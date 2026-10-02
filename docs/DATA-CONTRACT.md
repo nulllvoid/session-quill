@@ -141,9 +141,12 @@ PreToolUse stores attribution before execution. A PostToolUse result refers to t
 ## Mutation request
 
 Fields: id, store_id, actor_id, kind, target_id (nullable), expected_revision (nullable), payload, created_at, not_before, state, applied_revision (nullable), error (nullable), result (nullable), retry_of (nullable).
-kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external, run-job.
+kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external, run-job, accept-suggestion, dismiss-suggestion.
 
 - run-job (ADR 0007) has no target and payload { schedule }; it names a configured schedule, has no undo delay and is applied by the scheduler like refresh. A refresh or run-job left applying by a crash fails with code `interrupted` (retryable) on the next start.
+
+- handoff (ADR 0008) payload: recipe (name; optional, defaults to mode), mode, note, permissions, branch. With a recipe, permissions must be within its frontmatter; the applied request records recipe { name, source, hash }, and dispatch fails with `recipe-changed` if the file no longer has that hash.
+- accept-suggestion and dismiss-suggestion target a ticket and take payload { handoff_id, suggestion_id }; accept requires expected_revision, dismiss does not. Both have the 10 s undo window. A suggestion resolves once.
 
 - attach-unbound and dismiss-unbound target a session id; expected_revision is the session's unbound_work.revision. attach-unbound takes exactly one of ticket_id or key (a tracker key like PROJ-123, with optional title) plus bind (default true: link the session from then on if it is still unlinked). link-external targets a ticket with its revision and takes key plus optional system and https url; a key owned by another ticket is refused. All three have the 10 s undo window (ADR 0006).
 error: code, message, retryable, current_revision (nullable).
@@ -170,9 +173,10 @@ The snapshot carries `schedules[]` built from config and these records: name, jo
 
 ## Handoff
 
-Fields: id, ticket_id, request_id, mode, note (max 280 characters), permissions, base_ticket_revision, repo_id (nullable), base_commit (nullable), branch (nullable), state, requested_at, started_at (nullable), finished_at (nullable), deadline_at (nullable), error (nullable), result_ref (nullable), result_summary (nullable), children_ids[], worktree_path (local-only, nullable), changed_files[], test_results[], commit_sha (nullable), pr_url (nullable), uncertain_effects[], retry_of (nullable).
+Fields: id, ticket_id, request_id, mode, note (max 280 characters), permissions, base_ticket_revision, repo_id (nullable), base_commit (nullable), branch (nullable), state, requested_at, started_at (nullable), finished_at (nullable), deadline_at (nullable), error (nullable), result_ref (nullable), result_summary (nullable), children_ids[], worktree_path (local-only, nullable), changed_files[], test_results[], commit_sha (nullable), pr_url (nullable), uncertain_effects[], retry_of (nullable), recipe (nullable: name, source builtin|personal|repo, hash), legacy (boolean; true for the built-in handoff modes), outputs[], deadline_ms (nullable: the recipe time cap), suggestions[].
 
 permissions: read_source, edit_source, commit, push_branch, open_draft_pr (all booleans).
+suggestion: id, type (next-action, blocker, followup, deploy-evidence, comment-draft), state (proposed, accepted, dismissed), created_at, resolved_at (nullable), request_id (nullable), plus text, or title/category/priority/next_action, or items[] (environment, state deployed|pending|n-a, evidence, deployed_at). Recipes other than the built-in modes never change the ticket until a suggestion is accepted.
 Terminal states: done, failed, cancelled, timed-out. A non-done run may still have partial results. A request becoming applied means the handoff was created, not that execution completed.
 One queued/running run per ticket and one running attempt-fix per repository. Reservation and execution state are enforced by the worker, not by a disabled button alone.
 Queued runs do not consume the execution timeout. Missing runtime/credentials/source fails at dispatch with a reason; no indefinite hidden wait. A queued cancellation releases its reservation.

@@ -59,7 +59,7 @@ Use [DATA-CONTRACT](DATA-CONTRACT.md) directly; do not create a second list of i
 | Tree | Parents, direct-child completion counts, nested children, unresolved imported links | Empty; orphan; cycles rejected with issue; depth > 3 navigable through detail |
 | Sessions | Ticket history/current binding, machine, state, started, successful writes, coverage, checkpoint preview, unpromoted indicator, gate-off indicator | Live/idle/ended/extinct; unbound; rebind; unresolved attribution; capture gap |
 | Deployments | Each outstanding merged PR/environment obligation, oldest first; ticket journey strip with evidence dates | Empty; unknown PR state; multiple PRs/environments; pending edit; done ticket with outstanding deployment |
-| Ticket detail | Summary, project, status, next action, blocker, timeline, full plans/conclusions, file count, PRs/deployments, follow-ups and handoffs | No sessions; incomplete checkpoint; pending/conflict/failed edit; partial handoff result; validation issue |
+| Ticket detail | Summary, project, status, next action, blocker, timeline, full plans/conclusions, file count, PRs/deployments, follow-ups and an Agents panel (recipes for the ticket's repository with source, permission summary and time cap; each run with its suggestions) | No sessions; incomplete checkpoint; pending/conflict/failed edit; partial handoff result; validation issue |
 
 Every list displays its count; stale counts are separate from status totals. Relative time has an accessible absolute timestamp in detail and on hover/focus. Ticket keys are monospaced and copyable. An empty state explains what fills it and uses the actual installed command namespace.
 
@@ -81,6 +81,8 @@ Full checkpoint content is available from a preview; truncation never implies th
 | Health indicator | Separate sync age, worker connection, capture backlog/gaps and provider health |
 | Filter bar | Project, category, tag, repo, machine, stale, search; removable tokens and clear |
 | Handoff form | Mode, note, source and action permissions, required prerequisites, Queue |
+| Recipe run dialog | Recipe description, source and mode; only the permissions the recipe allows, with source access pre-selected and side effects unticked; note; time cap and whether results apply directly or arrive as suggestions; Queue run |
+| Suggestion | Type label and content (escaped); Accept (Mark used for a comment draft) and Dismiss while proposed; Accepting…/Dismissing… while the request is pending; Accepted or Dismissed afterwards; Copy for a comment draft, which is never posted |
 | Request feedback | Sending, pending, applying, applied, conflict, failed, cancelled; undo only while allowed |
 
 Use one line-icon set at 16 px, no emoji. Nesting a Handoff button inside a card must preserve valid keyboard semantics; use separate focus targets.
@@ -93,6 +95,7 @@ Use one line-icon set at 16 px, no emoji. Nesting a Handoff button inside a card
 4. **Undo and conflict:** Worker-enforced not-before makes pending edits cancellable for 10 s. If cancellation lost a race, show the applied outcome and offer a new revision-checked reversal. Conflict shows current and proposed values; user chooses to discard or resubmit against the new revision. Failure preserves the draft and exposes a retry reason.
 5. **Refresh:** Submit an immediate reconciliation request. While online, show its queued/running/result state, reusing an existing run if necessary. Do not change fresh data to ageing merely because Refresh was clicked. On failure re-enable retry; while offline disable submission and explain that nothing was queued.
 6. **Handoff:** Default to analyse with follow-ups, source off. Attempt fix requires source-read and isolated-edit permission. Commit, push branch and draft PR are separate opt-ins with dependencies shown. No push means local result only. Show prerequisite failure before submission where known; worker revalidates at dispatch.
+7. **Recipes:** A recipe whose file is invalid is listed with its error and has no Run button. While a run is queued or running, Run buttons are replaced by a one-run-per-ticket note. Accepting a suggestion is an edit with the undo window and conflict handling; dismissing changes nothing on the ticket ([ADR 0008](decisions/0008-agent-recipes.md)).
 7. **Handoff lifecycle:** One queued/running handoff per ticket is enforced by worker and UI. Allow cancellation. Show timeout/interruption and preserved partial results; retry creates a new run and does not duplicate previous children. Request accepted is distinct from handoff done.
 8. **Export:** Select project scope and included fields, preview exact content, then save. Exclude full checkpoints, local paths and private links by default. Display exported_at and last_sync. Explain that this is a copy that will not update or support revocation. Saving does not automatically upload or message anyone.
 

@@ -41,6 +41,7 @@ Everything flows through the journal. Hooks and the CLI only ever *write events*
 | `src/reconcile/*` | Lifecycle (live/idle/extinct, stale), pick-next ranking, provider polling, the two-hour scheduler and refresh requests. | `runReconciliation`, `rankPickNext`, `createExtension` |
 | `src/server/*` | Loopback API, bootstrap auth and CSRF, request validation and the request state machine. | `createServer`, `submitRequest`, `applyDueRequests` |
 | `src/handoff/*` | Reservation rules, worktrees, agent spawn/kill, result recording, permission validation. | `createExtension`, `validateHandoffRequest` |
+| `src/agents/*` | Recipe frontmatter parsing, discovery and precedence (repo, personal, built-in in `recipes/`), prompt rendering, and suggestions from typed outputs (ADR 0008). | `createRecipeCatalog`, `catalogFor`, `buildSuggestions`, `suggestionMutation` |
 | `src/export/*` | Sanitization and the single-file static build. | `sanitizeSnapshot`, `buildStaticHtml` |
 | `src/migrate/*` | Inventory, PMLA mapping, backup, run and rollback. | `runMigration`, `rollback` |
 | `src/cli/*` | Argument parsing, context loading, commands. Commands that change state wait for a worker ack file. | `main`, `submitAndWait` |

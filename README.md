@@ -15,7 +15,7 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Dashboard.** Pick next, Board, Tree, Sessions and Deployments views with revision-checked edits, a 10-second undo window, explicit conflicts, scheduled reconciliation (every two hours unless you set your own schedules) and a Refresh that runs immediately.
 - **Schedules and providers.** Named jobs run on cron or interval schedules in your time zone, with a Schedules panel and Run now. PR state comes from GitHub (`gh`) or Bitbucket Cloud and Server.
 - **Sharing.** Read-only standalone HTML snapshots with an export time; no credentials, request code or local paths.
-- **Handoffs.** Analyse, analyse with follow-ups, or attempt a fix in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions and a 20-minute cap.
+- **Agent recipes.** Analyse, analyse with follow-ups, attempt a fix, check deployments or write a standup, or add your own recipes as Markdown files. Each runs in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions that the recipe caps, and its suggestions wait for you to accept them.
 
 ## Documentation
 
@@ -99,7 +99,7 @@ job  = "reconcile"
 cron = "30 19 * * 1-5"       # minute hour day-of-month month day-of-week, in the store's time zone
 ```
 
-A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. `reconcile` is the job available today; `digest`, `publish`, `agent` and `tracker-sync` are accepted and skipped until they ship.
+A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. `reconcile` is the job available today; `agent` runs a recipe (see below); `digest`, `publish` and `tracker-sync` are accepted and skipped until they ship.
 
 ## Bitbucket pull requests
 
@@ -113,6 +113,36 @@ token_env = "BITBUCKET_TOKEN"                       # an access token, sent as a
 # provider_url = "https://bitbucket.example.com"    # Bitbucket Server/Data Center; omit for bitbucket.org
 ```
 
+## Agent recipes
+
+A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check` and `standup`; add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
+
+```markdown
+---
+name: deploy-check
+description: Check whether each merged PR reached each environment
+mode: analyse                      # analyse | analyse-followups | attempt-fix
+permissions: { read_source: true } # the most a run may get
+tools: [Read, Grep, "Bash(git log:*)"]
+timeout_min: 10
+outputs: [summary, deploy_evidence, next_action]
+---
+For {{ticket.key}} ({{ticket.url}}): for each merged PR {{prs}}, find the deployment evidence...
+```
+
+Run one from the ticket's Agents panel, with `quill agent run deploy-check PROJ-123`, with `/session-quill:agent run deploy-check PROJ-123`, or on a schedule:
+
+```toml
+[[schedule]]
+name   = "deploy-followup"
+job    = "agent"
+cron   = "0 11 * * 1-5"
+recipe = "deploy-check"
+scope  = "deploy-pending"          # deploy-pending | active | review | blocked | open
+```
+
+The run dialog shows what a recipe may do before you queue it; anything with a side effect stays off until you tick it, and scheduled runs only ever read. Results from your own recipes and `deploy-check` or `standup` arrive as suggestions on the ticket: accept or dismiss each one. A comment draft is never posted to your tracker.
+
 ## First tracked session
 
 1. Start Claude Code in the repository with the plugin loaded. The SessionStart hook injects `Session Quill session: <id>` and whether the session is bound. On a branch such as `feat/PROJ-123-retry-flake`, the session is already linked to `PROJ-123`.
@@ -121,7 +151,7 @@ token_env = "BITBUCKET_TOKEN"                       # an access token, sent as a
 4. Promote the latest checkpoint as an approved plan with `/session-quill:approve`. Approval is recorded provenance, never permission to commit, push or deploy.
 5. Open the dashboard: `quill ui`. The command prints a one-use owner link (loopback only, 10-minute validity) and opens your browser.
 
-Other commands: `/session-quill:status`, `/session-quill:handoff <KEY>`, `/session-quill:ui`; from a terminal `quill ticket list`, `quill sync`, `quill export`, `quill replay --into <dir>`, `quill import <note.md>`, `quill note restore <KEY>`, `quill migrate --source <dir> --dry-run`.
+Other commands: `/session-quill:status`, `/session-quill:handoff <KEY>`, `/session-quill:agent`, `/session-quill:ui`; from a terminal `quill ticket list`, `quill sync`, `quill export`, `quill replay --into <dir>`, `quill import <note.md>`, `quill note restore <KEY>`, `quill migrate --source <dir> --dry-run`.
 
 ## Status line
 

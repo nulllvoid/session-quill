@@ -1,0 +1,32 @@
+# ADR 0008 — Agent recipes
+
+Date: 2026-10-03 · Status: accepted · Builds on [ADR 0007](0007-schedules-and-bitbucket.md)
+
+## Context
+
+Handoffs had three fixed modes (analyse, analyse with follow-ups, attempt fix) with their instructions in code. The "zero-command ticket tracking" proposal turns them into recipes: small Markdown files with a prompt template and frontmatter that a team can share in its repository or a person can keep for themselves. Recipes run from ticket detail, the CLI, a slash command or a schedule. The proposal keeps the handoff permission model: explicit permissions validated at queue and at dispatch, an isolated worktree, nothing derived from note or approval text, and a recipe that cannot grant itself more than its frontmatter. Its typed outputs arrive as revision-checked requests the owner accepts, and a comment draft is never posted to the tracker automatically.
+
+## Decision
+
+- **Three places, one precedence.** Recipes are `<name>.md` files in a repository's `.quill/agents/`, in the personal `~/.claude/quill/agents/`, or in the plugin's `recipes/`. A repository recipe replaces a personal one of the same name for that repository only, and a personal one replaces a built-in. The file name is the recipe name.
+- **Frontmatter.** `name`, `description`, `mode` (`analyse`, `analyse-followups` or `attempt-fix`, which picks the tool profile), `permissions` (`read_source`, `edit_source`, `commit`, `push_branch`, `open_draft_pr`; `push` and `draft_pr` are accepted aliases), optional `tools`, `timeout_min` (1 to 20, default 20), `inputs` (`ticket`, `notes`, `prs`, `deployments`) and `outputs` (`summary`, `next_action`, `blocker`, `followups`, `deploy_evidence`, `comment_draft`, `test_results`, `changed_files`). The body is the prompt; `{{ticket.key}}`, `{{ticket.url}}`, `{{ticket.title}}`, `{{ticket.status}}`, `{{ticket.next_action}}`, `{{note}}`, `{{prs}}`, `{{deployments}}` and `{{environments}}` are filled in as plain text. A small YAML subset is parsed without a dependency. Anything invalid (an unknown key, permission, output or placeholder, a broken dependency such as commit without edit, a tool the permissions do not allow) makes the recipe an error that is listed but cannot run.
+- **Permissions are a ceiling.** A run asks for permissions explicitly, as handoffs always did, and each must be in the recipe's frontmatter. The dashboard and `quill agent run` grant the source access a recipe allows by default and anything with a side effect (commit, push, draft PR) only when the owner ticks it or passes the flag. `tools` can only narrow the profile those permissions allow: a Bash rule must start with a profile prefix such as `git log` and contain no shell operators.
+- **Checked three times.** At submit, when the request applies (CLI requests skip submit), and at dispatch. The request records the recipe's name, source and content hash. If the file changes or disappears before dispatch, the run fails with `recipe-changed` instead of running instructions nobody reviewed.
+- **The three modes became files.** `analyse`, `analyse-followups` and `attempt-fix` ship as built-in recipes with the same instructions. Their ceilings are what the handoff form already allowed, so the form and `quill handoff --mode` keep working unchanged. They also keep applying a next action (against the base revision) and creating follow-up children directly, which the existing acceptance scenarios require. `deploy-check` and `standup` ship beside them.
+- **Other recipes suggest.** Every recipe that is not one of Quill's built-in handoff modes leaves its declared outputs as suggestions on the run. `accept-suggestion` is revision-checked against the ticket and has the 10-second undo window; it sets the next action, marks the ticket blocked with the suggested blocker, creates the follow-up child, or records deployment evidence for the matching pending obligations (`n-a` becomes a waiver with the agent's reason). `dismiss-suggestion` changes nothing on the ticket. Accepting a comment draft records only that it was used; it is never sent anywhere. Undeclared outputs are dropped.
+- **Limits.** One queued or running run per ticket, the recipe's own time cap within the 20-minute ceiling, partial results kept, and retry starts a fresh run, all as for handoffs.
+- **Schedules.** An `agent` job in `[[schedule]]` names a `recipe`, a ticket `scope` (`deploy-pending`, `active`, `review`, `blocked` or `open`) and a `limit` (default 10, at most 25). It queues one run per ticket in scope, oldest first, skipping tickets with a run already queued or running. Scheduled runs get read access at most and never a side effect, and a recipe in `attempt-fix` mode cannot be scheduled.
+
+## Consequences
+
+- Ticket detail has an Agents panel: the recipes for the ticket's repository with their source, permission summary and time cap, a Run dialog that shows what the run may do before queueing, and each run with Accept, Dismiss and, for a comment draft, Copy.
+- `quill agent list|show|run|suggestions|accept|dismiss` and `/session-quill:agent` cover the same ground from a terminal.
+- The snapshot lists recipes (without file paths or full prompts). Exports carry run suggestions only when checkpoints are included, like result summaries.
+- Two quick accepts on one ticket conflict, because the first changes the ticket revision; the second can be resubmitted against the new revision, like any edit.
+- A repository recipe can change what `analyse` means for that repository, but never what it may do: tools and permissions are bounded by its own frontmatter and by the request.
+
+## Alternatives considered
+
+- **Apply every recipe's outputs directly.** Rejected: the proposal asks for outputs as requests the owner accepts, and a shared repository recipe should not edit someone's tickets on its own.
+- **Make the built-in modes suggest too.** Rejected for now: acceptance scenarios A37 and A41 specify direct, revision-checked application for them. Turning them into suggestions is a separate, visible change.
+- **Full YAML.** Rejected: a dependency for a handful of keys, and a larger surface for surprising parses.

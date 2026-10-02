@@ -205,6 +205,8 @@ Execution time starts on entering running; wall-clock timeout is 20 min and incl
 
 An interrupted running request becomes failed with interrupted reason on restart. Never automatically retry a fix or remote side effect. An explicit retry creates a new run referencing the previous run; it reconciles prior branch/PR/child IDs first. Child creation uses a stable run/result-item identity and cannot duplicate on result redelivery.
 
+Recipes ([ADR 0008](decisions/0008-agent-recipes.md)): the three modes are now built-in recipe files beside `deploy-check` and `standup`; teams and owners add recipes in `.quill/agents/` (repository, highest precedence) or `~/.claude/quill/agents/`. A recipe's frontmatter permissions are a ceiling for each run, its `tools` can only narrow the permission profile, and its `timeout_min` (at most 20) caps the run. The request records the recipe hash, re-checked when the request applies and again at dispatch. Outputs of recipes other than the built-in modes become suggestions accepted through revision-checked requests; a comment draft is never posted. An `agent` schedule queues read-only runs over a ticket scope and refuses `attempt-fix` recipes.
+
 Only analyse-followups creates children by default. Suggested next_action updates use the parent's recorded revision and become conflicts if it changed. A blocker is a suggestion; the agent cannot silently overwrite a newer owner status. A draft PR creates no deploy-pending child. Deployment obligations appear only when merge evidence arrives.
 
 ## Configuration and packaging

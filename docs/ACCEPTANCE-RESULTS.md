@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 406 tests, 405 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox and schedules, ADRs 0005–0007) |
+| Test command | `npm test` → 433 tests, 432 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox, schedules and agent recipes, ADRs 0005–0008) |
 
 ### Platform matrix (GitHub Actions, commit `bcd989e`)
 
@@ -123,6 +123,17 @@ Hook timings are in-process (`runHook`) and exclude Node process start-up (~40�
 | A52 | Automated (loopback Bitbucket Server) | bearer token from `QUILL_TEST_BB_TOKEN`; PR merged → deploy-pending with staging and production obligations; token absent from snapshot, journal and health log. **Pending manual:** Bitbucket Cloud and a real Server/Data Center instance |
 
 Unit coverage: `tests/schedule/cron.test.js` (DST gap, day OR rule, time zones), `tests/schedule/config.test.js`, `tests/schedule/schedule-run.test.js`, `tests/schedule/extension.test.js` (one run per job, catch-up, interrupted runs, live config edits), `tests/reconcile/bitbucket.test.js` (host pinning, auth, errors that never include the token). The Schedules panel was checked in the built-in browser against the dev seed, including Run now.
+
+## Phase 8 — agent recipes (ADR 0008)
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A53 | Automated | `tests/acceptance/phase8.test.js` — repository standup overrides personal and built-in for repo demo only; snapshot without paths; invalid recipe refused with recipe-invalid over the HTTP API |
+| A54 | Automated | edit_source on deploy-check refused (permission-beyond-recipe); run capped at 10 min with the recipe's five tools; recipe appended to after queueing fails with recipe-changed |
+| A55 | Automated | next action and deployment evidence suggestions; stale and back-to-back accepts conflict; resubmitted accept records the deployment; comment draft accepted with no ticket change |
+| A56 | Automated | agent job over the active scope queues two read-only runs, then zero with two already running; attempt-fix refused |
+
+Unit coverage: `tests/agents/frontmatter.test.js`, `tests/agents/recipes.test.js` (validation, precedence, tool narrowing, catalog cache), `tests/agents/run.test.js` (prompt, tools, time cap, suggestions, accept/dismiss, legacy modes, snapshot and export), `tests/agents/schedule.test.js`, `tests/cli/agent.test.js`, and the Agents panel and run dialog in `tests/ui/render.test.js`. The Agents panel was checked in the built-in browser against the dev seed with the fake agent runtime: Run on deploy-check, two suggestions, Accept moved the ticket's next action after the undo window. **Pending manual:** a recipe run against a real Claude Code runtime.
 
 CI now runs `npm run test:ci`, which also writes TAP; when a job fails, `scripts/ci-annotate.mjs` publishes each failing test as a check annotation, readable without signing in to GitHub.
 

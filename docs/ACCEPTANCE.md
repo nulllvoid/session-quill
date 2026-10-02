@@ -94,6 +94,15 @@ All Must scenarios must pass, with exceptions explicitly removed from the advert
 | A51 | FR-10 | Run now starts a named schedule immediately with no undo delay; unknown names are refused; Refresh still runs within one tick |
 | A52 | FR-10, FR-11 | A Bitbucket Server PR is polled with a token from a named environment variable; merge moves the ticket to deploy-pending with one obligation per environment; the token appears in no snapshot, journal or health log |
 
+## Phase 8 — Agent recipes (ADR 0008)
+
+| ID | Requirement | Scenario and expected outcome |
+| --- | --- | --- |
+| A53 | FR-11 | A repository recipe overrides a personal and a built-in recipe of the same name for that repository only; the snapshot lists effective recipes with permissions and no file paths; an invalid recipe is listed with its error and cannot be queued |
+| A54 | FR-11, FR-12 | A run asking for more than the recipe's frontmatter is refused; a valid run uses the recipe's tools and time cap; a recipe file edited after queueing fails the run at dispatch with recipe-changed |
+| A55 | FR-11, FR-12 | A recipe's typed outputs arrive as suggestions and change nothing until accepted; a stale accept conflicts and leaves the suggestion open; accepted next action and deployment evidence apply; an accepted comment draft changes nothing and is never sent |
+| A56 | FR-10, FR-11 | A scheduled agent job queues read-only runs for the tickets in scope, skips tickets with a run already queued or running, and refuses a source-editing recipe |
+
 ## Review resolution traceability
 
 | Review issue | Resolved contract | Acceptance |
