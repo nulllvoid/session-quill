@@ -103,6 +103,15 @@ All Must scenarios must pass, with exceptions explicitly removed from the advert
 | A55 | FR-11, FR-12 | A recipe's typed outputs arrive as suggestions and change nothing until accepted; a stale accept conflicts and leaves the suggestion open; accepted next action and deployment evidence apply; an accepted comment draft changes nothing and is never sent |
 | A56 | FR-10, FR-11 | A scheduled agent job queues read-only runs for the tickets in scope, skips tickets with a run already queued or running, and refuses a source-editing recipe |
 
+## Phase 9 — Environments, Today and the digest (ADR 0009)
+
+| ID | Requirement | Scenario and expected outcome |
+| --- | --- | --- |
+| A57 | FR-10, FR-11 | With `[tracker].environments` and no repository list, a merge creates one obligation per environment; recording ArgoCD evidence for one and waiving the other shows done and N/A; the ticket stays on Deployments until both are resolved, then moves to done |
+| A58 | FR-11 | Today groups the week by store-local day (a Kolkata store after 18:30 UTC is on the next day) and ticket, leaves tool calls out, and is not exported |
+| A59 | FR-10, FR-11 | A digest schedule writes the day into the store's daily note at its slot, keeps the owner's text around it, and fails visibly instead of overwriting an edited digest section |
+| A60 | FR-11 | Pick next gives reasons for a merged PR awaiting deployment and for days since last touch |
+
 ## Review resolution traceability
 
 | Review issue | Resolved contract | Acceptance |

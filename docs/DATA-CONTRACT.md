@@ -48,10 +48,11 @@ Control fields: status_source (manual, evidence, migration), status_evidence_id 
 - conclusions: id, session_id, checkpoint_id, content_ref, preview, recorded_at, approved_at (nullable), provenance (nullable).
 - timeline: id, at, kind, text, event_id, content_ref (nullable), coverage (complete, partial, unknown). kind: bind, write, tool, commit, pr, plan, conclusion, handoff, status, deployment, capture-error.
 - prs: id, provider, url, state, opened_at (nullable), merged_at (nullable), base_branch (nullable), head_branch (nullable), observed_at (nullable), error (nullable), evidence_id (nullable).
-- deployments: id, pr_id, environment, state, merged_at, deployed_at (nullable), evidence (nullable), waiver_reason (nullable), source_event_id. Unique obligation identity is pr_id + environment.
+- deployments: id, pr_id, environment, state, merged_at, deployed_at (nullable), evidence (nullable), evidence_kind (nullable: merge, tag, argocd, release, manual, agent), waiver_reason (nullable), source_event_id. Unique obligation identity is pr_id + environment.
+- environments (snapshot only, ADR 0009): one entry per configured environment and any environment that only appears on an obligation: environment, state (pending, done, n-a, none), pending, obligations, merged_at, deployed_at, evidence, evidence_kind, waiver_reason.
 - tags mirror status/category plus explicit tags. A stale tag may be derived independently and must not replace a status tag.
 
-Deployment obligation creation requires merged evidence and a configured target environment. Default environment is production. Multiple environments may be configured per repo. Closed-unmerged and draft PRs create no deployment obligation. A later PR merge creates a new obligation without erasing existing deployment history.
+Deployment obligation creation requires merged evidence and a configured target environment. A repository's deployment_environments win, then `[tracker].environments` (repository, then user), then production; the merged-PR update in the reconcile event records the list used (ADR 0009). Multiple environments may be configured per repo. Closed-unmerged and draft PRs create no deployment obligation. A later PR merge creates a new obligation without erasing existing deployment history.
 
 Example generated frontmatter (nested plan/conclusion bodies are represented by references in full notes):
 
@@ -170,6 +171,12 @@ Schedule record (ADR 0007), folded from `schedule-run` events: name, job, last_s
 `schedule-run` event payload: schedule, job, run_id, phase (started, finished), trigger (started), outcome, summary and error (finished).
 
 The snapshot carries `schedules[]` built from config and these records: name, job, cron or every, enabled, running, next_due, the last_* fields and the newest 10 runs. Exports never include it.
+
+## Today
+
+The snapshot's `today` (ADR 0009): timezone, generated_for (the store-local date), days[] newest first, each with date, sessions (count started that day) and tickets[] (ticket_id, key, title, status, counts by timeline kind, items[] newest first and at most 12: at, kind, text, plus last_at). Kinds: commit, pr, deployment, status, write, plan, conclusion, handoff, bind; tool entries are excluded. Seven days. Exports never include it.
+
+Digest schedule fields: to (vault-daily and/or file), path (required for file), day (today or yesterday). The digest section is delimited by `<!-- quill:digest:start -->` and `<!-- quill:digest:end -->`; a section edited since the last write fails the run with digest-conflict.
 
 ## Handoff
 

@@ -12,7 +12,7 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Unlinked work inbox.** Files and commits from a session with no ticket wait on Pick next. Attach them to a ticket, create the ticket from its key, or dismiss them; each action has a 10-second undo. Tracker keys open their ticket in a new tab and copy with one click.
 - **Ticket gate modes.** `nudge` (default) never blocks and asks once at the end of a turn about unlinked work. `strict` denies supported write tools, unknown shell commands and unregistered tools until the session is bound, while dedicated reads and a tested read-only shell subset pass through. `off` only captures. The gate is a workflow aid, not a sandbox: `/session-quill:ticket off` disables it per session, audibly.
 - **Durable capture.** Hooks persist events to local ingress before acknowledging; one worker per store journals them, rebuilds generated state, and writes markdown notes (plain folder or Obsidian vault) within 30 seconds. Your own Summary and Notes sections are preserved byte-for-byte.
-- **Dashboard.** Pick next, Board, Tree, Sessions and Deployments views with revision-checked edits, a 10-second undo window, explicit conflicts, scheduled reconciliation (every two hours unless you set your own schedules) and a Refresh that runs immediately.
+- **Dashboard.** Pick next, Board, Tree, Sessions, Deployments and Today views with revision-checked edits, a 10-second undo window, explicit conflicts, scheduled reconciliation (every two hours unless you set your own schedules) and a Refresh that runs immediately.
 - **Schedules and providers.** Named jobs run on cron or interval schedules in your time zone, with a Schedules panel and Run now. PR state comes from GitHub (`gh`) or Bitbucket Cloud and Server.
 - **Sharing.** Read-only standalone HTML snapshots with an export time; no credentials, request code or local paths.
 - **Agent recipes.** Analyse, analyse with follow-ups, attempt a fix, check deployments or write a standup, or add your own recipes as Markdown files. Each runs in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions that the recipe caps, and its suggestions wait for you to accept them.
@@ -99,7 +99,28 @@ job  = "reconcile"
 cron = "30 19 * * 1-5"       # minute hour day-of-month month day-of-week, in the store's time zone
 ```
 
-A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. `reconcile` is the job available today; `agent` runs a recipe (see below); `digest`, `publish` and `tracker-sync` are accepted and skipped until they ship.
+A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. `reconcile` is the job available today; `agent` runs a recipe and `digest` writes a daily summary (see below); `publish` and `tracker-sync` are accepted and skipped until they ship.
+
+## Environments, Today and the daily digest
+
+List your deployment environments once in `[tracker]`; a repository's own `deployment_environments` in `config.toml` still wins (repositories registered by older versions of `quill init` list `["production"]`; remove that line to use the tracker's list).
+
+```toml
+[tracker]
+environments = ["stage", "prod"]
+```
+
+Each merged PR then owes one deployment per environment. The ticket shows pending, done or N/A for each, with the evidence you or an agent recorded (a values-file tag bump, an ArgoCD sync, a release), and stays on Deployments until nothing is pending. **Today** (shortcut 6) shows the last week day by day and ticket by ticket. To get the same summary in your notes:
+
+```toml
+[[schedule]]
+name = "daily-digest"
+job  = "digest"
+cron = "30 19 * * 1-5"
+to   = ["vault-daily"]           # the store's daily/YYYY-MM-DD.md; or ["file"] with path = "..."
+```
+
+The digest lives between `<!-- quill:digest:start -->` and `<!-- quill:digest:end -->`; your own text in the note is never touched, and if you edit the digest section Quill stops updating it until you clear it.
 
 ## Bitbucket pull requests
 

@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 440 tests, 439 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox, schedules and agent recipes, ADRs 0005–0008) |
+| Test command | `npm test` → 457 tests, 456 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox, schedules, agent recipes, environments and Today, ADRs 0005–0009) |
 
 ### Platform matrix (GitHub Actions, commit `bcd989e`)
 
@@ -134,6 +134,17 @@ Unit coverage: `tests/schedule/cron.test.js` (DST gap, day OR rule, time zones),
 | A56 | Automated | agent job over the active scope queues two read-only runs, then zero with two already running; attempt-fix refused |
 
 Unit coverage: `tests/agents/frontmatter.test.js`, `tests/agents/recipes.test.js` (validation, precedence, tool narrowing, catalog cache), `tests/agents/run.test.js` (prompt, tools, time cap, suggestions, accept/dismiss, legacy modes, snapshot and export), `tests/agents/schedule.test.js`, `tests/cli/agent.test.js`, and the Agents panel and run dialog in `tests/ui/render.test.js`. The Agents panel was checked in the built-in browser against the dev seed with the fake agent runtime: Run on deploy-check, two suggestions, Accept moved the ticket's next action after the undo window. **Pending manual:** a recipe run against a real Claude Code runtime.
+
+## Phase 9 — environments, Today and the digest (ADR 0009)
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A57 | Automated | `tests/acceptance/phase9.test.js` — tracker environments stage and prod; ArgoCD evidence for stage over the HTTP API, prod waived; outstanding until both resolved, then done |
+| A58 | Automated | Kolkata store at 19:00 UTC reports 2026-10-03; tool call excluded; sanitized export has no today |
+| A59 | Automated | 19:30 cron digest writes daily/2026-10-02.md; owner text kept; edited section makes Run now fail with digest-conflict |
+| A60 | Automated | reasons "Merged PR awaiting deployment for 3 day(s): +20" and "Untouched for 3 days: +3" |
+
+Unit coverage: `tests/deploy/environments.test.js` (validation, precedence, status, journaled environments and replay, evidence kinds), `tests/today/today.test.js`, `tests/today/digest-job.test.js`, `tests/reconcile/picknext.test.js`, and the Today view, Deployments matrix and record dialog in `tests/ui/render.test.js`.
 
 CI now runs `npm run test:ci`, which also writes TAP; when a job fails, `scripts/ci-annotate.mjs` publishes each failing test as a check annotation, readable without signing in to GitHub.
 

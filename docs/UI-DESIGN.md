@@ -8,7 +8,7 @@ Historical PNG wireframes are v0.1 references; the states and layouts below supe
 
 The dashboard answers “what should I pick next?”, “where was I?” and “what still needs deployment?” for one developer. The local owner UI is editable; exported HTML is read-only for the owner or a teammate. A snapshot is not live and cannot be revoked after distribution.
 
-The owner typically works beside a terminal. Support 1440, 1024, 800 and 390 px layouts without hiding authorized actions solely because the viewport narrows. All five views remain available on small screens.
+The owner typically works beside a terminal. Support 1440, 1024, 800 and 390 px layouts without hiding authorized actions solely because the viewport narrows. All six views remain available on small screens.
 
 Local projections update after note materialization; external reconciliation runs every two hours. Requests and handoff progress update independently. Show data age, worker connection and provider errors separately so a recent local update cannot imply fresh PR evidence.
 
@@ -35,7 +35,7 @@ flowchart TD
   X --> E["Pending edit / conflict / result"]
 ```
 
-Five views are tabs; detail preserves the current view, filters and scroll position. A project filter applies globally; other filters are view-specific and reflected in the URL hash. Never serialize secrets or private paths in URLs.
+Six views are tabs (Pick next, Board, Tree, Sessions, Deployments, Today); detail preserves the current view, filters and scroll position. A project filter applies globally; other filters are view-specific and reflected in the URL hash. Never serialize secrets or private paths in URLs.
 
 ## Data and capabilities
 
@@ -58,7 +58,8 @@ Use [DATA-CONTRACT](DATA-CONTRACT.md) directly; do not create a second list of i
 | Board | Six columns: todo, active, review, deploy-pending, blocked, done; stale badge/filter overlays active cards; done collapsed by default | Empty columns; 40+ cards paged; zero filter results; loading/error |
 | Tree | Parents, direct-child completion counts, nested children, unresolved imported links | Empty; orphan; cycles rejected with issue; depth > 3 navigable through detail |
 | Sessions | Ticket history/current binding, machine, state, started, successful writes, coverage, checkpoint preview, unpromoted indicator, gate-off indicator | Live/idle/ended/extinct; unbound; rebind; unresolved attribution; capture gap |
-| Deployments | Each outstanding merged PR/environment obligation, oldest first; ticket journey strip with evidence dates | Empty; unknown PR state; multiple PRs/environments; pending edit; done ticket with outstanding deployment |
+| Deployments | Each ticket with outstanding work, oldest first, as a PR by environment matrix: Pending with Record and N/A actions, Done with time and evidence kind, N/A with the waiver reason | Empty; unknown PR state; multiple PRs/environments; pending edit; done ticket with outstanding deployment |
+| Today | The last seven days in the store time zone, newest first: per day the tickets with activity (counts and up to 12 items) and the sessions started | Empty week; filters hide all; export (not included) |
 | Ticket detail | Summary, project, status, next action, blocker, timeline, full plans/conclusions, file count, PRs/deployments, follow-ups and an Agents panel (recipes for the ticket's repository with source, permission summary and time cap; each run with its suggestions) | No sessions; incomplete checkpoint; pending/conflict/failed edit; partial handoff result; validation issue |
 
 Every list displays its count; stale counts are separate from status totals. Relative time has an accessible absolute timestamp in detail and on hover/focus. Ticket keys are monospaced and copyable. An empty state explains what fills it and uses the actual installed command namespace.
@@ -105,7 +106,7 @@ Tree is read-only navigation in v1; create children through the CLI or permitted
 
 - Keys open ticket detail without changing views. Escape closes detail and restores focus.
 - Left/Right navigate records only while the detail navigation control is focused; never intercept text editing.
-- / focuses search, 1–5 switch views, h opens Handoff on a focused eligible card, ? opens help. Shortcuts do not run in inputs/contenteditable or while another dialog owns focus.
+- / focuses search, 1–6 switch views, h opens Handoff on a focused eligible card, ? opens help. Shortcuts do not run in inputs/contenteditable or while another dialog owns focus.
 - Desktop docked detail is non-modal and does not trap focus. Overlay/fullscreen detail is modal, traps focus and returns it on close.
 - Every action works by keyboard. Labels accompany icons and color. Announce persisted request outcomes through a polite live region, without announcing every poll.
 - Respect reduced motion and system color preference; explicit theme selection can override system preference.

@@ -151,6 +151,8 @@ The data contract defines status transitions and manual override precedence. PR 
 
 Deployments track individual merged PRs and environments, not a single ticket boolean. Mark deployed requires selected PR IDs, environment, timestamp and evidence/note. A waived deployment requires a reason. A ticket can be done with outstanding deployments after explicit user confirmation; it remains listed in Deployments until each obligation is deployed or waived. Never equate a draft PR with a merged deployment obligation.
 
+Environments and evidence ([ADR 0009](decisions/0009-environments-and-today.md)): a repository's `deployment_environments` win, then `[tracker].environments`, then production, and the reconcile event records the list each merge used so replay is stable. Recorded deployments carry an evidence kind (merge, tag bump, ArgoCD sync, release, manual, agent). The snapshot gives each ticket its per-environment status (pending, done, n-a, none). The worker also builds a seven-day Today feed in the store time zone, and a `digest` schedule writes one day of it into a marked section of the daily note or a file, never over an edited section.
+
 ## Pick-next
 
 Eligible candidates are statuses todo, active, review and deploy-pending. Exclude blocked and done before scoring; blocked records form a separate list with blocker text.
@@ -159,11 +161,12 @@ Eligible candidates are statuses todo, active, review and deploy-pending. Exclud
 | --- | --- |
 | Priority P0 / P1 / P2 / P3 | 40 / 25 / 10 / 0 |
 | Due overdue or within 3 local calendar days / within 7 days | 30 / 15 (exclusive) |
-| Oldest pending merged PR >= 2 days old | 20 |
+| Oldest pending merged PR >= 2 days old / younger | 20 / 10 (exclusive) |
 | Oldest open PR >= 1 day old, status review | 15 |
 | Nonempty next_action | 10 |
 | Parent has another direct child done | 10 |
 | stale flag true | 10 |
+| Untouched N >= 2 days, not stale | N (at most 9) |
 
 Display score = min(100, raw score). Rank by raw score descending, then due ascending (null last), priority ascending, last_activity ascending and stable ticket ID. Reasons list actual contributing signals. Show at most five, and fewer when fewer eligible candidates exist. Provider-unknown dates earn no age points and show the evidence limitation.
 
