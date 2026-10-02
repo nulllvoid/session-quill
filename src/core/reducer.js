@@ -6,6 +6,7 @@ import {
   indexChild, registerSession, registerCheckpoint,
 } from './state.js';
 import { isIsoZ } from '../lib/time.js';
+import { TrackerError } from '../lib/errors.js';
 import { validateKey, validateParent } from './keys.js';
 import { externalTicketId } from './external-keys.js';
 import { applyStatusChange, deriveStatusFromEvidence, recordDeployment } from './transitions.js';
@@ -94,6 +95,8 @@ function approveCheckpoint(state, ev, { checkpoint_id, ticket_id, provenance }, 
 }
 
 function applyTicketFields(state, ticket, fields, ev, source, result) {
+  // Validate before mutating so a rejected update leaves the ticket untouched.
+  if (fields.repo_id !== undefined && fields.repo_id !== null && !state.meta.repos[fields.repo_id]) throw new TrackerError('repo-unknown', `repository ${fields.repo_id} is not registered`);
   const seq = ev.sequence ?? 0;
   if (fields.status !== undefined) {
     applyStatusChange(ticket, { status: fields.status, source, seq, blocker: fields.blocker ?? ticket.blocker, evidence_id: fields.status_evidence_id ?? null });
@@ -106,6 +109,7 @@ function applyTicketFields(state, ticket, fields, ev, source, result) {
   if (fields.priority !== undefined && PRIORITIES.includes(fields.priority)) ticket.priority = fields.priority;
   if (fields.category !== undefined && CATEGORIES.includes(fields.category)) ticket.category = fields.category;
   if (fields.due !== undefined) ticket.due = fields.due;
+  if (fields.repo_id !== undefined) ticket.repo_id = fields.repo_id;
   if (fields.parent_id !== undefined) {
     validateParent(state, ticket.id, fields.parent_id);
     const oldParent = ticket.parent_id ? state.tickets.get(ticket.parent_id) : null;
