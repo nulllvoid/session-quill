@@ -222,6 +222,71 @@ function bindExternal(state, session, ev, result) {
   return {};
 }
 
+// Shared by `ticket relink` and the dashboard's "Link to external" request.
+function relinkTicket(state, ticket, ev, p, result) {
+  const newKey = p.new_key;
+  if (newKey && newKey !== ticket.key) {
+    try { validateKey(newKey); } catch { return { rejected: 'key-invalid' }; }
+    const owner = state.keyIndex.get(newKey);
+    if (owner && owner !== ticket.id) return { rejected: 'key-collision' };
+    if (!ticket.aliases.includes(ticket.key)) ticket.aliases.push(ticket.key);
+    ticket.key = newKey;
+    state.keyIndex.set(newKey, ticket.id);
+  }
+  if (p.jira !== undefined) ticket.jira = p.jira;
+  if (p.external !== undefined) ticket.external = p.external;
+  const link = ticket.external ? ` (${ticket.external.system} ${ticket.external.key}, validation ${ticket.external.validation})` : ticket.jira ? ` (Jira ${ticket.jira.key}, validation ${ticket.jira.validation})` : '';
+  ticket.timeline.push(timelineEntry(ev, 'status', `Relinked to ${ticket.key}${link}`));
+  touch(state, ticket, ev, result);
+  return {};
+}
+
+// Owner-confirmed attachment of a session's unlinked work (ADR 0006). Unlike automatic binding
+// this is retroactive by design: the owner picked the ticket for exactly the work shown.
+function attachUnboundWork(state, ev, m, result) {
+  const session = state.sessionsById.get(m.session_id);
+  const w = session && session.unbound_work;
+  if (!w || w.dismissed_at || (!w.files.length && !w.commits.length)) return { rejected: 'unbound-gone' };
+  let ticketId = m.ticket_id ?? null;
+  if (m.create) {
+    ticketId = state.keyIndex.get(m.create.key) ?? null;
+    if (!ticketId) {
+      const created = createTicket(state, ev, m.create, 'manual', result);
+      if (created.rejected) return created;
+      ticketId = m.create.id;
+    }
+  }
+  const ticket = ticketId ? state.tickets.get(ticketId) : null;
+  if (!ticket) return { rejected: 'ticket-unknown' };
+  for (const f of w.files) {
+    const repo_id = f.repo_id ?? ticket.repo_id ?? null;
+    const existing = ticket.files_touched.find((x) => x.repo_id === repo_id && x.relative_path === f.relative_path);
+    if (existing) {
+      if (f.first_seen < existing.first_seen) existing.first_seen = f.first_seen;
+      if (f.last_seen > existing.last_seen) existing.last_seen = f.last_seen;
+    } else {
+      ticket.files_touched.push({ repo_id, relative_path: f.relative_path, first_seen: f.first_seen, last_seen: f.last_seen });
+    }
+  }
+  w.commits.forEach((c, i) => {
+    ticket.timeline.push(timelineEntry(ev, 'commit', `Commit ${c.sha.slice(0, 10)}${c.message ? `: ${c.message}` : ''} (attached)`, { index: i }));
+  });
+  const files = `${w.files.length} file${w.files.length === 1 ? '' : 's'}`;
+  const commits = `${w.commits.length} commit${w.commits.length === 1 ? '' : 's'}`;
+  ticket.timeline.push(timelineEntry(ev, 'write', `Attached unlinked work from session ${session.host_session_id}: ${files}, ${commits}`));
+  for (const id of state.checkpointsBySession.get(session.id) ?? []) {
+    const cp = state.checkpoints.get(id);
+    if (cp && !cp.ticket_id) cp.ticket_id = ticket.id;
+  }
+  if (!ticket.session_ids.includes(session.id)) ticket.session_ids.push(session.id);
+  if (!session.ticket_ids.includes(ticket.id)) session.ticket_ids.push(ticket.id);
+  session.unbound_work = { revision: w.revision + 1, files: [], commits: [], first_at: null, last_at: null, dismissed_at: null };
+  if (m.bind && !session.current_ticket_id) bindSession(state, session, ev, { ticket_id: ticket.id, project_id: ticket.project_id }, result);
+  else touch(state, ticket, ev, result);
+  recomputeUnpromoted(state, session);
+  return {};
+}
+
 // Tool results wait for their matching pre-call attribution record; they are never assigned by
 // ingestion order or current binding. Results still unmatched after a reconciliation run become
 // visible unresolved events (TRD §Durability and concurrency).
@@ -424,6 +489,18 @@ function handleRequestTx(state, ev, result) {
         h.cancel_requested = true;
         result.handoffsChanged.add(h.id);
       }
+    } else if (m.type === 'unbound-attach') {
+      const r = attachUnboundWork(state, ev, m, result);
+      if (!r.rejected && m.ticket_id && state.tickets.has(m.ticket_id)) req.applied_revision = state.tickets.get(m.ticket_id).revision;
+    } else if (m.type === 'unbound-dismiss') {
+      const s = state.sessionsById.get(m.session_id);
+      if (s && s.unbound_work && !s.unbound_work.dismissed_at) {
+        s.unbound_work.dismissed_at = ev.occurred_at;
+        s.unbound_work.revision += 1;
+      }
+    } else if (m.type === 'relink') {
+      const ticket = state.tickets.get(m.ticket_id);
+      if (ticket && !relinkTicket(state, ticket, ev, m, result).rejected) req.applied_revision = ticket.revision;
     } else if (m.type === 'refresh') {
       // no state mutation; the worker runs reconciliation as an effect
     }
@@ -634,20 +711,8 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'relink': {
       const ticket = state.tickets.get(ev.payload.ticket_id);
       if (!ticket) { result.rejected = 'ticket-unknown'; break; }
-      const newKey = ev.payload.new_key;
-      if (newKey && newKey !== ticket.key) {
-        try { validateKey(newKey); } catch { result.rejected = 'key-invalid'; break; }
-        const owner = state.keyIndex.get(newKey);
-        if (owner && owner !== ticket.id) { result.rejected = 'key-collision'; break; }
-        if (!ticket.aliases.includes(ticket.key)) ticket.aliases.push(ticket.key);
-        ticket.key = newKey;
-        state.keyIndex.set(newKey, ticket.id);
-      }
-      if (ev.payload.jira !== undefined) ticket.jira = ev.payload.jira;
-      if (ev.payload.external !== undefined) ticket.external = ev.payload.external;
-      const link = ticket.external ? ` (${ticket.external.system} ${ticket.external.key}, validation ${ticket.external.validation})` : ticket.jira ? ` (Jira ${ticket.jira.key}, validation ${ticket.jira.validation})` : '';
-      ticket.timeline.push(timelineEntry(ev, 'status', `Relinked to ${ticket.key}${link}`));
-      touch(state, ticket, ev, result);
+      const r = relinkTicket(state, ticket, ev, ev.payload, result);
+      if (r.rejected) result.rejected = r.rejected;
       break;
     }
     case 'approve':
