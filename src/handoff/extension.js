@@ -1,0 +1,177 @@
+// Worker extension that dispatches queued handoffs, enforces the 20-minute wall-clock cap,
+// honours cancellation, and resolves runs interrupted by a restart (TRD §Handoff execution).
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { nextDispatchable } from './reserve.js';
+import { validateHandoffRequest } from './permissions.js';
+import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
+import { buildPrompt, allowedToolsFor, parseAgentResult, spawnAgent, killTree } from './runner.js';
+import { recordResult, updateHandoff } from './results.js';
+import { handoffsDir, logsDir } from '../lib/paths.js';
+import { addMs, MINUTE } from '../lib/time.js';
+import { readJsonIfExists } from '../lib/atomic-fs.js';
+
+export const HANDOFF_DEADLINE_MS = 20 * MINUTE;
+
+function detectRuntime(claudePath) {
+  try {
+    execFileSync(process.platform === 'win32' ? 'where' : 'which', [claudePath], { stdio: 'ignore', windowsHide: true });
+    return true;
+  } catch {
+    return fs.existsSync(claudePath);
+  }
+}
+
+export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = HANDOFF_DEADLINE_MS, maxConcurrent = 2, runtimeAvailable, model = null } = {}) {
+  const running = new Map(); // handoff id -> { child, done, reason }
+  let paused = false;
+
+  function fail(worker, h, code, message, extra = {}) {
+    recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code, message }, extra });
+  }
+
+  async function finish(worker, h, run, outcome) {
+    const entry = running.get(h.id);
+    running.delete(h.id);
+    const current = worker.state.handoffs.get(h.id);
+    if (!current || !['running'].includes(current.state)) return;
+    const reason = entry ? entry.reason : null;
+    if (reason === 'timeout') { recordResult(worker, h.id, parseAgentResult(outcome.stdout), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'cancel') { recordResult(worker, h.id, parseAgentResult(outcome.stdout), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'stopped') { recordResult(worker, h.id, parseAgentResult(outcome.stdout), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
+    if (outcome.error) { fail(worker, current, outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', outcome.error.message); return; }
+    const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
+    const explicit = readJsonIfExists(resultFile);
+    const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: outcome.stdout } : parseAgentResult(outcome.stdout);
+    if (outcome.code !== 0) { recordResult(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
+    if (parsed.is_error) { recordResult(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
+    const extras = await fixExtras(worker, current, { finalize: true });
+    recordResult(worker, h.id, parsed, { state: extras.error ? 'failed' : 'done', error: extras.error ?? null, extra: extras });
+  }
+
+  // For fix runs: collect changed files and a patch; perform explicitly permitted commit/push/PR.
+  async function fixExtras(worker, h, { finalize = false } = {}) {
+    const out = {};
+    if (!h.worktree_path || !fs.existsSync(h.worktree_path)) return out;
+    try {
+      out.changed_files = await changedFiles(h.worktree_path);
+      const patch = await diffPatch(h.worktree_path);
+      const patchPath = path.join(handoffsDir(worker.env), 'results', `${h.id}.patch`);
+      fs.mkdirSync(path.dirname(patchPath), { recursive: true });
+      fs.writeFileSync(patchPath, patch);
+      out.patch_path = patchPath;
+    } catch (err) {
+      out.uncertain_effects = [...(h.uncertain_effects ?? []), `could not collect diff: ${err.message}`];
+      return out;
+    }
+    if (!finalize || !out.changed_files.length) return out;
+    const p = h.permissions ?? {};
+    const repo = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
+    try {
+      if (p.commit) out.commit_sha = await commitAll(h.worktree_path, `handoff(${h.id.slice(0, 8)}): ${h.note || 'attempt fix'}`);
+      if (p.push_branch && out.commit_sha) {
+        try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
+        if (p.open_draft_pr) {
+          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Tracker handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
+        }
+      }
+    } catch (err) {
+      out.error = { code: 'commit-failed', message: err.message };
+    }
+    return out;
+  }
+
+  async function dispatch(worker, h) {
+    const ticket = worker.state.tickets.get(h.ticket_id);
+    if (!ticket) return fail(worker, h, 'ticket-missing', 'ticket no longer exists');
+    const repoCfg = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
+    try {
+      validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch }, { repo: repoCfg });
+    } catch (err) {
+      return fail(worker, h, err.code ?? 'permission-invalid', err.message);
+    }
+    const available = runtimeAvailable ?? detectRuntime(claudePath);
+    if (!available) return fail(worker, h, 'runtime-missing', `Claude Code runtime (${claudePath}) is not installed or not on PATH; install and authenticate it, then retry as a new run`);
+    const needsSource = h.permissions && h.permissions.read_source;
+    let cwd;
+    let baseCommit = null;
+    let worktreePath = null;
+    if (needsSource) {
+      if (!repoCfg || !repoCfg.canonical_path || !fs.existsSync(repoCfg.canonical_path)) return fail(worker, h, 'repo-unavailable', 'source access requires the registered repository on this owner machine; it is not available');
+      try {
+        baseCommit = await headCommit(repoCfg.canonical_path);
+        worktreePath = path.join(handoffsDir(worker.env), 'worktrees', h.id);
+        await createWorktree({ repoPath: repoCfg.canonical_path, baseCommit, dir: worktreePath });
+      } catch (err) {
+        return fail(worker, h, err.code === 'worktree-failed' ? 'worktree-failed' : 'source-failed', err.message);
+      }
+      cwd = worktreePath;
+    } else {
+      cwd = path.join(handoffsDir(worker.env), 'sandbox', h.id);
+      fs.mkdirSync(cwd, { recursive: true });
+    }
+    const logPath = path.join(logsDir(worker.env), 'handoffs', `${h.id}.log`);
+    const started = worker.now();
+    const deadlineAt = addMs(started, deadlineMs);
+    updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath });
+    const current = worker.state.handoffs.get(h.id);
+    const prompt = buildPrompt(current, ticket, { repo: repoCfg });
+    const tools = allowedToolsFor({ mode: h.mode, permissions: h.permissions });
+    const env = { ...spawnEnv, TRACKER_HANDOFF_ID: h.id, TRACKER_HANDOFF_TICKET_ID: ticket.id, TRACKER_HANDOFF_TICKET_KEY: ticket.key };
+    if (ctx.env && ctx.env.TRACKER_HOME) env.TRACKER_HOME = ctx.env.TRACKER_HOME;
+    let run;
+    try {
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, logPath, model });
+    } catch (err) {
+      return fail(worker, h, 'spawn-failed', err.message);
+    }
+    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt });
+    run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
+  }
+
+  function killWithReason(id, reason) {
+    const entry = running.get(id);
+    if (!entry) return;
+    entry.reason = reason;
+    killTree(entry.child);
+  }
+
+  return {
+    name: 'handoff',
+    pause() { paused = true; },
+    resume() { paused = false; },
+    runningIds: () => new Set(running.keys()),
+    async onStart(worker) {
+      for (const h of [...worker.state.handoffs.values()]) {
+        if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
+      }
+    },
+    tick(worker) {
+      if (paused) return;
+      const now = worker.now();
+      for (const h of worker.state.handoffs.values()) {
+        if (h.cancel_requested && h.state === 'running' && running.has(h.id) && running.get(h.id).reason === null) killWithReason(h.id, 'cancel');
+      }
+      for (const [id, entry] of running) {
+        if (entry.reason === null && entry.deadlineAt && now >= entry.deadlineAt) killWithReason(id, 'timeout');
+      }
+      if (running.size >= maxConcurrent) return;
+      for (const h of nextDispatchable(worker.state, { running: new Set(running.keys()) })) {
+        if (running.size >= maxConcurrent) break;
+        running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null });
+        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); fail(worker, h, 'dispatch-failed', err.message); });
+      }
+    },
+    async onStop(worker, { abandonRuns = false } = {}) {
+      if (abandonRuns) { running.clear(); return; }
+      const pending = [];
+      for (const [id, entry] of running) {
+        if (entry.child) { killWithReason(id, 'stopped'); pending.push(entry.done); }
+      }
+      await Promise.all(pending);
+      // give finish() handlers a tick to journal their outcomes
+      await new Promise((r) => setTimeout(r, 20));
+    },
+  };
+}

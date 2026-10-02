@@ -92,13 +92,27 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
 
   const key = sessionKey({ session_id, agent_id });
   const base = { store_id: identity.store_id, machine_id: identity.machine_id, producer: 'hook', session_id, agent_id, occurred_at };
-  const snapshot = readBindingSnapshot(key, env);
+  // A handoff agent session runs with TRACKER_HANDOFF_* set by the worker: its tool calls are
+  // attributed to the handoff's ticket instead of being gated as unbound.
+  const handoff = env.TRACKER_HANDOFF_ID && env.TRACKER_HANDOFF_TICKET_ID
+    ? { id: env.TRACKER_HANDOFF_ID, ticket_id: env.TRACKER_HANDOFF_TICKET_ID, ticket_key: env.TRACKER_HANDOFF_TICKET_KEY ?? null }
+    : null;
+  let snapshot = readBindingSnapshot(key, env);
+  if (handoff && !(snapshot && snapshot.ticket_id)) {
+    snapshot = { ticket_id: handoff.ticket_id, ticket_key: handoff.ticket_key, ticket_title: null, binding_revision: snapshot ? snapshot.binding_revision ?? 0 : 0, gate_enabled: true, handoff_id: handoff.id };
+  }
   const gateEnabled = identity.gate_enabled !== false && !(snapshot && snapshot.gate_enabled === false);
 
   switch (eventName) {
     case 'SessionStart': {
-      const ev = makeEvent({ ...base, kind: 'session-start', payload: { source: input.source ?? 'startup', cwd: input.cwd ?? null, agent_type: input.agent_type ?? null }, source_identity: `session-start:${key}:${input.source ?? 'startup'}:${occurred_at}` });
+      const ev = makeEvent({ ...base, kind: 'session-start', payload: { source: input.source ?? 'startup', cwd: input.cwd ?? null, agent_type: input.agent_type ?? null, handoff_id: handoff ? handoff.id : null }, source_identity: `session-start:${key}:${input.source ?? 'startup'}:${occurred_at}` });
       persist(ev, env, result);
+      if (handoff) {
+        const bind = makeEvent({ ...base, kind: 'bind', payload: { ticket_id: handoff.ticket_id, project_id: null, handoff_id: handoff.id }, ticket_id: handoff.ticket_id, source_identity: `bind:${key}:handoff:${handoff.id}` });
+        persist(bind, env, result);
+        result.stdout = contextOutput('SessionStart', `Session Tracker session: ${session_id}. This is handoff ${handoff.id} for ticket ${handoff.ticket_key ?? handoff.ticket_id}; tool activity is attributed to that ticket. Permissions are limited to what the handoff request granted.`);
+        return result;
+      }
       result.stdout = contextOutput('SessionStart', bindingContext(snapshot, session_id));
       return result;
     }

@@ -310,14 +310,28 @@ function handleRequestTx(state, ev, result) {
         req.applied_revision = ticket.revision;
       }
     } else if (m.type === 'handoff-create') {
-      state.handoffs.set(m.handoff.id, { ...m.handoff });
-      const ticket = state.tickets.get(m.handoff.ticket_id);
+      const handoff = { ...m.handoff };
+      state.handoffs.set(handoff.id, handoff);
+      const ticket = state.tickets.get(handoff.ticket_id);
       if (ticket) {
-        if (!ticket.handoff_ids.includes(m.handoff.id)) ticket.handoff_ids.push(m.handoff.id);
-        ticket.timeline.push(timelineEntry(ev, 'handoff', `Handoff queued (${m.handoff.mode})`));
+        if (!ticket.handoff_ids.includes(handoff.id)) ticket.handoff_ids.push(handoff.id);
+        ticket.timeline.push(timelineEntry(ev, 'handoff', `Handoff queued (${handoff.mode})`));
         touch(state, ticket, ev, result);
+        // The suggestion baseline is the ticket revision as recorded with the handoff itself.
+        handoff.base_ticket_revision = ticket.revision;
       }
       result.handoffsChanged.add(m.handoff.id);
+    } else if (m.type === 'handoff-cancel') {
+      const h = state.handoffs.get(m.handoff_id);
+      if (h && h.state === 'queued') {
+        Object.assign(h, { state: 'cancelled', finished_at: ev.occurred_at, error: { code: 'cancelled', message: 'cancelled before dispatch' }, revision: (h.revision ?? 1) + 1, updated_at: ev.occurred_at });
+        const ticket = state.tickets.get(h.ticket_id);
+        if (ticket) { ticket.timeline.push(timelineEntry(ev, 'handoff', 'Handoff cancelled before dispatch')); touch(state, ticket, ev, result); }
+        result.handoffsChanged.add(h.id);
+      } else if (h && h.state === 'running') {
+        h.cancel_requested = true;
+        result.handoffsChanged.add(h.id);
+      }
     } else if (m.type === 'refresh') {
       // no state mutation; the worker runs reconciliation as an effect
     }

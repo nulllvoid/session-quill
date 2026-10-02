@@ -77,7 +77,7 @@ function sanitizeSession(s, o) {
 }
 
 function sanitizeHandoff(h, o) {
-  const { worktree_path, result_ref, pr_url, result_summary, changed_files, ...rest } = h;
+  const { worktree_path, result_ref, pr_url, result_summary, changed_files, log_path, patch_path, ...rest } = h;
   const out = { ...rest };
   if (o.includeLinks) out.pr_url = pr_url ?? null;
   if (o.includeCheckpoints) out.result_summary = result_summary ?? null;

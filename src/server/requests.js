@@ -8,8 +8,9 @@ import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'refresh'];
-const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff']);
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh'];
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel']);
+const REVISION_OPTIONAL = new Set(['handoff-cancel']);
 const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
 const TERMINAL = new Set(['applied', 'conflict', 'failed', 'cancelled']);
 
@@ -49,7 +50,7 @@ export function validateRequestBody(body, state, nowIso) {
     if (!body.target_id) throw new TrackerError('target-required', `${body.kind} requires target_id`);
     target = state.tickets.get(body.target_id);
     if (!target) throw new TrackerError('target-unknown', `unknown ticket ${body.target_id}`);
-    if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) throw new TrackerError('expected-revision-required', 'ticket edits require expected_revision');
+    if (!REVISION_OPTIONAL.has(body.kind) && (!Number.isInteger(body.expected_revision) || body.expected_revision < 0)) throw new TrackerError('expected-revision-required', 'ticket edits require expected_revision');
   }
   let normalized = {};
   switch (body.kind) {
@@ -82,6 +83,12 @@ export function validateRequestBody(body, state, nowIso) {
     case 'handoff':
       normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id) });
       break;
+    case 'handoff-cancel': {
+      const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
+      if (!h || h.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
+      normalized = { handoff_id: h.id };
+      break;
+    }
     case 'refresh':
       normalized = {};
       break;
@@ -92,7 +99,7 @@ export function validateRequestBody(body, state, nowIso) {
     id: body.id,
     kind: body.kind,
     target_id: target ? target.id : null,
-    expected_revision: target ? body.expected_revision : null,
+    expected_revision: target && !REVISION_OPTIONAL.has(body.kind) ? body.expected_revision : (Number.isInteger(body.expected_revision) ? body.expected_revision : null),
     payload: normalized,
     created_at: nowIso,
     not_before: DELAYED_KINDS.has(body.kind) ? addMs(nowIso, EDIT_DELAY_MS) : nowIso,
@@ -152,6 +159,12 @@ export function evaluateRequest(worker, req) {
         children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
       };
       return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
+    }
+    case 'handoff-cancel': {
+      const h = state.handoffs.get(req.payload.handoff_id);
+      if (!h) return { outcome: 'failed', error: { code: 'handoff-unknown', message: 'handoff no longer exists', retryable: false, current_revision: ticket.revision } };
+      if (!['queued', 'running'].includes(h.state)) return { outcome: 'failed', error: { code: 'handoff-terminal', message: `handoff is already ${h.state}`, retryable: false, current_revision: ticket.revision }, result: { state: h.state } };
+      return { outcome: 'applied', mutation: { type: 'handoff-cancel', handoff_id: h.id }, result: { handoff_id: h.id, was: h.state } };
     }
     default:
       return { outcome: 'failed', error: { code: 'kind-invalid', message: 'unsupported request kind', retryable: false, current_revision: null } };

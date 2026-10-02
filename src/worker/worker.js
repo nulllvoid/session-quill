@@ -318,9 +318,9 @@ export class Worker {
     return buildSnapshot(this.state, { generation_id: this.lastSnapshot ? this.lastSnapshot.generation_id : 'gen-00000000', generated_at: this.now(), ...this.snapshotOptions() });
   }
 
-  async stop({ flush = true } = {}) {
+  async stop({ flush = true, ...extOptions } = {}) {
     this.running = false;
-    for (const ext of this.extensions) if (ext.onStop) await ext.onStop(this);
+    for (const ext of this.extensions) if (ext.onStop) await ext.onStop(this, extOptions);
     if (flush && this.state) {
       try { this.flushNotes(); } catch (err) { this.log(`flush on stop failed: ${err.message}`); }
     }
