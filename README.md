@@ -1,41 +1,97 @@
-# Session Tracker — requirements and design
+# Session Tracker
 
-Session Tracker is a proposed public Claude Code plugin for ticket-bound sessions, recoverable local notes and a personal dashboard with agent handoff.
+A Claude Code plugin that binds development sessions to tickets, keeps a durable local record of what each session did, and gives you a loopback dashboard that answers "what should I pick next?", "where was I?" and "what still needs deployment?".
 
-**Status: revised draft v0.2, 2026-10-02. Implementation has not started.** The v0.2 revision resolves the requirements review; runtime and integration claims still require the acceptance work below.
+- **Ticket gate.** With the plugin loaded, supported write tools (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`), unknown shell commands and unregistered tools are denied until the session is bound to a ticket. Dedicated reads and a small tested read-only shell subset pass through. The gate is a workflow aid, not a sandbox: `/session-tracker:ticket off` disables it per session, audibly.
+- **Durable capture.** Hooks persist events to local ingress before acknowledging; one worker per store journals them, rebuilds generated state, and writes markdown notes (plain folder or Obsidian vault) within 30 seconds. Your own Summary and Notes sections are preserved byte-for-byte.
+- **Dashboard.** Pick next, Board, Tree, Sessions and Deployments views with revision-checked edits, a 10-second undo window, explicit conflicts, deterministic reconciliation every two hours and a Refresh that runs immediately.
+- **Sharing.** Read-only standalone HTML snapshots with an export time; no credentials, request code or local paths.
+- **Handoffs.** Analyse, analyse with follow-ups, or attempt a fix in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions and a 20-minute cap.
 
-## Documents
+Design documents live under [docs/](docs/README.md). Acceptance evidence is recorded in [docs/ACCEPTANCE-RESULTS.md](docs/ACCEPTANCE-RESULTS.md).
 
-| Document | Purpose |
-| --- | --- |
-| [PRD](docs/PRD.md) | Product guarantees, scope, requirements, defaults and release gates |
-| [TRD](docs/TRD.md) | Gate behavior, durable writer, attribution, reconciliation, UI transport, handoff and migration |
-| [Data contract](docs/DATA-CONTRACT.md) | Canonical fields, enums, identities, requests and state transitions |
-| [UI design](docs/UI-DESIGN.md) | Views, capabilities, interaction outcomes, responsive layout and visual system |
-| [Acceptance scenarios](docs/ACCEPTANCE.md) | Testable phase gates and traceability back to review findings |
-| [Architecture decisions](docs/decisions/) | Worker serialization, local-first dashboard and tested hook compatibility |
+## Prerequisites
 
-## v0.2 decisions
+- **Node.js 22 LTS or newer**, installed explicitly. Claude Code does **not** bundle Node; the hooks run `node` from your `PATH`.
+- **Claude Code 2.1.x** (hook payloads and plugin layout were verified against the 2.1.284 documentation).
+- **Git** and an authenticated **`claude`** CLI only if you use handoffs. **`gh`** only if you want GitHub PR polling.
 
-- Gate coverage is explicit; it does not promise filesystem-wide enforcement.
-- One local worker serializes writes. Events persist before acknowledgement; healthy note materialization is bounded at 30 seconds.
-- Bindings use explicit session/agent identities and preserve event history through rebinding.
-- Staleness is a flag; full checkpoints remain available behind shortened previews.
-- The local dashboard is the v1 baseline. Read-only HTML exports support sharing; hosted live sharing is deferred until its adapter is verified.
-- Edits have revision checks, a real undo window and explicit conflict/failure outcomes.
-- Handoffs use isolated source checkouts and separate read/edit/commit/push/PR permissions.
-- Single-owner-machine operation, approval phrases off and all-day two-hour reconciliation are the defaults.
+Supported platforms are recorded after each acceptance run in `docs/ACCEPTANCE-RESULTS.md`; development and tests so far ran on Windows 11 with Node 24.
 
-## Source of truth
+## Install
 
-The committed markdown is authoritative for v0.2. The data contract governs field/state definitions; PRD governs scope; TRD governs mechanics; UI governs presentation. Conflicts must be resolved in these files before implementation.
+Cloning alone does not install the plugin. Load it with Claude Code's plugin directory flag:
 
-Earlier live Claude documents and PNGs under [docs/diagrams](docs/diagrams/) are historical v0.1 references and have not been synchronized. Current architecture and screen maps are inline Mermaid in the revised documents; do not build from the old images.
+```bash
+claude --plugin-dir /path/to/session-tracker
+```
 
-Historical editing copies: [technical design](https://claude.ai/code/artifact/e7c5396d-215e-40fd-8e8a-37cb7f1ee220), [UI design](https://claude.ai/code/artifact/5aac569c-9868-4eb4-92eb-b79cf1bf295c).
+To install permanently, add this repository to a marketplace you control and run `claude plugin install session-tracker@<marketplace>`, or keep using `--plugin-dir` (a shell alias works well). Run `claude plugin validate /path/to/session-tracker` to check the manifest.
 
-## Next implementation gate
+## Initialize
 
-Begin phase 0 with actual Claude Code hook fixtures and an authenticated local UI-to-store request round trip. Record exact supported runtime versions and operating systems. Passing a document consistency check is not evidence that the software or integrations work.
+From the repository you want to track:
 
-Final public repository ownership/license and real deployment paths/credentials remain release or initialization inputs. This repository revision does not install a plugin, migrate PMLA, publish a dashboard or share private data.
+```bash
+node /path/to/session-tracker/bin/tracker.js init --store ~/Documents/Tracker --project my-project --project-name "My Project"
+```
+
+With the CLI on your `PATH` this is simply `tracker init ...`. `init` writes `~/.claude/tracker/config.toml` (user defaults), a committable `.tracker.toml` in the repository (project and category defaults; no secrets, no ownership), creates the store, starts the worker and verifies its heartbeat. Re-running is idempotent. Add `--yes` to skip prompts.
+
+Keep the worker running across reboots by registering this with your OS (Task Scheduler, login item, systemd user unit):
+
+```bash
+node /path/to/session-tracker/bin/tracker.js worker start
+```
+
+Optional: put the CLI on your `PATH` as `tracker` (for example `npm link` or a shell alias) so the commands below read `tracker ...`.
+
+## First tracked session
+
+1. Start Claude Code in the repository with the plugin loaded. The SessionStart hook injects `Session Tracker session: <id>` and whether the session is bound.
+2. Create and bind a ticket: `/session-tracker:ticket create "Preserve session checkpoints" --bind`. Supported writes are now permitted through normal Claude Code permissions.
+3. Work. Successful writes, commits, PR creation, approved plans (`ExitPlanMode`) and end-of-turn checkpoints are captured and attributed to the ticket.
+4. Promote the latest checkpoint as an approved plan with `/session-tracker:approve`. Approval is recorded provenance, never permission to commit, push or deploy.
+5. Open the dashboard: `tracker ui`. The command prints a one-use owner link (loopback only, 10-minute validity) and opens your browser.
+
+Other commands: `/session-tracker:status`, `/session-tracker:handoff <KEY>`, `/session-tracker:ui`; from a terminal `tracker ticket list`, `tracker sync`, `tracker export`, `tracker replay --into <dir>`, `tracker import <note.md>`, `tracker note restore <KEY>`, `tracker migrate --source <dir> --dry-run`.
+
+## Status line
+
+Add the tracker segment to your status line (`~/.claude/settings.json`):
+
+```json
+{ "statusLine": { "type": "command", "command": "node /path/to/session-tracker/scripts/statusline.js" } }
+```
+
+If you already have a status line, keep it and run both scripts from a small wrapper so neither replaces the other.
+
+## Diagnostics
+
+```bash
+tracker doctor
+```
+
+Reports Node, Git and Claude versions, store ownership (copies on other machines are read-only), worker lock and heartbeat, ingress backlog, journal health and recent capture gaps. `tracker status --json` shows the binding for a session. Logs are under `~/.claude/tracker/logs/`.
+
+## Uninstall
+
+1. Stop the worker: `tracker worker stop` (and remove any OS registration you added).
+2. Remove the plugin: stop passing `--plugin-dir`, or `claude plugin uninstall session-tracker`.
+3. Your markdown store is yours and stays where it is. Tracker state (journal, blobs, projections) lives in `~/.claude/tracker/`; delete it only after backing it up if you want a clean slate.
+
+## Privacy and limits
+
+- No telemetry. Hooks capture tool metadata and selected assistant content, not full prompts, environments or command output.
+- The gate covers tool calls delivered to its hooks. External processes, disabled hooks and host crashes are outside its guarantee, and a valid binding never bypasses normal Claude Code permissions.
+- Exports are copies: they do not update and cannot be revoked after you share them.
+- Handoffs use your configured model provider; selected ticket content leaves the machine when you queue one.
+
+## Development
+
+```bash
+npm test                 # unit and integration suites (node:test)
+npm run test:acceptance  # scenario suite mapped to docs/ACCEPTANCE.md
+```
+
+The license and public repository owner are release inputs; see [LICENSE-TBD.md](LICENSE-TBD.md).

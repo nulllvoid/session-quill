@@ -1,6 +1,9 @@
-node_modules/
-.DS_Store
-Thumbs.db
+
+# local tracker state and demo artifacts
+*.html.tmp
 *.log
+.DS_Store
 .env
 .superpowers/
+Thumbs.db
+node_modules/
