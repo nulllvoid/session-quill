@@ -16,6 +16,9 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Schedules and providers.** Named jobs run on cron or interval schedules in your time zone, with a Schedules panel and Run now. PR state comes from GitHub (`gh`) or Bitbucket Cloud and Server.
 - **Sharing.** Read-only standalone HTML snapshots with an export time; no credentials, request code or local paths.
 - **Agent recipes.** Analyse, analyse with follow-ups, attempt a fix, check deployments or write a standup, or add your own recipes as Markdown files. Each runs in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions that the recipe caps, and its suggestions wait for you to accept them.
+- **Environments and Today.** Each merged PR owes a deployment per environment, shown as a PR-by-environment matrix with the evidence for each. Today lists what happened on each day of the last week, and a digest job writes the same summary into your daily note.
+- **Publishers.** Share a roll-up note, a read-only HTML copy or a live claude.ai artifact page. Each sends only the fields and projects you list, and only after you confirm the destination.
+- **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear without ever writing to them. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline.
 
 ## Documentation
 
@@ -30,38 +33,55 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 ## Prerequisites
 
 - **Node.js 22 LTS or newer**, installed explicitly. Node is **not bundled** with Claude Code; the hooks run `node` from your `PATH`.
-- **Claude Code 2.1.x** (hook payloads and plugin layout were verified against the 2.1.284 documentation).
-- **Git** and an authenticated **`claude`** CLI only if you use handoffs. **`gh`** only if you want GitHub PR polling.
+- **Claude Code 2.1.x** (verified with 2.1.288).
+- **Git** and an authenticated **`claude`** CLI only if you use agent recipes. **`gh`** only for GitHub PR polling, and a Bitbucket or tracker token only if you use those integrations.
+- A **claude.ai** sign-in in Claude Code only for artifact publishers. Live pages are published from a Claude Code session, because headless `claude -p` has no Artifact tools.
 
-Supported platforms are recorded after each acceptance run in `docs/ACCEPTANCE-RESULTS.md`; development and tests so far ran on Windows 11 with Node 24.
+Supported platforms are recorded after each acceptance run in `docs/ACCEPTANCE-RESULTS.md`. CI runs the suite on Windows, macOS and Linux with Node 22 and 24.
 
 ## Install
 
-Cloning alone does not install the plugin. Load it with Claude Code's plugin directory flag:
+This repository is also its own plugin marketplace. Install from a terminal:
+
+```bash
+claude plugin marketplace add nulllvoid/session-quill
+```
+
+```bash
+claude plugin install session-quill@session-quill
+```
+
+The same commands work inside Claude Code as `/plugin marketplace add nulllvoid/session-quill` and `/plugin install session-quill@session-quill`. Start a new session; `/session-quill:status` confirms the plugin is loaded. To update later, run `claude plugin marketplace update session-quill` and then `claude plugin update session-quill@session-quill`.
+
+The terminal CLI ships inside the plugin, at `~/.claude/plugins/cache/session-quill/session-quill/<version>/bin/quill.js` (`%USERPROFILE%\.claude\plugins\cache\...` on Windows, or under `CLAUDE_CONFIG_DIR` if you set it). Point a shell alias named `quill` at it, or use a clone as below.
+
+**From a clone** (to develop, or to pin a commit), load the directory directly:
+
+```bash
+git clone https://github.com/nulllvoid/session-quill.git
+```
 
 ```bash
 claude --plugin-dir /path/to/session-quill
 ```
 
-To install permanently, add this repository to a marketplace you control and run `claude plugin install session-quill@<marketplace>`, or keep using `--plugin-dir` (a shell alias works well). Run `claude plugin validate /path/to/session-quill` to check the manifest.
+A shell alias for that command works well. In a clone, `npm link` puts the CLI on your `PATH` as `quill`. Run `claude plugin validate /path/to/session-quill` to check the plugin and marketplace manifests.
 
 ## Initialize
 
 From the repository you want to track:
 
 ```bash
-node /path/to/session-quill/bin/quill.js init --store ~/Documents/Quill --project my-project --project-name "My Project"
+quill init --store ~/Documents/Quill --project my-project --project-name "My Project"
 ```
 
-With the CLI on your `PATH` this is simply `quill init ...`. `init` writes `~/.claude/quill/config.toml` (user defaults), a committable `.quill.toml` in the repository (project and category defaults; no secrets, no ownership), creates the store, starts the worker and verifies its heartbeat. Re-running is idempotent. Add `--yes` to skip prompts.
+Use `node /path/to/session-quill/bin/quill.js` wherever this README says `quill` if you have no alias. `init` writes `~/.claude/quill/config.toml` (user defaults), a committable `.quill.toml` in the repository (project and category defaults; no secrets, no ownership), creates the store, starts the worker and verifies its heartbeat. Re-running is idempotent. Add `--yes` to skip prompts.
 
 Keep the worker running across reboots by registering this with your OS (Task Scheduler, login item, systemd user unit):
 
 ```bash
-node /path/to/session-quill/bin/quill.js worker start
+quill worker start
 ```
-
-Optional: put the CLI on your `PATH` as `quill` (for example `npm link` or a shell alias) so the commands below read `quill ...`.
 
 ## Link sessions to your tracker
 
@@ -99,7 +119,7 @@ job  = "reconcile"
 cron = "30 19 * * 1-5"       # minute hour day-of-month month day-of-week, in the store's time zone
 ```
 
-A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. `reconcile` is the job available today; `agent` runs a recipe, `digest` writes a daily summary, `publish` runs publishers and `tracker-sync` reads your tracker (see below).
+A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. Jobs: `reconcile` checks PRs, `agent` runs a recipe, `digest` writes a daily summary, `publish` runs publishers and `tracker-sync` reads your tracker (each is described below).
 
 ## Environments, Today and the daily digest
 
@@ -196,15 +216,21 @@ scope  = "deploy-pending"          # deploy-pending | active | review | blocked 
 
 The run dialog shows what a recipe may do before you queue it; anything with a side effect stays off until you tick it, and scheduled runs only ever read. Results from your own recipes and `deploy-check` or `standup` arrive as suggestions on the ticket: accept or dismiss each one. A comment draft is never posted to your tracker.
 
-## First tracked session
+## Example walkthrough
 
-1. Start Claude Code in the repository with the plugin loaded. The SessionStart hook injects `Session Quill session: <id>` and whether the session is bound. On a branch such as `feat/PROJ-123-retry-flake`, the session is already linked to `PROJ-123`.
-2. Mention the ticket in your prompt, for example "PROJ-123: make the retry test deterministic". The session is linked before Claude's first tool call, and the ticket is created under that key if the store has none. Without a `[tracker]` table, run `/session-quill:ticket create "Preserve session checkpoints" --bind` instead.
-3. Work. Successful writes, commits, PR creation, approved plans (`ExitPlanMode`) and end-of-turn checkpoints are captured and attributed to the ticket. Anything changed before the session was linked appears under "Unlinked work" on the dashboard's Pick next view, where you attach it to a ticket or dismiss it.
-4. Promote the latest checkpoint as an approved plan with `/session-quill:approve`. Approval is recorded provenance, never permission to commit, push or deploy.
-5. Open the dashboard: `quill ui`. The command prints a one-use owner link (loopback only, 10-minute validity) and opens your browser.
+One ticket, `PROJ-123` in Jira, from first prompt to a page your team can see. It assumes `quill init` has run and that `[tracker]` in `~/.claude/quill/config.toml` names your Jira site, prefixes and `environments = ["stage", "prod"]`.
 
-Other commands: `/session-quill:status`, `/session-quill:handoff <KEY>`, `/session-quill:agent`, `/session-quill:ui`; from a terminal `quill ticket list`, `quill sync`, `quill export`, `quill replay --into <dir>`, `quill import <note.md>`, `quill note restore <KEY>`, `quill migrate --source <dir> --dry-run`.
+1. **Start working.** Open Claude Code in the repository on a branch such as `feat/PROJ-123-retry-flake`, or say "PROJ-123: make the retry test deterministic". The session is linked to `PROJ-123` before Claude's first tool call, and the ticket is created if the store has none. With no `[tracker]` table, run `/session-quill:ticket create "Make the retry test deterministic" --bind` instead.
+2. **Let it capture.** Writes, commits, PR creation, approved plans and end-of-turn checkpoints are recorded against the ticket, and its note in your store updates within 30 seconds. Work done before the session was linked waits under **Unlinked work** on Pick next, where you attach it to a ticket or dismiss it.
+3. **Approve the plan.** `/session-quill:approve` promotes the latest checkpoint to an approved plan. It is a record, never permission to commit, push or deploy.
+4. **Open the dashboard.** `quill ui` prints a one-use owner link (loopback only, valid for 10 minutes) and opens it. Pick next ranks your open tickets; open `PROJ-123` for its timeline, PRs and deployments.
+5. **Ask an agent.** From the ticket's **Agents** panel, or `quill agent run analyse PROJ-123`, a recipe works in an isolated checkout with only the permissions you tick. Its findings arrive as suggestions on the ticket, and you accept or dismiss each one.
+6. **Merge and deploy.** When the PR merges, the next reconciliation records it (**Refresh** in the header, or `quill sync`, runs one now). `PROJ-123` now owes `stage` and `prod` deployments, which show on **Deployments**. Record each one with its evidence as it ships, or mark it N/A. A `deploy-check` recipe can look for the evidence and suggest it. Closing the ticket while a deployment is pending asks you to record, waive or leave it.
+7. **Review the day.** **Today** shows what changed on each ticket today and on each of the last few days. A `digest` schedule writes the same summary into the store's daily note.
+8. **Share it.** Add a `[[publish]]` entry (see [Publishing](#publishing)). For a markdown or HTML publisher, `quill publish team --confirm` confirms the destination and publishes. For a live artifact, run `/session-quill:publish team` in a Claude Code session and confirm when it asks; it prints the page's claude.ai link. Share the page from claude.ai. With `two_way = true`, people you let edit the page can change a ticket's status or next action. Each change comes back on the next publish as an edit that applies unless you changed the ticket since, and comments that name a ticket appear on its timeline.
+9. **See the tracker's view.** With `sync_token_env` set and a `tracker-sync` schedule (see [Tracker sync](#tracker-sync)), the ticket shows Jira's status, assignee and fix version, and warns if the key does not exist. Quill never writes to Jira.
+
+Other commands: `/session-quill:status`, `/session-quill:handoff <KEY>`, `/session-quill:agent`, `/session-quill:ui`; from a terminal `quill ticket list`, `quill publish list`, `quill export`, `quill replay --into <dir>`, `quill import <note.md>`, `quill note restore <KEY>`, `quill migrate --source <dir> --dry-run`, and `quill help` for the rest.
 
 ## Status line
 
@@ -227,7 +253,7 @@ Reports Node, Git and Claude versions, store ownership (copies on other machines
 ## Uninstall
 
 1. Stop the worker: `quill worker stop` (and remove any OS registration you added).
-2. Remove the plugin: stop passing `--plugin-dir`, or `claude plugin uninstall session-quill`.
+2. Remove the plugin: `claude plugin uninstall session-quill@session-quill` and `claude plugin marketplace remove session-quill`, or stop passing `--plugin-dir`.
 3. Your markdown store is yours and stays where it is. Quill state (journal, blobs, projections) lives in `~/.claude/quill/`; delete it only after backing it up if you want a clean slate.
 
 ## Privacy and limits

@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- A plugin marketplace manifest: install with `claude plugin marketplace add nulllvoid/session-quill` and `claude plugin install session-quill@session-quill`. The README install steps and a new example walkthrough cover recipes, deployments, Today, publishing and tracker sync.
 - Tracker sync ([ADR 0011](docs/decisions/0011-tracker-sync-and-two-way.md)): a `tracker-sync` schedule job reads title, status, assignee and fix versions for linked tickets from Jira, GitHub or Linear with a token from a named environment variable, validates keys, and never writes to the tracker or changes Quill's own fields.
 - Two-way artifacts: with `two_way = true`, editors change status and next action on the live page, and the next publish turns each change into a revision-checked request; page comments that name a ticket join its timeline. Acceptance scenarios A65–A68.
 
