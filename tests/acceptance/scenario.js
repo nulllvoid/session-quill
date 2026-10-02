@@ -22,7 +22,7 @@ export const FAKE_CLAUDE = path.resolve('tests/fixtures/fake-claude.js');
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Scenarios A01–A41 describe the strict gate; phase 6 passes gateMode explicitly (ADR 0005).
-export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos = {}, providers = null, withServer = false, withHandoff = false, handoffOpts = {}, gateMode = 'strict', timezone = 'UTC' } = {}) {
+export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos = {}, providers = null, withServer = false, withHandoff = false, handoffOpts = {}, gateMode = 'strict', timezone = 'UTC', jobOpts = {} } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-acc-'));
   const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
@@ -48,7 +48,7 @@ export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos =
     hookIdentity: () => { writeRuntimeIdentity({ store_id: meta.store_id, machine_id: MACHINE, store_path: storePath, gate_enabled: true, approval_phrases_enabled: false, allow_tools: [] }, env); writeHeartbeat({ at: iso(), pid: 1, store_id: meta.store_id }, env); },
     async start({ derive: d = derive } = {}) {
       s.w = new Worker({ config, storeMeta: meta, env, clock, derive: d });
-      s.rext = reconcileExt(ctx, { providers: providers ?? { for: () => ({ name: 'github', fetchPr: async () => { throw new Error('gh: offline'); } }) } });
+      s.rext = reconcileExt(ctx, { ...jobOpts, providers: providers ?? { for: () => ({ name: 'github', fetchPr: async () => { throw new Error('gh: offline'); } }) } });
       s.w.use(s.rext);
       if (withServer || withHandoff) { s.sext = serverExt(ctx, { port: 0 }); s.w.use(s.sext); }
       if (withHandoff) { s.hext = handoffExt(ctx, { claudePath: process.execPath, claudeArgs: [FAKE_CLAUDE], runtimeAvailable: true, maxConcurrent: 4, ...handoffOpts }); s.w.use(s.hext); }

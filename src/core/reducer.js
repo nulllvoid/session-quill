@@ -223,6 +223,28 @@ function bindExternal(state, session, ev, result) {
 }
 
 export const SCHEDULE_HISTORY = 20;
+export const PUBLISH_HISTORY = 20;
+
+// One finished publish of one publisher (ADR 0010). `confirmed` records the owner's consent to that
+// destination, which later publishes to the same destination rely on.
+function applyPublishRun(state, ev) {
+  const p = ev.payload;
+  if (!p || typeof p.publisher !== 'string' || typeof p.run_id !== 'string' || typeof p.outcome !== 'string') return { rejected: 'publish-invalid' };
+  let rec = state.publishers.get(p.publisher);
+  if (!rec) {
+    rec = { name: p.publisher, url: null, confirmed: [], last_published_at: null, last_outcome: null, last_error: null, last_summary: null, runs: [] };
+    state.publishers.set(p.publisher, rec);
+  }
+  if (p.confirmed === true && typeof p.destination === 'string' && !rec.confirmed.includes(p.destination)) rec.confirmed.push(p.destination);
+  if (typeof p.url === 'string' && p.url) rec.url = p.url;
+  if (p.outcome === 'ok') rec.last_published_at = ev.occurred_at;
+  rec.last_outcome = p.outcome;
+  rec.last_error = p.error ?? null;
+  rec.last_summary = p.summary ?? null;
+  rec.runs.unshift({ run_id: p.run_id, at: ev.occurred_at, trigger: p.trigger ?? 'manual', outcome: p.outcome, summary: p.summary ?? null, error: p.error ?? null });
+  if (rec.runs.length > PUBLISH_HISTORY) rec.runs.length = PUBLISH_HISTORY;
+  return {};
+}
 
 // Every scheduled or manual job run is journaled, so the Schedules panel and replay agree (ADR 0007).
 function applyScheduleRun(state, ev) {
@@ -790,6 +812,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'handoff-tx':
       Object.assign(result, handleHandoffTx(state, ev, result));
       break;
+    case 'publish-run': Object.assign(result, applyPublishRun(state, ev)); break;
     case 'schedule-run':
       Object.assign(result, applyScheduleRun(state, ev));
       break;

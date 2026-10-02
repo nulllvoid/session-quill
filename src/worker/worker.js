@@ -172,7 +172,7 @@ export class Worker {
         const fresh = loadUserConfig(this.env);
         // Repositories registered by `quill init` while the worker runs must reach the identity too.
         this.config = {
-          ...this.config, gate_enabled: fresh.gate_enabled, gate: fresh.gate, tracker: fresh.tracker, schedule: fresh.schedule,
+          ...this.config, gate_enabled: fresh.gate_enabled, gate: fresh.gate, tracker: fresh.tracker, schedule: fresh.schedule, publish: fresh.publish, claude_path: fresh.claude_path,
           repos: { ...this.config.repos, ...fresh.repos }, projects: { ...this.config.projects, ...fresh.projects }, default_project: fresh.default_project || this.config.default_project,
         };
         this.state.meta.repos = this.config.repos;
@@ -405,6 +405,7 @@ export class Worker {
       schedules: schedules ?? [], next_sync_due: schedules ? (reconcile ? reconcile.next_due : null) : undefined,
       recipes: this.recipeInfo ? this.recipeInfo() : [],
       environmentsFor: (repoId) => this.environmentsFor(repoId),
+      publishers: this.publishInfo ? this.publishInfo() : [],
     };
   }
 

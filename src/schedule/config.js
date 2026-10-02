@@ -3,12 +3,12 @@ import path from 'node:path';
 import os from 'node:os';
 import { parseCron, parseInterval, nextAfter } from './cron.js';
 
-export const JOBS = ['reconcile', 'agent', 'digest'];
+export const JOBS = ['reconcile', 'agent', 'digest', 'publish'];
 export const DIGEST_TARGETS = ['vault-daily', 'file'];
 export const AGENT_SCOPES = ['deploy-pending', 'active', 'review', 'blocked', 'open'];
 export const AGENT_LIMIT_MAX = 25;
 // Named by the zero-command proposal and accepted in config so later releases need no migration.
-export const PLANNED_JOBS = ['stale-sweep', 'publish', 'tracker-sync'];
+export const PLANNED_JOBS = ['stale-sweep', 'tracker-sync'];
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 export function defaultSchedules(config = {}) {
@@ -38,6 +38,10 @@ export function normalizeSchedules(config = {}, { timeZone = 'UTC', now = Date.n
       const limit = raw.limit ?? 10;
       if (!Number.isInteger(limit) || limit < 1 || limit > AGENT_LIMIT_MAX) { warnings.push(`${where}: limit must be a whole number from 1 to ${AGENT_LIMIT_MAX}`); return; }
       extra = { recipe: raw.recipe.trim(), scope, limit };
+    }
+    if (raw.job === 'publish') {
+      if (raw.publisher !== undefined && (typeof raw.publisher !== 'string' || !raw.publisher.trim())) { warnings.push(`${where}: publisher must name a [[publish]] entry`); return; }
+      extra = { publisher: raw.publisher ? raw.publisher.trim() : null };
     }
     if (raw.job === 'digest') {
       const to = raw.to ?? ['vault-daily'];

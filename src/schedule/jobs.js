@@ -7,7 +7,13 @@ import { uuid } from '../lib/ids.js';
 import path from 'node:path';
 import { buildToday, localDate } from '../today/feed.js';
 import { renderDigest, writeDigest, writeDigestFile } from '../today/digest.js';
-import { stateDir } from '../lib/paths.js';
+import { stateDir, quillHome } from '../lib/paths.js';
+import { readJsonIfExists, writeJsonAtomic } from '../lib/atomic-fs.js';
+import { normalizePublishers, destinationOf, KIND_LABELS } from '../publish/config.js';
+import { rowsFor } from '../publish/content.js';
+import { publishMarkdown, publishHtml } from '../publish/writers.js';
+import { publishArtifact } from '../publish/artifact.js';
+import { createArtifactClient } from '../publish/artifact-client.js';
 
 const NO_PERMISSIONS = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 
@@ -30,8 +36,61 @@ function previousDate(date) {
   return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
 }
 
-export function createJobs({ providers }) {
+function defaultArtifactClient(publisher, worker) {
+  return createArtifactClient({ claudePath: worker.config.claude_path || 'claude', workRoot: path.join(quillHome(worker.env), 'publish', publisher.name, 'runs') });
+}
+
+export function createJobs({ providers, artifactClientFor = defaultArtifactClient }) {
   return {
+    // Runs publishers (ADR 0010). A destination the owner has not confirmed is never sent anything:
+    // the run records needs-confirmation until a publish request carries confirm.
+    async publish(worker, { run_id, settings, trigger }) {
+      const { publishers } = normalizePublishers(worker.config);
+      const names = settings.publishers ?? (settings.publisher ? [settings.publisher] : null);
+      const targets = names ? publishers.filter((p) => names.includes(p.name)) : publishers;
+      if (settings.publisher && !targets.length) throw new Error(`no publisher named ${settings.publisher}`);
+      if (!targets.length) return { summary: 'no publishers configured' };
+      const snapshot = worker.getSnapshot();
+      const indexPath = path.join(stateDir(worker.env), 'publish-index.json');
+      const results = [];
+      for (const p of targets) {
+        const destination = destinationOf(p);
+        const rec = worker.state.publishers.get(p.name);
+        const confirmed = !!(rec && rec.confirmed.includes(destination));
+        const base = { publisher: p.name, run_id, destination, trigger: trigger ?? 'manual', confirmed: !!settings.confirm };
+        if (!confirmed && !settings.confirm) {
+          const summary = `waiting for confirmation of the first publish to ${p.kind === 'artifact' ? (p.url ?? 'a new claude.ai artifact') : path.basename(p.path)}`;
+          worker.emit('publish-run', { ...base, outcome: 'needs-confirmation', summary }, { source_identity: `publish-run:${run_id}:${p.name}` });
+          results.push({ name: p.name, ok: true, summary });
+          continue;
+        }
+        const now = worker.now();
+        try {
+          let out;
+          if (p.kind === 'markdown') out = publishMarkdown(p, rowsFor(snapshot, p, { exportedAt: now }), { indexPath, now });
+          else if (p.kind === 'html') out = publishHtml(p, snapshot, { now });
+          else if (p.executor !== 'cli') {
+            // The Artifact tools exist in Claude Code sessions, not in the worker: say what to run.
+            worker.emit('publish-run', { ...base, outcome: 'needs-session', summary: `run /session-quill:publish ${p.name} in a Claude Code session to publish` }, { source_identity: `publish-run:${run_id}:${p.name}` });
+            results.push({ name: p.name, ok: true, summary: `run /session-quill:publish ${p.name} in a Claude Code session to publish` });
+            continue;
+          } else {
+            const sidecar = path.join(quillHome(worker.env), 'publish', p.name, 'state.json');
+            const prior = readJsonIfExists(sidecar);
+            out = await publishArtifact(p, rowsFor(snapshot, p, { exportedAt: now }), { client: artifactClientFor(p, worker), prior: prior && (!p.url || prior.url === p.url) ? prior : null, now });
+            writeJsonAtomic(sidecar, out.state);
+          }
+          worker.emit('publish-run', { ...base, outcome: 'ok', summary: out.summary, url: out.url ?? null }, { source_identity: `publish-run:${run_id}:${p.name}` });
+          results.push({ name: p.name, ok: true, summary: out.summary });
+        } catch (err) {
+          worker.log(`publish ${p.name} failed: ${err.stack ?? err.message}`);
+          worker.emit('publish-run', { ...base, outcome: 'failed', error: err.message }, { source_identity: `publish-run:${run_id}:${p.name}` });
+          results.push({ name: p.name, ok: false, error: err.message });
+        }
+      }
+      if (results.every((r) => !r.ok)) throw new Error(results.map((r) => `${r.name}: ${r.error}`).join('; '));
+      return { summary: results.map((r) => `${r.name} (${KIND_LABELS[targets.find((t) => t.name === r.name).kind].toLowerCase()}): ${r.ok ? r.summary : `failed: ${r.error}`}`).join('; ') };
+    },
     async reconcile(worker, { run_id, reason }) {
       const r = await runReconciliation(worker, { reason, providers, run_id });
       const errors = r.provider_health.filter((h) => h.error).length;

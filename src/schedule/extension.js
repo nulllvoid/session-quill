@@ -6,11 +6,15 @@ import { normalizeSchedules } from './config.js';
 import { nextAfter } from './cron.js';
 import { createJobs } from './jobs.js';
 import { defaultProviders } from '../reconcile/providers/index.js';
+import path from 'node:path';
+import { normalizePublishers, destinationOf, KIND_LABELS } from '../publish/config.js';
 
 const CATCH_UP_SLACK_MS = 60_000;
+const SCHEDULED_REQUESTS = new Set(['refresh', 'run-job', 'publish']);
 
-export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 5000 } = {}) {
-  const impl = jobs ?? createJobs({ providers: providers ?? defaultProviders(ctx.config, ctx.env) });
+export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 5000, artifactClientFor } = {}) {
+  const impl = jobs ?? createJobs({ providers: providers ?? defaultProviders(ctx.config, ctx.env), artifactClientFor });
+  let worker0 = null;
   let schedules = [];
   let loadedFrom;
   let baselineMs = null;
@@ -56,6 +60,12 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
 
   function scheduleForRequest(r) {
     if (r.kind === 'refresh') return schedules.find((s) => s.job === 'reconcile') ?? { name: 'reconcile', job: 'reconcile', enabled: false };
+    // Publish now (ADR 0010): an ad hoc run of the publish job for one publisher, or all of them.
+    if (r.kind === 'publish') {
+      const publisher = r.payload && r.payload.publisher ? r.payload.publisher : null;
+      if (publisher && !publishers(worker0).some((p) => p.name === publisher)) return null;
+      return { name: `publish:${publisher ?? 'all'}`, job: 'publish', enabled: false, publisher, confirm: !!(r.payload && r.payload.confirm) };
+    }
     return schedules.find((s) => s.name === (r.payload && r.payload.schedule)) ?? null;
   }
 
@@ -71,7 +81,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
       let error = null;
       let result = {};
       try {
-        result = (await impl[s.job](worker, { run_id, reason, schedule: s.name, settings: s, due_at: dueMs ? toIso(dueMs) : null })) ?? {};
+        result = (await impl[s.job](worker, { run_id, reason, schedule: s.name, settings: s, trigger, due_at: dueMs ? toIso(dueMs) : null })) ?? {};
         summary = result.summary ?? null;
       } catch (err) {
         outcome = 'failed';
@@ -79,6 +89,11 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
         worker.log(`job ${s.job} (${s.name}) failed: ${err.stack ?? err.message}`);
       }
       worker.emit('schedule-run', { schedule: s.name, job: s.job, run_id, phase: 'finished', outcome, summary, error }, { source_identity: `schedule-run:${run_id}:finished` });
+      // Publishers with on = ["reconcile"] follow every successful reconciliation (ADR 0010).
+      if (s.job === 'reconcile' && outcome === 'ok' && !running.has('publish')) {
+        const after = publishers(worker).filter((p) => p.after_reconcile).map((p) => p.name);
+        if (after.length) start(worker, { name: 'publish:after-reconcile', job: 'publish', enabled: false, publishers: after }, 'after-reconcile', []);
+      }
       for (const r of requests) {
         if (outcome === 'ok') {
           worker.emit('request-tx', { request_id: r.id, outcome: 'applied', result: { run_id, last_sync: result.last_sync ?? null }, mutation: { type: 'refresh' } }, { source_identity: `request-tx:${r.id}:applied` });
@@ -89,6 +104,37 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
       worker.markGenerationDirty();
     })().finally(() => { running.delete(s.job); });
     running.set(s.job, { promise, run_id, schedule: s.name });
+  }
+
+  // Publishers from config, re-read when config changes; warnings go to the health log once per load.
+  let publisherCache = { from: undefined, list: [] };
+  function publishers(worker) {
+    if (!worker) return [];
+    if (publisherCache.from !== worker.config.publish) {
+      const { publishers: list, warnings } = normalizePublishers(worker.config);
+      publisherCache = { from: worker.config.publish, list };
+      for (const w of warnings) {
+        worker.log(`publish: ${w}`);
+        worker.recordHealthError({ kind: 'config-invalid', error: `publish: ${w}` });
+      }
+    }
+    return publisherCache.list;
+  }
+
+  function publishInfo(worker) {
+    const job = running.get('publish');
+    return publishers(worker).map((p) => {
+      const rec = worker.state.publishers.get(p.name);
+      const destination = destinationOf(p);
+      const url = (rec && rec.url) || p.url || null;
+      return {
+        name: p.name, kind: p.kind, label: KIND_LABELS[p.kind], executor: p.executor, title: p.title, fields: p.fields, projects: p.projects, include_links: p.include_links, after_reconcile: p.after_reconcile,
+        destination_label: p.kind === 'artifact' ? (url ?? 'a new claude.ai artifact') : path.basename(p.path), url,
+        confirmed: !!(rec && rec.confirmed.includes(destination)), running: !!(job && (job.schedule === `publish:${p.name}` || job.schedule === 'publish:all' || job.schedule === 'publish:after-reconcile')),
+        last_published_at: rec ? rec.last_published_at : null, last_outcome: rec ? rec.last_outcome : null, last_error: rec ? rec.last_error : null, last_summary: rec ? rec.last_summary : null,
+        runs: rec ? rec.runs.slice(0, 5) : [],
+      };
+    });
   }
 
   function info(worker) {
@@ -108,8 +154,11 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
   return {
     name: 'reconcile',
     get activeRunId() { const r = running.get('reconcile'); return r ? r.run_id : null; },
-    idle: () => Promise.all([...running.values()].map((r) => r.promise)).then(() => {}),
+    // Waits for every run, including runs started by a run that just finished (publish after reconcile).
+    async idle() { while (running.size) await Promise.all([...running.values()].map((r) => r.promise)); },
     async onStart(worker) {
+      worker0 = worker;
+      worker.publishInfo = () => publishInfo(worker);
       baselineMs = worker.clock();
       load(worker);
       worker.scheduleInfo = () => info(worker);
@@ -121,7 +170,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
       }
       // Refresh and Run now requests that were joined to the interrupted run never got a result.
       for (const r of [...worker.state.requests.values()]) {
-        if ((r.kind !== 'refresh' && r.kind !== 'run-job') || r.state !== 'applying') continue;
+        if (!SCHEDULED_REQUESTS.has(r.kind) || r.state !== 'applying') continue;
         worker.emit('request-tx', { request_id: r.id, outcome: 'failed', error: { code: 'interrupted', message: 'the worker stopped before this run finished; run it again', retryable: true, current_revision: null } }, { source_identity: `request-tx:${r.id}:interrupted` });
       }
     },
@@ -132,17 +181,20 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
       const nowIso = toIso(nowMs);
       const batches = new Map();
       for (const r of worker.state.requests.values()) {
-        if ((r.kind !== 'refresh' && r.kind !== 'run-job') || r.state !== 'pending' || (r.not_before ?? nowIso) > nowIso) continue;
+        if (!SCHEDULED_REQUESTS.has(r.kind) || r.state !== 'pending' || (r.not_before ?? nowIso) > nowIso) continue;
         const s = scheduleForRequest(r);
         if (!s) {
-          worker.emit('request-tx', { request_id: r.id, outcome: 'failed', error: { code: 'schedule-unknown', message: `no schedule named ${r.payload && r.payload.schedule}`, retryable: false, current_revision: null } }, { source_identity: `request-tx:${r.id}:failed` });
+          const what = r.kind === 'publish' ? ['publisher-unknown', `no publisher named ${r.payload && r.payload.publisher}`] : ['schedule-unknown', `no schedule named ${r.payload && r.payload.schedule}`];
+          worker.emit('request-tx', { request_id: r.id, outcome: 'failed', error: { code: what[0], message: what[1], retryable: false, current_revision: null } }, { source_identity: `request-tx:${r.id}:failed` });
           continue;
         }
         if (running.has(s.job)) continue;
-        if (!batches.has(s.job)) batches.set(s.job, { s, trigger: r.kind === 'refresh' ? 'refresh' : 'manual', requests: [] });
-        batches.get(s.job).requests.push(r);
+        // Requests for the same job join one run; publish runs are per publisher and confirmation.
+        const key = s.job === 'publish' ? `${s.name}:${s.confirm}` : s.job;
+        if (!batches.has(key)) batches.set(key, { s, trigger: r.kind === 'refresh' ? 'refresh' : 'manual', requests: [] });
+        batches.get(key).requests.push(r);
       }
-      for (const b of batches.values()) start(worker, b.s, b.trigger, b.requests);
+      for (const b of batches.values()) if (!running.has(b.s.job)) start(worker, b.s, b.trigger, b.requests);
       for (const s of schedules) {
         if (!s.enabled || running.has(s.job)) continue;
         const next = nextDueMs(worker, s);
