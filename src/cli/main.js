@@ -20,6 +20,7 @@ const COMMANDS = {
   agent: () => import('./commands/agent.js'),
   publish: () => import('./commands/publish.js'),
   migrate: () => import('./commands/migrate.js'),
+  repo: () => import('./commands/repo.js'),
 };
 
 const HELP = `quill — Session Quill CLI
@@ -33,6 +34,7 @@ Usage: quill <command> [options]
   ticket relink <KEY> --external <EXT-KEY> [--system s] [--url <url>] --session <id>   (--jira is an alias)
   ticket children <KEY>                     ticket list [--status s] [--json]
   ticket set <KEY> [--title t] [--status s] [--blocker b] [--next text] [--priority P] [--category c] [--due D|none] [--parent KEY|none] [--repo id|none]
+  repo add <path> [--id id] [--project id] [--repo-file]   repo list [--json]   repo remove <id>
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>
   status [--json] [--session <id>] | status --statusline
   doctor

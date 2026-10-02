@@ -77,6 +77,17 @@ quill init --store ~/Documents/Quill --project my-project --project-name "My Pro
 
 Use `node /path/to/session-quill/bin/quill.js` wherever this README says `quill` if you have no alias. `init` writes `~/.claude/quill/config.toml` (user defaults), a committable `.quill.toml` in the repository (project and category defaults; no secrets, no ownership), creates the store, starts the worker and verifies its heartbeat. Re-running is idempotent. Add `--yes` to skip prompts.
 
+More repositories for the same or another project don't need `init` again:
+
+```bash
+quill repo add ~/src/payments-api            # id from the folder, default branch from origin/HEAD
+quill repo add ~/src/legacy --id old-app --project billing --repo-file   # also write .quill.toml
+quill repo list                               # flags paths that moved or are no longer git work trees
+quill repo remove old-app
+```
+
+`repo add` requires a git work tree and never restarts the worker; a running worker picks up the change. `init` refuses a folder that isn't a git work tree unless you pass `--force`.
+
 Keep the worker running across reboots by registering this with your OS (Task Scheduler, login item, systemd user unit):
 
 ```bash

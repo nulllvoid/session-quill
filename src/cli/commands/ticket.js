@@ -197,7 +197,7 @@ async function set(ctx, io, args, flags) {
   if (repo !== undefined) {
     if (repo !== CLEAR && !Object.hasOwn(ctx.config.repos ?? {}, repo)) {
       const known = Object.keys(ctx.config.repos ?? {});
-      throw new TrackerError('repo-unknown', `unknown repository ${repo}; registered: ${known.length ? known.join(', ') : 'none'} (see ${commandName('repo')} list)`);
+      throw new TrackerError('repo-unknown', `unknown repository ${repo}; registered: ${known.length ? known.join(', ') : 'none'} (see quill repo list)`);
     }
     fields.repo_id = repo === CLEAR ? null : repo;
   }

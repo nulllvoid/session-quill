@@ -10,6 +10,7 @@ import { quillHome, ingressDir, blobsDir, stateDir, projectionsDir } from '../..
 import { TrackerError } from '../../lib/errors.js';
 import { collect, MIN_NODE_MAJOR } from './doctor.js';
 import { commandName } from '../context.js';
+import { isGitWorkTree, detectDefaultBranch, repoIdFromPath, samePath } from '../../config/repos.js';
 
 async function ask(io, question, fallback) {
   if (!process.stdin.isTTY) return fallback;
@@ -34,6 +35,9 @@ export async function run({ flags, io, env }) {
   const defaultStore = cfg.store_path || path.join(os.homedir(), 'Documents', 'Quill');
   const storePath = path.resolve(flags.store ?? (yes ? defaultStore : await ask(io, 'Markdown store folder (plain folder or inside an Obsidian vault)', defaultStore)));
   const repoDir = path.resolve(flags.repo ?? process.cwd());
+  const isGit = isGitWorkTree(repoDir);
+  if (!isGit && flags.force !== true) throw new TrackerError('repo-not-git', `${repoDir} is not a git work tree; run init from a clone of the repository, pass --repo <path>, or add --force to register it anyway`);
+  if (!isGit) io.println(`! ${repoDir} is not a git work tree; registering it anyway (--force)`);
   const existingRepo = loadRepoConfig(repoDir) ?? {};
   const projectName = flags['project-name'] ?? (yes ? (existingRepo.project_name ?? path.basename(repoDir)) : await ask(io, 'Project name', existingRepo.project_name ?? path.basename(repoDir)));
   const projectId = flags.project ?? existingRepo.project_id ?? slugId(projectName);
@@ -58,13 +62,19 @@ export async function run({ flags, io, env }) {
   const layout = storeLayout(storePath);
   for (const dir of [layout.tickets, layout.sessions, layout.handoffs, layout.authored]) ensureDir(dir);
 
-  const repoId = flags['repo-id'] ?? existingRepo.repo_id ?? projectId;
+  // A second repository of the same project gets an id from its folder instead of overwriting the first.
+  let repoId = flags['repo-id'] ?? existingRepo.repo_id ?? projectId;
+  const taken = (id) => cfg.repos[id] && cfg.repos[id].canonical_path && !samePath(cfg.repos[id].canonical_path, repoDir);
+  if (!flags['repo-id'] && !existingRepo.repo_id && taken(repoId)) {
+    repoId = repoIdFromPath(repoDir);
+    if (taken(repoId)) throw new TrackerError('repo-id-taken', `repository ids ${projectId} and ${repoId} are already registered for other paths; pass --repo-id <id>`);
+  }
   cfg.store_path = storePath;
   cfg.store_name = meta.store_name;
   cfg.timezone = timezone;
   cfg.default_project = cfg.default_project || projectId;
-  cfg.projects = { ...cfg.projects, [projectId]: { ...(cfg.projects[projectId] ?? {}), name: projectName, repo_id: repoId } };
-  cfg.repos = { ...cfg.repos, [repoId]: { ...(cfg.repos[repoId] ?? {}), project_id: projectId, display_name: path.basename(repoDir), canonical_path: repoDir, default_branch: (cfg.repos[repoId] ?? {}).default_branch ?? 'main', ...((cfg.repos[repoId] ?? {}).deployment_environments ? { deployment_environments: cfg.repos[repoId].deployment_environments } : {}) } };
+  cfg.projects = { ...cfg.projects, [projectId]: { ...(cfg.projects[projectId] ?? {}), name: projectName, repo_id: (cfg.projects[projectId] ?? {}).repo_id ?? repoId } };
+  cfg.repos = { ...cfg.repos, [repoId]: { ...(cfg.repos[repoId] ?? {}), project_id: projectId, display_name: path.basename(repoDir), canonical_path: repoDir, default_branch: isGit ? detectDefaultBranch(repoDir) : ((cfg.repos[repoId] ?? {}).default_branch ?? 'main'), ...((cfg.repos[repoId] ?? {}).deployment_environments ? { deployment_environments: cfg.repos[repoId].deployment_environments } : {}) } };
   const cfgFile = saveUserConfig(cfg, env);
   io.println(`wrote user config ${cfgFile}`);
   if (fs.existsSync(repoDir)) {

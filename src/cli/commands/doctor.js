@@ -6,6 +6,7 @@ import { Journal } from '../../core/journal.js';
 import { journalPath, ingressDir } from '../../lib/paths.js';
 import { countIngress } from '../../core/ingress.js';
 import { readHealthErrors } from '../../worker/health.js';
+import { repoStatus, REPO_STATUS_TEXT } from '../../config/repos.js';
 
 export const MIN_NODE_MAJOR = 22;
 
@@ -58,6 +59,10 @@ export async function collect(env) {
   const errors = readHealthErrors(env, { limit: 10 });
   const gaps = errors.filter((e) => e.kind === 'capture-gap');
   add(gaps.length ? 'warn' : 'ok', 'capture', gaps.length ? `${gaps.length} recent capture gap(s); last: ${gaps[gaps.length - 1].error}` : 'no recent capture gaps');
+  for (const [id, repo] of Object.entries(ctx.config.repos ?? {})) {
+    const status = repoStatus(repo);
+    if (status !== 'ok') add('warn', `repo ${id}`, `${repo.canonical_path ?? ''} ${REPO_STATUS_TEXT[status]} (fix the path with quill repo add, or quill repo remove ${id})`.trim());
+  }
   return { ctx, report };
 }
 
