@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 502 tests, 501 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox, schedules, agent recipes, environments and Today, publishers, tracker sync and two-way artifacts, ADRs 0005–0011) |
+| Test command | `npm test` → 512 tests, 511 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox, schedules, agent recipes, environments and Today, publishers, tracker sync and two-way artifacts, ADRs 0005–0011) |
 
 ### Platform matrix (GitHub Actions, commit `bcd989e`)
 
@@ -168,7 +168,7 @@ Unit coverage: `tests/publish/publish.test.js`, `tests/publish/artifact.test.js`
 
 **Pending manual:** tracker-sync against real Jira, GitHub and Linear accounts, and a two-way page edited and commented on by a second person on claude.ai.
 
-Unit coverage: `tests/tracker/sync.test.js`, `tests/publish/two-way.test.js`, `tests/publish/review6.test.js`, and the tracker line in `tests/ui/render.test.js`.
+Unit coverage: `tests/tracker/sync.test.js`, `tests/publish/two-way.test.js`, `tests/publish/review6.test.js`, `tests/publish/review7.test.js`, and the tracker line in `tests/ui/render.test.js`.
 
 CI now runs `npm run test:ci`, which also writes TAP; when a job fails, `scripts/ci-annotate.mjs` publishes each failing test as a check annotation, readable without signing in to GitHub.
 

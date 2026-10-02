@@ -42,7 +42,7 @@ const USER_JS = `if (db && EDITABLE.length) {
 }
 `;
 
-export const PAGE_CAPABILITIES = { db: { rules: [{ path: '', read: 'interact', write: 'admin' }] } };
+export const PAGE_CAPABILITIES = { db: { rules: [{ path: '', read: 'view', write: 'admin' }] } };
 
 const LABELS = { key: 'Key', title: 'Title', status: 'Status', category: 'Category', priority: 'Priority', next: 'Next', blocker: 'Blocker', due: 'Due', updated: 'Updated', pr: 'PRs', deployments: 'Deployments', stale: 'Stale', external: 'Tracker' };
 

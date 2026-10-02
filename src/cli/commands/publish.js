@@ -9,7 +9,7 @@ import path from 'node:path';
 import { loadContext, latestSnapshot, cliEvent } from '../context.js';
 import { normalizePublishers, consentId, KIND_LABELS } from '../../publish/config.js';
 import { rowsFor } from '../../publish/content.js';
-import { beginArtifactPublish, continueArtifactPublish, resolvePlan } from '../../publish/artifact.js';
+import { beginArtifactPublish, continueArtifactPublish, resolvePlan, editRequestId } from '../../publish/artifact.js';
 import { executorPrompt } from '../../publish/artifact-client.js';
 import { writeIngress } from '../../core/ingress.js';
 import { readJsonIfExists, writeJsonAtomic } from '../../lib/atomic-fs.js';
@@ -82,7 +82,7 @@ function bringBack(ctx, publisher, done) {
   for (const e of done.edits ?? []) {
     const kind = e.field === 'status' ? 'set-status' : 'set-next-action';
     const payload = e.field === 'status' ? { status: e.value } : { next_action: String(e.value ?? '') };
-    const body = { id: uuid(), kind, target_id: e.ticket_id, expected_revision: e.expected_revision, payload };
+    const body = { id: editRequestId(publisher, e), kind, target_id: e.ticket_id, expected_revision: e.expected_revision, payload };
     const request = { ...body, created_at: now, not_before: addMs(now, EDIT_DELAY_MS), actor_id: `artifact:${publisher}`, retry_of: null, body_hash: bodyHash(body) };
     writeIngress(cliEvent(ctx, { kind: 'request', payload: request, ticket_id: e.ticket_id, source_identity: `request:${request.id}` }), ctx.env);
   }
@@ -157,9 +157,10 @@ function result(ctx, io, name, file) {
     writeRun(ctx, io, p, outcome, { publisher: name, run_id: pending.run_id, destination: pending.destination, confirm: pending.confirm, started_at: pending.started_at });
     return 0;
   }
+  // Edits and comments reach ingress before the state that acknowledges them is saved (see jobs.js).
+  bringBack(ctx, name, outcome.done);
   writeJsonAtomic(path.join(publishDir(ctx, name), 'state.json'), outcome.done.state);
   fs.rmSync(pendingPath, { force: true });
-  bringBack(ctx, name, outcome.done);
   journal(ctx, { publisher: name, run_id: pending.run_id, outcome: 'ok', summary: outcome.done.summary, url: outcome.done.url, destination: pending.destination, confirmed: pending.confirm, trigger: 'session' });
   io.println(`${name}: ${outcome.done.summary} — ${outcome.done.url}`);
   return 0;

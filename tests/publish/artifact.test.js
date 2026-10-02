@@ -50,7 +50,7 @@ test('the executor runs a plan through the agent runtime: create publishes the p
   assert.equal(first.summary, 'published 2 rows to a new artifact');
   let remote = JSON.parse(fs.readFileSync(store, 'utf8'));
   assert.equal(remote.docs['tickets/PROJ-1'].data.next, 'Go');
-  assert.deepEqual(remote.capabilities.db.rules[0], { path: '', read: 'interact', write: 'admin' });
+  assert.deepEqual(remote.capabilities.db.rules[0], { path: '', read: 'view', write: 'admin' });
   remote.docs['tickets/PROJ-1'].data.next = 'Edited on the page';
   remote.docs['tickets/PROJ-1'].version += 1;
   fs.writeFileSync(store, JSON.stringify(remote));

@@ -285,6 +285,8 @@ function evaluateSessionRequest(worker, req) {
   return { outcome: 'applied', mutation: { type: 'unbound-attach', session_id: session.id, ticket_id: ticketId, create, bind: req.payload.bind !== false }, result: { ticket_id: ticketId, created: !!create }, session: who };
 }
 
+const REVALIDATED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
+
 export function evaluateRequest(worker, req) {
   if (SESSION_KINDS.has(req.kind)) return evaluateSessionRequest(worker, req);
   const { state } = worker;
@@ -292,6 +294,16 @@ export function evaluateRequest(worker, req) {
   if (req.kind !== 'refresh' && !ticket) return { outcome: 'failed', error: { code: 'target-unknown', message: 'ticket no longer exists', retryable: false, current_revision: null } };
   if (ticket && req.expected_revision !== null && ticket.revision !== req.expected_revision) {
     return { outcome: 'conflict', error: { code: 'revision-conflict', message: `ticket is at revision ${ticket.revision}, request expected ${req.expected_revision}`, retryable: false, current_revision: ticket.revision }, result: { current: currentValues(ticket) } };
+  }
+  if (REVALIDATED_KINDS.has(req.kind)) {
+    // Field edits from ingress (the CLI, page edits a session publish brings back) skipped submit
+    // validation, so they are validated here, against the ticket as it is now, before they apply.
+    try {
+      const checked = validateRequestBody({ id: req.id, kind: req.kind, target_id: ticket.id, expected_revision: ticket.revision, payload: req.payload }, state, worker.now());
+      req = { ...req, payload: checked.payload };
+    } catch (err) {
+      return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
+    }
   }
   switch (req.kind) {
     case 'set-next-action':

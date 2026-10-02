@@ -251,7 +251,10 @@ function applyArtifactComment(state, ev, result) {
   const p = ev.payload;
   const t = p && state.tickets.get(p.ticket_id);
   if (!t || typeof p.text !== 'string') return { rejected: 'comment-invalid' };
-  t.timeline.push(timelineEntry(ev, 'comment', `Comment on the ${p.publisher} page: ${p.text.slice(0, 500)}`));
+  // Commenters are less trusted than anything else on the timeline: the text is kept to one line
+  // with dash runs broken up, so it cannot pose as a prompt's data delimiter, and it is marked.
+  const text = p.text.replace(/\s+/g, ' ').replace(/-{3,}/g, '–').trim().slice(0, 500);
+  t.timeline.push(timelineEntry(ev, 'comment', `Comment from a page viewer on the ${p.publisher} page: ${text}`));
   result.changed.add(t.id);
   return {};
 }

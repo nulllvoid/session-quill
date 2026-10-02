@@ -12,9 +12,9 @@ import { readJsonIfExists, writeJsonAtomic } from '../lib/atomic-fs.js';
 import { normalizePublishers, consentId, KIND_LABELS } from '../publish/config.js';
 import { rowsFor } from '../publish/content.js';
 import { publishMarkdown, publishHtml } from '../publish/writers.js';
-import { publishArtifact } from '../publish/artifact.js';
+import { publishArtifact, editRequestId } from '../publish/artifact.js';
 import { createArtifactClient } from '../publish/artifact-client.js';
-import { createTrackerClient, syncSettings } from '../tracker/client.js';
+import { createTrackerClient, syncSettings, syncable } from '../tracker/client.js';
 
 const NO_PERMISSIONS = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 
@@ -43,7 +43,7 @@ export function applyFeedback(worker, publisher, done) {
   for (const e of done.edits ?? []) {
     const body = e.field === 'status' ? { kind: 'set-status', payload: { status: e.value } } : { kind: 'set-next-action', payload: { next_action: String(e.value ?? '') } };
     try {
-      submitRequest(worker, { id: uuid(), target_id: e.ticket_id, expected_revision: e.expected_revision, ...body }, { actor: `artifact:${publisher}` });
+      submitRequest(worker, { id: editRequestId(publisher, e), target_id: e.ticket_id, expected_revision: e.expected_revision, ...body }, { actor: `artifact:${publisher}` });
     } catch (err) {
       worker.log(`publish ${publisher}: page edit of ${e.key} ${e.field} refused: ${err.message}`);
     }
@@ -66,9 +66,7 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
       const tracker = worker.identity && worker.identity.tracker;
       if (!tracker) throw new Error('tracker-sync needs a [tracker] table with system and domain in config.toml');
       const client = createTrackerClient({ tracker, settings: syncSettings(worker.config.tracker), env: worker.env, fetchImpl: trackerFetch });
-      const host = (() => { try { return new URL(tracker.domain).host; } catch { return null; } })();
-      const tickets = [...worker.state.tickets.values()].filter((t) => t.status !== 'done' && t.external && t.external.key && t.external.system === tracker.system
-        && (!t.external.url || !host || (() => { try { return new URL(t.external.url).host === host; } catch { return false; } })()))
+      const tickets = [...worker.state.tickets.values()].filter((t) => syncable(t, tracker))
         .sort((a, b) => ((a.external.validated_at ?? '') < (b.external.validated_at ?? '') ? -1 : (a.external.validated_at ?? '') > (b.external.validated_at ?? '') ? 1 : a.key < b.key ? -1 : 1))
         .slice(0, settings.limit ?? 100);
       const results = [];
@@ -133,8 +131,10 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
               if (err.url && !(prior && prior.url === err.url)) writeJsonAtomic(sidecar, { url: err.url, page_hash: null, rows: {}, seen_comments: [] });
               throw err;
             }
-            writeJsonAtomic(sidecar, out.state);
+            // Edits and comments are journaled before the state that acknowledges them is saved; their
+            // ids are derived from the edits, so a retry after a crash in between makes no duplicates.
             applyFeedback(worker, p.name, out);
+            writeJsonAtomic(sidecar, out.state);
           }
           worker.emit('publish-run', { ...base, outcome: 'ok', summary: out.summary, url: out.url ?? null }, { source_identity: `publish-run:${run_id}:${p.name}` });
           results.push({ name: p.name, ok: true, summary: out.summary });

@@ -12,7 +12,7 @@ test('with two-way on, an edit made on the page becomes an edit to apply, is ack
   const last = { 'PROJ-1': { key: 'PROJ-1', status: 'active', next: 'Write tests' } };
   const remote = { 'PROJ-1': { version: 3, data: { key: 'PROJ-1', status: 'review', next: 'Write tests', _quill: { in_scope: true, revision: 4 }, _edits: { status: { by: 'u_abc', at: '2026-10-03T09:00:00Z' } } } } };
   const { writes, conflicts, edits, published } = planRowWrites({ local, last, remote, now: '2026-10-03T10:00:00Z', editable: ['status', 'next'] });
-  assert.deepEqual(edits, [{ ticket_id: 't1', key: 'PROJ-1', field: 'status', value: 'review', expected_revision: 4, by: 'u_abc' }]);
+  assert.deepEqual(edits, [{ ticket_id: 't1', key: 'PROJ-1', field: 'status', value: 'review', expected_revision: 4, by: 'u_abc', at: '2026-10-03T09:00:00Z' }]);
   assert.deepEqual(conflicts, []);
   assert.equal(writes.length, 0, 'the page keeps the edit until the request applies');
   assert.equal(published['PROJ-1'].status, 'review', 'acknowledged: the next publish writes the ticket value over it if the request did not apply');

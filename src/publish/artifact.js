@@ -20,6 +20,13 @@ const eq = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const isMeta = (k) => k === 'key' || k.startsWith('_');
 
+// The request id of a page edit, derived from the edit itself, so bringing the same edit back twice
+// (a retry after a crash, a lost result) makes one request, and a later edit makes a new one.
+export function editRequestId(publisher, e) {
+  const h = crypto.createHash('sha256').update(JSON.stringify([publisher, e.ticket_id, e.field, e.value ?? null, e.expected_revision, e.at ?? null])).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
 export function docId(key) {
   // Letters, digits and _ - . ~ @ + only: also safe as a file name on Windows (no ':').
   const id = String(key).replace(/[^A-Za-z0-9_\-.~@+]/g, '_').slice(0, 200);
@@ -38,12 +45,20 @@ export function planRowWrites({ local, last = {}, remote = {}, now, editable = n
   const conflicts = [];
   const edits = [];
   const foreign = [];
+  const missing = [];
   const published = {};
   const fieldsOf = (row) => Object.entries(row).filter(([k]) => !k.startsWith('_'));
-  const stamp = (inScope, row) => ({ _quill: { in_scope: inScope, published_at: now, ...(row && row._ticket ? { revision: row._ticket.revision } : {}) } });
+  const stamp = (inScope, row, revision = row && row._ticket ? row._ticket.revision : undefined) => ({ _quill: { in_scope: inScope, published_at: now, ...(revision !== undefined ? { revision } : {}) } });
   for (const [id, row] of Object.entries(local)) {
     const r = remote[id];
     const plain = Object.fromEntries(fieldsOf(row));
+    if (!r && last[id]) {
+      // Published before but not in this read: deleted on the page, or a read that fell short.
+      // Either way it is left alone; only a row Quill never published is created without a pin.
+      missing.push(id);
+      published[id] = last[id];
+      continue;
+    }
     if (!r) {
       writes.push({ op: 'set', collection: 'tickets', doc_id: id, data: { ...plain, ...stamp(true, row) } });
       published[id] = { ...plain };
@@ -57,6 +72,7 @@ export function planRowWrites({ local, last = {}, remote = {}, now, editable = n
     const prev = last[id] ?? null;
     const patch = {};
     const record = {};
+    let edited = false;
     for (const [f, lv] of fieldsOf(row)) {
       const rv = r.data[f];
       if (eq(lv, rv)) { record[f] = lv; continue; }
@@ -66,8 +82,9 @@ export function planRowWrites({ local, last = {}, remote = {}, now, editable = n
       if (editable && editable.includes(f) && row._ticket && Number.isInteger(r.data._quill.revision)) {
         // Two-way: hand the edit back as a revision-checked request, and acknowledge it so the next
         // publish writes the ticket's value over it if the request does not apply.
-        edits.push({ ticket_id: row._ticket.id, key: row.key ?? id, field: f, value: rv, expected_revision: r.data._quill.revision, by: (r.data._edits && r.data._edits[f] && r.data._edits[f].by) || null });
+        edits.push({ ticket_id: row._ticket.id, key: row.key ?? id, field: f, value: rv, expected_revision: r.data._quill.revision, by: (r.data._edits && r.data._edits[f] && r.data._edits[f].by) || null, at: (r.data._edits && r.data._edits[f] && typeof r.data._edits[f].at === 'string' && r.data._edits[f].at) || null });
         record[f] = rv;
+        edited = true;
         continue;
       }
       // One-way: their value stands on the page.
@@ -81,8 +98,10 @@ export function planRowWrites({ local, last = {}, remote = {}, now, editable = n
     }
     const outOfScope = r.data._quill.in_scope === false;
     // Two-way rows carry the revision they show, so a page edit is checked against what the editor saw.
-    const staleRevision = !!editable && !!row._ticket && r.data._quill.revision !== row._ticket.revision;
-    if (Object.keys(patch).length || outOfScope || staleRevision) writes.push({ op: 'update', collection: 'tickets', doc_id: id, if_version: r.version, data: { ...patch, ...stamp(true, row) } });
+    // A row still showing an edit keeps the revision its editor saw until it shows Quill's values again.
+    const staleRevision = !!editable && !!row._ticket && !edited && r.data._quill.revision !== row._ticket.revision;
+    const revision = edited ? r.data._quill.revision : undefined;
+    if (Object.keys(patch).length || outOfScope || staleRevision) writes.push({ op: 'update', collection: 'tickets', doc_id: id, if_version: r.version, data: { ...patch, ...(edited ? stamp(true, row, revision) : stamp(true, row)) } });
     published[id] = record;
   }
   for (const [id, r] of Object.entries(remote)) {
@@ -91,7 +110,7 @@ export function planRowWrites({ local, last = {}, remote = {}, now, editable = n
     const blank = Object.fromEntries(Object.keys(r.data).filter((f) => !isMeta(f)).map((f) => [f, DELETE]));
     writes.push({ op: 'update', collection: 'tickets', doc_id: id, if_version: r.version, data: { ...blank, ...stamp(false) } });
   }
-  return { writes, conflicts, edits, foreign, published };
+  return { writes, conflicts, edits, foreign, missing, published };
 }
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -142,7 +161,8 @@ function checkSteps(result, plan, { url = null } = {}) {
   const expected = plan.ops;
   if (steps.length > expected.length || steps.some((s, i) => !s || s.op !== expected[i])) throw fail('the executor result does not match the plan; run the plan again', { url });
   const publishUrl = (steps.find((s) => s && s.op === 'publish' && s.ok && s.url) ?? {}).url ?? null;
-  const known = validUrl(publishUrl) ?? url;
+  // A reported URL is taken only when creating; an update keeps the artifact it was given.
+  const known = url ?? validUrl(publishUrl);
   const failed = steps.find((s) => !s.ok);
   if (failed) throw fail(`artifact ${failed.op} failed: ${failed.error ?? 'no reason given'}`, { url: known });
   if (steps.length !== expected.length) throw fail('the executor result does not match the plan; run the plan again', { url: known });
@@ -160,6 +180,7 @@ function validUrl(url) {
 export function readRemote(dir, result, collection) {
   const step = result.steps.find((s) => s.op === 'read' && s.collection === collection);
   if (!step || !Array.isArray(step.documents)) throw fail(`the executor did not report the ${collection} read`);
+  if (step.complete !== true) throw fail(`the executor did not report reading every ${collection} document; run the publish again`);
   const remote = {};
   const base = path.join(dir, 'read', collection);
   for (const d of step.documents) {
@@ -218,11 +239,11 @@ export function continueArtifactPublish(context, result, dir) {
   if (context.phase === 'read') {
     const remote = readRemote(dir, result, 'tickets');
     const remoteMeta = readRemote(dir, result, 'meta').page ?? null;
-    const { writes, conflicts, edits, foreign, published } = planRowWrites({ local: context.local, last: context.last, remote, now: context.now, editable: context.editable });
+    const { writes, conflicts, edits, foreign, missing, published } = planRowWrites({ local: context.local, last: context.last, remote, now: context.now, editable: context.editable });
     const commentStep = result.steps.find((x) => x.op === 'comments');
     const { matched } = context.two_way && commentStep ? matchComments(commentStep.threads ?? [], new Map(Object.entries(context.keys ?? {})), new Set(context.seen_comments)) : { matched: [] };
     const seen = [...context.seen_comments, ...matched.map((m) => m.comment_id)].slice(-2000);
-    const counts = { added: writes.filter((w) => w.op === 'set').length, out: writes.filter((w) => w.op === 'update' && w.data._quill && w.data._quill.in_scope === false).length, foreign: foreign.length };
+    const counts = { added: writes.filter((w) => w.op === 'set').length, out: writes.filter((w) => w.op === 'update' && w.data._quill && w.data._quill.in_scope === false).length, foreign: foreign.length, missing: missing.length };
     counts.updated = writes.length - counts.added - counts.out;
     writes.push(remoteMeta ? { op: 'update', collection: 'meta', doc_id: 'page', if_version: remoteMeta.version, data: context.meta } : { op: 'set', collection: 'meta', doc_id: 'page', data: context.meta });
     const b = batchSteps(writes);
@@ -245,8 +266,8 @@ function stripTickets(published) {
   return Object.fromEntries(Object.entries(published).map(([id, row]) => [id, Object.fromEntries(Object.entries(row).filter(([k]) => !k.startsWith('_')))]));
 }
 
-function summarize({ added, updated, out, foreign = 0 }, kept) {
-  const parts = [added ? `added ${plural(added, 'row')}` : null, updated ? `updated ${plural(updated, 'row')}` : null, out ? `${out} out of scope` : null, foreign ? `${plural(foreign, 'row')} not created by Quill left alone` : null].filter(Boolean);
+function summarize({ added, updated, out, foreign = 0, missing = 0 }, kept) {
+  const parts = [added ? `added ${plural(added, 'row')}` : null, updated ? `updated ${plural(updated, 'row')}` : null, out ? `${out} out of scope` : null, foreign ? `${plural(foreign, 'row')} not created by Quill left alone` : null, missing ? `${plural(missing, 'row')} missing from the page left alone` : null].filter(Boolean);
   return `${parts.length ? parts.join(', ') : 'no row changes'}${kept}`;
 }
 

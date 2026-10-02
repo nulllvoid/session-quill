@@ -21,6 +21,25 @@ export function syncSettings(rawTracker = {}) {
   return { token_env: typeof t.sync_token_env === 'string' && t.sync_token_env ? t.sync_token_env : null, username_env: typeof t.sync_username_env === 'string' && t.sync_username_env ? t.sync_username_env : null };
 }
 
+// Whether tracker-sync may read this ticket's issue: an open ticket whose key belongs to the user's
+// tracker and whose link, if any, is on its host. A GitHub key is only a number, so its link must
+// name the configured repository and that number; otherwise another repository's issue would be read.
+export function syncable(ticket, tracker) {
+  const ext = ticket && ticket.external;
+  if (!ext || !ext.key || ticket.status === 'done' || !tracker || ext.system !== tracker.system) return false;
+  let link = null;
+  if (ext.url) { try { link = new URL(ext.url); } catch { return false; } }
+  if (tracker.system === 'github') {
+    const base = origin(tracker.domain || 'https://github.com');
+    const number = /(\d+)$/.exec(ext.key);
+    if (!link || !base || link.origin !== base || !number || typeof tracker.repo !== 'string') return false;
+    return link.pathname.replace(/\/+$/, '').toLowerCase() === `/${tracker.repo}/issues/${number[1]}`.toLowerCase();
+  }
+  if (!link) return true;
+  const host = (() => { try { return new URL(tracker.domain).host; } catch { return null; } })();
+  return !host || link.host === host;
+}
+
 export function createTrackerClient({ tracker, settings = {}, env = process.env, fetchImpl = globalThis.fetch, timeoutMs = 15_000 }) {
   const system = tracker && tracker.system;
   const tokenEnv = settings.token_env || DEFAULT_TOKEN_ENV[system] || null;

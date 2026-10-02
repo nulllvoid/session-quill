@@ -43,7 +43,7 @@ test('review I4: a read that reports documents without saving them, or a missing
   const rows = [{ key: 'K-1', status: 'todo', next: '', _ticket: { id: 't1', revision: 1 } }];
   const sync = beginArtifactPublish(pub({ url: 'https://claude.ai/artifact/abc' }), rows, { prior: { url: 'https://claude.ai/artifact/abc', page_hash: 'x', rows: {} }, now: 'n' });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-r6-'));
-  const steps = sync.plan.steps.map((s) => (s.op === 'read' ? { op: 'read', collection: s.collection, ok: true, documents: s.collection === 'tickets' ? [{ doc_id: 'K-1', version: 3 }] : [] } : { op: s.op, ok: true, url: 'https://claude.ai/artifact/abc' }));
+  const steps = sync.plan.steps.map((s) => (s.op === 'read' ? { op: 'read', collection: s.collection, ok: true, complete: true, documents: s.collection === 'tickets' ? [{ doc_id: 'K-1', version: 3 }] : [] } : { op: s.op, ok: true, url: 'https://claude.ai/artifact/abc' }));
   assert.throws(() => continueArtifactPublish(sync.context, { url: 'https://claude.ai/artifact/abc', steps }, dir), /K-1 was reported but not saved/);
 });
 

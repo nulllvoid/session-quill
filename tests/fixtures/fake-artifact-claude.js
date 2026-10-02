@@ -29,7 +29,7 @@ for (const step of plan.steps) {
       fs.writeFileSync(file, JSON.stringify(doc.data));
       documents.push({ doc_id: id, version: doc.version });
     }
-    steps.push({ op: 'read', collection: step.collection, ok: true, documents });
+    steps.push({ op: 'read', collection: step.collection, ok: true, complete: process.env.FAKE_ARTIFACT_PARTIAL !== '1', documents });
   } else if (step.op === 'comments') {
     steps.push({ op: 'comments', ok: true, threads: store.threads ?? [] });
   } else if (step.op === 'batch') {
