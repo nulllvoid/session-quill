@@ -35,6 +35,7 @@ const config = {
   ...defaultUserConfig(), store_path: storePath, default_project: 'session-quill',
   projects: { 'session-quill': { name: 'Session Quill', repo_id: 'session-quill' }, legacy: { name: 'Legacy Delivery', repo_id: 'legacy' } },
   repos: { 'session-quill': { project_id: 'session-quill', display_name: 'session-quill', canonical_path: root, default_branch: 'main', deployment_environments: ['staging', 'production'], provider: 'github' }, legacy: { project_id: 'legacy', display_name: 'legacy-tracker', default_branch: 'main', deployment_environments: ['production'] } },
+  tracker: { system: 'jira', domain: 'https://example.atlassian.net', prefixes: ['PROJ'] },
 };
 saveUserConfig(config, env);
 const ctx = { env, config, storeMeta: meta };
@@ -90,6 +91,18 @@ if (!fs.existsSync(path.join(home, 'seeded.flag'))) {
   ev('stop', { content_ref: putBlob('Checkpoint from the extinct session.', env).hash, preview: 'Checkpoint from the extinct session.', length: 36, complete: true, conclusions: [] }, { session_id: 'sess-extinct-009c4d31', at: ago(58 * 3600e3) });
   ev('session-start', { source: 'startup', cwd: root }, { session_id: 'sess-ended-110293aa', at: ago(20 * 3600e3) });
   ev('session-end', { reason: 'other' }, { session_id: 'sess-ended-110293aa', at: ago(19 * 3600e3) });
+  // Unlinked work for the inbox (ADR 0006): a session that edited and committed without a ticket.
+  ev('session-start', { source: 'startup', cwd: root }, { session_id: 'sess-unlinked-5a6b7c8d', at: ago(1800e3) });
+  ev('prompt', { title_candidate: 'Tidy the export dialog copy', approval_candidate: false, length: 28 }, { session_id: 'sess-unlinked-5a6b7c8d', at: ago(1790e3) });
+  for (const [i, file] of ['ui/views/dialogs.js', 'ui/styles.css'].entries()) {
+    ev('pre-tool', { tool_name: 'Edit', write_target: file }, { session_id: 'sess-unlinked-5a6b7c8d', tool_call_id: `u${i}`, source_identity: `pre:su:u${i}`, at: ago(1700e3 - i * 1000) });
+    ev('post-tool', { tool_name: 'Edit', write_paths: [file], repo_id: null, success: true }, { session_id: 'sess-unlinked-5a6b7c8d', tool_call_id: `u${i}`, source_identity: `post:su:u${i}`, at: ago(1690e3 - i * 1000) });
+  }
+  ev('pre-tool', { tool_name: 'Bash', write_target: 'git commit' }, { session_id: 'sess-unlinked-5a6b7c8d', tool_call_id: 'uc', source_identity: 'pre:su:uc', at: ago(1600e3) });
+  ev('post-tool', { tool_name: 'Bash', write_paths: [], commit: { sha: '9f8e7d6c5b4a', message: 'ui: clearer export copy' }, repo_id: null, success: true }, { session_id: 'sess-unlinked-5a6b7c8d', tool_call_id: 'uc', source_identity: 'post:su:uc', at: ago(1590e3) });
+  ev('stop', { content_ref: putBlob('Reworded the export dialog and tightened spacing.', env).hash, preview: 'Reworded the export dialog and tightened spacing.', length: 49, complete: true, conclusions: [] }, { session_id: 'sess-unlinked-5a6b7c8d', at: ago(1500e3) });
+  // A ticket created from a tracker key, so its key renders as a link with a copy button.
+  ev('ticket-create', { ticket: { id: T(20), key: 'PROJ-42', title: 'Tracker-linked ticket from a prompt mention', project_id: 'session-quill', project_name: 'Session Quill', category: 'feature', priority: 'P1', parent_id: null, repo_id: 'session-quill', due: null, jira: { key: 'PROJ-42', url: 'https://example.atlassian.net/browse/PROJ-42', validation: 'pending', validated_at: null, error: null }, external: { system: 'jira', key: 'PROJ-42', url: 'https://example.atlassian.net/browse/PROJ-42', validation: 'pending', validated_at: null, error: null } } }, { at: ago(2 * 86400e3) });
   fs.writeFileSync(path.join(home, 'seeded.flag'), '1');
 }
 w.tick();
