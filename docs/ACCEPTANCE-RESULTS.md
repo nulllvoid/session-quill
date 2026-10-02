@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 482 tests, 481 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox, schedules, agent recipes, environments and Today, publishers, ADRs 0005–0010) |
+| Test command | `npm test` → 502 tests, 501 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox, schedules, agent recipes, environments and Today, publishers, tracker sync and two-way artifacts, ADRs 0005–0011) |
 
 ### Platform matrix (GitHub Actions, commit `bcd989e`)
 
@@ -156,6 +156,19 @@ Unit coverage: `tests/deploy/environments.test.js` (validation, precedence, stat
 | A64 | Automated (simulated artifact); verified once against claude.ai | needs-session from the worker; --plan / --result loop records the URL. **Manual check:** a Claude Code session executed the real plan on a private claude.ai artifact — republish, reads with versions, a 12-write pinned batch, and a stale pin refused atomically. Headless `claude -p` (Claude Code 2.1.288) reported that the Artifact tools are unavailable, which is why the session executor is the default |
 
 Unit coverage: `tests/publish/publish.test.js`, `tests/publish/artifact.test.js`, `tests/publish/job.test.js`, `tests/cli/publish.test.js`, `tests/cli/publish-session.test.js`, and the Publish dialog in `tests/ui/render.test.js`.
+
+## Phase 11 — tracker sync and two-way artifacts (ADR 0011)
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A65 | Automated (simulated artifact) | `tests/acceptance/phase11.test.js` — status edit applied after the undo window; next-action edit on a ticket changed since publishing conflicts and is overwritten on the next publish; one comment entry |
+| A66 | Automated | run-job of a tracker-sync schedule: PROJ-1 valid with remote status, PROJ-2 not-found, ticket revision unchanged |
+| A67 | Automated | repository .quill.toml naming another host and token variable: every request went to example.atlassian.net; error names JIRA_TOKEN; no token in state |
+| A68 | Automated (simulated artifact) | one-way page: no requests, no comments, "1 field edited on the page kept" |
+
+**Pending manual:** tracker-sync against real Jira, GitHub and Linear accounts, and a two-way page edited and commented on by a second person on claude.ai.
+
+Unit coverage: `tests/tracker/sync.test.js`, `tests/publish/two-way.test.js`, `tests/publish/review6.test.js`, and the tracker line in `tests/ui/render.test.js`.
 
 CI now runs `npm run test:ci`, which also writes TAP; when a job fails, `scripts/ci-annotate.mjs` publishes each failing test as a check annotation, readable without signing in to GitHub.
 

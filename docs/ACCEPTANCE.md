@@ -121,6 +121,15 @@ All Must scenarios must pass, with exceptions explicitly removed from the advert
 | A63 | FR-15, FR-16 | A live artifact keeps a field edited on the page while Quill's other changes are written, every update pinned to the version read, and a ticket leaving scope is marked, not deleted |
 | A64 | FR-15, FR-16 | With the default session executor the worker never publishes an artifact itself; a Claude Code session publishes it through --plan and --result and the worker records the URL and outcome |
 
+## Phase 11 — Tracker sync and two-way artifacts (ADR 0011)
+
+| ID | Requirement | Scenario and expected outcome |
+| --- | --- | --- |
+| A65 | FR-11, FR-16 | On a two-way artifact, a status edit becomes a revision-checked request that applies; an edit to a ticket changed since publishing conflicts and the next publish restores the ticket's value; a comment naming a ticket joins its timeline once |
+| A66 | FR-8, FR-16 | A tracker-sync schedule records remote status and assignee and validates keys (not found is marked) without changing ticket fields or revisions, using only GET requests |
+| A67 | FR-16 | Tracker tokens go only to the user config's tracker host; a repository's [tracker] cannot redirect them, and errors name the variable, never the token |
+| A68 | FR-16 | A one-way artifact turns no page edit into a request and reads no comments; the kept edit is reported |
+
 ## Review resolution traceability
 
 | Review issue | Resolved contract | Acceptance |

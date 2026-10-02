@@ -180,13 +180,23 @@ The snapshot's `today` (ADR 0009): timezone, generated_for (the store-local date
 
 Digest schedule fields: to (vault-daily and/or file), path (required for file), day (today or yesterday). The digest section is delimited by `<!-- quill:digest:start -->` and `<!-- quill:digest:end -->`; a section edited since the last write fails the run with digest-conflict.
 
+## Tracker sync
+
+`external.remote` (ADR 0011, nullable): title, status, assignee, fix_versions[], fetched_at — what the tracker said at the last `tracker-sync`. `external.validation` becomes valid or not-found. Neither changes the ticket's own fields or revision.
+
+`tracker-sync` payload: system, synced_at, results[] (ticket_id, key, validation (valid, not-found, or null on an error), remote (nullable), error (nullable)).
+
+`artifact-comment` payload: publisher, ticket_id, key, thread_id, comment_id, author (an opaque viewer id), text, at. It adds a `comment` timeline entry; its source identity is `artifact-comment:<publisher>:<comment_id>`, so a comment is recorded once.
+
+Two-way artifact rows also carry `_quill.revision` (the ticket revision at publish) and `_edits.<field>` { by, at } for page edits. A page edit to status or next becomes a set-status or set-next-action request with actor `artifact:<publisher>` and expected_revision = `_quill.revision`.
+
 ## Publisher
 
-Publisher record (ADR 0010), folded from `publish-run` events: name, url (artifact, nullable), confirmed[] (destinations the owner confirmed: `<kind>:<path>` or `artifact:<url or new>`), last_published_at, last_outcome (ok, failed, needs-confirmation, needs-session), last_error, last_summary, runs[] (newest first, at most 20: run_id, at, trigger (manual, schedule, after-reconcile, session), outcome, summary, error).
+Publisher record (ADR 0010), folded from `publish-run` events: name, url (artifact, nullable), confirmed[] (consent fingerprints: a hash of the destination and of what is sent — fields, projects, links, two-way), last_published_at, last_outcome (ok, failed, needs-confirmation, needs-session), last_error, last_summary, runs[] (newest first, at most 20: run_id, at, trigger (manual, schedule, after-reconcile, session), outcome, summary, error).
 
-`publish-run` payload: publisher, run_id, outcome, summary, error, url, destination, confirmed (true when this run carried the owner's confirmation), trigger.
+`publish-run` payload: publisher, run_id, outcome, summary, error, url, destination (the consent fingerprint), confirmed (true when this run carried the owner's confirmation), trigger.
 
-The snapshot's `publishers[]`: name, kind, label (Live, Copy, Note), executor, title, fields, projects, include_links, after_reconcile, destination_label (a file name or the artifact URL; never a local path), url, confirmed, running, the last_* fields and the newest 5 runs. Exports never include it.
+The snapshot's `publishers[]`: name, kind, label (Live, Copy, Note), executor, title, fields, projects, include_links, after_reconcile, destination_label (a file name or the artifact URL; never a local path), url (the configured one when set), last_url, consent_id, consent_ids[], confirmed, running, the last_* fields and the newest 5 runs. Exports never include it.
 
 Artifact db layout: `tickets/<key>` (the publisher's fields plus `_quill` { in_scope, published_at }) and `meta/page` (title, fields, published_at, publisher, generator).
 

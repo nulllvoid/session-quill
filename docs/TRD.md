@@ -216,6 +216,10 @@ Only analyse-followups creates children by default. Suggested next_action update
 
 Publishers ([ADR 0010](decisions/0010-publishers.md)) are `[[publish]]` entries in user config: `markdown` (a roll-up table per status in a marked section of a note), `html` (the standalone export written to a path) and `artifact` (a live claude.ai page). Content always goes through the export sanitizer with the publisher's fields and projects. Nothing is sent to a destination until the owner confirms it; a changed path or URL is a new destination. The artifact page renders rows from its own db; publishes after the first read each row with its version and write only fields nobody else changed, pinned to that version. Quill computes every write; a Claude Code session (`/session-quill:publish`, the default) or a headless runtime with the Artifact tools executes the plan. Publishes run on demand, after reconciliation (`on = ["reconcile"]`) or as a `publish` schedule job.
 
+## Tracker sync and two-way artifacts
+
+The `tracker-sync` job ([ADR 0011](decisions/0011-tracker-sync-and-two-way.md)) reads title, status, assignee and fix versions of linked tickets from Jira, GitHub or Linear, using only the user config's `[tracker]` host and a token from `sync_token_env`. Results sit in `external.remote` and validate keys; ticket fields and revisions are never changed. A two-way artifact publisher lets editors change status and next action on the page; the next publish turns each edit into a revision-checked request against the published revision, and page comments that name a published key join that ticket's timeline once.
+
 ## Configuration and packaging
 
 Ship plugin manifest, hook config, namespaced commands, CLI, local worker, UI assets, templates, optional handoff agent and PMLA profile. Core uses Node built-ins; validate the restricted TOML/YAML subsets written by quill, preserve unknown authored text, and reject unsupported syntax rather than lossy parsing.
