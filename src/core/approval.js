@@ -23,8 +23,10 @@ export function selectCheckpointForApproval(state, session, explicitId = null) {
   }
   if (!session.current_ticket_id) throw new TrackerError('no-checkpoint', 'session is not bound to a ticket');
   let latest = null;
-  for (const cp of state.checkpoints.values()) {
-    if (cp.session_id !== session.id || !cp.complete) continue;
+  const ids = state.checkpointsBySession.get(session.id) ?? new Set();
+  for (const id of ids) {
+    const cp = state.checkpoints.get(id);
+    if (!cp || !cp.complete) continue;
     if (cp.ticket_id !== session.current_ticket_id || cp.binding_revision !== session.current_binding_revision) continue;
     if (!latest || cp.recorded_at > latest.recorded_at || (cp.recorded_at === latest.recorded_at && cp.sequence > latest.sequence)) latest = cp;
   }

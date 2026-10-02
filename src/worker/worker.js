@@ -42,6 +42,7 @@ export class Worker {
     this.flushRequested = false;
     this.generationDirty = false;
     this.generationNumber = 0;
+    this.detailDirty = null; // null = write every ticket detail on the next publish
     this.lastHeartbeatMs = 0;
     this.lastSnapshot = null;
     this.notesIndex = {};
@@ -208,7 +209,7 @@ export class Worker {
     this.ack(record, result);
     if (result.duplicate) return result;
     for (const id of result.changed) {
-      if (this.state.tickets.has(id)) this.dirtyTickets.add(id);
+      if (this.state.tickets.has(id)) { this.dirtyTickets.add(id); if (this.detailDirty) this.detailDirty.add(id); }
     }
     if (record.session_id) this.dirtySessions.add(sessionKey(record));
     for (const id of result.handoffsChanged) this.dirtyHandoffs.add(id);
@@ -306,7 +307,9 @@ export class Worker {
 
   publishGeneration() {
     this.generationNumber += 1;
-    this.lastSnapshot = publishGeneration(this.state, { env: this.env, now: this.now(), generationNumber: this.generationNumber, snapshotOptions: this.snapshotOptions() });
+    const changedTickets = this.detailDirty ? [...this.detailDirty] : null;
+    this.lastSnapshot = publishGeneration(this.state, { env: this.env, now: this.now(), generationNumber: this.generationNumber, snapshotOptions: this.snapshotOptions(), changedTickets });
+    this.detailDirty = new Set();
     this.generationDirty = false;
     return this.lastSnapshot;
   }

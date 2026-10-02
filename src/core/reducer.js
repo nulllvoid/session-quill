@@ -3,6 +3,7 @@
 import { deterministicId } from '../lib/ids.js';
 import {
   sessionKey, newTicket, newSession, refreshDerived, bumpRevision, projectName, repoFor, TICKET_STATUSES, CATEGORIES, PRIORITIES, PR_STATES,
+  indexChild, registerSession, registerCheckpoint,
 } from './state.js';
 import { isIsoZ } from '../lib/time.js';
 import { validateKey, validateParent } from './keys.js';
@@ -33,6 +34,7 @@ function getOrCreateSession(state, ev, { source = 'startup', cwd = null, parent_
   if (!session) {
     session = newSession(state, { host_session_id: ev.session_id, agent_id: ev.agent_id ?? null, parent_session_id, started_at: ev.occurred_at, cwd });
     state.sessions.set(key, session);
+    registerSession(state, session);
   }
   if (ev.occurred_at > session.last_event_at) session.last_event_at = ev.occurred_at;
   if (source !== 'resume' && cwd) session.cwd = cwd;
@@ -67,7 +69,8 @@ function bindSession(state, session, ev, { ticket_id, project_id }, result) {
 }
 
 function recomputeUnpromoted(state, session) {
-  session.unpromoted = [...state.checkpoints.values()].some((cp) => cp.session_id === session.id && cp.complete && !cp.approved_at && !cp.dismissed_at);
+  const ids = state.checkpointsBySession.get(session.id);
+  session.unpromoted = ids ? [...ids].some((id) => { const cp = state.checkpoints.get(id); return cp && cp.complete && !cp.approved_at && !cp.dismissed_at; }) : false;
 }
 
 function approveCheckpoint(state, ev, { checkpoint_id, ticket_id, provenance }, result) {
@@ -82,7 +85,7 @@ function approveCheckpoint(state, ev, { checkpoint_id, ticket_id, provenance }, 
   cp.approval_provenance = provenance;
   ticket.plans.push({ id: deterministicId(`${ev.event_id}:plan:${cp.id}`), session_id: cp.session_id, checkpoint_id: cp.id, content_ref: cp.content_ref, preview: cp.preview, approved_at: ev.occurred_at, provenance });
   ticket.timeline.push(timelineEntry(ev, 'plan', `Checkpoint approved (${provenance})`, { content_ref: cp.content_ref }));
-  const session = [...state.sessions.values()].find((s) => s.id === cp.session_id);
+  const session = state.sessionsById.get(cp.session_id);
   if (session) recomputeUnpromoted(state, session);
   touch(state, ticket, ev, result);
   return {};
@@ -104,7 +107,9 @@ function applyTicketFields(state, ticket, fields, ev, source, result) {
   if (fields.parent_id !== undefined) {
     validateParent(state, ticket.id, fields.parent_id);
     const oldParent = ticket.parent_id ? state.tickets.get(ticket.parent_id) : null;
+    const previousParentId = ticket.parent_id;
     ticket.parent_id = fields.parent_id;
+    indexChild(state, ticket, previousParentId);
     if (oldParent) { refreshDerived(state, oldParent); result.changed.add(oldParent.id); }
   }
   if (fields.summary !== undefined) ticket.summary = String(fields.summary);
@@ -167,6 +172,7 @@ function createTicket(state, ev, t, source, result) {
   if (typeof t.last_activity === 'string' && isIsoZ(t.last_activity)) ticket.last_activity = t.last_activity;
   if (typeof t.created_at === 'string' && isIsoZ(t.created_at)) ticket.created_at = t.created_at;
   state.tickets.set(ticket.id, ticket);
+  indexChild(state, ticket);
   state.keyIndex.set(ticket.key, ticket.id);
   if (ticket.parent_id) {
     const m = /\.(\d+)$/.exec(ticket.key);
@@ -233,7 +239,7 @@ function handlePostTool(state, ev, result) {
 
   if (p.plan_ref) {
     const cp = { id: deterministicId(`${ev.event_id}:plan-checkpoint`), session_id: session.id, ticket_id: attribution.ticket_id, binding_revision: attribution.binding_revision, recorded_at: ev.occurred_at, content_ref: p.plan_ref, preview: String(p.plan_preview ?? '').slice(0, 1500), complete: true, approved_at: null, approval_provenance: null, dismissed_at: null, sequence: ev.sequence ?? 0, kind: 'plan' };
-    state.checkpoints.set(cp.id, cp);
+    registerCheckpoint(state, cp);
     if (ticket) approveCheckpoint(state, ev, { checkpoint_id: cp.id, ticket_id: ticket.id, provenance: 'explicit' }, result);
     return;
   }
@@ -273,7 +279,7 @@ function handleStop(state, ev, result) {
     recorded_at: ev.occurred_at, content_ref: complete ? p.content_ref : null, preview: String(p.preview ?? '').slice(0, 1500), complete,
     approved_at: null, approval_provenance: null, dismissed_at: null, sequence: ev.sequence ?? 0, kind: ev.kind === 'subagent-stop' ? 'subagent' : 'stop',
   };
-  state.checkpoints.set(cp.id, cp);
+  registerCheckpoint(state, cp);
   session.last_checkpoint_id = cp.id;
   session.last_checkpoint_preview = cp.preview;
   session.events_since_checkpoint = 0;
@@ -573,7 +579,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       const cp = state.checkpoints.get(ev.payload.checkpoint_id);
       if (!cp) { result.rejected = 'no-checkpoint'; break; }
       cp.dismissed_at = ev.occurred_at;
-      const session = [...state.sessions.values()].find((s) => s.id === cp.session_id);
+      const session = state.sessionsById.get(cp.session_id);
       if (session) recomputeUnpromoted(state, session);
       break;
     }
@@ -599,6 +605,11 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
         if (!ticket) continue;
         const pr = ticket.prs.find((x) => x.id === upd.pr_id || x.url === upd.url);
         if (!pr) continue;
+        if (upd.error) {
+          // Failed poll: keep last known evidence and its age; only record the provider error.
+          if (pr.error !== upd.error) { pr.error = upd.error; bumpRevision(ticket, ev.occurred_at); result.changed.add(ticket.id); }
+          continue;
+        }
         const before = `${pr.state}:${pr.merged_at}`;
         Object.assign(pr, { state: upd.state ?? pr.state, merged_at: upd.merged_at ?? pr.merged_at, opened_at: upd.opened_at ?? pr.opened_at, base_branch: upd.base_branch ?? pr.base_branch, head_branch: upd.head_branch ?? pr.head_branch, observed_at: upd.observed_at ?? ev.occurred_at, error: upd.error ?? null });
         const evidenceId = upd.evidence_id ?? `${pr.url}:${pr.state}:${pr.merged_at ?? ''}`;

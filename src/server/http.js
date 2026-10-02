@@ -3,8 +3,8 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { projectionsDir } from '../lib/paths.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
+import { ticketDetailPath } from '../worker/projections.js';
 import { getBlob } from '../core/blobs.js';
 import { TrackerError } from '../lib/errors.js';
 import { submitRequest, cancelRequest } from './requests.js';
@@ -79,8 +79,8 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
           const gen = url.searchParams.get('generation');
           const current = worker.getSnapshot().generation_id;
           if (gen && gen !== current) return fail(res, 410, 'generation-expired', `generation ${gen} is no longer current (${current}); reload the snapshot`);
-          const detail = readJsonIfExists(path.join(projectionsDir(worker.env), current, 'tickets', `${m[1]}.json`));
-          if (!detail) return fail(res, 404, 'not-found', 'ticket not in this generation');
+          const detail = readJsonIfExists(ticketDetailPath(worker.env, m[1]));
+          if (!detail || !worker.state.tickets.has(m[1])) return fail(res, 404, 'not-found', 'ticket not in this generation');
           return json(res, 200, { ...detail, generation_id: current });
         }
         if ((m = /^\/v1\/content\/([0-9a-f]{64})$/.exec(url.pathname))) {

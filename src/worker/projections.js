@@ -66,14 +66,25 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
   };
 }
 
-export function publishGeneration(state, { env, now, generationNumber, snapshotOptions }) {
+export function ticketDetailPath(env, ticketId) {
+  return path.join(projectionsDir(env), 'tickets', `${ticketId}.json`);
+}
+
+// Ticket detail files live in a stable directory and are rewritten only when the ticket changed;
+// the detail endpoint serves them only for the current generation, so they are never mixed.
+export function publishGeneration(state, { env, now, generationNumber, snapshotOptions, changedTickets = null }) {
   const root = projectionsDir(env);
   const generation_id = `gen-${String(generationNumber).padStart(8, '0')}`;
   const dir = path.join(root, generation_id);
-  ensureDir(path.join(dir, 'tickets'));
+  ensureDir(dir);
+  ensureDir(path.join(root, 'tickets'));
   const snapshot = buildSnapshot(state, { generation_id, generated_at: now, ...snapshotOptions });
   writeJsonAtomic(path.join(dir, 'snapshot.json'), snapshot);
-  for (const ticket of state.tickets.values()) writeJsonAtomic(path.join(dir, 'tickets', `${ticket.id}.json`), ticket);
+  const ids = changedTickets ?? [...state.tickets.keys()];
+  for (const id of ids) {
+    const ticket = state.tickets.get(id);
+    if (ticket) writeJsonAtomic(ticketDetailPath(env, id), { ...ticket, generation_id });
+  }
   // Commit manifest last: readers only read complete generations.
   writeJsonAtomic(path.join(root, 'MANIFEST.json'), { schema_version: 1, generation_id, generated_at: now, path: generation_id });
   pruneGenerations(root, generation_id);

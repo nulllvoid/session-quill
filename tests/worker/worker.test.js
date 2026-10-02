@@ -150,7 +150,8 @@ test('MANIFEST only points at a completely written generation and snapshot carri
   assert.equal(snapshot.meta.store_id, f.meta.store_id);
   assert.equal(snapshot.meta.last_sync, null);
   assert.equal(snapshot.capabilities.edit_tickets, true);
-  assert.ok(fs.existsSync(path.join(projectionsDir(f.env), manifest.path, 'tickets', `${T1}.json`)));
+  assert.ok(fs.existsSync(path.join(projectionsDir(f.env), 'tickets', `${T1}.json`)));
+  assert.equal(readJsonIfExists(path.join(projectionsDir(f.env), 'tickets', `${T1}.json`)).generation_id, manifest.generation_id);
   const live = w.getSnapshot();
   assert.equal(live.generation_id, manifest.generation_id);
   await w.stop();

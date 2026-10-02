@@ -123,7 +123,7 @@ export function latestSnapshot(ctx) {
 export function latestTicketDetail(ctx, ticketId) {
   const manifest = readJsonIfExists(path.join(projectionsDir(ctx.env), 'MANIFEST.json'));
   if (!manifest) return null;
-  return readJsonIfExists(path.join(projectionsDir(ctx.env), manifest.path, 'tickets', `${ticketId}.json`));
+  return readJsonIfExists(path.join(projectionsDir(ctx.env), 'tickets', `${ticketId}.json`));
 }
 
 export function findTicketByKey(ctx, key) {

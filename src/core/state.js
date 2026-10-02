@@ -40,6 +40,9 @@ export function createState(meta) {
     approvals: new Set(),
     counters: { childByParent: new Map() },
     keyIndex: new Map(),
+    childrenIndex: new Map(),
+    sessionsById: new Map(),
+    checkpointsBySession: new Map(),
     appliedEvents: new Set(),
     appliedSources: new Set(),
     lastSequence: 0,
@@ -155,21 +158,38 @@ export function refreshTags(ticket) {
   ticket.tags = [`tracker/status/${ticket.status}`, `tracker/cat/${ticket.category}`, ...(ticket.stale ? ['tracker/stale'] : []), ...explicit];
 }
 
+// Parent -> children index keeps derived child fields O(children) instead of O(all tickets).
+export function indexChild(state, ticket, previousParentId = undefined) {
+  if (previousParentId !== undefined && previousParentId !== null && previousParentId !== ticket.parent_id) {
+    const prev = state.childrenIndex.get(previousParentId);
+    if (prev) prev.delete(ticket.id);
+  }
+  if (ticket.parent_id) {
+    if (!state.childrenIndex.has(ticket.parent_id)) state.childrenIndex.set(ticket.parent_id, new Set());
+    state.childrenIndex.get(ticket.parent_id).add(ticket.id);
+  }
+}
+
 export function refreshDerived(state, ticket) {
   ticket.files_touched_count = ticket.files_touched.length;
   ticket.plans_count = ticket.plans.length;
-  const children = [];
+  const ids = state.childrenIndex.get(ticket.id);
+  const children = ids ? [...ids].filter((id) => state.tickets.has(id)).sort() : [];
   let done = 0;
-  for (const other of state.tickets.values()) {
-    if (other.parent_id === ticket.id) {
-      children.push(other.id);
-      if (other.status === 'done') done += 1;
-    }
-  }
-  children.sort();
+  for (const id of children) if (state.tickets.get(id).status === 'done') done += 1;
   ticket.children_ids = children;
   ticket.children_done_count = done;
   refreshTags(ticket);
+}
+
+export function registerSession(state, session) {
+  state.sessionsById.set(session.id, session);
+}
+
+export function registerCheckpoint(state, cp) {
+  state.checkpoints.set(cp.id, cp);
+  if (!state.checkpointsBySession.has(cp.session_id)) state.checkpointsBySession.set(cp.session_id, new Set());
+  state.checkpointsBySession.get(cp.session_id).add(cp.id);
 }
 
 export function bumpRevision(ticket, at) {
