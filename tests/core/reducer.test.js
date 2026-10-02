@@ -55,16 +55,32 @@ test('duplicate event_id and duplicate source_identity have exactly one effect',
   assert.equal(state.tickets.get(T1).files_touched_count, 1);
 });
 
-test('post-tool without a pre-tool record is quarantined as unresolved and never attributed by cwd or current binding', () => {
+test('post-tool without a pre-tool record is deferred, never attributed to the current binding, and becomes unresolved after one reconciliation', () => {
   const state = newState();
   createTicket(state);
   bind(state, 'host-1', T1);
   const r = ev(state, 'post-tool', { tool_name: 'Edit', write_paths: ['src/x.js'], success: true }, { session_id: 'host-1', tool_call_id: 'toolu_missing' });
-  assert.equal(r.unresolved, true);
-  assert.equal(state.unresolved.length, 1);
-  assert.equal(state.unresolved[0].reason, 'missing-pre-tool');
+  assert.equal(r.deferred, true);
+  assert.equal(state.unresolved.length, 0);
   assert.equal(state.tickets.get(T1).timeline.some((e) => e.kind === 'write' || e.kind === 'tool'), false, 'no write or tool entry attributed');
   assert.equal(state.tickets.get(T1).files_touched_count, 0);
+  ev(state, 'reconcile', { last_sync: '2026-10-02T10:00:00Z', provider_health: [] }, { occurred_at: '2026-10-02T10:00:00Z' });
+  assert.equal(state.unresolved.length, 1);
+  assert.equal(state.unresolved[0].reason, 'missing-pre-tool');
+  assert.equal(state.tickets.get(T1).files_touched_count, 0);
+});
+
+test('a result that arrives before its pre-tool record is applied once the attribution record lands', () => {
+  const state = newState();
+  createTicket(state);
+  bind(state, 'host-1', T1);
+  ev(state, 'post-tool', { tool_name: 'Edit', write_paths: ['src/early.js'], repo_id: 'demo', success: true }, { session_id: 'host-1', tool_call_id: 'toolu_early', occurred_at: '2026-10-02T08:05:00Z' });
+  assert.equal(state.tickets.get(T1).files_touched_count, 0);
+  ev(state, 'pre-tool', { tool_name: 'Edit', write_target: 'src/early.js' }, { session_id: 'host-1', tool_call_id: 'toolu_early', occurred_at: '2026-10-02T08:05:00Z' });
+  assert.equal(state.tickets.get(T1).files_touched_count, 1);
+  assert.equal(state.sessions.get(sessionKey({ session_id: 'host-1' })).successful_write_count, 1);
+  ev(state, 'reconcile', { last_sync: '2026-10-02T10:00:00Z', provider_health: [] }, { occurred_at: '2026-10-02T10:00:00Z' });
+  assert.equal(state.unresolved.length, 0);
 });
 
 test('rebind while a tool is in flight keeps the result on the original ticket', () => {

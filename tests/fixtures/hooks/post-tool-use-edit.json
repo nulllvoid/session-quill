@@ -1,0 +1,18 @@
+{
+  "session_id": "sess-0001",
+  "transcript_path": "C:/Users/me/.claude/projects/x/sess-0001.jsonl",
+  "cwd": "C:/repo",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "C:/repo/src/a.js",
+    "old_string": "a",
+    "new_string": "b"
+  },
+  "tool_use_id": "toolu_01A",
+  "tool_response": {
+    "filePath": "C:/repo/src/a.js",
+    "success": true
+  }
+}

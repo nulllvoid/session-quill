@@ -162,15 +162,44 @@ function createTicket(state, ev, t, source, result) {
   return {};
 }
 
+// Tool results wait for their matching pre-call attribution record; they are never assigned by
+// ingestion order or current binding. Results still unmatched after a reconciliation run become
+// visible unresolved events (TRD §Durability and concurrency).
 function resolveAttribution(state, ev, result) {
   const key = sessionKey(ev);
   const attribution = ev.tool_call_id ? state.pendingToolCalls.get(`${key}:${ev.tool_call_id}`) : null;
   if (!attribution) {
-    state.unresolved.push({ event_id: ev.event_id, session_key: key, tool_call_id: ev.tool_call_id ?? null, reason: ev.tool_call_id ? 'missing-pre-tool' : 'missing-tool-call-id', at: ev.occurred_at });
-    result.unresolved = true;
+    if (!ev.tool_call_id) {
+      state.unresolved.push({ event_id: ev.event_id, session_key: key, tool_call_id: null, reason: 'missing-tool-call-id', at: ev.occurred_at });
+      result.unresolved = true;
+      return null;
+    }
+    if (!state.deferredResults) state.deferredResults = new Map();
+    state.deferredResults.set(`${key}:${ev.tool_call_id}`, ev);
+    result.deferred = true;
     return null;
   }
   return attribution;
+}
+
+function replayDeferred(state, key, toolCallId, result) {
+  if (!state.deferredResults) return;
+  const deferredKey = `${key}:${toolCallId}`;
+  const pending = state.deferredResults.get(deferredKey);
+  if (!pending) return;
+  state.deferredResults.delete(deferredKey);
+  const sub = applyEventInner(state, pending, { replayingDeferred: true });
+  for (const id of sub.changed) result.changed.add(id);
+}
+
+function sweepDeferred(state, ev) {
+  if (!state.deferredResults) return;
+  for (const [deferredKey, pending] of state.deferredResults) {
+    if (pending.occurred_at <= ev.occurred_at) {
+      state.deferredResults.delete(deferredKey);
+      state.unresolved.push({ event_id: pending.event_id, session_key: sessionKey(pending), tool_call_id: pending.tool_call_id, reason: 'missing-pre-tool', at: pending.occurred_at, swept_at: ev.occurred_at });
+    }
+  }
 }
 
 function handlePostTool(state, ev, result) {
@@ -346,13 +375,19 @@ function handleHandoffTx(state, ev, result) {
 }
 
 export function applyEvent(state, ev) {
+  return applyEventInner(state, ev, {});
+}
+
+function applyEventInner(state, ev, { replayingDeferred = false }) {
   const result = { changed: new Set(), bindingChanged: new Set(), requestsChanged: new Set(), handoffsChanged: new Set(), effects: [] };
-  if (state.appliedEvents.has(ev.event_id) || (ev.source_identity && state.appliedSources.has(ev.source_identity))) {
-    result.duplicate = true;
-    return result;
+  if (!replayingDeferred) {
+    if (state.appliedEvents.has(ev.event_id) || (ev.source_identity && state.appliedSources.has(ev.source_identity))) {
+      result.duplicate = true;
+      return result;
+    }
+    state.appliedEvents.add(ev.event_id);
+    if (ev.source_identity) state.appliedSources.add(ev.source_identity);
   }
-  state.appliedEvents.add(ev.event_id);
-  if (ev.source_identity) state.appliedSources.add(ev.source_identity);
   if (Number.isInteger(ev.sequence) && ev.sequence > state.lastSequence) state.lastSequence = ev.sequence;
   if (!['reconcile', 'notify', 'request', 'request-tx'].includes(ev.kind) && ev.producer !== 'worker') {
     if (!state.lastCaptureAt || ev.occurred_at > state.lastCaptureAt) state.lastCaptureAt = ev.occurred_at;
@@ -394,6 +429,7 @@ export function applyEvent(state, ev) {
         const ticket_id = ev.ticket_id ?? s.current_ticket_id;
         const binding_revision = ev.binding_revision ?? s.current_binding_revision;
         state.pendingToolCalls.set(`${sessionKey(ev)}:${ev.tool_call_id}`, { session_key: sessionKey(ev), ticket_id, binding_revision, tool_name: ev.payload.tool_name, sequence: ev.sequence, at: ev.occurred_at, denied: ev.payload.denied === true });
+        replayDeferred(state, sessionKey(ev), ev.tool_call_id, result);
       }
       break;
     }
@@ -521,6 +557,7 @@ export function applyEvent(state, ev) {
       break;
     case 'reconcile': {
       const p = ev.payload;
+      sweepDeferred(state, ev);
       if (p.last_sync) state.lastSync = p.last_sync;
       if (Array.isArray(p.provider_health)) state.providerHealth = p.provider_health;
       for (const upd of Array.isArray(p.pr_updates) ? p.pr_updates : []) {

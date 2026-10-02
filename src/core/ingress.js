@@ -40,24 +40,29 @@ export function listIngress(env = process.env) {
   for (const name of listFiles(dir, (f) => f.endsWith('.json') && !isTempFile(f))) {
     const file = path.join(dir, name);
     let text;
+    let mtimeMs = 0;
     try {
       text = fs.readFileSync(file, 'utf8');
+      mtimeMs = fs.statSync(file).mtimeMs;
     } catch (err) {
       if (err.code === 'ENOENT') continue;
-      out.push({ file, name, error: 'unreadable', event: null });
+      out.push({ file, name, error: 'unreadable', event: null, mtimeMs });
       continue;
     }
     try {
       const event = JSON.parse(text);
-      out.push({ file, name, event, error: null });
+      out.push({ file, name, event, error: null, mtimeMs });
     } catch {
-      out.push({ file, name, event: null, error: 'malformed' });
+      out.push({ file, name, event: null, error: 'malformed', mtimeMs });
     }
   }
+  // occurred_at has second resolution; the write time breaks ties so a pre-tool record usually
+  // precedes its result. The reducer still tolerates reordering by deferring unmatched results.
   out.sort((a, b) => {
     const ta = a.event ? a.event.occurred_at : '';
     const tb = b.event ? b.event.occurred_at : '';
     if (ta !== tb) return ta < tb ? -1 : 1;
+    if (a.mtimeMs !== b.mtimeMs) return a.mtimeMs - b.mtimeMs;
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   });
   return out;
