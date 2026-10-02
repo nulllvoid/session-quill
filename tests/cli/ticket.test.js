@@ -146,3 +146,57 @@ test('review: relink --external normalizes tracker keys to uppercase', async () 
     await w.stop();
   }
 });
+
+test('issue #4: ticket set edits title, status, next action, priority, due and repository in one event', async () => {
+  const fx = makeHome();
+  fx.config.repos.api = { project_id: 'demo', display_name: 'api', default_branch: 'main', deployment_environments: ['production'] };
+  saveUserConfig(fx.config, fx.env);
+  const w = await startWorker(fx);
+  try {
+    const a = await cli(['ticket', 'create', 'Imported work', '--session', 'sess-S'], fx.env);
+    const key = /(LOCAL-imported-work-[0-9a-f]{8})/.exec(a.out)[1];
+    const before = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out).find((t) => t.key === key);
+    const r = await cli(['ticket', 'set', key, '--title', 'Fixed title', '--status', 'active', '--next', 'Write the test', '--priority', 'P1', '--due', '2026-11-01', '--repo', 'api'], fx.env);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /Updated/);
+    const t = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out).find((x) => x.key === key);
+    assert.deepEqual([t.title, t.status, t.next_action, t.priority, t.due, t.repo_id], ['Fixed title', 'active', 'Write the test', 'P1', '2026-11-01', 'api']);
+    assert.equal(t.revision, before.revision + 1, 'one ticket-update event');
+    const blocked = await cli(['ticket', 'set', key, '--status', 'blocked', '--blocker', 'Waiting on infra'], fx.env);
+    assert.equal(blocked.code, 0, blocked.err);
+    const cleared = await cli(['ticket', 'set', key, '--repo', 'none', '--due', 'none'], fx.env);
+    assert.equal(cleared.code, 0, cleared.err);
+    const t2 = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out).find((x) => x.key === key);
+    assert.deepEqual([t2.status, t2.blocker, t2.repo_id, t2.due], ['blocked', 'Waiting on infra', null, null]);
+  } finally {
+    await w.stop();
+  }
+});
+
+test('issue #4: ticket set validates locally before submitting', async () => {
+  const fx = makeHome();
+  const w = await startWorker(fx);
+  try {
+    const a = await cli(['ticket', 'create', 'Validate me', '--session', 'sess-V'], fx.env);
+    const key = /(LOCAL-validate-me-[0-9a-f]{8})/.exec(a.out)[1];
+    const cases = [
+      [[], /nothing to change/],
+      [['--repo', 'nope'], /unknown repository nope/],
+      [['--status', 'shipping'], /status must be one of/],
+      [['--status', 'blocked'], /blocker/],
+      [['--blocker', 'x'], /--status blocked/],
+      [['--priority', 'P9'], /priority/],
+      [['--due', 'tomorrow'], /YYYY-MM-DD/],
+      [['--parent', 'LOCAL-missing-00000000'], /unknown parent/],
+    ];
+    for (const [flags, re] of cases) {
+      const r = await cli(['ticket', 'set', key, ...flags], fx.env);
+      assert.notEqual(r.code, 0, flags.join(' '));
+      assert.match(r.err, re, flags.join(' '));
+    }
+    const unknown = await cli(['ticket', 'set', 'LOCAL-missing-00000000', '--title', 'x'], fx.env);
+    assert.match(unknown.err, /unknown ticket key/);
+  } finally {
+    await w.stop();
+  }
+});

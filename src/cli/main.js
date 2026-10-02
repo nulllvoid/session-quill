@@ -32,6 +32,7 @@ Usage: quill <command> [options]
   ticket off --session <id>                 ticket on --session <id>
   ticket relink <KEY> --external <EXT-KEY> [--system s] [--url <url>] --session <id>   (--jira is an alias)
   ticket children <KEY>                     ticket list [--status s] [--json]
+  ticket set <KEY> [--title t] [--status s] [--blocker b] [--next text] [--priority P] [--category c] [--due D|none] [--parent KEY|none] [--repo id|none]
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>
   status [--json] [--session <id>] | status --statusline
   doctor

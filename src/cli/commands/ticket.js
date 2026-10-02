@@ -6,7 +6,7 @@ import { renderUrl, isSafeExternalUrl, TRACKER_SYSTEMS } from '../../core/extern
 import { uuid, shortId } from '../../lib/ids.js';
 import { isDate } from '../../lib/time.js';
 import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
-import { sessionKey } from '../../core/state.js';
+import { sessionKey, TICKET_STATUSES } from '../../core/state.js';
 import { TrackerError } from '../../lib/errors.js';
 
 function timeout(flags) {
@@ -137,6 +137,79 @@ async function relink(ctx, io, args, flags) {
   return 0;
 }
 
+const CLEAR = 'none';
+
+// One ticket-update event for every field given; values are validated here because the reducer applies what it is sent.
+async function set(ctx, io, args, flags) {
+  const usage = 'usage: ticket set <KEY> [--title t] [--status s] [--blocker text] [--next text] [--priority P0-P3] [--category c] [--due YYYY-MM-DD|none] [--parent KEY|none] [--repo <repo-id>|none]';
+  const [key] = args;
+  if (!key) throw new TrackerError('key-required', usage);
+  validateKey(key);
+  const ticket = findTicketByKey(ctx, key);
+  if (!ticket) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
+  const str = (name) => (typeof flags[name] === 'string' ? flags[name].trim() : undefined);
+  const fields = {};
+  const title = str('title');
+  if (title !== undefined) {
+    if (!title) throw new TrackerError('title-required', 'the title cannot be empty');
+    fields.title = title.slice(0, 200);
+  }
+  const status = str('status');
+  const blocker = str('blocker');
+  if (status !== undefined) {
+    if (!TICKET_STATUSES.includes(status)) throw new TrackerError('status-invalid', `status must be one of ${TICKET_STATUSES.join(', ')}`);
+    if (status === 'blocked' && !blocker && !(ticket.status === 'blocked' && ticket.blocker)) throw new TrackerError('blocker-required', 'blocked needs --blocker "<what you are waiting on>"');
+    fields.status = status;
+  }
+  if (blocker !== undefined) {
+    if (!blocker) throw new TrackerError('blocker-required', 'the blocker cannot be empty');
+    if ((status ?? ticket.status) !== 'blocked') throw new TrackerError('blocker-not-blocked', `--blocker applies only to a blocked ticket; add --status blocked (${ticket.key} is ${ticket.status})`);
+    fields.blocker = blocker;
+  }
+  if (status === 'blocked' && blocker === undefined) fields.blocker = ticket.blocker;
+  if (typeof flags.next === 'string') fields.next_action = flags.next.trim();
+  const priority = str('priority');
+  if (priority !== undefined) {
+    if (!PRIORITIES.includes(priority)) throw new TrackerError('priority-invalid', `priority must be one of ${PRIORITIES.join(', ')}`);
+    fields.priority = priority;
+  }
+  const category = str('category');
+  if (category !== undefined) {
+    if (!CATEGORIES.includes(category)) throw new TrackerError('category-invalid', `category must be one of ${CATEGORIES.join(', ')}`);
+    fields.category = category;
+  }
+  const due = str('due');
+  if (due !== undefined) {
+    if (due !== CLEAR && !isDate(due)) throw new TrackerError('due-invalid', 'due must be YYYY-MM-DD (or none to clear it)');
+    fields.due = due === CLEAR ? null : due;
+  }
+  const parentKey = str('parent');
+  if (parentKey !== undefined) {
+    if (parentKey === CLEAR) fields.parent_id = null;
+    else {
+      validateKey(parentKey);
+      const parent = findTicketByKey(ctx, parentKey);
+      if (!parent) throw new TrackerError('parent-invalid', `unknown parent ticket key ${parentKey}`);
+      fields.parent_id = parent.id;
+    }
+  }
+  const repo = str('repo');
+  if (repo !== undefined) {
+    if (repo !== CLEAR && !Object.hasOwn(ctx.config.repos ?? {}, repo)) {
+      const known = Object.keys(ctx.config.repos ?? {});
+      throw new TrackerError('repo-unknown', `unknown repository ${repo}; registered: ${known.length ? known.join(', ') : 'none'} (see ${commandName('repo')} list)`);
+    }
+    fields.repo_id = repo === CLEAR ? null : repo;
+  }
+  if (!Object.keys(fields).length) throw new TrackerError('usage', `nothing to change. ${usage}`);
+  const session = flags.session ? sessionFromFlags(flags, ctx.env) : null;
+  const ack = await submitAndWait(ctx, cliEvent(ctx, { kind: 'ticket-update', payload: { ticket_id: ticket.id, fields, source: 'manual' }, session, ticket_id: ticket.id }), { timeoutMs: timeout(flags) });
+  if (ack.rejected) throw new TrackerError(ack.rejected, `update rejected: ${ack.rejected}`);
+  const shown = Object.entries(fields).map(([k, v]) => `${k}=${v === null ? CLEAR : k === 'parent_id' ? parentKey : v}`).join(', ');
+  io.println(`Updated ${ticket.key}: ${shown}`);
+  return 0;
+}
+
 function list(ctx, io, flags) {
   const snap = latestSnapshot(ctx);
   let tickets = snap ? snap.tickets : [];
@@ -182,9 +255,10 @@ export async function run({ args, flags, io, env }) {
     case 'off': return gate(ctx, io, flags, false);
     case 'on': return gate(ctx, io, flags, true);
     case 'relink': return relink(ctx, io, rest, flags);
+    case 'set': return set(ctx, io, rest, flags);
     case 'list': return list(ctx, io, flags);
     case 'children': return children(ctx, io, rest, flags);
     default:
-      throw new TrackerError('usage', 'usage: ticket create|bind|show|off|on|relink|list|children');
+      throw new TrackerError('usage', 'usage: ticket create|bind|show|set|off|on|relink|list|children');
   }
 }

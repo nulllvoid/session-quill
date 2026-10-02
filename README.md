@@ -230,7 +230,7 @@ One ticket, `PROJ-123` in Jira, from first prompt to a page your team can see. I
 8. **Share it.** Add a `[[publish]]` entry (see [Publishing](#publishing)). For a markdown or HTML publisher, `quill publish team --confirm` confirms the destination and publishes. For a live artifact, run `/session-quill:publish team` in a Claude Code session and confirm when it asks; it prints the page's claude.ai link. Share the page from claude.ai. With `two_way = true`, people you let edit the page can change a ticket's status or next action. Each change comes back on the next publish as an edit that applies unless you changed the ticket since, and comments that name a ticket appear on its timeline.
 9. **See the tracker's view.** With `sync_token_env` set and a `tracker-sync` schedule (see [Tracker sync](#tracker-sync)), the ticket shows Jira's status, assignee and fix version, and warns if the key does not exist. Quill never writes to Jira.
 
-Other commands: `/session-quill:status`, `/session-quill:handoff <KEY>`, `/session-quill:agent`, `/session-quill:ui`; from a terminal `quill ticket list`, `quill publish list`, `quill export`, `quill replay --into <dir>`, `quill import <note.md>`, `quill note restore <KEY>`, `quill migrate --source <dir> --dry-run`, and `quill help` for the rest.
+Other commands: `/session-quill:status`, `/session-quill:handoff <KEY>`, `/session-quill:agent`, `/session-quill:ui`; from a terminal `quill ticket list`, `quill ticket set <KEY> --status active --next "…" --repo <id>` (edit a ticket after creation or migration), `quill publish list`, `quill export`, `quill replay --into <dir>`, `quill import <note.md>`, `quill note restore <KEY>`, `quill migrate --source <dir> --dry-run`, and `quill help` for the rest.
 
 ## Status line
 
