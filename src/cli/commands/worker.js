@@ -12,7 +12,8 @@ import fs from 'node:fs';
 const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'bin', 'tracker.js');
 
 export async function buildWorker(ctx, { log } = {}) {
-  const w = new Worker({ config: ctx.config, storeMeta: ctx.storeMeta, env: ctx.env, log: log ?? (() => {}) });
+  const { derive } = await import('../../reconcile/derive.js');
+  const w = new Worker({ config: ctx.config, storeMeta: ctx.storeMeta, env: ctx.env, log: log ?? (() => {}), derive });
   await attachExtensions(w, ctx);
   return w;
 }
