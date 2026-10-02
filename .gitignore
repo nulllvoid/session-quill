@@ -1,5 +1,5 @@
 
-# local tracker state and demo artifacts
+# local quill state and demo artifacts
 *.html.tmp
 *.log
 .DS_Store

@@ -120,7 +120,7 @@ function renderFilterBar(s) {
   }
   const categories = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
   const repos = s.repos ?? [];
-  const tags = [...new Set(s.tickets.flatMap((t) => t.tags.filter((x) => !x.startsWith('tracker/'))))];
+  const tags = [...new Set(s.tickets.flatMap((t) => t.tags.filter((x) => !x.startsWith('quill/'))))];
   const projects = [...new Map(s.tickets.map((t) => [t.project_id, t.project_name])).entries()];
   return `<span class="eyebrow">Triage lens</span>
   <label>Project <select data-filter="project" aria-label="Project filter (applies to every view)"><option value="">All</option>${projects.map(([id, name]) => `<option value="${attr(id)}" ${f.project === id ? 'selected' : ''}>${esc(name ?? id)}</option>`).join('')}</select></label>

@@ -8,7 +8,7 @@ Hook payloads and plugin command names need verification against supported Claud
 
 ## Decision
 
-Use plugin settings hooks routed to `tracker hook`. Versioned fixtures define supported events, native shell tools, approved-plan extraction, plan-file exceptions, subagent identity, failure behavior and command names. Do not claim compatibility with untested older releases. Mods remain optional later work.
+Use plugin settings hooks routed to `quill hook`. Versioned fixtures define supported events, native shell tools, approved-plan extraction, plan-file exceptions, subagent identity, failure behavior and command names. Do not claim compatibility with untested older releases. Mods remain optional later work.
 
 Bindings use explicit session/agent identity; directory fallback is forbidden. Missing identity denies covered operations with a diagnostic. A valid binding permits normal host permission processing; it must not produce an unconditional permission override.
 

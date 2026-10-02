@@ -6,9 +6,9 @@ export function renderPickNext(rawSnapshot, filters, { now }) {
   const blocked = (snapshot.blocked ?? []).map((b) => ({ b, ticket: ticketById(snapshot, b.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
   let main;
   if (!entries.length && blocked.length) {
-    main = emptyState('Everything eligible is blocked', 'Clear a blocker below, or create new work with <code>/session-tracker:ticket create "&lt;title&gt;"</code>.');
+    main = emptyState('Everything eligible is blocked', 'Clear a blocker below, or create new work with <code>/session-quill:ticket create "&lt;title&gt;"</code>.');
   } else if (!entries.length) {
-    main = emptyState('No eligible work', 'Pick next fills as tickets in to do, active, review or deploy-pending appear. Create one with <code>/session-tracker:ticket create "&lt;title&gt;"</code> in a Claude Code session.');
+    main = emptyState('No eligible work', 'Pick next fills as tickets in to do, active, review or deploy-pending appear. Create one with <code>/session-quill:ticket create "&lt;title&gt;"</code> in a Claude Code session.');
   } else {
     main = `<div class="section-head"><h2>Ranked candidates</h2><span class="section-count" style="margin:0">${esc(entries.length)} candidate${entries.length === 1 ? '' : 's'} · ranked by raw score, display capped at 100 · blocked and done excluded</span></div>
 <div class="picknext-grid">${entries.map(({ entry, ticket }) => ticketCard(ticket, snapshot, { variant: 'picknext', now, showHandoff: true, entry })).join('')}</div>`;

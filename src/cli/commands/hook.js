@@ -3,12 +3,12 @@ import { READ_TOOLS } from '../../gate/decide.js';
 
 const DENY = (reason) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
 
-// `tracker hook <EventName>`: never throws out to the host. Non-gate hooks always exit 0 without a
+// `quill hook <EventName>`: never throws out to the host. Non-gate hooks always exit 0 without a
 // decision; a PreToolUse the hook cannot evaluate fails closed for covered tools (TRD §Durability 8).
 export async function run({ args, io, env }) {
   const [eventName] = args;
   if (!HOOK_EVENTS.includes(eventName)) {
-    io.error(`Session Tracker: unsupported hook event ${eventName}`);
+    io.error(`Session Quill: unsupported hook event ${eventName}`);
     return 0;
   }
   let input;
@@ -16,17 +16,17 @@ export async function run({ args, io, env }) {
     const raw = await io.readStdin();
     input = raw ? JSON.parse(raw) : {};
   } catch (err) {
-    io.error(`Session Tracker: malformed hook input (${err.message})`);
-    if (eventName === 'PreToolUse') io.out(DENY('Session Tracker: the gate could not read this tool call (malformed hook input); covered operations are denied. Run `tracker doctor`.'));
+    io.error(`Session Quill: malformed hook input (${err.message})`);
+    if (eventName === 'PreToolUse') io.out(DENY('Session Quill: the gate could not read this tool call (malformed hook input); covered operations are denied. Run `quill doctor`.'));
     return 0;
   }
   let result;
   try {
     result = runHook(eventName, input, { env });
   } catch (err) {
-    io.error(`Session Tracker: hook failure (${err.message})`);
+    io.error(`Session Quill: hook failure (${err.message})`);
     if (eventName === 'PreToolUse' && input && input.tool_name && !READ_TOOLS.has(input.tool_name)) {
-      io.out(DENY(`Session Tracker: the gate failed while evaluating ${input.tool_name} (${err.message}); covered operations are denied. Run \`tracker doctor\`.`));
+      io.out(DENY(`Session Quill: the gate failed while evaluating ${input.tool_name} (${err.message}); covered operations are denied. Run \`quill doctor\`.`));
     }
     return 0;
   }

@@ -28,7 +28,7 @@ async function submitRequest(ctx, io, body, flags) {
   const ack = await submitAndWait(ctx, cliEvent(ctx, { kind: 'request', payload: request, ticket_id: body.target_id, source_identity: `request:${id}` }), { timeoutMs: flags.timeout ? Number(flags.timeout) : 10_000 });
   if (ack.rejected) throw new TrackerError(ack.rejected, `request rejected: ${ack.rejected}`);
   const terminal = await waitTerminal(ctx, id, flags.timeout ? Number(flags.timeout) : 10_000);
-  if (!terminal) throw new TrackerError('request-pending', `request ${id} is persisted but not yet applied; check \`tracker handoff list\``);
+  if (!terminal) throw new TrackerError('request-pending', `request ${id} is persisted but not yet applied; check \`quill handoff list\``);
   return terminal;
 }
 
@@ -54,7 +54,7 @@ async function queue(ctx, io, args, flags) {
     throw new TrackerError(err.code ?? terminal.state, `handoff request ${terminal.state}: ${err.message ?? ''}${terminal.result && terminal.result.existing_handoff_id ? ` (existing run ${terminal.result.existing_handoff_id})` : ''}`);
   }
   io.println(`Handoff ${terminal.result.handoff_id} queued for ${ticket.key} (${payload.mode}; permissions: ${Object.entries(payload.permissions).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}).`);
-  io.println('Request accepted is not execution complete: follow progress with `tracker handoff list` or the dashboard. Execution is capped at 20 minutes.');
+  io.println('Request accepted is not execution complete: follow progress with `quill handoff list` or the dashboard. Execution is capped at 20 minutes.');
   if (flags.json) io.json(terminal);
   return 0;
 }
@@ -83,7 +83,7 @@ async function cancel(ctx, io, args, flags) {
   return 0;
 }
 
-// `tracker handoff result <id> --json <file>`: an agent (or operator) hands back a structured result.
+// `quill handoff result <id> --json <file>`: an agent (or operator) hands back a structured result.
 function result(ctx, io, args, flags) {
   const [id] = args;
   if (!id || !flags.json || flags.json === true) throw new TrackerError('usage', 'usage: handoff result <handoff-id> --json <file>');

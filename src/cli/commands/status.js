@@ -13,7 +13,7 @@ export async function run({ flags, io, env }) {
   if (flags.statusline) {
     let input = {};
     try { input = JSON.parse((await io.readStdin()) || '{}'); } catch { input = {}; }
-    if (!ctx.initialized) { io.out('⌁ tracker: not initialized'); return 0; }
+    if (!ctx.initialized) { io.out('⌁ quill: not initialized'); return 0; }
     const session = input.session_id ? { session_id: input.session_id, agent_id: null } : null;
     const b = bindingFor(ctx, session);
     const ws = workerStatus(ctx);
@@ -39,7 +39,7 @@ export async function run({ flags, io, env }) {
     generation: snap ? snap.generation_id : null,
   };
   if (flags.json) { io.json({ ...info, session: sessionRecord ?? session }); return 0; }
-  if (!ctx.initialized) { io.println('Session Tracker is not initialized. Run `tracker init`.'); return 1; }
+  if (!ctx.initialized) { io.println('Session Quill is not initialized. Run `quill init`.'); return 1; }
   io.println(`Store: ${ctx.storeMeta.store_name} (${ctx.config.store_path})`);
   io.println(`Worker: ${ws.healthy ? 'healthy' : 'unavailable'}${ws.heartbeat_at ? ` (heartbeat ${ws.heartbeat_at})` : ''}; ingress backlog: ${info.backlog}`);
   io.println(`Last sync: ${info.last_sync ?? 'never'}`);

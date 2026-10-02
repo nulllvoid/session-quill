@@ -73,7 +73,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       if (p.push_branch && out.commit_sha) {
         try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
         if (p.open_draft_pr) {
-          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Tracker handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
+          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
         }
       }
     } catch (err) {
@@ -118,8 +118,8 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const current = worker.state.handoffs.get(h.id);
     const prompt = buildPrompt(current, ticket, { repo: repoCfg });
     const tools = allowedToolsFor({ mode: h.mode, permissions: h.permissions });
-    const env = { ...spawnEnv, TRACKER_HANDOFF_ID: h.id, TRACKER_HANDOFF_TICKET_ID: ticket.id, TRACKER_HANDOFF_TICKET_KEY: ticket.key };
-    if (ctx.env && ctx.env.TRACKER_HOME) env.TRACKER_HOME = ctx.env.TRACKER_HOME;
+    const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
+    if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
     let run;
     try {
       run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, model });

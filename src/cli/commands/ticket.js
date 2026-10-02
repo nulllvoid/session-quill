@@ -41,7 +41,7 @@ async function create(ctx, io, args, flags) {
   if (!PRIORITIES.includes(defaults.priority)) throw new TrackerError('priority-invalid', `priority must be one of ${PRIORITIES.join(', ')}`);
   if (flags.due && !isDate(flags.due)) throw new TrackerError('due-invalid', 'due must be YYYY-MM-DD');
   const project_id = defaults.project_id || Object.keys(ctx.config.projects)[0];
-  if (!project_id) throw new TrackerError('project-required', 'no project configured; pass --project or run tracker init');
+  if (!project_id) throw new TrackerError('project-required', 'no project configured; pass --project or run quill init');
   const project = ctx.config.projects[project_id] ?? {};
   const snapshot = latestSnapshot(ctx);
   const index = keyIndexFromSnapshot(snapshot);

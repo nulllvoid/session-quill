@@ -1,4 +1,4 @@
-# Session Tracker — Acceptance Scenarios
+# Session Quill — Acceptance Scenarios
 
 Status: v0.2 design · 2026-10-02 · All scenarios pending implementation
 These are release requirements, not tests already executed. Record host/runtime versions, OS, fixture set and results when implementing each phase. A documentation review does not satisfy runtime acceptance.
@@ -39,7 +39,7 @@ These are release requirements, not tests already executed. Record host/runtime 
 | --- | --- | --- |
 | A21 | FR-14 | Dry run changes no files; lists all mapped and ambiguous records, including stale and skipped-deployment cases. Every source ticket and user-authored section is accounted for |
 | A22 | FR-14 | Import creates replayable migration events and preserves original files; verify counts, links, plan/checkpoint content, statuses and deployment obligations |
-| A23 | FR-14 | Interrupt migration and resume without duplicate effects. Restore old hooks/settings and source layout from backup; preserve/export any new tracker events for reconciliation |
+| A23 | FR-14 | Interrupt migration and resume without duplicate effects. Restore old hooks/settings and source layout from backup; preserve/export any new quill events for reconciliation |
 
 ## Phase 3 — Reconciliation, UI and sharing
 

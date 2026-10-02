@@ -1,4 +1,4 @@
-# Session Tracker — Product Requirements (PRD)
+# Session Quill — Product Requirements (PRD)
 
 Status: revised draft v0.2 · 2026-10-02 · Owner: Shivam
 Companions: [TRD](TRD.md), [data contract](DATA-CONTRACT.md), [UI specification](UI-DESIGN.md), [acceptance scenarios](ACCEPTANCE.md), [decisions](decisions/).
@@ -7,7 +7,7 @@ Companions: [TRD](TRD.md), [data contract](DATA-CONTRACT.md), [UI specification]
 
 A public Claude Code plugin that binds development sessions to tickets, preserves captured work in local markdown or Obsidian, and provides a personal dashboard for status, pick-next and agent handoff.
 
-The primary user runs parallel sessions across repositories and needs to recover conclusions, approved plans, changes and next actions. Users without a note application receive the same core behavior. Teammates can read an explicitly exported snapshot, without editing the owner's tracker.
+The primary user runs parallel sessions across repositories and needs to recover conclusions, approved plans, changes and next actions. Users without a note application receive the same core behavior. Teammates can read an explicitly exported snapshot, without editing the owner's quill.
 
 The existing PMLA Delivery Tracker is the reference migration, not a dependency of the public product. Company-specific providers and skills belong to an optional profile.
 
@@ -56,7 +56,7 @@ Responsive layout never determines authorization. A narrow local owner window re
 
 ## Commands and key journeys
 
-The documents use `/ticket` and `/approve` as shorthand. Installed plugin commands use their verified namespace, such as `/session-tracker:ticket` and `/session-tracker:approve`, unless an alias is installed. Help and denial messages show the executable command for that installation.
+The documents use `/ticket` and `/approve` as shorthand. Installed plugin commands use their verified namespace, such as `/session-quill:ticket` and `/session-quill:approve`, unless an alias is installed. Help and denial messages show the executable command for that installation.
 
 - Start unbound: read and plan using allowed operations; a covered write gives an instruction to bind or create a ticket.
 - Create and bind: inherit project/category defaults, allocate a collision-safe key and display the binding.
@@ -113,6 +113,6 @@ No phase has a duration estimate until phase 0 provides evidence. Migration date
 
 ## Resolved defaults and remaining inputs
 
-Defaults: working name `session-tracker`; markdown store; LOCAL keys; gate on; approval phrases off; active-ticket staleness 5 days; session extinction 48 h; sync every 2 h all days; handoff analyse with follow-ups; source access off; no remote push by default.
+Defaults: working name `session-quill`; markdown store; LOCAL keys; gate on; approval phrases off; active-ticket staleness 5 days; session extinction 48 h; sync every 2 h all days; handoff analyse with follow-ups; source access off; no remote push by default.
 
 Still needed at deployment: actual store/repository paths, provider credentials if used, PMLA inventory/backup, final repository owner and license choice. These are collected during initialization or release preparation; runtime behavior is defined in the [TRD](TRD.md#configuration-and-packaging).

@@ -4,12 +4,12 @@ argument-hint: <KEY> [--mode analyse|analyse-followups|attempt-fix] [--note "...
 allowed-tools: Bash(node *)
 ---
 
-Queue a Session Tracker handoff. Permissions are explicit flags on the request; never add a permission the user did not ask for, and never infer one from approval text.
+Queue a Session Quill handoff. Permissions are explicit flags on the request; never add a permission the user did not ask for, and never infer one from approval text.
 
 1. Run:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/bin/tracker.js" handoff $ARGUMENTS
+node "${CLAUDE_PLUGIN_ROOT}/bin/quill.js" handoff $ARGUMENTS
 ```
 
 2. Relay the output. "Request accepted" means the handoff was queued, not that it finished; execution is capped at 20 minutes and one queued or running handoff exists per ticket. Progress is visible with `handoff list` or in the dashboard.

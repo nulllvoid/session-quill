@@ -61,7 +61,7 @@ export function readRuntimeIdentity(env = process.env) {
     const id = readJsonIfExists(identityPath(env));
     if (id && id.store_id && id.machine_id) return id;
   } catch { /* fall through */ }
-  // Fallback for a configured tracker whose worker has not yet published identity.
+  // Fallback for a configured quill whose worker has not yet published identity.
   const cfgText = readTextIfExists(configPath(env));
   if (!cfgText) return null;
   let cfg;

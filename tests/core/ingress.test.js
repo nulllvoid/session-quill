@@ -8,7 +8,7 @@ import { writeIngress, listIngress, removeIngress } from '../../src/core/ingress
 import { putBlob, getBlob } from '../../src/core/blobs.js';
 
 function env() {
-  return { TRACKER_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-home-')) };
+  return { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-home-')) };
 }
 
 const base = { store_id: '11111111-1111-4111-8111-111111111111', machine_id: '22222222-2222-4222-8222-222222222222', producer: 'test' };
@@ -37,7 +37,7 @@ test('writeIngress persists <event_id>.json atomically and listIngress orders by
   const a = makeEvent({ ...base, kind: 'bind', payload: {}, occurred_at: '2026-10-02T08:00:01Z' });
   writeIngress(b, e);
   writeIngress(a, e);
-  const files = fs.readdirSync(path.join(e.TRACKER_HOME, 'ingress'));
+  const files = fs.readdirSync(path.join(e.QUILL_HOME, 'ingress'));
   assert.deepEqual(files.sort(), [`${a.event_id}.json`, `${b.event_id}.json`].sort());
   const listed = listIngress(e);
   assert.deepEqual(listed.map((x) => x.event.event_id), [a.event_id, b.event_id]);
@@ -47,14 +47,14 @@ test('writeIngress persists <event_id>.json atomically and listIngress orders by
 
 test('writeIngress fails loudly when the ingress directory is unusable', () => {
   const e = env();
-  fs.writeFileSync(path.join(e.TRACKER_HOME, 'ingress'), 'not a dir');
+  fs.writeFileSync(path.join(e.QUILL_HOME, 'ingress'), 'not a dir');
   const ev = makeEvent({ ...base, kind: 'bind', payload: {}, occurred_at: '2026-10-02T08:00:01Z' });
   assert.throws(() => writeIngress(ev, e), (err) => err.code === 'ingress-failed');
 });
 
 test('listIngress ignores temp files and malformed files are reported, not thrown', () => {
   const e = env();
-  const dir = path.join(e.TRACKER_HOME, 'ingress');
+  const dir = path.join(e.QUILL_HOME, 'ingress');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.x.json.123.tmp'), '{');
   fs.writeFileSync(path.join(dir, 'bad.json'), '{not json');

@@ -17,7 +17,7 @@ export function buildPrompt(handoff, ticket, { notes = [], repo = null } = {}) {
   const plans = (ticket.plans ?? []).map((x) => `- approved ${x.approved_at} (${x.provenance}): ${x.preview}`).join('\n') || '- (none)';
   const conclusions = (ticket.conclusions ?? []).map((c) => `- ${c.recorded_at}: ${c.preview}`).join('\n') || '- (none)';
   return [
-    `You are the Session Tracker handoff agent for ticket ${ticket.key} (handoff ${handoff.id}, mode ${handoff.mode}).`,
+    `You are the Session Quill handoff agent for ticket ${ticket.key} (handoff ${handoff.id}, mode ${handoff.mode}).`,
     MODE_INSTRUCTIONS[handoff.mode] ?? MODE_INSTRUCTIONS.analyse,
     '',
     `Granted permissions for this run: ${grants.length ? grants.join(', ') : 'none (note-only analysis)'}. Anything not granted is forbidden: you must not read or edit source outside what is granted, must not commit, push, open pull requests, merge or deploy unless that exact permission is listed, and must never touch a default or protected branch.`,

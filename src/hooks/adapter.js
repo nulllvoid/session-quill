@@ -1,4 +1,4 @@
-// `tracker hook <Event>`: reads host JSON on stdin, persists ingress, and for PreToolUse emits the
+// `quill hook <Event>`: reads host JSON on stdin, persists ingress, and for PreToolUse emits the
 // gate decision. No network, no model calls, no journal scans (TRD §Durability 8, ADR 0003).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -46,16 +46,16 @@ function persist(ev, env, result, { covered = false } = {}) {
     const receipt = writeIngress(ev, env);
     result.persisted = true;
     if (receipt.slow) {
-      result.stderr += `Session Tracker: capture took ${receipt.elapsed} ms (budget 1000 ms)\n`;
+      result.stderr += `Session Quill: capture took ${receipt.elapsed} ms (budget 1000 ms)\n`;
       recordHealthError(env, { at: ev.occurred_at, kind: 'slow-capture', elapsed: receipt.elapsed, event_id: ev.event_id });
     }
     return true;
   } catch (err) {
     result.persisted = false;
-    result.stderr += `Session Tracker: capture gap — could not persist ${ev.kind} event (${err.message}). Run \`tracker doctor\`.\n`;
+    result.stderr += `Session Quill: capture gap — could not persist ${ev.kind} event (${err.message}). Run \`quill doctor\`.\n`;
     recordHealthError(env, { at: ev.occurred_at, kind: 'capture-gap', event_kind: ev.kind, error: err.message });
     if (covered) {
-      result.stdout = denyOutput('Session Tracker: capture storage unavailable; covered writes are denied until `tracker doctor` reports healthy storage (or /session-tracker:ticket off).');
+      result.stdout = denyOutput('Session Quill: capture storage unavailable; covered writes are denied until `quill doctor` reports healthy storage (or /session-quill:ticket off).');
     }
     return false;
   }
@@ -63,17 +63,17 @@ function persist(ev, env, result, { covered = false } = {}) {
 
 function bindingContext(snapshot, session_id) {
   if (snapshot && snapshot.ticket_id) {
-    return `Session Tracker session: ${session_id}. Bound to ${snapshot.ticket_key}${snapshot.ticket_title ? ` (${snapshot.ticket_title})` : ''}, binding revision ${snapshot.binding_revision}. Supported writes are permitted. Use /session-tracker:ticket show for details.`;
+    return `Session Quill session: ${session_id}. Bound to ${snapshot.ticket_key}${snapshot.ticket_title ? ` (${snapshot.ticket_title})` : ''}, binding revision ${snapshot.binding_revision}. Supported writes are permitted. Use /session-quill:ticket show for details.`;
   }
   const gateNote = snapshot && snapshot.gate_enabled === false ? 'Ticket gate is OFF for this session (audited).' : 'Ticket gate is ON: supported write tools are denied until bound.';
-  return `Session Tracker session: ${session_id}. This session is unbound. ${gateNote} Run /session-tracker:ticket create "<title>" or /session-tracker:ticket bind <KEY>; pass --session ${session_id} to the tracker CLI.`;
+  return `Session Quill session: ${session_id}. This session is unbound. ${gateNote} Run /session-quill:ticket create "<title>" or /session-quill:ticket bind <KEY>; pass --session ${session_id} to the quill CLI.`;
 }
 
 export function runHook(eventName, input, { env = process.env, now } = {}) {
   const result = { exitCode: 0, stdout: '', stderr: '', persisted: null };
   const occurred_at = now ?? nowIso();
   if (!input || typeof input !== 'object') {
-    result.stderr += 'Session Tracker: malformed hook input\n';
+    result.stderr += 'Session Quill: malformed hook input\n';
     return result;
   }
   const identity = readRuntimeIdentity(env);
@@ -82,21 +82,21 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
   const covered = eventName === 'PreToolUse' && !!input.tool_name && !READ_TOOLS.has(input.tool_name) && !(identity && Array.isArray(identity.allow_tools) && identity.allow_tools.includes(input.tool_name));
 
   if (!identity) {
-    result.stderr += 'Session Tracker: not initialized; run `tracker init` to enable capture and the ticket gate.\n';
+    result.stderr += 'Session Quill: not initialized; run `quill init` to enable capture and the ticket gate.\n';
     return result;
   }
   if (!session_id) {
-    result.stderr += 'Session Tracker: hook input has no session_id; identity unresolved (no cwd fallback).\n';
+    result.stderr += 'Session Quill: hook input has no session_id; identity unresolved (no cwd fallback).\n';
     if (covered) result.stdout = denyOutput(`${DENIAL_REASON} (host provided no session identity)`);
     return result;
   }
 
   const key = sessionKey({ session_id, agent_id });
   const base = { store_id: identity.store_id, machine_id: identity.machine_id, producer: 'hook', session_id, agent_id, occurred_at };
-  // A handoff agent session runs with TRACKER_HANDOFF_* set by the worker: its tool calls are
+  // A handoff agent session runs with QUILL_HANDOFF_* set by the worker: its tool calls are
   // attributed to the handoff's ticket instead of being gated as unbound.
-  const handoff = env.TRACKER_HANDOFF_ID && env.TRACKER_HANDOFF_TICKET_ID
-    ? { id: env.TRACKER_HANDOFF_ID, ticket_id: env.TRACKER_HANDOFF_TICKET_ID, ticket_key: env.TRACKER_HANDOFF_TICKET_KEY ?? null }
+  const handoff = env.QUILL_HANDOFF_ID && env.QUILL_HANDOFF_TICKET_ID
+    ? { id: env.QUILL_HANDOFF_ID, ticket_id: env.QUILL_HANDOFF_TICKET_ID, ticket_key: env.QUILL_HANDOFF_TICKET_KEY ?? null }
     : null;
   let snapshot = readBindingSnapshot(key, env);
   if (handoff && !(snapshot && snapshot.ticket_id)) {
@@ -111,7 +111,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
       if (handoff) {
         const bind = makeEvent({ ...base, kind: 'bind', payload: { ticket_id: handoff.ticket_id, project_id: null, handoff_id: handoff.id }, ticket_id: handoff.ticket_id, source_identity: `bind:${key}:handoff:${handoff.id}` });
         persist(bind, env, result);
-        result.stdout = contextOutput('SessionStart', `Session Tracker session: ${session_id}. This is handoff ${handoff.id} for ticket ${handoff.ticket_key ?? handoff.ticket_id}; tool activity is attributed to that ticket. Permissions are limited to what the handoff request granted.`);
+        result.stdout = contextOutput('SessionStart', `Session Quill session: ${session_id}. This is handoff ${handoff.id} for ticket ${handoff.ticket_key ?? handoff.ticket_id}; tool activity is attributed to that ticket. Permissions are limited to what the handoff request granted.`);
         return result;
       }
       result.stdout = contextOutput('SessionStart', bindingContext(snapshot, session_id));
@@ -157,7 +157,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
         source_identity: tool_call_id ? `pre-tool:${key}:${tool_call_id}` : undefined,
       });
       if (denied) result.stdout = denyOutput(gate.reason);
-      persist(ev, env, result, { covered: covered && !denied && gate.reason !== 'read-tool' && !/^read-only shell/.test(gate.reason ?? '') && gate.reason !== 'tracker-cli' && gate.reason !== 'plan-file-exception' });
+      persist(ev, env, result, { covered: covered && !denied && gate.reason !== 'read-tool' && !/^read-only shell/.test(gate.reason ?? '') && gate.reason !== 'quill-cli' && gate.reason !== 'plan-file-exception' });
       return result;
     }
     case 'PostToolUse': {
@@ -177,7 +177,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
             payload.plan_ref = putBlob(plan, env).hash;
             payload.plan_preview = preview(plan);
           } catch (err) {
-            result.stderr += `Session Tracker: capture gap — plan blob not stored (${err.message})\n`;
+            result.stderr += `Session Quill: capture gap — plan blob not stored (${err.message})\n`;
           }
         }
       }
@@ -201,7 +201,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
           content_ref = putBlob(message, env).hash;
           complete = true;
         } catch (err) {
-          result.stderr += `Session Tracker: capture gap — checkpoint blob not stored (${err.message})\n`;
+          result.stderr += `Session Quill: capture gap — checkpoint blob not stored (${err.message})\n`;
         }
       }
       const ev = makeEvent({ ...base, kind: eventName === 'Stop' ? 'stop' : 'subagent-stop', payload: {
@@ -226,7 +226,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
       return result;
     }
     default:
-      result.stderr += `Session Tracker: unsupported hook event ${eventName}\n`;
+      result.stderr += `Session Quill: unsupported hook event ${eventName}\n`;
       return result;
   }
 }

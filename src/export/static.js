@@ -37,7 +37,7 @@ export function buildStaticHtml(snapshot, options = {}, { uiDir = UI_DIR } = {})
   const css = fs.readFileSync(path.join(uiDir, 'styles.css'), 'utf8');
   let html = fs.readFileSync(path.join(uiDir, 'index.html'), 'utf8');
   html = html.replace(/<link rel="stylesheet" href="\/ui\/styles.css">/, `<style>\n${css}\n</style>`);
-  html = html.replace(/<title>[^<]*<\/title>/, `<title>Session Tracker snapshot — ${sanitized.meta.exported_at}</title>`);
+  html = html.replace(/<title>[^<]*<\/title>/, `<title>Session Quill snapshot — ${sanitized.meta.exported_at}</title>`);
   const bundle = bundleUiModules({ staticMode: true, uiDir });
   const scripts = `<script>window.__SNAPSHOT__ = ${embedJson(sanitized)};</script>\n<script type="module">\n${bundle}\n</script>`;
   html = html.replace(/<script type="module" src="\/ui\/app.js"><\/script>/, scripts);

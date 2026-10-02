@@ -61,7 +61,7 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
     try {
       if (req.method === 'GET' && url.pathname === '/auth') {
         const token = auth.exchangeSecret(url.searchParams.get('secret'));
-        if (!token) return fail(res, 403, 'secret-invalid', 'bootstrap secret is invalid, expired or already used; run `tracker ui` again');
+        if (!token) return fail(res, 403, 'secret-invalid', 'bootstrap secret is invalid, expired or already used; run `quill ui` again');
         // Redirect immediately so the secret leaves the address bar.
         return send(res, 302, '', { Location: '/', 'Set-Cookie': auth.cookieHeader(token) });
       }
@@ -69,7 +69,7 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
       if (!url.pathname.startsWith('/v1/')) return fail(res, 404, 'not-found', 'not found');
 
       const token = auth.tokenFromRequest(req);
-      if (!token) return fail(res, 401, 'unauthenticated', 'owner session required; open the dashboard with `tracker ui`');
+      if (!token) return fail(res, 401, 'unauthenticated', 'owner session required; open the dashboard with `quill ui`');
 
       if (req.method === 'GET') {
         if (url.pathname === '/v1/csrf') return json(res, 200, { csrf: auth.csrfFor(token) });
@@ -100,7 +100,7 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
       }
 
       if (req.method === 'POST') {
-        if (!auth.verifyCsrf(token, req.headers['x-tracker-csrf'])) return fail(res, 403, 'csrf-invalid', 'missing or invalid CSRF token');
+        if (!auth.verifyCsrf(token, req.headers['x-quill-csrf'])) return fail(res, 403, 'csrf-invalid', 'missing or invalid CSRF token');
         if (req.headers.origin === undefined && !(req.headers['sec-fetch-site'] === 'same-origin' || req.headers['sec-fetch-site'] === undefined)) return fail(res, 403, 'origin-rejected', 'cross-site request rejected');
         let body = {};
         const raw = await readBody(req);

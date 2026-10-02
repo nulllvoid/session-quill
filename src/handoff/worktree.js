@@ -61,7 +61,7 @@ export async function diffPatch(dir) {
 
 export async function commitAll(dir, message) {
   await git(dir, ['add', '-A']);
-  await git(dir, ['-c', 'user.name=Session Tracker handoff', '-c', 'user.email=tracker@localhost', 'commit', '-q', '-m', message]);
+  await git(dir, ['-c', 'user.name=Session Quill handoff', '-c', 'user.email=quill@localhost', 'commit', '-q', '-m', message]);
   return git(dir, ['rev-parse', 'HEAD']);
 }
 

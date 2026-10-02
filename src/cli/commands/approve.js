@@ -5,7 +5,7 @@ import { TrackerError } from '../../lib/errors.js';
 
 function currentCheckpoint(ctx, session, explicitId) {
   const binding = readBindingSnapshot(sessionKey(session), ctx.env);
-  if (!binding || !binding.session_id) throw new TrackerError('session-unknown', `session ${session.session_id} is unknown to the tracker`);
+  if (!binding || !binding.session_id) throw new TrackerError('session-unknown', `session ${session.session_id} is unknown to the quill`);
   if (!binding.ticket_id) throw new TrackerError('no-checkpoint', 'session is not bound to a ticket');
   const snap = latestSnapshot(ctx);
   const checkpoints = (snap ? snap.checkpoints : []).filter((c) => c.session_id === binding.session_id && c.complete);

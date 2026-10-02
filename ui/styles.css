@@ -1,4 +1,4 @@
-/* Session Tracker — "Terminal Slate" (docs/ui/terminal_slate/DESIGN.md): dark-first, 4px rhythm,
+/* Session Quill — "Terminal Slate" (docs/ui/terminal_slate/DESIGN.md): dark-first, 4px rhythm,
    monospace identifiers, status always labelled. Light variant keeps the same roles with measured AA. */
 :root[data-theme="dark"], :root:not([data-theme="light"]) {
   --bg: #0d1117;

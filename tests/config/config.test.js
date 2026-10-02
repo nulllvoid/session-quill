@@ -10,7 +10,7 @@ import { ensureMachineId, loadStoreMeta, writeStoreMeta, createStoreMeta } from 
 
 function tmpHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-home-'));
-  return { TRACKER_HOME: home };
+  return { QUILL_HOME: home };
 }
 
 test('loadUserConfig returns defaults when no file exists and saves round trip', () => {
@@ -22,17 +22,17 @@ test('loadUserConfig returns defaults when no file exists and saves round trip',
   assert.equal(cfg.sync_interval_hours, 2);
   assert.equal(cfg.stale_days, 5);
   assert.equal(cfg.default_category, 'research');
-  cfg.store_path = '/tmp/Tracker';
+  cfg.store_path = '/tmp/Quill';
   cfg.projects = { demo: { name: 'Demo', repo_id: 'demo' } };
   saveUserConfig(cfg, env);
   const again = loadUserConfig(env);
-  assert.equal(again.store_path, '/tmp/Tracker');
+  assert.equal(again.store_path, '/tmp/Quill');
   assert.equal(again.projects.demo.name, 'Demo');
 });
 
-test('loadRepoConfig finds the nearest .tracker.toml walking up from cwd', () => {
+test('loadRepoConfig finds the nearest .quill.toml walking up from cwd', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'st-repo-'));
-  fs.writeFileSync(path.join(repo, '.tracker.toml'), 'project_id = "demo"\ncategory = "feature"\nrepo_id = "demo"\n');
+  fs.writeFileSync(path.join(repo, '.quill.toml'), 'project_id = "demo"\ncategory = "feature"\nrepo_id = "demo"\n');
   fs.mkdirSync(path.join(repo, 'src', 'deep'), { recursive: true });
   const found = loadRepoConfig(path.join(repo, 'src', 'deep'));
   assert.deepEqual(found, { project_id: 'demo', category: 'feature', repo_id: 'demo' });
@@ -61,7 +61,7 @@ test('ensureMachineId persists one UUID; store meta round trips', () => {
   const b = ensureMachineId(env);
   assert.equal(a, b);
   const store = fs.mkdtempSync(path.join(os.tmpdir(), 'st-store-'));
-  const meta = createStoreMeta({ store_name: 'Tracker', owner_machine_id: a, timezone: 'UTC' });
+  const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: a, timezone: 'UTC' });
   assert.equal(meta.schema_version, 1);
   writeStoreMeta(store, meta);
   assert.deepEqual(loadStoreMeta(store), meta);

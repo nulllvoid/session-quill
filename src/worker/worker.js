@@ -60,7 +60,7 @@ export class Worker {
     this.journalInfo = this.journal.open();
     if (this.journalInfo.corrupt) {
       await this.lock.release();
-      throw new TrackerError('journal-corrupt', 'journal has mid-log corruption; run `tracker doctor` and recover before starting the worker');
+      throw new TrackerError('journal-corrupt', 'journal has mid-log corruption; run `quill doctor` and recover before starting the worker');
     }
     this.state = createState({
       store_id: this.storeMeta.store_id,

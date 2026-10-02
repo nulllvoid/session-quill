@@ -19,7 +19,7 @@ export function createState(meta) {
       store_id: meta.store_id,
       machine_id: meta.machine_id,
       machine_name: meta.machine_name ?? 'local',
-      store_name: meta.store_name ?? 'Tracker',
+      store_name: meta.store_name ?? 'Quill',
       timezone: meta.timezone ?? 'UTC',
       key_prefix: meta.key_prefix ?? 'LOCAL',
       stale_days: meta.stale_days ?? 5,
@@ -154,8 +154,8 @@ export function newSession(state, { id, host_session_id, agent_id = null, parent
 }
 
 export function refreshTags(ticket) {
-  const explicit = ticket.tags.filter((t) => !t.startsWith('tracker/status/') && !t.startsWith('tracker/cat/') && t !== 'tracker/stale');
-  ticket.tags = [`tracker/status/${ticket.status}`, `tracker/cat/${ticket.category}`, ...(ticket.stale ? ['tracker/stale'] : []), ...explicit];
+  const explicit = ticket.tags.filter((t) => !t.startsWith('quill/status/') && !t.startsWith('quill/cat/') && t !== 'quill/stale');
+  ticket.tags = [`quill/status/${ticket.status}`, `quill/cat/${ticket.category}`, ...(ticket.stale ? ['quill/stale'] : []), ...explicit];
 }
 
 // Parent -> children index keeps derived child fields O(children) instead of O(all tickets).

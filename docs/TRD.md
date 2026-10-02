@@ -1,4 +1,4 @@
-# Session Tracker — Technical Requirements & Design (TRD)
+# Session Quill — Technical Requirements & Design (TRD)
 
 Status: revised draft v0.2 · 2026-10-02 · Owner: Shivam
 Companions: [PRD](PRD.md), [data contract](DATA-CONTRACT.md), [UI](UI-DESIGN.md), [acceptance](ACCEPTANCE.md), [decisions](decisions/).
@@ -27,7 +27,7 @@ One logical store has one owner machine and one worker. Machine identity is a pe
 
 ## Durability and concurrency
 
-1. Each hook or CLI producer assigns an event UUID. It writes an exclusive temporary file under `~/.claude/tracker/ingress/`, flushes it and atomically renames it to `<event_id>.json`. Only complete files are eligible for ingestion. Referenced checkpoint blobs must be persisted before the event. A successful receipt means this persistence completed, not that notes already changed.
+1. Each hook or CLI producer assigns an event UUID. It writes an exclusive temporary file under `~/.claude/quill/ingress/`, flushes it and atomically renames it to `<event_id>.json`. Only complete files are eligible for ingestion. Referenced checkpoint blobs must be persisted before the event. A successful receipt means this persistence completed, not that notes already changed.
 2. The worker holds an exclusive per-store local socket/named-pipe ownership lock released by the OS on exit. The endpoint is derived from owner and store UUIDs; startup verifies the canonical store path. Never steal ownership on a timer. A competing worker refuses to start.
 3. The worker serially validates ingress, assigns a monotonically increasing sequence, appends to `events.jsonl`, flushes the journal and only then acknowledges ingestion. Duplicate event IDs or source identities have one effect. A restarted worker scans its checkpoint plus the journal tail before applying new events.
 4. Ticket, session, request and binding projections are written to temporary files in their destination directory and atomically replaced. Windows replacement retries do not fall back to truncating the destination. A commit manifest identifies a completed projection generation; the UI only reads complete generations.
@@ -51,13 +51,13 @@ User-authored text lives outside marked generated blocks. Preserve it byte-for-b
 Store layout:
 
 ```text
-Tracker/
+Quill/
   store.json
   tickets/<safe-key>.md
   sessions/<session-id>.md
   handoffs/<handoff-id>.md
   authored/                 # preserved user attachments, if any
-~/.claude/tracker/
+~/.claude/quill/
   config.toml
   ingress/
   events.jsonl
@@ -81,7 +81,7 @@ The gate applies only to tool calls delivered to its supported hooks. It is not 
 | Bash or native PowerShell | Permit only the tested read-only grammar below; otherwise deny |
 | Registered mutating MCP/other tools | Deny |
 | Unregistered tools with unknown effects | Deny until bound, except explicitly registered non-mutating host control tools |
-| Tracker bind/create/show/off commands | Permit only validated direct CLI invocation targeting tracker state |
+| Quill bind/create/show/off commands | Permit only validated direct CLI invocation targeting quill state |
 | Host plan controls and approved plan-file exception | Permit; capture approval only on verified successful approval outcome |
 
 The initial shell read subset is deliberately small: exact `pwd`, `git status` (`--short`, `--branch`, `--porcelain` only), literal-path `ls`/`cat` on Bash, and literal-path `Get-Location`/`Get-ChildItem`/`Get-Content` on PowerShell with an explicitly tested option grammar. Deny pipelines, redirects, command substitution, statement separators, script execution, environment assignments, unknown options and shell profiles that can run arbitrary setup. Start shell tools without user startup profiles where the host supports it; document that ambient command wrappers/aliases remain outside the guarantee. Dedicated read/search tools remain available when a shell form is rejected. Add read forms only with fixtures, never a write-command blacklist.
@@ -90,7 +90,7 @@ An active binding permits these operations to proceed through normal host permis
 
 The plan-file exemption permits only the exact canonical host-designated plan path for that session, under the verified plan directory, excluding symlink/reparse escapes. Host plan mode alone never exempts source edits. Phase 0 must prove reliable plan-path identification; if unavailable, that host version is unsupported for the full gate/read/plan contract, rather than silently widening the exception.
 
-Tracker initialization is a terminal/setup operation. Direct tracker state-changing commands are narrowly exempt so a user can bind before source writes; arbitrary shell wrappers around them are not exempt. This gate remains a user-controlled workflow aid: disabling it is possible and logged when observable.
+Quill initialization is a terminal/setup operation. Direct quill state-changing commands are narrowly exempt so a user can bind before source writes; arbitrary shell wrappers around them are not exempt. This gate remains a user-controlled workflow aid: disabling it is possible and logged when observable.
 
 ## Binding and attribution
 
@@ -164,7 +164,7 @@ Display score = min(100, raw score). Rank by raw score descending, then due asce
 
 ## Local dashboard and request transport
 
-`tracker ui` opens a dashboard served by the worker on loopback only. It never binds to a LAN/public interface in v1. Initialization starts/supervises the worker via the OS service mechanism; CLI diagnostics expose ownership, backlog and errors. UI loss of connection leaves the last rendered generation visible with an offline banner and disables submissions.
+`quill ui` opens a dashboard served by the worker on loopback only. It never binds to a LAN/public interface in v1. Initialization starts/supervises the worker via the OS service mechanism; CLI diagnostics expose ownership, backlog and errors. UI loss of connection leaves the last rendered generation visible with an offline banner and disables submissions.
 
 The worker provides versioned JSON endpoints:
 - `GET /v1/snapshot`: complete generation, collections and capabilities.
@@ -179,7 +179,7 @@ UI polls every 2 s while visible, backs off while hidden and reconnects after wa
 
 Request state/validation is defined in DATA-CONTRACT. Ticket edits have a 10 s not-before window for undo. Cancellation is serialized against application; success means cancelled, while already applied means show applied and offer a new revision-checked reversal. Handoff and Refresh do not have the edit undo delay.
 
-`tracker ui --static` creates standalone read-only HTML without service dependencies. `tracker export` additionally requires project/field selection and an exact preview; checkpoint bodies, paths and private links are excluded by default. Export never sends messages or uploads automatically. Exported files show generated_at, last_sync and snapshot limitations, and contain no request code, owner token or local store URI.
+`quill ui --static` creates standalone read-only HTML without service dependencies. `quill export` additionally requires project/field selection and an exact preview; checkpoint bodies, paths and private links are excluded by default. Export never sends messages or uploads automatically. Exported files show generated_at, last_sync and snapshot limitations, and contain no request code, owner token or local store URI.
 
 Hosted adapters are phase 6. They must prove per-user storage isolation, authenticated owner requests, enforced viewer-only access, revocation, request deduplication, delivery acknowledgement, offline behavior and an actual worker wake-up mechanism before live sharing is offered.
 
@@ -194,7 +194,7 @@ Modes use wire values analyse, analyse-followups, attempt-fix. Default is analys
 
 Never push a default/protected branch, merge or deploy. Without push/PR permission, attempt-fix delivers local diff/tests and optionally a local commit; it does not promise a PR. A source-requesting handoff requires the registered repo and owner machine. If source is unavailable, fail with a reason rather than silently changing scope; a new note-only analysis request is available.
 
-The worker atomically reserves one queued/running handoff per ticket; duplicate request IDs return the existing run. Fix runs for the same repo are serialized in v1. A clean isolated Git worktree is created from the recorded base commit; it never incorporates another live session's dirty changes or writes its checkout. If worktree creation fails, fail the request. Analysis treats imported notes/source as data, not instructions to expand permissions. All agent file and command access is confined to the allowed checkout and tracker result API.
+The worker atomically reserves one queued/running handoff per ticket; duplicate request IDs return the existing run. Fix runs for the same repo are serialized in v1. A clean isolated Git worktree is created from the recorded base commit; it never incorporates another live session's dirty changes or writes its checkout. If worktree creation fails, fail the request. Analysis treats imported notes/source as data, not instructions to expand permissions. All agent file and command access is confined to the allowed checkout and quill result API.
 
 Execution time starts on entering running; wall-clock timeout is 20 min and includes sleep. Cancellation/timeout stops the agent and its subprocess group, preserves patches/logs/results and reports cancelled/timed-out. Unknown remote effects are recorded as uncertain and reconciled before any retry. Retain recovery checkout paths; cleanup is explicit after results are accepted.
 
@@ -204,14 +204,14 @@ Only analyse-followups creates children by default. Suggested next_action update
 
 ## Configuration and packaging
 
-Ship plugin manifest, hook config, namespaced commands, CLI, local worker, UI assets, templates, optional handoff agent and PMLA profile. Core uses Node built-ins; validate the restricted TOML/YAML subsets written by tracker, preserve unknown authored text, and reject unsupported syntax rather than lossy parsing.
+Ship plugin manifest, hook config, namespaced commands, CLI, local worker, UI assets, templates, optional handoff agent and PMLA profile. Core uses Node built-ins; validate the restricted TOML/YAML subsets written by quill, preserve unknown authored text, and reject unsupported syntax rather than lossy parsing.
 
-`tracker init` collects store path and project defaults, writes user config and a per-repo .tracker.toml, checks prerequisites, registers the worker and verifies a round trip. Re-running is idempotent and preserves existing hook/status-line setup. Git clones need a documented plugin load/install command; cloning alone is not installation.
+`quill init` collects store path and project defaults, writes user config and a per-repo .quill.toml, checks prerequisites, registers the worker and verifies a round trip. Re-running is idempotent and preserves existing hook/status-line setup. Git clones need a documented plugin load/install command; cloning alone is not installation.
 
 Configuration precedence: explicit CLI option, session override, repo defaults, user defaults. Store ownership and handoff permissions cannot be weakened by repository config. Secrets remain in the user's credential store or environment, never committed repo config.
 
 Resolved defaults:
-- Working name session-tracker; final public license and repository owner are release inputs.
+- Working name session-quill; final public license and repository owner are release inputs.
 - Single owner machine; plain markdown default, optional Obsidian path.
 - LOCAL prefix; project from init; category research unless configured.
 - Gate on; approval phrases off.
@@ -225,10 +225,10 @@ Pin tested Node and Claude Code version ranges during phase 0; refuse unsupporte
 
 ## Migration and rollout
 
-`tracker migrate --dry-run` inventories source notes, maps identities/statuses and lists ambiguous records without writing. Migration requires a full backup of notes, hooks/settings, journal and blobs. Import every generated source value as migration events and preserve authored sections and original paths in the manifest.
+`quill migrate --dry-run` inventories source notes, maps identities/statuses and lists ambiguous records without writing. Migration requires a full backup of notes, hooks/settings, journal and blobs. Import every generated source value as migration events and preserve authored sections and original paths in the manifest.
 
 PMLA mapping: open maps to active only with explicit in-progress evidence, otherwise todo; PR raised to review; merged to deploy-pending; deployed to done. Legacy stale maps to active plus derived stale unless prior status evidence exists. Legacy deploy skipped becomes a waiver with imported provenance and a reason; missing reason requires review. Preserve all existing files until verification succeeds.
 
-Pause old hooks/agents before enabling the new writer; snapshot settings and switch atomically to avoid double capture. Verify ticket counts, links, checkpoints and deployment obligations. Rollback restores original settings and untouched source notes; newer tracker events are preserved/exported for reconciliation, not discarded.
+Pause old hooks/agents before enabling the new writer; snapshot settings and switch atomically to avoid double capture. Verify ticket counts, links, checkpoints and deployment obligations. Rollback restores original settings and untouched source notes; newer quill events are preserved/exported for reconciliation, not discarded.
 
 Keep the old PMLA dashboard read-only until at least one week of verified operation, then retire only through an explicit operator action. Follow the [PRD phase gates](PRD.md#release-plan) and [acceptance scenarios](ACCEPTANCE.md); no one-session implementation estimate is asserted.

@@ -3,28 +3,28 @@ import assert from 'node:assert/strict';
 import { parseToml, stringifyToml } from '../../src/config/toml.js';
 
 const SAMPLE = `# user config
-store_path = "C:\\\\Users\\\\me\\\\Tracker"
+store_path = "C:\\\\Users\\\\me\\\\Quill"
 gate_enabled = true
 stale_days = 5
 phrases = ["approved", "lgtm"]
 
-[projects.session-tracker]
-name = "Session Tracker"
-repo_id = "session-tracker"
+[projects.session-quill]
+name = "Session Quill"
+repo_id = "session-quill"
 
-[repos.session-tracker]
-project_id = "session-tracker"
+[repos.session-quill]
+project_id = "session-quill"
 deployment_environments = ["production"]
 `;
 
 test('parseToml handles strings, numbers, booleans, arrays and nested tables', () => {
   const cfg = parseToml(SAMPLE);
-  assert.equal(cfg.store_path, 'C:\\Users\\me\\Tracker');
+  assert.equal(cfg.store_path, 'C:\\Users\\me\\Quill');
   assert.equal(cfg.gate_enabled, true);
   assert.equal(cfg.stale_days, 5);
   assert.deepEqual(cfg.phrases, ['approved', 'lgtm']);
-  assert.equal(cfg.projects['session-tracker'].name, 'Session Tracker');
-  assert.deepEqual(cfg.repos['session-tracker'].deployment_environments, ['production']);
+  assert.equal(cfg.projects['session-quill'].name, 'Session Quill');
+  assert.deepEqual(cfg.repos['session-quill'].deployment_environments, ['production']);
 });
 
 test('parseToml rejects unsupported syntax with a diagnostic instead of lossy parsing', () => {

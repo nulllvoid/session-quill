@@ -279,7 +279,7 @@ test('A18 a second worker on the same store refuses ownership; a copy on another
   } finally { await s.stop(); }
   // read-only copy: store owned by another machine
   const copy = scenario();
-  const meta = createStoreMeta({ store_name: 'Tracker', owner_machine_id: '99999999-9999-4999-8999-999999999999', timezone: 'UTC' });
+  const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: '99999999-9999-4999-8999-999999999999', timezone: 'UTC' });
   writeStoreMeta(copy.storePath, meta);
   const doctor = await cli(['doctor'], copy.env);
   assert.match(doctor.out, /ownership: another machine/);

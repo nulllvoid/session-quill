@@ -32,7 +32,7 @@ test('applyLifecycle updates derived fields without changing status, and new wor
   const changed = applyLifecycle(state, '2026-10-09T08:00:00Z');
   assert.equal(t.stale, true);
   assert.equal(t.status, 'active');
-  assert.ok(t.tags.includes('tracker/stale'));
+  assert.ok(t.tags.includes('quill/stale'));
   assert.equal(s.state, 'extinct');
   assert.ok(changed.tickets.has(T1));
   // New substantive work: a stop checkpoint on the ticket

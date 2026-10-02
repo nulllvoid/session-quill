@@ -6,7 +6,7 @@ import { loadUserConfig, saveUserConfig, saveRepoConfig, loadRepoConfig, CATEGOR
 import { ensureMachineId, createStoreMeta, writeStoreMeta, loadStoreMeta, storeLayout } from '../../config/store.js';
 import { isValidTimeZone } from '../../lib/time.js';
 import { ensureDir } from '../../lib/atomic-fs.js';
-import { trackerHome, ingressDir, blobsDir, stateDir, projectionsDir } from '../../lib/paths.js';
+import { quillHome, ingressDir, blobsDir, stateDir, projectionsDir } from '../../lib/paths.js';
 import { TrackerError } from '../../lib/errors.js';
 import { collect, MIN_NODE_MAJOR } from './doctor.js';
 import { commandName } from '../context.js';
@@ -31,7 +31,7 @@ export async function run({ flags, io, env }) {
   if (nodeMajor < MIN_NODE_MAJOR) throw new TrackerError('node-unsupported', `Node ${process.versions.node} is unsupported; install Node >= ${MIN_NODE_MAJOR} LTS (Claude Code does not bundle Node)`);
   const cfg = loadUserConfig(env);
   const yes = flags.yes === true;
-  const defaultStore = cfg.store_path || path.join(os.homedir(), 'Documents', 'Tracker');
+  const defaultStore = cfg.store_path || path.join(os.homedir(), 'Documents', 'Quill');
   const storePath = path.resolve(flags.store ?? (yes ? defaultStore : await ask(io, 'Markdown store folder (plain folder or inside an Obsidian vault)', defaultStore)));
   const repoDir = path.resolve(flags.repo ?? process.cwd());
   const existingRepo = loadRepoConfig(repoDir) ?? {};
@@ -43,7 +43,7 @@ export async function run({ flags, io, env }) {
   if (!CATEGORIES.includes(category)) throw new TrackerError('category-invalid', `category must be one of ${CATEGORIES.join(', ')}`);
 
   const machineId = ensureMachineId(env);
-  for (const dir of [trackerHome(env), ingressDir(env), blobsDir(env), stateDir(env), projectionsDir(env)]) ensureDir(dir);
+  for (const dir of [quillHome(env), ingressDir(env), blobsDir(env), stateDir(env), projectionsDir(env)]) ensureDir(dir);
   ensureDir(storePath);
   let meta = loadStoreMeta(storePath);
   if (!meta) {
@@ -80,7 +80,7 @@ export async function run({ flags, io, env }) {
     if (!(await isLocked(meta.store_id, machineId, env))) {
       const pid = startDetached(ctx);
       const ok = await waitHealthy(ctx, 10_000);
-      io.println(ok ? `worker started (pid ${pid}) and heartbeat verified` : `! worker spawned (pid ${pid}) but no heartbeat within 10 s; run tracker doctor`);
+      io.println(ok ? `worker started (pid ${pid}) and heartbeat verified` : `! worker spawned (pid ${pid}) but no heartbeat within 10 s; run quill doctor`);
     } else {
       io.println('worker already running');
     }
@@ -89,9 +89,9 @@ export async function run({ flags, io, env }) {
   for (const item of report.items.filter((i) => i.level !== 'ok')) io.println(`${item.level === 'warn' ? '!' : '✗'} ${item.label}: ${item.detail}`);
   io.println('');
   io.println('Next steps:');
-  io.println(`  1. Load the plugin in Claude Code (e.g. claude --plugin-dir <path-to-session-tracker>) and start a session in ${repoDir}.`);
+  io.println(`  1. Load the plugin in Claude Code (e.g. claude --plugin-dir <path-to-session-quill>) and start a session in ${repoDir}.`);
   io.println(`  2. Create and bind a ticket: ${commandName('ticket')} create "<title>" --bind`);
-  io.println('  3. Open the dashboard: tracker ui');
-  io.println('To keep the worker running across reboots, register `tracker worker start` with your OS login items / Task Scheduler / systemd user service.');
+  io.println('  3. Open the dashboard: quill ui');
+  io.println('To keep the worker running across reboots, register `quill worker start` with your OS login items / Task Scheduler / systemd user service.');
   return report.ok ? 0 : 1;
 }

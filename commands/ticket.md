@@ -4,18 +4,18 @@ argument-hint: create "<title>" [--category c] [--priority P2] [--parent KEY] [-
 allowed-tools: Bash(node *)
 ---
 
-Run the Session Tracker CLI for this session and show the user its output verbatim.
+Run the Session Quill CLI for this session and show the user its output verbatim.
 
-1. Find this session's id in your context: the SessionStart hook injected a line that starts with `Session Tracker session:`. Use that id for `--session`. If no such line exists, run the command without `--session` and relay the error the CLI prints (it explains how to get an id); never guess or reuse another session's id.
+1. Find this session's id in your context: the SessionStart hook injected a line that starts with `Session Quill session:`. Use that id for `--session`. If no such line exists, run the command without `--session` and relay the error the CLI prints (it explains how to get an id); never guess or reuse another session's id.
 2. Run exactly:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/bin/tracker.js" ticket $ARGUMENTS --session <session id>
+node "${CLAUDE_PLUGIN_ROOT}/bin/quill.js" ticket $ARGUMENTS --session <session id>
 ```
 
 3. Report the result. After `create --bind` or `bind`, state the key the session is now bound to. After `off`, remind the user that the gate is off for this session and audited; after `on`, that enforcement is restored.
 
 Notes:
-- `create` inherits project and category defaults from the repository's `.tracker.toml`; pass `--category` or `--priority` to override.
+- `create` inherits project and category defaults from the repository's `.quill.toml`; pass `--category` or `--priority` to override.
 - Bindings never fall back to the working directory. Rebinding affects future tool calls only.
 - Recorded approval or binding is never permission to commit, push or deploy.

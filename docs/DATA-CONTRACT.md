@@ -1,4 +1,4 @@
-# Session Tracker — Canonical Data Contract
+# Session Quill — Canonical Data Contract
 
 Status: revised draft v0.2 · 2026-10-02
 Authority: field names and state rules in this document apply to [TRD](TRD.md) and [UI](UI-DESIGN.md). Markdown is a projection, not a separate schema. Version 1 is the first implementation schema; document v0.2 is not a data-format version.
@@ -63,15 +63,15 @@ created_at: "2026-10-02T08:00:00Z"
 updated_at: "2026-10-02T08:05:00Z"
 key: LOCAL-session-capture-a1b2c3d4
 title: Preserve session checkpoints
-project_id: session-tracker
-project_name: Session Tracker
+project_id: session-quill
+project_name: Session Quill
 status: active
 category: feature
 priority: P2
 parent_id: null
 due: null
 blocker: null
-repo_id: session-tracker
+repo_id: session-quill
 jira: null
 next_action: Verify restart recovery
 summary: ""
@@ -84,7 +84,7 @@ manual_status_evidence_floor: 12
 aliases: []
 children_ids: []
 session_ids: []
-tags: [tracker/status/active, tracker/cat/feature]
+tags: [quill/status/active, quill/cat/feature]
 files_touched: []
 plans: []
 conclusions: []

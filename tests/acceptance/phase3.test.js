@@ -238,7 +238,7 @@ test('A32 export contains exactly the selected fields/projects, no secrets, loca
     s.w.tick();
     const snap = s.w.publishGeneration();
     const html = buildStaticHtml(snap, { exportedAt: s.iso(), fields: ['key', 'title', 'status'] });
-    for (const needle of ['/v1/requests', 'st_owner', 'x-tracker-csrf', 'C:\\\\Users', 'secret.txt', 'tracker://', s.storePath.replace(/\\/g, '\\\\')]) assert.equal(html.includes(needle), false, needle);
+    for (const needle of ['/v1/requests', 'st_owner', 'x-quill-csrf', 'C:\\\\Users', 'secret.txt', 'quill://', s.storePath.replace(/\\/g, '\\\\')]) assert.equal(html.includes(needle), false, needle);
     const embedded = JSON.parse(/window\.__SNAPSHOT__ = (.*?);<\/script>/s.exec(html)[1]);
     assert.equal(embedded.meta.exported_at, s.iso());
     assert.equal(embedded.meta.last_sync, snap.meta.last_sync);

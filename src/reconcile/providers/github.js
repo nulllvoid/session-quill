@@ -25,7 +25,7 @@ function run(cmd, args, { timeoutMs = 15_000 } = {}) {
   });
 }
 
-// Uses the authenticated GitHub CLI; credentials never pass through the tracker.
+// Uses the authenticated GitHub CLI; credentials never pass through the quill.
 export function createGithubProvider({ exec = run } = {}) {
   return {
     name: 'github',

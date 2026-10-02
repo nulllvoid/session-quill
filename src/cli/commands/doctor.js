@@ -33,7 +33,7 @@ export async function collect(env) {
   add('ok', 'platform', `${process.platform} ${process.arch}`);
   add('ok', 'commands', `${commandName('ticket')}, ${commandName('approve')}, ${commandName('status')}, ${commandName('handoff')}`);
   if (!ctx.initialized) {
-    add('error', 'store', 'not initialized — run `tracker init`');
+    add('error', 'store', 'not initialized — run `quill init`');
     return { ctx, report };
   }
   const owner = ctx.storeMeta.owner_machine_id === ctx.machineId;
@@ -43,7 +43,7 @@ export async function collect(env) {
   const ws = workerStatus(ctx);
   if (ws.healthy && locked) add('ok', 'worker', `healthy (pid ${ws.pid}, heartbeat ${ws.heartbeat_at})`);
   else if (locked) add('warn', 'worker', `lock held but heartbeat stale (${ws.age_ms ?? 'none'} ms)`);
-  else add(owner ? 'error' : 'warn', 'worker', `unavailable — start with \`tracker worker start\`${ws.heartbeat_at ? ` (last heartbeat ${ws.heartbeat_at})` : ''}`);
+  else add(owner ? 'error' : 'warn', 'worker', `unavailable — start with \`quill worker start\`${ws.heartbeat_at ? ` (last heartbeat ${ws.heartbeat_at})` : ''}`);
   const backlog = countIngress(env);
   add(backlog > 100 ? 'warn' : 'ok', 'ingress backlog', `${backlog} pending event(s) in ${ingressDir(env)}`);
   const j = new Journal(journalPath(env));

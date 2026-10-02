@@ -12,11 +12,11 @@ const HEADINGS = {
 };
 // Markers are matched with optional carriage returns so a CRLF-converted note is still recognized
 // (its block hashes will then mismatch and the file is treated as a conflict, never overwritten).
-const MARKER_RE = /<!-- tracker:generated:([a-z-]+) start hash=([0-9a-f]{64}) -->\r?\n([\s\S]*?)<!-- tracker:generated:\1 end -->\r?\n/g;
+const MARKER_RE = /<!-- quill:generated:([a-z-]+) start hash=([0-9a-f]{64}) -->\r?\n([\s\S]*?)<!-- quill:generated:\1 end -->\r?\n/g;
 
 function block(section, body) {
   const text = body.endsWith('\n') ? body : `${body}\n`;
-  return `<!-- tracker:generated:${section} start hash=${contentHash(text)} -->\n${text}<!-- tracker:generated:${section} end -->\n`;
+  return `<!-- quill:generated:${section} start hash=${contentHash(text)} -->\n${text}<!-- quill:generated:${section} end -->\n`;
 }
 
 function frontmatterFor(ticket) {
@@ -29,13 +29,13 @@ function frontmatterFor(ticket) {
 function sectionBodies(ticket, state) {
   const b = {};
   b.timeline = ticket.timeline.length
-    ? ticket.timeline.map((e) => `- ${e.at} · ${e.kind} · ${safeInline(e.text)}${e.coverage !== 'complete' ? ` _(coverage: ${e.coverage})_` : ''}${e.content_ref ? ` [full](tracker://content/${e.content_ref})` : ''}`).join('\n')
+    ? ticket.timeline.map((e) => `- ${e.at} · ${e.kind} · ${safeInline(e.text)}${e.coverage !== 'complete' ? ` _(coverage: ${e.coverage})_` : ''}${e.content_ref ? ` [full](quill://content/${e.content_ref})` : ''}`).join('\n')
     : '_No events yet._';
   b.plans = ticket.plans.length
-    ? ticket.plans.map((p) => `### Plan ${p.id.slice(0, 8)} — approved ${p.approved_at} (${p.provenance})\n\n${safeInline(p.preview).replace(/\\n/g, '\n')}\n\n[Full plan](tracker://content/${p.content_ref})`).join('\n\n')
+    ? ticket.plans.map((p) => `### Plan ${p.id.slice(0, 8)} — approved ${p.approved_at} (${p.provenance})\n\n${safeInline(p.preview).replace(/\\n/g, '\n')}\n\n[Full plan](quill://content/${p.content_ref})`).join('\n\n')
     : '_No approved plans._';
   b.conclusions = ticket.conclusions.length
-    ? ticket.conclusions.map((c) => `- ${c.recorded_at}: ${safeInline(c.preview)} [full](tracker://content/${c.content_ref})`).join('\n')
+    ? ticket.conclusions.map((c) => `- ${c.recorded_at}: ${safeInline(c.preview)} [full](quill://content/${c.content_ref})`).join('\n')
     : '_No conclusions recorded._';
   b.files = ticket.files_touched.length
     ? ticket.files_touched.map((f) => `- \`${safeInline(f.relative_path)}\`${f.repo_id ? ` (${safeInline(f.repo_id)})` : ''} — first ${f.first_seen}, last ${f.last_seen}`).join('\n')

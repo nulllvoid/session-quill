@@ -84,12 +84,12 @@ test('import creates replayable migration events once, preserves authored text a
     for (const e of migrationEvents) perPath.set(e.source_identity, (perPath.get(e.source_identity) ?? 0) + 1);
     assert.ok([...perPath.values()].every((n) => n === 1), 'each source identity journaled once');
     assert.equal(JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out).length, 9);
-    // rollback: delete a source note, then restore from the backup and export newer tracker events
+    // rollback: delete a source note, then restore from the backup and export newer quill events
     fs.unlinkSync(path.join(src, 'PMLA-102-open-todo.md'));
     const rb = await cli(['migrate', 'rollback', '--manifest', manifestPath, '--yes'], fx.env);
     assert.equal(rb.code, 0, rb.err);
     assert.ok(fs.existsSync(path.join(src, 'PMLA-102-open-todo.md')), 'source note restored from backup');
-    const exportFile = /exported (\d+) newer tracker event\(s\) to (.+\.jsonl)/.exec(rb.out);
+    const exportFile = /exported (\d+) newer quill event\(s\) to (.+\.jsonl)/.exec(rb.out);
     assert.ok(exportFile, rb.out);
     assert.ok(fs.existsSync(exportFile[2].trim()));
   } finally {

@@ -116,8 +116,8 @@ function applyTicketFields(state, ticket, fields, ev, source, result) {
   if (fields.summary !== undefined) ticket.summary = String(fields.summary);
   if (fields.user_notes !== undefined) ticket.user_notes = String(fields.user_notes);
   if (fields.tags !== undefined && Array.isArray(fields.tags)) {
-    const explicit = fields.tags.filter((t) => typeof t === 'string' && !t.startsWith('tracker/'));
-    ticket.tags = [...ticket.tags.filter((t) => t.startsWith('tracker/')), ...explicit];
+    const explicit = fields.tags.filter((t) => typeof t === 'string' && !t.startsWith('quill/'));
+    ticket.tags = [...ticket.tags.filter((t) => t.startsWith('quill/')), ...explicit];
   }
   if (fields.validation_issues !== undefined) ticket.validation_issues = fields.validation_issues;
   if (Array.isArray(fields.deployments)) {

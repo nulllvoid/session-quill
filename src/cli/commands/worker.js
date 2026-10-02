@@ -9,7 +9,7 @@ import { ensureDir } from '../../lib/atomic-fs.js';
 import { TrackerError } from '../../lib/errors.js';
 import fs from 'node:fs';
 
-const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'bin', 'tracker.js');
+const BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'bin', 'quill.js');
 
 export async function buildWorker(ctx, { log } = {}) {
   const { derive } = await import('../../reconcile/derive.js');

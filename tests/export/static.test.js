@@ -83,7 +83,7 @@ test('buildStaticHtml inlines CSS, snapshot and bundle, with no request endpoint
   assert.match(html, /<style>/);
   assert.match(html, /window\.__SNAPSHOT__/);
   assert.match(html, /2026-10-02T12:30:00Z/);
-  for (const needle of ['/v1/requests', 'st_owner', 'x-tracker-csrf', '/auth?secret', 'tracker://', 'C:\\\\Users', '/Users/', 'shivam', '<link rel="stylesheet"', 'src="/ui/']) {
+  for (const needle of ['/v1/requests', 'st_owner', 'x-quill-csrf', '/auth?secret', 'quill://', 'C:\\\\Users', '/Users/', 'shivam', '<link rel="stylesheet"', 'src="/ui/']) {
     assert.equal(html.includes(needle), false, `static export must not contain ${needle}`);
   }
   assert.match(html, /LOCAL-ticket-1-abcdef01/);
@@ -91,7 +91,7 @@ test('buildStaticHtml inlines CSS, snapshot and bundle, with no request endpoint
   assert.equal(/<\/script>/i.test(JSON.stringify(privateSnapshot().tickets[0].title)), false);
 });
 
-test('CLI: tracker ui --static writes a standalone file; tracker export requires --yes and respects field selection', async () => {
+test('CLI: quill ui --static writes a standalone file; quill export requires --yes and respects field selection', async () => {
   const fx = makeHome();
   const w = await startWorker(fx);
   try {

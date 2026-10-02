@@ -1,12 +1,12 @@
 // Export endpoints served by the worker: exact preview, then a local file write. Never uploads.
 import path from 'node:path';
-import { trackerHome } from '../lib/paths.js';
+import { quillHome } from '../lib/paths.js';
 import { previewExport, normalizeOptions } from './sanitize.js';
 import { writeStaticHtml } from './static.js';
 import { TrackerError } from '../lib/errors.js';
 
 export function defaultExportPath(env, exportedAt) {
-  return path.join(trackerHome(env), 'exports', `session-tracker-snapshot-${exportedAt.replace(/[:]/g, '-')}.html`);
+  return path.join(quillHome(env), 'exports', `session-quill-snapshot-${exportedAt.replace(/[:]/g, '-')}.html`);
 }
 
 export const exportHandler = {

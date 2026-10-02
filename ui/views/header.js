@@ -27,7 +27,7 @@ ${meta ? `<div><span class="eyebrow">Runtime context</span>
 <div class="context-card" style="margin-top:8px">
   <div class="row"><span>Store</span><span>${esc(meta.store_name)}</span></div>
   <div class="row"><span>Timezone</span><span>${esc(meta.timezone)}</span></div>
-  <div class="row"><span>Tracker</span><span>v${esc(meta.tracker_version)}</span></div>
+  <div class="row"><span>Quill</span><span>v${esc(meta.tracker_version)}</span></div>
   <div class="row"><span>Schema</span><span>${esc(meta.schema_version)}</span></div>
   <div class="row"><span>Stale</span><span>${esc(meta.stale_ticket_count)} ticket${meta.stale_ticket_count === 1 ? '' : 's'}</span></div>
 </div></div>` : ''}
@@ -36,7 +36,7 @@ ${meta ? `<div><span class="eyebrow">Runtime context</span>
     <div class="row"><span>${isStatic ? 'Snapshot' : 'Loopback'}</span><span class="${isStatic ? 'muted' : online ? 'good' : 'critical'}">${isStatic ? 'READ-ONLY' : online ? 'ACTIVE' : 'OFFLINE'}</span></div>
     <div class="row"><span>${isStatic ? 'Exported' : 'Endpoint'}</span><span>${isStatic ? esc(meta.exported_at) : esc(endpoint ?? '127.0.0.1')}</span></div>
   </div>
-  <div class="sidebar-copy"><span>Session Tracker</span><span>${meta ? `v${esc(meta.tracker_version)}` : ''}</span></div>
+  <div class="sidebar-copy"><span>Session Quill</span><span>${meta ? `v${esc(meta.tracker_version)}` : ''}</span></div>
 </div>`;
 }
 
@@ -90,7 +90,7 @@ export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters
   const caps = snapshot.capabilities ?? {};
   const isStatic = !!snapshot.meta.exported_at;
   return `<div class="topbar">
-  <div class="brand">${logoSvg()}<span>Session Tracker</span><span class="pill">v${esc(snapshot.meta.tracker_version)}</span></div>
+  <div class="brand">${logoSvg()}<span>Session Quill</span><span class="pill">v${esc(snapshot.meta.tracker_version)}</span></div>
   <label class="search">${icon('search')}<input type="search" id="search" data-filter="q" placeholder="Search tickets, keys, tags…" value="${attr(filters.q ?? '')}" aria-label="Search tickets"><kbd aria-hidden="true">/</kbd></label>
   <span class="endpoint" title="${attr(isStatic ? 'Read-only exported snapshot' : 'Owner session on loopback')}"><span class="dot ${isStatic ? 'muted' : online ? 'good' : 'critical'}" aria-hidden="true"></span>${isStatic ? 'snapshot' : esc(endpoint ?? '127.0.0.1')} <strong>[${isStatic ? 'Viewer' : 'Owner'}]</strong></span>
   <div class="topbar-actions">

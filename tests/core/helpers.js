@@ -9,7 +9,7 @@ export function newState(overrides = {}) {
   return createState({
     store_id: STORE,
     machine_id: MACHINE,
-    store_name: 'Tracker',
+    store_name: 'Quill',
     timezone: 'UTC',
     key_prefix: 'LOCAL',
     stale_days: 5,

@@ -1,5 +1,5 @@
 // Migration run: inventory -> backup -> replayable migration events -> manifest; and rollback that
-// restores settings and source notes while exporting newer tracker events (TRD §Migration and rollout).
+// restores settings and source notes while exporting newer quill events (TRD §Migration and rollout).
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,12 +8,12 @@ import { backup, restoreBackup } from './backup.js';
 import { makeEvent } from '../core/events.js';
 import { writeIngress } from '../core/ingress.js';
 import { Journal } from '../core/journal.js';
-import { trackerHome, journalPath, blobsDir, configPath } from '../lib/paths.js';
+import { quillHome, journalPath, blobsDir, configPath } from '../lib/paths.js';
 import { nowIso } from '../lib/time.js';
 import { submitAndWait, workerStatus } from '../cli/context.js';
 
 export function migrationsDir(env) {
-  return path.join(trackerHome(env), 'migrations');
+  return path.join(quillHome(env), 'migrations');
 }
 
 function ticketPayload(t, projectId, projectName) {
@@ -35,7 +35,7 @@ export async function runMigration(ctx, { sourceDir, profile, projectId, dryRun 
   const j = new Journal(journalPath(ctx.env));
   const info = fs.existsSync(journalPath(ctx.env)) ? j.open() : { lastSequence: 0 };
   j.close();
-  const dest = backupDir ?? path.join(trackerHome(ctx.env), 'backups');
+  const dest = backupDir ?? path.join(quillHome(ctx.env), 'backups');
   const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
   const bk = backup({
     paths: [
@@ -80,7 +80,7 @@ export async function runMigration(ctx, { sourceDir, profile, projectId, dryRun 
     schema_version: 1, profile: profile.name, source: inv.source, project_id: projectId, created_at: nowIso(),
     journal_sequence_at_start: info.lastSequence, backup: { dir: bk.dir, manifest: bk.manifest, entries: bk.entries },
     tickets: events, ambiguous: inv.ambiguous.map((a) => ({ path: a.rel, issues: a.issues })), ignored: inv.ignored, worker_confirmed: healthy,
-    notes: 'Original source files were not modified. Pause legacy PMLA hooks before enabling the tracker gate; the settings snapshot in the backup restores them on rollback.',
+    notes: 'Original source files were not modified. Pause legacy PMLA hooks before enabling the quill gate; the settings snapshot in the backup restores them on rollback.',
   };
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   return { dryRun: false, inventory: inv, manifestPath, manifest, backup: bk, workerConfirmed: healthy };

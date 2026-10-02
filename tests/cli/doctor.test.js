@@ -17,7 +17,7 @@ test('doctor without a worker reports it unavailable and exits non-zero; with a 
     assert.equal(ok.code, 0, ok.out + ok.err);
     assert.match(ok.out, /worker: healthy/i);
     assert.match(ok.out, /ownership: this machine/i);
-    assert.match(ok.out, /commands: \/session-tracker:ticket/);
+    assert.match(ok.out, /commands: \/session-quill:ticket/);
   } finally {
     await w.stop();
   }

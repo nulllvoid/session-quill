@@ -19,7 +19,7 @@ test('ticket-create registers key index and defaults; duplicate key is rejected 
   assert.equal(state.keyIndex.get(t.key), t.id);
   assert.equal(t.status, 'todo');
   assert.equal(t.revision, 1);
-  assert.deepEqual(t.tags, ['tracker/status/todo', 'tracker/cat/feature']);
+  assert.deepEqual(t.tags, ['quill/status/todo', 'quill/cat/feature']);
   const r = ev(state, 'ticket-create', { ticket: { id: T2, key: t.key, title: 'dup', project_id: 'demo', project_name: 'Demo', category: 'feature', priority: 'P2', parent_id: null, repo_id: 'demo', due: null, jira: null } });
   assert.equal(r.rejected, 'key-collision');
   assert.equal(state.tickets.has(T2), false);

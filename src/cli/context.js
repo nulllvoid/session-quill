@@ -10,7 +10,7 @@ import { readHeartbeat } from '../hooks/binding-snapshot.js';
 import { TrackerError } from '../lib/errors.js';
 import { nowIso } from '../lib/time.js';
 
-export const COMMAND_NAMESPACE = 'session-tracker';
+export const COMMAND_NAMESPACE = 'session-quill';
 
 export function parseArgs(argv) {
   const positional = [];
@@ -62,16 +62,16 @@ export function loadContext(env = process.env, { requireStore = true } = {}) {
     }
   }
   if (requireStore && !storeMeta) {
-    throw new TrackerError('not-initialized', 'Session Tracker is not initialized. Run `tracker init` first.');
+    throw new TrackerError('not-initialized', 'Session Quill is not initialized. Run `quill init` first.');
   }
   return { env, config, machineId, storeMeta, initialized: !!storeMeta };
 }
 
 export function sessionFromFlags(flags, env = process.env) {
-  const session_id = flags.session ?? env.TRACKER_SESSION_ID ?? null;
+  const session_id = flags.session ?? env.QUILL_SESSION_ID ?? null;
   const agent_id = flags.agent ?? null;
   if (!session_id || typeof session_id !== 'string') {
-    throw new TrackerError('session-required', 'a session id is required: pass --session <id> (the SessionStart hook injects "Session Tracker session: <id>" into context).');
+    throw new TrackerError('session-required', 'a session id is required: pass --session <id> (the SessionStart hook injects "Session Quill session: <id>" into context).');
   }
   return { session_id, agent_id: agent_id || null };
 }
@@ -105,7 +105,7 @@ export async function submitAndWait(ctx, ev, { timeoutMs = 10_000 } = {}) {
     await sleep(40);
   }
   const ws = workerStatus(ctx);
-  throw new TrackerError('worker-unavailable', `the tracker worker did not confirm the change within ${timeoutMs} ms (worker ${ws.healthy ? 'is running but slow' : 'is not running'}). The event is persisted in ingress and will apply when the worker runs. Start it with \`tracker worker start\` and check \`tracker doctor\`.`);
+  throw new TrackerError('worker-unavailable', `the quill worker did not confirm the change within ${timeoutMs} ms (worker ${ws.healthy ? 'is running but slow' : 'is not running'}). The event is persisted in ingress and will apply when the worker runs. Start it with \`quill worker start\` and check \`quill doctor\`.`);
 }
 
 export function writeControl(ctx, name, payload = {}) {

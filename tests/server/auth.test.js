@@ -46,7 +46,7 @@ test('parseCookies and host/origin checks', () => {
   assert.equal(ok({ host: '127.0.0.1:4321', origin: 'http://localhost:4321' }).ok, true);
   assert.equal(ok({ host: '127.0.0.1:4321', origin: 'http://evil.test' }).ok, false);
   assert.equal(ok({ host: '127.0.0.1:4321', origin: 'null' }).ok, false);
-  assert.equal(ok({ host: 'tracker.example.com:4321' }).ok, false);
+  assert.equal(ok({ host: 'quill.example.com:4321' }).ok, false);
   assert.equal(ok({ host: '127.0.0.1:9999' }).ok, false);
   assert.equal(ok({}).ok, false);
 });

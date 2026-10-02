@@ -16,8 +16,8 @@ const NOW = '2026-10-02T08:00:00Z';
 
 function setup({ bound = false, heartbeat = true, approval = false } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-hook-'));
-  const env = { TRACKER_HOME: home };
-  writeRuntimeIdentity({ store_id: STORE, machine_id: MACHINE, store_path: path.join(home, 'Tracker'), gate_enabled: true, approval_phrases_enabled: approval, allow_tools: [] }, env);
+  const env = { QUILL_HOME: home };
+  writeRuntimeIdentity({ store_id: STORE, machine_id: MACHINE, store_path: path.join(home, 'Quill'), gate_enabled: true, approval_phrases_enabled: approval, allow_tools: [] }, env);
   if (heartbeat) writeHeartbeat({ at: NOW, pid: 1, store_id: STORE }, env);
   if (bound) writeBindingSnapshot('sess-0001', { ticket_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', ticket_key: 'LOCAL-x-00000001', ticket_title: 'Demo', binding_revision: 1, gate_enabled: true, project_id: 'demo', revision_committed_at: NOW }, env);
   return env;
@@ -33,7 +33,7 @@ test('unbound Edit is denied with a structured PreToolUse decision and the attem
   const out = JSON.parse(r.stdout);
   assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /session-tracker:ticket/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /session-quill:ticket/);
   const evs = events(env);
   assert.equal(evs.length, 1);
   assert.equal(evs[0].kind, 'pre-tool');
@@ -159,8 +159,8 @@ test('SessionStart injects binding context including the session id; SubagentSta
 
 test('ingress failure never blocks a non-gate hook and never returns a false receipt; covered PreToolUse is denied', () => {
   const env = setup({ bound: true });
-  fs.rmSync(path.join(env.TRACKER_HOME, 'ingress'), { recursive: true, force: true });
-  fs.writeFileSync(path.join(env.TRACKER_HOME, 'ingress'), 'blocker');
+  fs.rmSync(path.join(env.QUILL_HOME, 'ingress'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(env.QUILL_HOME, 'ingress'), 'blocker');
   const r = run('stop', env);
   assert.equal(r.exitCode, 0);
   assert.equal(r.stdout, '');
@@ -170,12 +170,12 @@ test('ingress failure never blocks a non-gate hook and never returns a false rec
   assert.equal(JSON.parse(r2.stdout).hookSpecificOutput.permissionDecision, 'deny');
 });
 
-test('uninitialized tracker (no identity, no config) emits a diagnostic and no decision', () => {
-  const env = { TRACKER_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-hook-')) };
+test('uninitialized quill (no identity, no config) emits a diagnostic and no decision', () => {
+  const env = { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-hook-')) };
   const r = run('pre-tool-use-edit', env);
   assert.equal(r.exitCode, 0);
   assert.equal(r.stdout, '');
-  assert.match(r.stderr, /tracker init/);
+  assert.match(r.stderr, /quill init/);
 });
 
 test('hook path stays within budget: 200 bound Edit decisions p95 < 200 ms', () => {

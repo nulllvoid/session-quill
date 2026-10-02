@@ -27,8 +27,8 @@ const NOW = '2026-10-02T08:00:00Z';
 
 function hookHome({ bound = true, hasTitle = false } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-fix-'));
-  const env = { TRACKER_HOME: home };
-  writeRuntimeIdentity({ store_id: STORE, machine_id: MACHINE, store_path: path.join(home, 'Tracker'), gate_enabled: true, approval_phrases_enabled: false, allow_tools: [] }, env);
+  const env = { QUILL_HOME: home };
+  writeRuntimeIdentity({ store_id: STORE, machine_id: MACHINE, store_path: path.join(home, 'Quill'), gate_enabled: true, approval_phrases_enabled: false, allow_tools: [] }, env);
   writeHeartbeat({ at: NOW, pid: 1, store_id: STORE }, env);
   if (bound) writeBindingSnapshot('sess-1', { session_id: 'ss', ticket_id: T1, ticket_key: 'LOCAL-x-00000001', ticket_title: 'Demo', binding_revision: 1, gate_enabled: true, project_id: 'demo', revision_committed_at: NOW, has_title: hasTitle }, env);
   return env;
@@ -67,8 +67,8 @@ test('I1: the gate fails closed for covered tools on malformed input, hook excep
   out = '';
   await main(['hook', 'PreToolUse'], { env, stdout: (s) => { out += s; }, stderr: () => {}, stdin: async () => JSON.stringify({ session_id: 'sess-1', hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: {} }) });
   assert.equal(out, '', 'reads still pass through on the same input shape');
-  fs.rmSync(path.join(env.TRACKER_HOME, 'ingress'), { recursive: true, force: true });
-  fs.writeFileSync(path.join(env.TRACKER_HOME, 'ingress'), 'blocker');
+  fs.rmSync(path.join(env.QUILL_HOME, 'ingress'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(env.QUILL_HOME, 'ingress'), 'blocker');
   const bash = runHook('PreToolUse', { session_id: 'sess-1', hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'rm -rf build' }, tool_use_id: 't1' }, { env, now: NOW });
   assert.match(bash.stdout, /"deny"/, 'bound Bash with failed capture is denied');
   const mcp = runHook('PreToolUse', { session_id: 'sess-1', hook_event_name: 'PreToolUse', tool_name: 'mcp__jira__create', tool_input: {}, tool_use_id: 't2' }, { env, now: NOW });
@@ -93,12 +93,12 @@ test('I2: only the first prompt of a session contributes a title; later prompts 
 
 test('I3: a malformed journaled event is rejected and recorded, never a poison pill that stops the worker', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-poison-'));
-  const storePath = path.join(home, 'Tracker');
+  const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
-  const meta = createStoreMeta({ store_name: 'Tracker', owner_machine_id: MACHINE, timezone: 'UTC' });
+  const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: MACHINE, timezone: 'UTC' });
   writeStoreMeta(storePath, meta);
   const config = { ...defaultUserConfig(), store_path: storePath, projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: ['production'] } } };
-  const env = { TRACKER_HOME: home };
+  const env = { QUILL_HOME: home };
   const mk = (kind, payload, extra = {}) => makeEvent({ kind, payload, store_id: meta.store_id, machine_id: MACHINE, producer: 'test', occurred_at: NOW, ...extra });
   const lines = [
     mk('ticket-create', { ticket: { id: T1, key: 'LOCAL-a-00000001', title: 'A', project_id: 'demo', project_name: 'Demo', category: 'feature', priority: 'P2', parent_id: null, repo_id: 'demo', due: null, jira: null } }),

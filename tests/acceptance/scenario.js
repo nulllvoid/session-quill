@@ -23,13 +23,13 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos = {}, providers = null, withServer = false, withHandoff = false, handoffOpts = {} } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-acc-'));
-  const storePath = path.join(home, 'Tracker');
+  const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
-  const meta = createStoreMeta({ store_name: 'Tracker', owner_machine_id: MACHINE, timezone: 'UTC' });
+  const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: MACHINE, timezone: 'UTC' });
   writeStoreMeta(storePath, meta);
   fs.writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ machine_id: MACHINE, machine_name: 'acc' }));
   const config = { ...defaultUserConfig(), store_path: storePath, default_project: 'demo', projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: ['production'], provider: 'github' }, ...repos } };
-  const env = { TRACKER_HOME: home };
+  const env = { QUILL_HOME: home };
   saveUserConfig(config, env);
   let nowMs = startMs;
   const clock = () => nowMs;
@@ -71,7 +71,7 @@ export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos =
       return {
         base, cookie, csrf,
         get: (url) => fetch(`${base}${url}`, { headers: { cookie } }),
-        post: (url, body, headers = {}) => fetch(`${base}${url}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie, 'x-tracker-csrf': csrf, origin: base, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) }),
+        post: (url, body, headers = {}) => fetch(`${base}${url}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie, 'x-quill-csrf': csrf, origin: base, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) }),
       };
     },
     notePath: (key) => path.join(storePath, 'tickets', `${key}.md`),

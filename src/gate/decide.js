@@ -7,10 +7,10 @@ export const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'WebFetch', 'We
 export const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 export const SHELL_TOOLS = { Bash: 'bash', PowerShell: 'powershell' };
 
-export const DENIAL_REASON = 'Session Tracker: this session is not bound to a ticket. Run /session-tracker:ticket bind <KEY> or /session-tracker:ticket create "<title>" (or /session-tracker:ticket off to disable the gate for this session).';
-export const WORKER_UNAVAILABLE_REASON = 'Session Tracker: tracker worker unavailable or binding unreadable; covered writes are denied. Run `tracker doctor` (or /session-tracker:ticket off to disable the gate for this session).';
+export const DENIAL_REASON = 'Session Quill: this session is not bound to a ticket. Run /session-quill:ticket bind <KEY> or /session-quill:ticket create "<title>" (or /session-quill:ticket off to disable the gate for this session).';
+export const WORKER_UNAVAILABLE_REASON = 'Session Quill: quill worker unavailable or binding unreadable; covered writes are denied. Run `quill doctor` (or /session-quill:ticket off to disable the gate for this session).';
 
-const TRACKER_SUBCOMMANDS = new Set(['ticket', 'approve', 'dismiss', 'status', 'init', 'doctor']);
+const QUILL_SUBCOMMANDS = new Set(['ticket', 'approve', 'dismiss', 'status', 'init', 'doctor']);
 const TICKET_VERBS = new Set(['create', 'bind', 'show', 'off', 'on', 'relink', 'children', 'list']);
 const UNSAFE_OUTSIDE_QUOTES = /[|&;<>$`(){}\n\r*?[\]~!]/;
 
@@ -37,7 +37,7 @@ function splitArgs(command) {
   return tokens;
 }
 
-// Narrow exemption: direct tracker CLI invocations that change tracker state, so a user can bind
+// Narrow exemption: direct quill CLI invocations that change quill state, so a user can bind
 // before source writes. Wrappers (bash -c, pipelines, substitutions) are not exempt.
 export function isTrackerCliCommand(command) {
   if (typeof command !== 'string') return false;
@@ -47,15 +47,15 @@ export function isTrackerCliCommand(command) {
   const first = tokens[0];
   if (first === 'node' || first === 'node.exe') {
     const script = tokens[1] ?? '';
-    if (!/[\\/]bin[\\/]tracker\.js$/.test(script)) return false;
+    if (!/[\\/]bin[\\/]quill\.js$/.test(script)) return false;
     idx = 2;
-  } else if (first === 'tracker' || first === 'session-tracker') {
+  } else if (first === 'quill' || first === 'session-quill') {
     idx = 1;
   } else {
     return false;
   }
   const sub = tokens[idx];
-  if (!TRACKER_SUBCOMMANDS.has(sub)) return false;
+  if (!QUILL_SUBCOMMANDS.has(sub)) return false;
   if (sub === 'ticket') {
     const verb = tokens[idx + 1];
     if (!TICKET_VERBS.has(verb)) return false;
@@ -115,7 +115,7 @@ export function decideGate({ tool_name, tool_input = {}, binding, workerHealthy 
   const shell = SHELL_TOOLS[tool_name];
   if (shell) {
     const command = tool_input && typeof tool_input.command === 'string' ? tool_input.command : '';
-    if (shell === 'bash' && isTrackerCliCommand(command)) return { decision: 'none', reason: 'tracker-cli' };
+    if (shell === 'bash' && isTrackerCliCommand(command)) return { decision: 'none', reason: 'quill-cli' };
     const r = classifyShell(command, { shell });
     if (r.allowed) return { decision: 'none', reason: `read-only shell: ${r.form}` };
     if (!workerHealthy) return { decision: 'deny', reason: WORKER_UNAVAILABLE_REASON };

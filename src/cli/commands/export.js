@@ -23,7 +23,7 @@ export async function run({ flags, io, env }) {
   if (!snapshot) throw new TrackerError('no-snapshot', 'no published generation yet; start the worker once to publish projections');
   const options = { projects: flags.projects, fields: flags.fields, includeLinks: flags['include-links'] === true, includeCheckpoints: flags['include-checkpoints'] === true, exportedAt: nowIso() };
   const preview = previewExport(snapshot, options);
-  const out = flags.out ? String(flags.out) : path.join(process.cwd(), `session-tracker-snapshot-${options.exportedAt.replace(/[:]/g, '-')}.html`);
+  const out = flags.out ? String(flags.out) : path.join(process.cwd(), `session-quill-snapshot-${options.exportedAt.replace(/[:]/g, '-')}.html`);
   io.println('Export preview (exact content of the snapshot):');
   io.println(`  projects: ${preview.projects.join(', ')}`);
   io.println(`  fields:   ${preview.fields.join(', ')}`);

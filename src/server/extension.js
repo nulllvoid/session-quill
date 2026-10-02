@@ -1,5 +1,5 @@
 // Worker extension: hosts the loopback API, applies due requests each tick, accepts bootstrap
-// secret hashes dropped by `tracker ui`, and recovers `applying` requests after a restart.
+// secret hashes dropped by `quill ui`, and recovers `applying` requests after a restart.
 import path from 'node:path';
 import { createAuth } from './auth.js';
 import { createServer, listen } from './http.js';

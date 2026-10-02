@@ -11,7 +11,7 @@ process.stdin.on('end', async () => {
   try {
     await main(['status', '--statusline'], { stdout: (s) => { out += s; }, stderr: () => {}, stdin: async () => input });
   } catch {
-    out = '⌁ tracker: unavailable';
+    out = '⌁ quill: unavailable';
   }
   process.stdout.write(out.trim());
 });

@@ -19,7 +19,7 @@ const USER_ONLY_FIELDS = new Set([
 export function defaultUserConfig() {
   return {
     store_path: '',
-    store_name: 'Tracker',
+    store_name: 'Quill',
     machine_name: os.hostname(),
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     key_prefix: 'LOCAL',
@@ -57,7 +57,7 @@ export function loadUserConfig(env = process.env) {
 
 export function saveUserConfig(cfg, env = process.env) {
   const file = configPath(env);
-  const previous = readTextIfExists(file) ?? '# Session Tracker user configuration\n# Secrets never belong here; use your credential store or environment.\n';
+  const previous = readTextIfExists(file) ?? '# Session Quill user configuration\n# Secrets never belong here; use your credential store or environment.\n';
   writeFileAtomic(file, stringifyToml(cfg, { preserve: previous }));
   return file;
 }
@@ -65,7 +65,7 @@ export function saveUserConfig(cfg, env = process.env) {
 export function loadRepoConfig(cwd) {
   let dir = path.resolve(cwd);
   for (;;) {
-    const file = path.join(dir, '.tracker.toml');
+    const file = path.join(dir, '.quill.toml');
     if (fs.existsSync(file)) {
       const parsed = parseToml(fs.readFileSync(file, 'utf8'));
       const safe = {};
@@ -79,8 +79,8 @@ export function loadRepoConfig(cwd) {
 }
 
 export function saveRepoConfig(repoDir, cfg) {
-  const file = path.join(repoDir, '.tracker.toml');
-  const previous = readTextIfExists(file) ?? '# Session Tracker repository defaults (safe to commit; no secrets, no ownership)\n';
+  const file = path.join(repoDir, '.quill.toml');
+  const previous = readTextIfExists(file) ?? '# Session Quill repository defaults (safe to commit; no secrets, no ownership)\n';
   writeFileAtomic(file, stringifyToml(cfg, { preserve: previous }));
   return file;
 }

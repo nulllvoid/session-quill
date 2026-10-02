@@ -1,6 +1,6 @@
 {
-  "name": "session-tracker",
-  "displayName": "Session Tracker",
+  "name": "session-quill",
+  "displayName": "Session Quill",
   "version": "0.1.0",
   "description": "Ticket-bound Claude Code sessions with a workflow gate, durable local capture to markdown or Obsidian, a loopback dashboard with pick-next ranking, read-only snapshot export and isolated agent handoffs.",
   "author": {
@@ -8,5 +8,5 @@
   },
   "license": "UNLICENSED",
   "keywords": ["tickets", "sessions", "hooks", "dashboard", "obsidian", "handoff"],
-  "agents": ["./agents/tracker-handoff.md"]
+  "agents": ["./agents/quill-handoff.md"]
 }

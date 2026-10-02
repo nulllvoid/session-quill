@@ -72,7 +72,7 @@ async function replay(ctx, io, flags) {
   io.println(`tickets: ${summary.tickets}, sessions: ${summary.sessions}, handoffs: ${summary.handoffs}`);
   io.println(`authored sections recovered from the live store: ${summary.authoredRecovered}; tickets with no live note (generated content only): ${summary.authoredMissing}`);
   if (flags.switch) {
-    if (workerStatus(ctx).healthy) throw new TrackerError('worker-running', 'stop the worker before switching stores (`tracker worker stop`)');
+    if (workerStatus(ctx).healthy) throw new TrackerError('worker-running', 'stop the worker before switching stores (`quill worker stop`)');
     const backup = `${ctx.config.store_path}.replaced-${nowIso().replace(/[:]/g, '-')}`;
     fs.renameSync(ctx.config.store_path, backup);
     fs.renameSync(into, ctx.config.store_path);
@@ -100,7 +100,7 @@ async function importNote(ctx, io, args, flags) {
   if (!file) throw new TrackerError('usage', 'usage: import <ticket-note.md>');
   const text = fs.readFileSync(path.resolve(file), 'utf8');
   const parsed = parseNote(text);
-  if (!parsed.frontmatter || !parsed.frontmatter.id) throw new TrackerError('note-invalid', 'note has no tracker frontmatter with an id');
+  if (!parsed.frontmatter || !parsed.frontmatter.id) throw new TrackerError('note-invalid', 'note has no quill frontmatter with an id');
   const current = latestTicketDetail(ctx, parsed.frontmatter.id);
   if (!current) throw new TrackerError('ticket-unknown', `ticket ${parsed.frontmatter.id} is not in the current projection`);
   const fields = {};

@@ -26,7 +26,7 @@ test('renderTicketNote emits frontmatter, user Summary first, generated sections
   const { state, ticket } = sampleTicket();
   const text = renderTicketNote(ticket, { state, authored: { summary: '\nMy summary\n\n', notes: '\nkeep me\n' } });
   assert.match(text, /^---\nschema_version: 1\n/);
-  const order = GENERATED_SECTIONS.map((s) => text.indexOf(`<!-- tracker:generated:${s} start`));
+  const order = GENERATED_SECTIONS.map((s) => text.indexOf(`<!-- quill:generated:${s} start`));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.ok(text.indexOf('## Summary') < order[0]);
   assert.ok(text.lastIndexOf('## Notes') > order[order.length - 1]);

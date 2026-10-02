@@ -6,13 +6,13 @@ export function createApi({ staticSnapshot = null } = {}) {
     if (method === 'POST') {
       if (!csrf) csrf = (await (await fetch('/v1/csrf', { credentials: 'same-origin' })).json()).csrf;
       headers['content-type'] = 'application/json';
-      headers['x-tracker-csrf'] = csrf;
+      headers['x-quill-csrf'] = csrf;
     }
     const res = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin' });
     const text = await res.text();
     let data = null;
     try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
-    if (res.status === 401) { const e = new Error('Owner session expired; run `tracker ui` again'); e.code = 'unauthenticated'; e.status = 401; throw e; }
+    if (res.status === 401) { const e = new Error('Owner session expired; run `quill ui` again'); e.code = 'unauthenticated'; e.status = 401; throw e; }
     if (!res.ok) { const e = new Error(data && data.error ? data.error.message : `HTTP ${res.status}`); e.code = data && data.error ? data.error.code : `http-${res.status}`; e.status = res.status; e.data = data; throw e; }
     return data;
   }

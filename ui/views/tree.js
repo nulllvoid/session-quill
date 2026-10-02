@@ -26,7 +26,7 @@ export function renderTree(rawSnapshot, filters, { root = null }) {
     if (!byParent.has(t.parent_id)) byParent.set(t.parent_id, []);
     byParent.get(t.parent_id).push(t);
   }
-  if (!all.length) return `<section class="view view-tree" aria-labelledby="tab-tree">${emptyState('No tickets yet', 'Parents and children appear here. Children are created with <code>/session-tracker:ticket create "&lt;title&gt;" --parent KEY</code> or by a handoff with follow-ups.')}</section>`;
+  if (!all.length) return `<section class="view view-tree" aria-labelledby="tab-tree">${emptyState('No tickets yet', 'Parents and children appear here. Children are created with <code>/session-quill:ticket create "&lt;title&gt;" --parent KEY</code> or by a handoff with follow-ups.')}</section>`;
   let roots;
   let crumbs = '';
   if (root && byId.has(root)) {

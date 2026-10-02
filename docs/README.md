@@ -1,6 +1,6 @@
-# Session Tracker — requirements and design
+# Session Quill — requirements and design
 
-Session Tracker is a proposed public Claude Code plugin for ticket-bound sessions, recoverable local notes and a personal dashboard with agent handoff.
+Session Quill is a proposed public Claude Code plugin for ticket-bound sessions, recoverable local notes and a personal dashboard with agent handoff.
 
 **Status: revised draft v0.2, 2026-10-02. A v1 implementation now exists in this repository (see the top-level [README](../README.md) and [ACCEPTANCE-RESULTS](ACCEPTANCE-RESULTS.md)); runtime claims against real Claude Code hosts still require the acceptance work below.**
 

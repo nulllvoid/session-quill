@@ -1,5 +1,5 @@
 // Minimal YAML subset emitter/parser for generated frontmatter, plus text escaping helpers.
-// The subset is exactly what the tracker writes; it is not a general YAML implementation.
+// The subset is exactly what the quill writes; it is not a general YAML implementation.
 
 const PLAIN_RE = /^[A-Za-z0-9_][A-Za-z0-9 _./+()@-]*$/;
 const RESERVED = new Set(['null', 'true', 'false', 'yes', 'no', 'on', 'off', '~', '']);

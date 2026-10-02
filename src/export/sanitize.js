@@ -9,7 +9,7 @@ const ALWAYS = ['schema_version', 'id', 'revision', 'created_at', 'updated_at', 
 // directory segment. URLs survive because their slashes follow `:` or another `/`; relative paths
 // like `src/a.js` and ratios like `1/2` survive because their `/` follows a word character.
 const ABS_PATH_RE = /(?:[A-Za-z]:\\(?:[^\\\s"'<>|]+\\?)+|\\\\[^\s"'<>|]+|~\/[^\s"'<>|]*|(?<![\w:/.~])\/(?:[^\s"'<>|/]+\/)+[^\s"'<>|/]*)/g;
-const INTERNAL_URI_RE = /tracker:\/\/[^\s)]*/g;
+const INTERNAL_URI_RE = /quill:\/\/[^\s)]*/g;
 
 export function redactText(value) {
   if (typeof value !== 'string') return value;

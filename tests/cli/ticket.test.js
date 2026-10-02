@@ -95,5 +95,5 @@ test('commands that change state fail clearly when no worker confirms them', asy
   const r = await cli(['ticket', 'create', 'No worker', '--session', 's', '--timeout', '300'], fx.env);
   assert.notEqual(r.code, 0);
   assert.match(r.err, /worker/i);
-  assert.match(r.err, /tracker doctor|tracker worker start/);
+  assert.match(r.err, /quill doctor|quill worker start/);
 });

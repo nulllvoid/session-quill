@@ -100,9 +100,9 @@ test('A05 a real local UI request is durably acknowledged, changes the note revi
     assert.ok(after.revision > before, 'local note revision changed');
     assert.equal(after.next_action, 'Round trip');
     const body = { id: RID(2), kind: 'set-next-action', target_id: T1, expected_revision: after.revision, payload: { next_action: 'evil' } };
-    assert.equal((await fetch(`${c.base}/v1/requests`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-tracker-csrf': c.csrf }, body: JSON.stringify(body) })).status, 401);
+    assert.equal((await fetch(`${c.base}/v1/requests`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-quill-csrf': c.csrf }, body: JSON.stringify(body) })).status, 401);
     assert.equal((await c.post('/v1/requests', body, { origin: 'http://evil.example' })).status, 403);
-    assert.equal((await c.post('/v1/requests', body, { 'x-tracker-csrf': 'bad' })).status, 403);
+    assert.equal((await c.post('/v1/requests', body, { 'x-quill-csrf': 'bad' })).status, 403);
     assert.equal(s.w.state.requests.has(RID(2)), false, 'nothing entered the queue');
   } finally { await s.stop(); }
 });

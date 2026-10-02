@@ -1,4 +1,4 @@
-// Inventories legacy notes without writing anything (TRD §Migration: `tracker migrate --dry-run`).
+// Inventories legacy notes without writing anything (TRD §Migration: `quill migrate --dry-run`).
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseYaml } from '../worker/markdown.js';

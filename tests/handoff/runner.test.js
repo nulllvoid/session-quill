@@ -172,7 +172,7 @@ test('missing runtime fails at dispatch with a reason; a crash is failed with ex
 
 test('hook adapter attributes a handoff agent session to the handoff ticket instead of gating it', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-hh-'));
-  const env = { TRACKER_HOME: home, TRACKER_HANDOFF_ID: 'h-123', TRACKER_HANDOFF_TICKET_ID: T1, TRACKER_HANDOFF_TICKET_KEY: 'LOCAL-a-00000001' };
+  const env = { QUILL_HOME: home, QUILL_HANDOFF_ID: 'h-123', QUILL_HANDOFF_TICKET_ID: T1, QUILL_HANDOFF_TICKET_KEY: 'LOCAL-a-00000001' };
   writeRuntimeIdentity({ store_id: '11111111-1111-4111-8111-111111111111', machine_id: '22222222-2222-4222-8222-222222222222', store_path: home, gate_enabled: true, approval_phrases_enabled: false, allow_tools: [] }, env);
   writeHeartbeat({ at: '2026-10-02T08:00:00Z', pid: 1, store_id: '11111111-1111-4111-8111-111111111111' }, env);
   const start = runHook('SessionStart', { session_id: 'agent-sess', hook_event_name: 'SessionStart', source: 'startup', cwd: 'C:/wt' }, { env, now: '2026-10-02T08:00:00Z' });

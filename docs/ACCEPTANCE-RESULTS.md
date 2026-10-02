@@ -1,6 +1,6 @@
-# Session Tracker — Acceptance Results
+# Session Quill — Acceptance Results
 
-Recorded: 2026-10-02 · Implementation revision: v0.1.0 (branch `feat/session-tracker-v1`)
+Recorded: 2026-10-02 · Implementation revision: v0.1.0 (branch `feat/session-quill-v1`)
 Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a scenario-named test in `tests/acceptance/` (or a unit suite named below) passed on the environment in the table. "Pending manual" means the scenario needs a live Claude Code host, real network providers or a human and has not been executed.
 
 ## Environment
@@ -25,7 +25,7 @@ Other operating systems (macOS, Linux, WSL) have **not** been run yet; they must
 | A03 | Automated | distinct identities for two sessions in one cwd and a subagent; missing `session_id` denies covered writes and never falls back to cwd |
 | A04 | **Pending manual** | real approved/rejected/cancelled `ExitPlanMode` payloads and Stop/subagent payloads from a live host; fixtures in `tests/fixtures/hooks/` follow the documented shapes |
 | A05 | Automated | `tests/acceptance/phase0.test.js`, `tests/server/http.test.js` — 202 after persistence, note revision change, confirmation; unauthenticated / wrong-Origin / wrong-Host / missing CSRF cannot mutate |
-| A06 | **Pending manual** | installed command names (`/session-tracker:*`) and status-line composition on a live host; `claude plugin validate` passes |
+| A06 | **Pending manual** | installed command names (`/session-quill:*`) and status-line composition on a live host; `claude plugin validate` passes |
 | A07 | Automated | the hook process never fails; a PreToolUse the gate cannot evaluate (malformed input, internal error, failed capture) fails closed for every covered tool while reads pass; non-gate hooks never block; bound sessions emit no decision (never an `allow` override). Host fail-open limit: a hook the host times out or cannot launch is outside the guarantee (TRD) |
 
 ## Phase 1 — persistence, attribution and recovery
@@ -51,7 +51,7 @@ Other operating systems (macOS, Linux, WSL) have **not** been run yet; they must
 | Profile | Replay on start | Hook p50 | Hook p95 | Hook max | Ingest 1,000 events | Publish generation |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2,000 tickets / 20,000 events (default `npm test`) | 3.9 s | 1.4 ms | 1.7 ms | 13.2 ms | 648 ms | 18 ms |
-| 10,000 tickets / 100,000 events (`TRACKER_PERF_FULL=1`) | 12.9 s | 1.5 ms | 1.7 ms | 4.7 ms | 673 ms | 63 ms |
+| 10,000 tickets / 100,000 events (`QUILL_PERF_FULL=1`) | 12.9 s | 1.5 ms | 1.7 ms | 4.7 ms | 673 ms | 63 ms |
 
 Hook timings are in-process (`runHook`) and exclude Node process start-up (~40–80 ms on this machine), which the host incurs per hook invocation; the 200 ms budget still holds with margin. Cold-start numbers per OS remain to be recorded.
 
@@ -61,7 +61,7 @@ Hook timings are in-process (`runHook`) and exclude Node process start-up (~40�
 | --- | --- | --- |
 | A21 | Automated | `tests/migrate/run.test.js` — dry run writes nothing; lists mapped and ambiguous records including stale and skipped-deployment cases; every source note accounted for (ignored files listed) |
 | A22 | Automated | import creates replayable `migration` events, preserves originals and authored sections; counts, parent links, PR records, statuses and deployment obligations verified |
-| A23 | Automated (partial) | re-running import yields no duplicate effects; rollback restores source notes and settings from the backup and exports newer tracker events. **Pending manual:** the real PMLA layout (the profile assumes YAML frontmatter fields listed in `profiles/pmla/profile.json`) and pausing the legacy hooks |
+| A23 | Automated (partial) | re-running import yields no duplicate effects; rollback restores source notes and settings from the backup and exports newer quill events. **Pending manual:** the real PMLA layout (the profile assumes YAML frontmatter fields listed in `profiles/pmla/profile.json`) and pausing the legacy hooks |
 
 ## Phase 3 — reconciliation, UI and sharing
 

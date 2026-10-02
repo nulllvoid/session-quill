@@ -13,9 +13,9 @@ test('unbound Edit/Write/MultiEdit/NotebookEdit are denied with the namespaced c
   for (const tool_name of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']) {
     const r = decideGate({ ...base, tool_name, tool_input: { file_path: 'C:/repo/src/a.js' }, binding: unbound });
     assert.equal(r.decision, 'deny', tool_name);
-    assert.match(r.reason, /\/session-tracker:ticket bind/);
+    assert.match(r.reason, /\/session-quill:ticket bind/);
   }
-  assert.match(DENIAL_REASON, /session-tracker:ticket create/);
+  assert.match(DENIAL_REASON, /session-quill:ticket create/);
 });
 
 test('dedicated reads and host control tools pass through with no decision', () => {
@@ -32,17 +32,17 @@ test('Bash read-only grammar passes; anything else is denied when unbound', () =
   assert.equal(decideGate({ ...base, tool_name: 'PowerShell', tool_input: { command: 'Remove-Item x' }, binding: unbound }).decision, 'deny');
 });
 
-test('direct tracker CLI invocations are exempt; shell wrappers around them are not', () => {
-  assert.equal(isTrackerCliCommand('node C:/plugins/session-tracker/bin/tracker.js ticket bind LOCAL-x-1 --session abc'), true);
-  assert.equal(isTrackerCliCommand('node "C:/Program Files/plug in/bin/tracker.js" ticket create "Fix the thing" --session abc'), true);
-  assert.equal(isTrackerCliCommand('tracker ticket show'), true);
-  assert.equal(isTrackerCliCommand('tracker ticket off'), true);
-  assert.equal(isTrackerCliCommand('tracker ticket bind X && rm -rf /'), false);
-  assert.equal(isTrackerCliCommand('tracker ticket bind $(cat x)'), false);
-  assert.equal(isTrackerCliCommand('tracker worker stop'), false);
-  assert.equal(isTrackerCliCommand('tracker ticket create "x" | tee out'), false);
-  assert.equal(isTrackerCliCommand('bash -c "tracker ticket bind X"'), false);
-  assert.equal(decideGate({ ...base, tool_name: 'Bash', tool_input: { command: 'tracker ticket bind LOCAL-x-1' }, binding: unbound }).decision, 'none');
+test('direct quill CLI invocations are exempt; shell wrappers around them are not', () => {
+  assert.equal(isTrackerCliCommand('node C:/plugins/session-quill/bin/quill.js ticket bind LOCAL-x-1 --session abc'), true);
+  assert.equal(isTrackerCliCommand('node "C:/Program Files/plug in/bin/quill.js" ticket create "Fix the thing" --session abc'), true);
+  assert.equal(isTrackerCliCommand('quill ticket show'), true);
+  assert.equal(isTrackerCliCommand('quill ticket off'), true);
+  assert.equal(isTrackerCliCommand('quill ticket bind X && rm -rf /'), false);
+  assert.equal(isTrackerCliCommand('quill ticket bind $(cat x)'), false);
+  assert.equal(isTrackerCliCommand('quill worker stop'), false);
+  assert.equal(isTrackerCliCommand('quill ticket create "x" | tee out'), false);
+  assert.equal(isTrackerCliCommand('bash -c "quill ticket bind X"'), false);
+  assert.equal(decideGate({ ...base, tool_name: 'Bash', tool_input: { command: 'quill ticket bind LOCAL-x-1' }, binding: unbound }).decision, 'none');
 });
 
 test('MCP and unknown tools are denied unless registered as non-mutating', () => {

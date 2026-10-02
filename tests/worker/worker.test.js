@@ -17,13 +17,13 @@ const T1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-worker-'));
-  const storePath = path.join(home, 'Tracker');
+  const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
-  const meta = createStoreMeta({ store_name: 'Tracker', owner_machine_id: MACHINE, timezone: 'UTC' });
+  const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: MACHINE, timezone: 'UTC' });
   writeStoreMeta(storePath, meta);
   fs.writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ machine_id: MACHINE, machine_name: 'test' }));
   const config = { ...defaultUserConfig(), store_path: storePath, projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: ['production'] } } };
-  const env = { TRACKER_HOME: home };
+  const env = { QUILL_HOME: home };
   let nowMs = Date.parse('2026-10-02T08:00:00Z');
   const clock = () => nowMs;
   const advance = (ms) => { nowMs += ms; };

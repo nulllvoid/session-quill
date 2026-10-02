@@ -1,10 +1,10 @@
 {
-  "name": "session-tracker",
+  "name": "session-quill",
   "version": "0.1.0",
   "description": "Ticket-bound Claude Code sessions with recoverable local notes and a personal dashboard",
   "type": "module",
   "private": true,
-  "bin": { "tracker": "bin/tracker.js" },
+  "bin": { "quill": "bin/quill.js" },
   "engines": { "node": ">=22" },
   "scripts": {
     "test": "node --test \"tests/**/*.test.js\"",

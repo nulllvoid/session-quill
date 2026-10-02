@@ -1,4 +1,4 @@
-// Restricted TOML subset used for tracker-written configuration.
+// Restricted TOML subset used for quill-written configuration.
 // Supported: comments, `key = value` with string/integer/boolean/array-of-strings values,
 // and `[dotted.table]` headers. Anything else is rejected with a diagnostic rather than
 // parsed lossily (TRD §Configuration and packaging).

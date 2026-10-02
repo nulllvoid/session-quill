@@ -7,7 +7,7 @@ export function renderBoard(rawSnapshot, filters, { now, layout = 'columns', exp
   const tickets = filterTickets(snapshot, filters);
   if (!tickets.length) {
     const any = snapshot.tickets.length;
-    return `<section class="view view-board" aria-labelledby="tab-board">${any ? emptyState('No tickets match the current filters', 'Clear a filter token above to see more.') : emptyState('No tickets yet', 'Create the first one with <code>/session-tracker:ticket create "&lt;title&gt;"</code>.')}</section>`;
+    return `<section class="view view-board" aria-labelledby="tab-board">${any ? emptyState('No tickets match the current filters', 'Clear a filter token above to see more.') : emptyState('No tickets yet', 'Create the first one with <code>/session-quill:ticket create "&lt;title&gt;"</code>.')}</section>`;
   }
   const staleCount = tickets.filter((t) => t.stale).length;
   const columns = STATUS_ORDER.map((status) => {

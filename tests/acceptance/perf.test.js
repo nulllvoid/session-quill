@@ -1,5 +1,5 @@
 // A19 (scaled): hook p95 with a populated store, and proof the hook path never scans the journal.
-// Set TRACKER_PERF_FULL=1 to run the full 10,000 tickets / 100,000 events profile; the default keeps
+// Set QUILL_PERF_FULL=1 to run the full 10,000 tickets / 100,000 events profile; the default keeps
 // CI fast with 2,000 tickets / 20,000 events. Results are printed for ACCEPTANCE-RESULTS.md.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +10,7 @@ import { scenario, MACHINE } from './scenario.js';
 import { makeEvent } from '../../src/core/events.js';
 import { journalPath } from '../../src/lib/paths.js';
 
-const FULL = process.env.TRACKER_PERF_FULL === '1';
+const FULL = process.env.QUILL_PERF_FULL === '1';
 const TICKETS = FULL ? 10_000 : 2_000;
 const EVENTS = FULL ? 100_000 : 20_000;
 const HOOK_CALLS = 1_000;

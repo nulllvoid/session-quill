@@ -10,12 +10,12 @@ export const MACHINE = '22222222-2222-4222-8222-222222222222';
 
 export function makeHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-cli-'));
-  const storePath = path.join(home, 'Tracker');
+  const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
-  const meta = createStoreMeta({ store_name: 'Tracker', owner_machine_id: MACHINE, timezone: 'UTC' });
+  const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: MACHINE, timezone: 'UTC' });
   writeStoreMeta(storePath, meta);
   fs.writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ machine_id: MACHINE, machine_name: 'test' }));
-  const env = { TRACKER_HOME: home };
+  const env = { QUILL_HOME: home };
   const config = { ...defaultUserConfig(), store_path: storePath, default_project: 'demo', projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: ['production'] } } };
   saveUserConfig(config, env);
   return { home, storePath, meta, config, env };

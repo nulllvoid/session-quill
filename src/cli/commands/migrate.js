@@ -34,18 +34,18 @@ export async function run({ args, flags, io, env }) {
   const ctx = loadContext(env);
   if (args[0] === 'rollback') {
     if (!flags.manifest) throw new TrackerError('usage', 'usage: migrate rollback --manifest <migration-manifest.json> [--yes]');
-    const ok = flags.yes === true || (await confirm('Restore source notes and settings from the migration backup and export newer tracker events?'));
+    const ok = flags.yes === true || (await confirm('Restore source notes and settings from the migration backup and export newer quill events?'));
     if (!ok) { io.error('rollback not performed'); return 1; }
     const r = rollback(ctx, path.resolve(String(flags.manifest)));
     io.println(`restored ${r.restored.length} backup entr${r.restored.length === 1 ? 'y' : 'ies'} (source notes and settings); journal and blobs left intact`);
-    io.println(`exported ${r.exported} newer tracker event(s) to ${r.exportPath} for reconciliation`);
-    io.println('Re-enable the legacy hooks from the restored settings yourself; the tracker worker keeps running until you stop it.');
+    io.println(`exported ${r.exported} newer quill event(s) to ${r.exportPath} for reconciliation`);
+    io.println('Re-enable the legacy hooks from the restored settings yourself; the quill worker keeps running until you stop it.');
     return 0;
   }
   if (!flags.source) throw new TrackerError('usage', 'usage: migrate --source <dir> [--profile pmla] [--project <id>] [--dry-run] [--backup <dir>] [--yes]');
   const profile = loadProfile(flags.profile ?? 'pmla');
   const projectId = flags.project ?? ctx.config.default_project ?? Object.keys(ctx.config.projects)[0];
-  if (!projectId) throw new TrackerError('project-required', 'pass --project <id> (configure projects with tracker init)');
+  if (!projectId) throw new TrackerError('project-required', 'pass --project <id> (configure projects with quill init)');
   const dryRun = flags['dry-run'] === true;
   if (dryRun) {
     const r = await runMigration(ctx, { sourceDir: String(flags.source), profile, projectId, dryRun: true });

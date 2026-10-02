@@ -1,4 +1,4 @@
-# Session Tracker — UI Design Specification
+# Session Quill — UI Design Specification
 
 Status: revised draft v0.2 · 2026-10-02
 Companions: [PRD](PRD.md), [TRD](TRD.md), [canonical fields](DATA-CONTRACT.md), [acceptance](ACCEPTANCE.md).

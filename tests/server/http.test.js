@@ -21,12 +21,12 @@ const RID = (n) => `11111111-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 async function boot() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-http-'));
-  const storePath = path.join(home, 'Tracker');
+  const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
-  const meta = createStoreMeta({ store_name: 'Tracker', owner_machine_id: MACHINE, timezone: 'UTC' });
+  const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: MACHINE, timezone: 'UTC' });
   writeStoreMeta(storePath, meta);
   const config = { ...defaultUserConfig(), store_path: storePath, projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: ['production'] } } };
-  const env = { TRACKER_HOME: home };
+  const env = { QUILL_HOME: home };
   let nowMs = Date.parse('2026-10-02T08:00:00Z');
   const clock = () => nowMs;
   const iso = () => new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -49,7 +49,7 @@ async function boot() {
   const authRes = await fetch(`${base}/auth?secret=${secret}`, { redirect: 'manual' });
   const cookie = authRes.headers.get('set-cookie').split(';')[0];
   const csrf = (await (await fetch(`${base}/v1/csrf`, { headers: { cookie } })).json()).csrf;
-  const post = (url, body, headers = {}) => fetch(`${base}${url}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie, 'x-tracker-csrf': csrf, origin: base, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const post = (url, body, headers = {}) => fetch(`${base}${url}`, { method: 'POST', headers: { 'content-type': 'application/json', cookie, 'x-quill-csrf': csrf, origin: base, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
   const get = (url) => fetch(`${base}${url}`, { headers: { cookie } });
   const settle = async () => { w.tick(); await rext.idle(); w.tick(); };
   return { w, env, base, port, cookie, csrf, post, get, secret, authRes, advance: (ms) => { nowMs += ms; }, settle, iso, mk, sext };
@@ -73,14 +73,14 @@ test('mutations require CSRF and a loopback Origin/Host; cross-origin and wrong-
   const b = await boot();
   try {
     const body = { id: RID(1), kind: 'set-next-action', target_id: T1, expected_revision: 1, payload: { next_action: 'x' } };
-    assert.equal((await b.post('/v1/requests', body, { 'x-tracker-csrf': '' })).status, 403);
+    assert.equal((await b.post('/v1/requests', body, { 'x-quill-csrf': '' })).status, 403);
     assert.equal((await b.post('/v1/requests', body, { origin: 'http://evil.test' })).status, 403);
     const wrongHost = await new Promise((resolve) => {
-      const req = http.request({ host: '127.0.0.1', port: b.port, path: '/v1/requests', method: 'POST', headers: { host: 'tracker.example.com', 'content-type': 'application/json', cookie: b.cookie, 'x-tracker-csrf': b.csrf } }, (res) => resolve(res.statusCode));
+      const req = http.request({ host: '127.0.0.1', port: b.port, path: '/v1/requests', method: 'POST', headers: { host: 'quill.example.com', 'content-type': 'application/json', cookie: b.cookie, 'x-quill-csrf': b.csrf } }, (res) => resolve(res.statusCode));
       req.end(JSON.stringify(body));
     });
     assert.equal(wrongHost, 403);
-    assert.equal((await fetch(`${b.base}/v1/requests`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-tracker-csrf': b.csrf }, body: JSON.stringify(body) })).status, 401);
+    assert.equal((await fetch(`${b.base}/v1/requests`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-quill-csrf': b.csrf }, body: JSON.stringify(body) })).status, 401);
     const snap = await (await b.get('/v1/snapshot')).json();
     assert.equal(snap.requests.length, 0, 'nothing entered the queue');
   } finally { await b.w.stop(); }
@@ -160,7 +160,7 @@ test('validation errors are rejected before the queue: blocked without blocker, 
     const r1 = await b.post('/v1/requests', { id: RID(7), kind: 'set-status', target_id: T1, expected_revision: 1, payload: { status: 'blocked' } });
     assert.equal(r1.status, 400);
     assert.equal((await r1.json()).error.code, 'blocker-required');
-    const r2 = await fetch(`${b.base}/v1/requests`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: b.cookie, 'x-tracker-csrf': b.csrf, origin: b.base }, body: '{not json' });
+    const r2 = await fetch(`${b.base}/v1/requests`, { method: 'POST', headers: { 'content-type': 'application/json', cookie: b.cookie, 'x-quill-csrf': b.csrf, origin: b.base }, body: '{not json' });
     assert.equal(r2.status, 400);
     const snap = await (await b.get('/v1/snapshot')).json();
     assert.equal(snap.requests.length, 0);

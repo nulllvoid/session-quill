@@ -50,7 +50,7 @@ test('renderPickNext empty states', () => {
   const s = snapshot({ picknext: [], blocked: [] });
   const html = renderPickNext(s, noFilters, { now: NOW });
   assert.match(html, /No eligible work/);
-  assert.match(html, /session-tracker:ticket create/);
+  assert.match(html, /session-quill:ticket create/);
   const allBlocked = snapshot({ picknext: [], blocked: [{ ticket_id: TID(3), blocker: 'x' }] });
   assert.match(renderPickNext(allBlocked, noFilters, { now: NOW }), /Everything eligible is blocked/);
 });

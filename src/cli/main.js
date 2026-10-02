@@ -20,9 +20,9 @@ const COMMANDS = {
   migrate: () => import('./commands/migrate.js'),
 };
 
-const HELP = `tracker — Session Tracker CLI
+const HELP = `quill — Session Quill CLI
 
-Usage: tracker <command> [options]
+Usage: quill <command> [options]
 
   init [--store <path>] [--project <id>] [--project-name <name>] [--repo <path>] [--timezone <tz>] [--yes]
   ticket create "<title>" [--category c] [--priority P2] [--parent KEY] [--project id] [--due YYYY-MM-DD] [--bind] --session <id>
@@ -71,7 +71,7 @@ export async function main(argv, { env = process.env, stdout, stderr, stdin } = 
     return code ?? 0;
   } catch (err) {
     if (err instanceof TrackerError) {
-      io.error(`tracker ${command}: ${err.message}`);
+      io.error(`quill ${command}: ${err.message}`);
       if (flags.json) io.json({ error: { code: err.code, message: err.message } });
       return 1;
     }

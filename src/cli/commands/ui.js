@@ -27,7 +27,7 @@ export function openInBrowser(url) {
 // URL the browser opens and is redirected away immediately (TRD §Local dashboard).
 export async function issueOwnerUrl(ctx, { ttlMs = 10 * MINUTE } = {}) {
   const endpoint = readJsonIfExists(endpointPath(ctx.env));
-  if (!endpoint || !workerStatus(ctx).healthy) throw new TrackerError('worker-unavailable', 'the worker is not serving the dashboard; start it with `tracker worker start`');
+  if (!endpoint || !workerStatus(ctx).healthy) throw new TrackerError('worker-unavailable', 'the worker is not serving the dashboard; start it with `quill worker start`');
   const secret = randomBytes(32).toString('hex');
   const nonce = randomBytes(8).toString('hex');
   ensureDir(secretsDir(ctx.env));
@@ -41,7 +41,7 @@ export async function issueOwnerUrl(ctx, { ttlMs = 10 * MINUTE } = {}) {
 export async function run({ flags, io, env }) {
   const ctx = loadContext(env);
   if (flags.static) {
-    const out = flags.static === true ? path.join(process.cwd(), `session-tracker-snapshot-${nowIso().replace(/[:]/g, '-')}.html`) : String(flags.static);
+    const out = flags.static === true ? path.join(process.cwd(), `session-quill-snapshot-${nowIso().replace(/[:]/g, '-')}.html`) : String(flags.static);
     const snapshot = latestSnapshot(ctx);
     if (!snapshot) throw new TrackerError('no-snapshot', 'no published generation yet; start the worker once to publish projections');
     const result = writeStaticHtml(snapshot, out, { exportedAt: nowIso(), fields: flags.fields, projects: flags.projects, includeLinks: flags['include-links'] === true, includeCheckpoints: flags['include-checkpoints'] === true });

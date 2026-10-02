@@ -19,12 +19,12 @@ const PR_URL = 'https://github.com/acme/demo/pull/7';
 
 function fixture({ environments = ['production'], provider = 'github' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-rec-'));
-  const storePath = path.join(home, 'Tracker');
+  const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
-  const meta = createStoreMeta({ store_name: 'Tracker', owner_machine_id: MACHINE, timezone: 'UTC' });
+  const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: MACHINE, timezone: 'UTC' });
   writeStoreMeta(storePath, meta);
   const config = { ...defaultUserConfig(), store_path: storePath, projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: environments, provider } } };
-  const env = { TRACKER_HOME: home };
+  const env = { QUILL_HOME: home };
   let nowMs = Date.parse('2026-10-02T08:00:00Z');
   const clock = () => nowMs;
   const iso = () => new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, 'Z');

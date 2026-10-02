@@ -7,4 +7,4 @@ merged_at: 2026-09-10T12:00:00Z
 deploy_skipped: true
 ---
 ## Summary
-Marked skipped in the old tracker.
+Marked skipped in the old quill.

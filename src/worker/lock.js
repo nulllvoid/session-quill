@@ -10,7 +10,7 @@ import { TrackerError } from '../lib/errors.js';
 
 export function lockEndpoint(storeId, machineId, env = process.env) {
   const digest = createHash('sha256').update(`${storeId}:${machineId}`).digest('hex').slice(0, 24);
-  if (process.platform === 'win32') return `\\\\.\\pipe\\session-tracker-${digest}`;
+  if (process.platform === 'win32') return `\\\\.\\pipe\\session-quill-${digest}`;
   return path.join(runDir(env), `${digest}.sock`);
 }
 
@@ -39,7 +39,7 @@ export async function acquireLock(storeId, machineId, env = process.env) {
   }
   const server = net.createServer((socket) => {
     // Owner probe: reply with a tiny banner and close.
-    socket.end('session-tracker-owner\n');
+    socket.end('session-quill-owner\n');
   });
   await new Promise((resolve, reject) => {
     server.once('error', (err) => {
