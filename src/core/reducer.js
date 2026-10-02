@@ -1,6 +1,6 @@
 // Pure reducer: journal events -> generated state. Replay never runs tools or remote requests;
 // duplicate event IDs or source identities have exactly one effect (TRD §Durability).
-import { uuid } from '../lib/ids.js';
+import { deterministicId } from '../lib/ids.js';
 import {
   sessionKey, newTicket, newSession, refreshDerived, bumpRevision, projectName, repoFor, TICKET_STATUSES, CATEGORIES, PRIORITIES,
 } from './state.js';
@@ -11,8 +11,8 @@ import { heuristicApprovalEligible } from './approval.js';
 const SUBSTANTIVE = new Set(['bind', 'post-tool', 'stop', 'subagent-stop', 'approve', 'ticket-update', 'ticket-create', 'relink', 'import', 'migration', 'handoff-tx']);
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
-function timelineEntry(ev, kind, text, { content_ref = null, coverage = 'complete' } = {}) {
-  return { id: uuid(), at: ev.occurred_at, kind, text, event_id: ev.event_id, content_ref, coverage };
+function timelineEntry(ev, kind, text, { content_ref = null, coverage = 'complete', index = 0 } = {}) {
+  return { id: deterministicId(`${ev.event_id}:timeline:${kind}:${index}:${text}`), at: ev.occurred_at, kind, text, event_id: ev.event_id, content_ref, coverage };
 }
 
 function touch(state, ticket, ev, result) {
@@ -79,7 +79,7 @@ function approveCheckpoint(state, ev, { checkpoint_id, ticket_id, provenance }, 
   state.approvals.add(approvalKey);
   cp.approved_at = ev.occurred_at;
   cp.approval_provenance = provenance;
-  ticket.plans.push({ id: uuid(), session_id: cp.session_id, checkpoint_id: cp.id, content_ref: cp.content_ref, preview: cp.preview, approved_at: ev.occurred_at, provenance });
+  ticket.plans.push({ id: deterministicId(`${ev.event_id}:plan:${cp.id}`), session_id: cp.session_id, checkpoint_id: cp.id, content_ref: cp.content_ref, preview: cp.preview, approved_at: ev.occurred_at, provenance });
   ticket.timeline.push(timelineEntry(ev, 'plan', `Checkpoint approved (${provenance})`, { content_ref: cp.content_ref }));
   const session = [...state.sessions.values()].find((s) => s.id === cp.session_id);
   if (session) recomputeUnpromoted(state, session);
@@ -213,7 +213,7 @@ function handlePostTool(state, ev, result) {
   const repo = repoFor(state, p.repo_id ?? (ticket ? ticket.repo_id : null));
 
   if (p.plan_ref) {
-    const cp = { id: uuid(), session_id: session.id, ticket_id: attribution.ticket_id, binding_revision: attribution.binding_revision, recorded_at: ev.occurred_at, content_ref: p.plan_ref, preview: String(p.plan_preview ?? '').slice(0, 1500), complete: true, approved_at: null, approval_provenance: null, dismissed_at: null, sequence: ev.sequence ?? 0, kind: 'plan' };
+    const cp = { id: deterministicId(`${ev.event_id}:plan-checkpoint`), session_id: session.id, ticket_id: attribution.ticket_id, binding_revision: attribution.binding_revision, recorded_at: ev.occurred_at, content_ref: p.plan_ref, preview: String(p.plan_preview ?? '').slice(0, 1500), complete: true, approved_at: null, approval_provenance: null, dismissed_at: null, sequence: ev.sequence ?? 0, kind: 'plan' };
     state.checkpoints.set(cp.id, cp);
     if (ticket) approveCheckpoint(state, ev, { checkpoint_id: cp.id, ticket_id: ticket.id, provenance: 'explicit' }, result);
     return;
@@ -234,7 +234,7 @@ function handlePostTool(state, ev, result) {
     ticket.timeline.push(timelineEntry(ev, 'commit', `Commit ${p.commit.sha.slice(0, 10)}${p.commit.message ? `: ${p.commit.message}` : ''}`, { coverage: 'complete' }));
     session.successful_write_count += 1;
   } else if (p.pr && p.pr.url) {
-    const pr = { id: uuid(), provider: p.pr.provider ?? 'unknown', url: p.pr.url, state: p.pr.state ?? 'unknown', opened_at: ev.occurred_at, merged_at: null, base_branch: p.pr.base_branch ?? null, head_branch: p.pr.head_branch ?? null, observed_at: ev.occurred_at, error: null, evidence_id: ev.event_id };
+    const pr = { id: deterministicId(`${ev.event_id}:pr:${p.pr.url}`), provider: p.pr.provider ?? 'unknown', url: p.pr.url, state: p.pr.state ?? 'unknown', opened_at: ev.occurred_at, merged_at: null, base_branch: p.pr.base_branch ?? null, head_branch: p.pr.head_branch ?? null, observed_at: ev.occurred_at, error: null, evidence_id: ev.event_id };
     if (!ticket.prs.some((x) => x.url === pr.url)) ticket.prs.push(pr);
     ticket.timeline.push(timelineEntry(ev, 'pr', `PR ${pr.url} (${pr.state})`));
     if (pr.state === 'open' || pr.state === 'draft') deriveStatusFromEvidence(ticket, { type: pr.state === 'draft' ? 'pr-draft' : 'pr-open', seq: ev.sequence ?? 0, evidence_id: ev.event_id }, repo);
@@ -263,7 +263,7 @@ function handleStop(state, ev, result) {
   if (ticket) {
     if (complete) {
       for (const text of Array.isArray(p.conclusions) ? p.conclusions : []) {
-        ticket.conclusions.push({ id: uuid(), session_id: session.id, checkpoint_id: cp.id, content_ref: cp.content_ref, preview: String(text).slice(0, 1500), recorded_at: ev.occurred_at, approved_at: null, provenance: null });
+        ticket.conclusions.push({ id: deterministicId(`${ev.event_id}:conclusion:${ticket.conclusions.length}`), session_id: session.id, checkpoint_id: cp.id, content_ref: cp.content_ref, preview: String(text).slice(0, 1500), recorded_at: ev.occurred_at, approved_at: null, provenance: null });
         ticket.timeline.push(timelineEntry(ev, 'conclusion', String(text).slice(0, 200), { content_ref: cp.content_ref }));
       }
       if (!Array.isArray(p.conclusions) || !p.conclusions.length) ticket.timeline.push(timelineEntry(ev, 'conclusion', `Checkpoint recorded (${p.length ?? cp.preview.length} chars)`, { content_ref: cp.content_ref }));
@@ -347,7 +347,7 @@ function handleHandoffTx(state, ev, result) {
       if (item.type === 'child') {
         if (state.handoffChildren?.has(identity)) continue;
         if (!state.handoffChildren) state.handoffChildren = new Set();
-        const childId = item.id ?? uuid();
+        const childId = item.id ?? deterministicId(`${h.id}:child:${index}`);
         if (state.tickets.has(childId)) continue;
         const r = createTicket(state, ev, { id: childId, key: item.key, title: item.title, project_id: ticket.project_id, project_name: ticket.project_name, category: item.category ?? ticket.category, priority: item.priority ?? ticket.priority, parent_id: ticket.id, repo_id: ticket.repo_id, next_action: item.next_action ?? '' }, 'manual', result);
         if (!r.rejected) {

@@ -2,7 +2,7 @@
 // TRD §Workflow and deployments).
 import { TrackerError } from '../lib/errors.js';
 import { TICKET_STATUSES } from './state.js';
-import { uuid } from '../lib/ids.js';
+import { deterministicId } from '../lib/ids.js';
 
 export function applyStatusChange(ticket, { status, source = 'manual', seq = 0, blocker, evidence_id = null }) {
   if (!TICKET_STATUSES.includes(status)) throw new TrackerError('status-invalid', `unknown status ${status}`);
@@ -32,7 +32,7 @@ function ensureObligations(ticket, { pr_id, merged_at, source_event_id }, repo) 
   for (const environment of environments) {
     if (ticket.deployments.some((d) => d.pr_id === pr_id && d.environment === environment)) continue;
     ticket.deployments.push({
-      id: uuid(), pr_id, environment, state: 'pending', merged_at, deployed_at: null, evidence: null, waiver_reason: null, source_event_id,
+      id: deterministicId(`${source_event_id}:deployment:${pr_id}:${environment}`), pr_id, environment, state: 'pending', merged_at, deployed_at: null, evidence: null, waiver_reason: null, source_event_id,
     });
     created += 1;
   }

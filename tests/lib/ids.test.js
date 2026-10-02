@@ -8,6 +8,13 @@ test('uuid is v4 and shortId is 8 hex', () => {
   assert.notEqual(shortId(), shortId());
 });
 
+test('deterministicId is stable, UUID-shaped and seed-sensitive', async () => {
+  const { deterministicId } = await import('../../src/lib/ids.js');
+  assert.equal(deterministicId('a'), deterministicId('a'));
+  assert.notEqual(deterministicId('a'), deterministicId('b'));
+  assert.equal(isUuid(deterministicId('anything')), true);
+});
+
 test('contentHash is sha256 hex and stable', () => {
   assert.equal(contentHash('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
 });

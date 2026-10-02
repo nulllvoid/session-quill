@@ -1,5 +1,5 @@
 // In-memory generated state, reduced from the journal. Field names follow DATA-CONTRACT.md.
-import { uuid } from '../lib/ids.js';
+import { uuid, deterministicId } from '../lib/ids.js';
 
 export const TICKET_STATUSES = ['todo', 'active', 'blocked', 'review', 'deploy-pending', 'done'];
 export const CATEGORIES = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
@@ -114,11 +114,12 @@ export function newTicket(state, {
   };
 }
 
-export function newSession(state, { id = uuid(), host_session_id, agent_id = null, parent_session_id = null, started_at, cwd = null, machine_name = null }) {
+export function newSession(state, { id, host_session_id, agent_id = null, parent_session_id = null, started_at, cwd = null, machine_name = null }) {
+  const sessionId = id ?? deterministicId(`session:${state.meta.store_id}:${state.meta.machine_id}:${host_session_id}:${agent_id ?? ''}`);
   return {
     schema_version: 1,
     store_id: state.meta.store_id,
-    id,
+    id: sessionId,
     revision: 1,
     created_at: started_at,
     updated_at: started_at,
