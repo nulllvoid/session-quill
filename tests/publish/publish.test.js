@@ -9,11 +9,12 @@ import { publishMarkdown, publishHtml } from '../../src/publish/writers.js';
 import { snapshot } from '../ui/fixtures.js';
 
 test('[[publish]] entries are validated; field aliases map to export fields; planned kinds are skipped with a warning', () => {
-  const store = 'C:/Quill';
+  const store = path.resolve('quill-store');
+  const share = path.resolve('share', 'quill.html');
   const { publishers, warnings } = normalizePublishers({ store_path: store, publish: [
     { name: 'team-artifact', kind: 'artifact', projects: ['pmla'], fields: ['key', 'title', 'status', 'next', 'pr', 'deployments', 'updated'] },
     { name: 'rollup', kind: 'markdown', on: ['reconcile'] },
-    { name: 'copy', kind: 'html', path: 'C:/share/quill.html', include_links: true },
+    { name: 'copy', kind: 'html', path: share, include_links: true },
     { name: 'wiki', kind: 'confluence' },
     { name: 'nopath', kind: 'html' },
     { name: 'oddfield', kind: 'markdown', fields: ['key', 'secrets'] },
@@ -28,11 +29,11 @@ test('[[publish]] entries are validated; field aliases map to export fields; pla
   assert.deepEqual([art.projects, art.include_links, art.after_reconcile, art.url], [['pmla'], false, false, null]);
   assert.equal(roll.path, path.resolve(store, 'rollups', 'rollup.md'));
   assert.equal(roll.after_reconcile, true);
-  assert.deepEqual([copy.path, copy.include_links], [path.resolve('C:/share/quill.html'), true]);
+  assert.deepEqual([copy.path, copy.include_links], [share, true]);
   assert.equal(take.url, 'https://claude.ai/artifact/abc123');
   assert.equal(destinationOf(art), 'artifact:new');
   assert.equal(destinationOf(take), 'artifact:https://claude.ai/artifact/abc123');
-  assert.equal(destinationOf(copy), `html:${path.resolve('C:/share/quill.html')}`);
+  assert.equal(destinationOf(copy), `html:${share}`);
   const text = warnings.join('\n');
   for (const re of [/wiki.*confluence.*later release/, /nopath.*needs path/, /oddfield.*unknown field "secrets"/, /lowercase/, /rollup.*duplicate/, /evil-url.*claude\.ai/]) assert.match(text, re);
 });
