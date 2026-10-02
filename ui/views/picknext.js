@@ -40,7 +40,7 @@ export function renderPickNext(rawSnapshot, filters, { now, pending = [] }) {
   } else if (!entries.length) {
     main = emptyState('No eligible work', `Pick next fills as tickets in to do, active, review or deploy-pending appear. ${mentionHint(snapshot)}`);
   } else {
-    main = `<div class="section-head"><h2>Ranked candidates</h2><span class="section-count" style="margin:0">${esc(entries.length)} candidate${entries.length === 1 ? '' : 's'} · ranked by raw score, display capped at 100 · blocked and done excluded</span></div>
+    main = `<div class="section-head"><h2>Ranked candidates</h2><span class="section-count">${esc(entries.length)} candidate${entries.length === 1 ? '' : 's'} · ranked by raw score, display capped at 100 · blocked and done excluded</span></div>
 <div class="picknext-grid">${entries.map(({ entry, ticket }) => ticketCard(ticket, snapshot, { variant: 'picknext', now, showHandoff: true, entry })).join('')}</div>`;
   }
   const blockedHtml = blocked.length

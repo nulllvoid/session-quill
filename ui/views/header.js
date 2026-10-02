@@ -5,7 +5,7 @@ const FRESH_LABELS = { 'never-synced': 'Never synced', fresh: 'Fresh', ageing: '
 export const NAV_ITEMS = [['picknext', 'Pick next', 'ticket', '1'], ['board', 'Board', 'machine', '2'], ['tree', 'Tree', 'branch', '3'], ['sessions', 'Sessions', 'user', '4'], ['deployments', 'Deployments', 'rocket', '5'], ['today', 'Today', 'clock', '6']];
 
 export function logoSvg() {
-  return '<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" fill="none" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"/><path d="M7 11h18M7 16h11M7 21h15" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round"/><circle cx="23" cy="16" r="3" fill="var(--accent-fill)"/><path d="M21 16l1.5 1.5L25 14" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  return '<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" fill="none" aria-hidden="true"><rect width="32" height="32" rx="9" fill="var(--accent-fill)"/><path d="M22.5 7.5c-6 1-10.5 5.5-12 13l-1 4 3.2-2.6c6.8-1.4 10.3-6.2 9.8-14.4Z" fill="var(--accent-fg)"/><path d="M9.5 24.5l6-8" stroke="var(--accent-fill)" stroke-width="1.4" stroke-linecap="round"/></svg>';
 }
 
 export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null, online = true } = {}) {
@@ -20,24 +20,20 @@ export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null,
     today: snapshot.today && snapshot.today.days.length && snapshot.today.days[0].date === snapshot.today.generated_for ? snapshot.today.days[0].tickets.length : 0,
   } : {};
   const isStatic = !!(meta && meta.exported_at);
-  return `<div class="sidebar-head"><span class="eyebrow">${icon('machine')}Workspace</span><span class="pill">${isStatic ? 'SNAPSHOT' : 'LOCAL'}</span></div>
+  const conn = isStatic ? 'snapshot' : online ? 'online' : 'offline';
+  return `<div class="sidebar-brand">${logoSvg()}<div class="brand-text"><span class="brand-name">Session Quill</span><span class="brand-sub">${isStatic ? 'Snapshot' : 'Local'}${meta ? ` · v${esc(meta.tracker_version)}` : ''}</span></div></div>
 <div class="nav" role="tablist" aria-label="Views">
   ${NAV_ITEMS.map(([id, label, ic, key]) => `<button type="button" role="tab" class="nav-item" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}">${icon(ic)}<span class="nav-label">${esc(label)}</span><span class="badge" aria-label="${attr(`${counts[id] ?? 0} items, shortcut ${key}`)}" title="Shortcut ${key}">${esc(counts[id] ?? key)}</span></button>`).join('')}
 </div>
-${meta ? `<div><span class="eyebrow">Runtime context</span>
-<div class="context-card" style="margin-top:8px">
-  <div class="row"><span>Store</span><span>${esc(meta.store_name)}</span></div>
-  <div class="row"><span>Timezone</span><span>${esc(meta.timezone)}</span></div>
-  <div class="row"><span>Quill</span><span>v${esc(meta.tracker_version)}</span></div>
-  <div class="row"><span>Schema</span><span>${esc(meta.schema_version)}</span></div>
-  <div class="row"><span>Stale</span><span>${esc(meta.stale_ticket_count)} ticket${meta.stale_ticket_count === 1 ? '' : 's'}</span></div>
-</div></div>` : ''}
+${meta ? `<div class="sidebar-section"><span class="eyebrow">Workspace</span>
+<dl class="context-list">
+  <div><dt>Store</dt><dd>${esc(meta.store_name)}</dd></div>
+  <div><dt>Timezone</dt><dd>${esc(meta.timezone)}</dd></div>
+  <div><dt>Schema</dt><dd>${esc(meta.schema_version)}</dd></div>
+  <div><dt>Stale</dt><dd${meta.stale_ticket_count ? ' class="stale-count"' : ''}>${esc(meta.stale_ticket_count)} ticket${meta.stale_ticket_count === 1 ? '' : 's'}</dd></div>
+</dl></div>` : ''}
 <div class="sidebar-foot">
-  <div class="context-card">
-    <div class="row"><span>${isStatic ? 'Snapshot' : 'Loopback'}</span><span class="${isStatic ? 'muted' : online ? 'good' : 'critical'}">${isStatic ? 'READ-ONLY' : online ? 'ACTIVE' : 'OFFLINE'}</span></div>
-    <div class="row"><span>${isStatic ? 'Exported' : 'Endpoint'}</span><span>${isStatic ? esc(meta.exported_at) : esc(endpoint ?? '127.0.0.1')}</span></div>
-  </div>
-  <div class="sidebar-copy"><span>Session Quill</span><span>${meta ? `v${esc(meta.tracker_version)}` : ''}</span></div>
+  <div class="conn" data-connection="${conn}"><span class="dot" aria-hidden="true"></span><span class="conn-text"><strong>${isStatic ? 'Read-only snapshot' : online ? 'Loopback active' : 'Worker offline'}</strong><span>${isStatic ? `Exported ${esc(meta.exported_at)}` : esc(endpoint ?? '127.0.0.1')}</span></span></div>
 </div>`;
 }
 
@@ -82,7 +78,7 @@ export function renderRefreshControl(snapshot, { online, refresh }) {
 }
 
 export function renderReceipt(receipt, { online }) {
-  if (!receipt) return `<div class="receipt" data-tone="neutral">${icon('check')}<span class="receipt-text">Receipt: waiting for the first persisted outcome. Only acknowledged persisted requests count as queued.</span><span class="live">${online ? 'LIVE' : 'OFFLINE'}</span></div>`;
+  if (!receipt) return `<div class="receipt" data-tone="neutral" title="Only acknowledged persisted requests count as queued">${icon('check')}<span class="receipt-text">Receipt: no persisted outcome yet</span><span class="live">${online ? 'LIVE' : 'OFFLINE'}</span></div>`;
   return `<div class="receipt" data-tone="${attr(receipt.tone ?? 'neutral')}" title="${attr(receipt.at ?? '')}">${icon(receipt.tone === 'critical' ? 'alert' : 'check')}<span class="receipt-text">Receipt: ${esc(receipt.text)}</span><span class="live">${online ? 'LIVE' : 'OFFLINE'}</span></div>`;
 }
 
@@ -91,19 +87,18 @@ export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters
   const caps = snapshot.capabilities ?? {};
   const isStatic = !!snapshot.meta.exported_at;
   return `<div class="topbar">
-  <div class="brand">${logoSvg()}<span>Session Quill</span><span class="pill">v${esc(snapshot.meta.tracker_version)}</span></div>
-  <label class="search">${icon('search')}<input type="search" id="search" data-filter="q" placeholder="Search tickets, keys, tags…" value="${attr(filters.q ?? '')}" aria-label="Search tickets"><kbd aria-hidden="true">/</kbd></label>
-  <span class="endpoint" title="${attr(isStatic ? 'Read-only exported snapshot' : 'Owner session on loopback')}"><span class="dot ${isStatic ? 'muted' : online ? 'good' : 'critical'}" aria-hidden="true"></span>${isStatic ? 'snapshot' : esc(endpoint ?? '127.0.0.1')} <strong>[${isStatic ? 'Viewer' : 'Owner'}]</strong></span>
+  <div class="brand">${logoSvg()}<span>Session Quill</span></div>
+  <label class="search">${icon('search')}<input type="search" id="search" data-filter="q" placeholder="Search tickets, keys, tags" value="${attr(filters.q ?? '')}" aria-label="Search tickets"><kbd aria-hidden="true">/</kbd></label>
+  <span class="endpoint" title="${attr(isStatic ? 'Read-only exported snapshot' : 'Owner session on loopback')}"><span class="dot ${isStatic ? 'muted' : online ? 'good' : 'critical'}" aria-hidden="true"></span>${isStatic ? 'snapshot' : esc(endpoint ?? '127.0.0.1')} <strong>${isStatic ? 'Viewer' : 'Owner'}</strong></span>
   <div class="topbar-actions">
-    ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small" data-action="schedules">${icon('clock')}Schedules</button>` : ''}
-    ${(snapshot.publishers ?? []).length && !isStatic ? `<button type="button" class="btn small" data-action="publishers" data-publish-state="${snapshot.publishers.some((p) => p.last_outcome === 'failed' || !p.confirmed) ? 'attention' : 'ok'}">${icon('download')}Publish</button>` : ''}
-    ${caps.export ? `<button type="button" class="btn small" data-action="export">${icon('download')}Export</button>` : ''}
-    <button type="button" class="btn small icon-only" data-action="theme" aria-label="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" title="Theme">${icon(theme === 'dark' ? 'sun' : 'moon')}</button>
-    <button type="button" class="btn small icon-only" data-action="help" aria-label="Keyboard shortcuts" title="Help (?)">${icon('help')}</button>
+    ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small ghost" data-action="schedules">${icon('clock')}Schedules</button>` : ''}
+    ${(snapshot.publishers ?? []).length && !isStatic ? `<button type="button" class="btn small ghost" data-action="publishers" data-publish-state="${snapshot.publishers.some((p) => p.last_outcome === 'failed' || !p.confirmed) ? 'attention' : 'ok'}">${icon('download')}Publish</button>` : ''}
+    ${caps.export ? `<button type="button" class="btn small ghost" data-action="export">${icon('download')}Export</button>` : ''}
+    <button type="button" class="btn small ghost icon-only" data-action="theme" aria-label="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" title="Theme">${icon(theme === 'dark' ? 'sun' : 'moon')}</button>
+    <button type="button" class="btn small ghost icon-only" data-action="help" aria-label="Keyboard shortcuts" title="Help (?)">${icon('help')}</button>
   </div>
 </div>
-<div class="healthbar" role="status" aria-label="Freshness and health">${renderHealth(snapshot, { now, online })}${renderRefreshControl(snapshot, { online, refresh })}</div>
-${renderReceipt(receipt, { online })}`;
+<div class="statusline"><div class="healthbar" role="status" aria-label="Freshness and health">${renderHealth(snapshot, { now, online })}</div>${renderReceipt(receipt, { online })}${renderRefreshControl(snapshot, { online, refresh })}</div>`;
 }
 
 export function statusCounts(snapshot) {

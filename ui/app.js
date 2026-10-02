@@ -89,7 +89,7 @@ function render() {
   const s = appState.snapshot;
   const now = nowIso();
   const main = $('#main');
-  if (!s) { main.innerHTML = `<div class="empty"><h3>Loading…</h3><p>Waiting for the first snapshot from the worker.</p></div>`; return; }
+  if (!s) { main.innerHTML = `<div class="skeleton" role="status" aria-label="Waiting for the first snapshot from the worker"><span></span><span></span><span></span></div>`; return; }
   const scroll = main.scrollTop;
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
@@ -108,6 +108,8 @@ function render() {
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
   main.innerHTML = (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + html;
   main.scrollTop = scroll;
+  // The entry animation plays once; later polls replace the DOM without replaying it.
+  if (!document.body.dataset.ready) setTimeout(() => { document.body.dataset.ready = 'true'; }, 900);
   document.body.dataset.layout = layoutMode();
   renderDetailPanel(now, pending);
   renderDialog();

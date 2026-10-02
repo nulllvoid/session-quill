@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Dashboard redesign, "Graphite Ink" ([docs/ui/graphite_ink/DESIGN.md](docs/ui/graphite_ink/DESIGN.md)): warm graphite neutrals with one highlighter accent, vendored Geist and Geist Mono variable fonts, hairline separation instead of nested boxes, a floating top bar with a single status line, the brand and workspace details in the sidebar, a framed top Pick next candidate, board cards without the redundant status chip, a loading skeleton, and entry motion that plays once and respects reduced motion. Light and dark tokens still meet WCAG AA.
+
 ### Added
 
 - Tracker sync ([ADR 0011](docs/decisions/0011-tracker-sync-and-two-way.md)): a `tracker-sync` schedule job reads title, status, assignee and fix versions for linked tickets from Jira, GitHub or Linear with a token from a named environment variable, validates keys, and never writes to the tracker or changes Quill's own fields.
