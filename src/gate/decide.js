@@ -71,6 +71,25 @@ function realpathOrNull(p) {
   }
 }
 
+// Canonical form for a path that may not exist yet (a `Write` creates its target): resolve the
+// nearest existing ancestor and re-append the remaining segments. Without this, 8.3 short names
+// or casing differences in the un-resolved spelling never match the resolved plan directory.
+function canonicalPath(p) {
+  const resolved = path.resolve(p);
+  const direct = realpathOrNull(resolved);
+  if (direct) return direct;
+  const tail = [];
+  let cursor = resolved;
+  for (;;) {
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return resolved;
+    tail.unshift(path.basename(cursor));
+    const real = realpathOrNull(parent);
+    if (real) return path.join(real, ...tail);
+    cursor = parent;
+  }
+}
+
 function isSymlink(p) {
   try {
     return fs.lstatSync(p).isSymbolicLink();
@@ -91,10 +110,8 @@ export function isPlanFileWrite({ file_path, planPath, hostPlanDir }) {
   if (isSymlink(planPath) || isSymlink(file_path)) return false;
   const dir = realpathOrNull(hostPlanDir);
   if (!dir) return false;
-  const resolvedPlan = path.resolve(planPath);
-  const resolvedTarget = path.resolve(file_path);
-  const realPlan = realpathOrNull(resolvedPlan) ?? resolvedPlan;
-  const realTarget = realpathOrNull(resolvedTarget) ?? resolvedTarget;
+  const realPlan = canonicalPath(planPath);
+  const realTarget = canonicalPath(file_path);
   if (realPlan !== realTarget) return false;
   // The plan file must sit directly inside the verified plan directory.
   return withinDir(realPlan, dir) && path.dirname(realPlan) === dir;

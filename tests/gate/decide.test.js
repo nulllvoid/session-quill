@@ -79,6 +79,18 @@ test('plan-file exception permits only the exact canonical plan path under the v
   assert.equal(noPlan.decision, 'deny', 'plan mode alone never exempts');
 });
 
+test('plan-file exception matches a not-yet-created file even when the directory path is spelled differently from its canonical form (8.3 short names, casing)', (t) => {
+  if (process.platform !== 'win32') { t.skip('Windows path canonicalization'); return; }
+  const canonical = fs.mkdtempSync(path.join(os.tmpdir(), 'st-plans-'));
+  // A differently-cased spelling of the same directory, as a runner's TEMP with short names would be.
+  const variant = canonical.replace(/^([A-Za-z]):\\Users/i, (m, d) => `${d.toLowerCase()}:\\USERS`).toUpperCase();
+  assert.notEqual(variant, canonical);
+  const target = path.join(variant, 'new-plan.md');
+  assert.equal(fs.existsSync(target), false, 'the plan file does not exist before the Write');
+  const r = decideGate({ ...base, hostPlanDir: canonical, planPath: target, tool_name: 'Write', tool_input: { file_path: target }, binding: unbound });
+  assert.equal(r.decision, 'none');
+});
+
 test('a symlink inside the plan dir pointing elsewhere is denied', (t) => {
   const planDir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-plans-'));
   const target = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'st-elsewhere-')), 'secret.md');
