@@ -57,11 +57,14 @@ test('status line script prints the binding segment from status-line JSON', () =
 
 function require_os() { return { tmpdir: () => process.env.TEMP || process.env.TMPDIR || '/tmp' }; }
 
-test('README documents install, init, first tracked session, uninstall and diagnostics; license is marked as a release input', () => {
+test('README documents install, init, first tracked session, uninstall and diagnostics; the MIT license ships with the repo', () => {
   const readme = read('README.md');
   for (const needle of ['--plugin-dir', 'quill init', '/session-quill:ticket', 'quill doctor', 'Uninstall', 'quill ui', 'Node', 'not bundled']) assert.ok(readme.includes(needle), `README mentions ${needle}`);
   assert.ok(fs.existsSync(path.join(ROOT, 'docs', 'README.md')), 'design index moved under docs/');
-  assert.ok(fs.existsSync(path.join(ROOT, 'LICENSE-TBD.md')));
+  assert.match(read('LICENSE'), /^MIT License/);
+  assert.equal(JSON.parse(read('package.json')).license, 'MIT');
+  assert.equal(JSON.parse(read('.claude-plugin/plugin.json')).license, 'MIT');
+  assert.equal(fs.existsSync(path.join(ROOT, 'LICENSE-TBD.md')), false);
 });
 
 test('claude plugin validate passes when the CLI is available', (t) => {

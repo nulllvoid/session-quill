@@ -96,4 +96,4 @@ npm test                 # unit and integration suites (node:test)
 npm run test:acceptance  # scenario suite mapped to docs/ACCEPTANCE.md
 ```
 
-The license and public repository owner are release inputs; see [LICENSE-TBD.md](LICENSE-TBD.md).
+Session Quill is released under the [MIT License](LICENSE). Source: [github.com/nulllvoid/session-quill](https://github.com/nulllvoid/session-quill).

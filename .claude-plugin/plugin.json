@@ -6,7 +6,8 @@
   "author": {
     "name": "Shivam Shah"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "repository": "https://github.com/nulllvoid/session-quill",
   "keywords": ["tickets", "sessions", "hooks", "dashboard", "obsidian", "handoff"],
   "agents": ["./agents/quill-handoff.md"]
 }

@@ -10,5 +10,6 @@
     "test": "node --test \"tests/**/*.test.js\"",
     "test:acceptance": "node --test \"tests/acceptance/*.test.js\""
   },
-  "license": "UNLICENSED"
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/nulllvoid/session-quill.git" }
 }

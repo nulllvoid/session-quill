@@ -93,4 +93,4 @@ Hook timings are in-process (`runHook`) and exclude Node process start-up (~40â€
 
 ## Phase 5 â€” release evidence
 
-Not started. Required before public release: two outside installs under 10 minutes using the README only; macOS, Linux and WSL runs of `npm test` and the A19 profile with cold-start hook timings; A04/A06 against a live host; license and repository owner decided (`LICENSE-TBD.md`).
+Not started. Required before public release: two outside installs under 10 minutes using the README only; macOS, Linux and WSL runs of `npm test` and the A19 profile with cold-start hook timings; A04/A06 against a live host. License (MIT, `LICENSE`) and repository owner (github.com/nulllvoid/session-quill) are decided.
