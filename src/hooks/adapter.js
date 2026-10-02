@@ -7,7 +7,7 @@ import { writeIngress } from '../core/ingress.js';
 import { putBlob } from '../core/blobs.js';
 import { sessionKey } from '../core/state.js';
 import { matchApprovalPhrase } from '../core/approval.js';
-import { decideGate, WRITE_TOOLS, isPlanFileWrite, DENIAL_REASON } from '../gate/decide.js';
+import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } from '../gate/decide.js';
 import { readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim } from './binding-snapshot.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
 import { ensureDir } from '../lib/atomic-fs.js';
@@ -78,7 +78,8 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
   }
   const identity = readRuntimeIdentity(env);
   const { session_id, agent_id } = identityOf(input);
-  const covered = eventName === 'PreToolUse' && !!input.tool_name && !['Read', 'Glob', 'Grep'].includes(input.tool_name);
+  // Every tool outside the dedicated read set is "covered": the gate fails closed for it.
+  const covered = eventName === 'PreToolUse' && !!input.tool_name && !READ_TOOLS.has(input.tool_name) && !(identity && Array.isArray(identity.allow_tools) && identity.allow_tools.includes(input.tool_name));
 
   if (!identity) {
     result.stderr += 'Session Tracker: not initialized; run `tracker init` to enable capture and the ticket gate.\n';
@@ -86,7 +87,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
   }
   if (!session_id) {
     result.stderr += 'Session Tracker: hook input has no session_id; identity unresolved (no cwd fallback).\n';
-    if (covered && WRITE_TOOLS.has(input.tool_name)) result.stdout = denyOutput(`${DENIAL_REASON} (host provided no session identity)`);
+    if (covered) result.stdout = denyOutput(`${DENIAL_REASON} (host provided no session identity)`);
     return result;
   }
 
@@ -118,8 +119,11 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
     }
     case 'UserPromptSubmit': {
       const prompt = typeof input.prompt === 'string' ? input.prompt : '';
+      // Only the first prompt of a session contributes a title; later prompts are inspected for
+      // approval matching only and no text is retained (TRD §Capture and approval).
+      const needsTitle = !(snapshot && snapshot.has_title);
       const ev = makeEvent({ ...base, kind: 'prompt', payload: {
-        title_candidate: sanitizeTitle(prompt) || null,
+        title_candidate: needsTitle ? (sanitizeTitle(prompt) || null) : null,
         approval_candidate: identity.approval_phrases_enabled === true && matchApprovalPhrase(prompt),
         length: prompt.length,
       } });
@@ -134,9 +138,11 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
       const planDir = hostPlansDir(env);
       if (WRITE_TOOLS.has(tool_name) && input.permission_mode === 'plan') {
         const claim = readPlanClaim(key, env);
-        const target = input.tool_input && (input.tool_input.file_path || input.tool_input.notebook_path);
+        const target = input.tool_input && input.tool_input.file_path;
         if (claim && claim.plan_path) planPath = claim.plan_path;
-        else if (target && isPlanFileWrite({ file_path: target, planPath: target, hostPlanDir: planDir })) {
+        // The claim is narrow: the first `Write` of a Markdown file directly inside the verified
+        // plan directory while in plan mode (ADR 0004). Edits, other tools and other file types never claim.
+        else if (tool_name === 'Write' && typeof target === 'string' && /\.md$/i.test(target) && isPlanFileWrite({ file_path: target, planPath: target, hostPlanDir: planDir })) {
           planPath = target;
           try { writePlanClaim(key, target, env); } catch { /* best effort */ }
         }
@@ -151,7 +157,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
         source_identity: tool_call_id ? `pre-tool:${key}:${tool_call_id}` : undefined,
       });
       if (denied) result.stdout = denyOutput(gate.reason);
-      persist(ev, env, result, { covered: covered && !denied && WRITE_TOOLS.has(tool_name) });
+      persist(ev, env, result, { covered: covered && !denied && gate.reason !== 'read-tool' && !/^read-only shell/.test(gate.reason ?? '') && gate.reason !== 'tracker-cli' && gate.reason !== 'plan-file-exception' });
       return result;
     }
     case 'PostToolUse': {

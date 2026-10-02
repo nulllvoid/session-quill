@@ -5,7 +5,10 @@ export const DEFAULT_FIELDS = ['key', 'title', 'status', 'category', 'priority',
 export const SELECTABLE_FIELDS = ['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'tags', 'prs', 'deployments', 'files_touched_count', 'plans_count', 'children_ids', 'summary', 'timeline', 'files_touched', 'conclusions', 'plans', 'aliases', 'jira'];
 const ALWAYS = ['schema_version', 'id', 'revision', 'created_at', 'updated_at', 'project_id', 'project_name', 'parent_id', 'children_done_count', 'validation_issues', 'session_ids', 'handoff_ids', 'repo_id', 'status_source'];
 
-const ABS_PATH_RE = /(?:[A-Za-z]:\\(?:[^\\\s"'<>|]+\\?)+|\/(?:Users|home|root|tmp|var|etc|opt|mnt|private|Volumes)\/[^\s"'<>|]*|~\/[^\s"'<>|]*|\\\\[^\s"'<>|]+)/g;
+// Any absolute path: Windows drive paths, UNC paths, `~/…`, and POSIX paths with at least one
+// directory segment. URLs survive because their slashes follow `:` or another `/`; relative paths
+// like `src/a.js` and ratios like `1/2` survive because their `/` follows a word character.
+const ABS_PATH_RE = /(?:[A-Za-z]:\\(?:[^\\\s"'<>|]+\\?)+|\\\\[^\s"'<>|]+|~\/[^\s"'<>|]*|(?<![\w:/.~])\/(?:[^\s"'<>|/]+\/)+[^\s"'<>|/]*)/g;
 const INTERNAL_URI_RE = /tracker:\/\/[^\s)]*/g;
 
 export function redactText(value) {

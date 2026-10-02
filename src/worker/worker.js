@@ -76,7 +76,7 @@ export class Worker {
       repos: this.config.repos,
       tracker_version: this.config.tracker_version ?? '0.1.0',
     });
-    for (const ev of this.journal.read()) applyEvent(this.state, ev);
+    for (const ev of this.journal.read()) this.safeApply(ev, { replay: true });
     this.notesIndex = readJsonIfExists(path.join(stateDir(this.env), 'notes-index.json')) ?? {};
     const manifest = readJsonIfExists(path.join(stateDir(this.env), '..', 'projections', 'MANIFEST.json'));
     this.generationNumber = manifest ? Number(manifest.generation_id.replace('gen-', '')) || 0 : 0;
@@ -89,6 +89,8 @@ export class Worker {
       gate_enabled: this.config.gate_enabled !== false, approval_phrases_enabled: this.config.approval_phrases_enabled === true,
       allow_tools: (this.config.gate && this.config.gate.allow_tools) || [],
     }, this.env);
+    for (const e of this.replayErrors ?? []) this.recordHealthError({ kind: 'apply-error', phase: 'replay', ...e });
+    this.replayErrors = [];
     this.publishAllBindings();
     this.markStaleNotesDirty();
     this.heartbeat(true);
@@ -204,8 +206,32 @@ export class Worker {
     });
   }
 
+  // A reducer exception must never poison the journal: the event is marked applied (so replay is
+  // deterministic), rejected with a health error, and the loop continues.
+  safeApply(record, { replay = false } = {}) {
+    try {
+      return applyEvent(this.state, record);
+    } catch (err) {
+      this.state.appliedEvents.add(record.event_id);
+      if (record.source_identity) this.state.appliedSources.add(record.source_identity);
+      if (Number.isInteger(record.sequence) && record.sequence > this.state.lastSequence) this.state.lastSequence = record.sequence;
+      this.log(`apply-error on ${record.kind} ${record.event_id}: ${err.message}`);
+      if (!replay) this.recordHealthError({ kind: 'apply-error', event_id: record.event_id, event_kind: record.kind, error: err.message });
+      else this.replayErrors = [...(this.replayErrors ?? []), { event_id: record.event_id, event_kind: record.kind, error: err.message }];
+      return { changed: new Set(), bindingChanged: new Set(), requestsChanged: new Set(), handoffsChanged: new Set(), effects: [], rejected: 'apply-error', error: err.message };
+    }
+  }
+
+  recordHealthError(record) {
+    try {
+      const file = path.join(stateDir(this.env), 'health-errors.jsonl');
+      ensureDir(path.dirname(file));
+      fs.appendFileSync(file, JSON.stringify({ at: this.now(), ...record }) + '\n');
+    } catch { /* storage unavailable */ }
+  }
+
   applyRecord(record) {
-    const result = applyEvent(this.state, record);
+    const result = this.safeApply(record);
     this.ack(record, result);
     if (result.duplicate) return result;
     for (const id of result.changed) {
@@ -241,6 +267,7 @@ export class Worker {
       project_id: session.project_ids[session.project_ids.length - 1] ?? null,
       binding_revision: session.current_binding_revision,
       gate_enabled: session.gate_enabled,
+      has_title: !!session.title,
       revision_committed_at: this.now(),
     }, this.env);
   }

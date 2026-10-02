@@ -10,7 +10,8 @@ import { validateKey, validateParent } from './keys.js';
 import { applyStatusChange, deriveStatusFromEvidence, recordDeployment } from './transitions.js';
 import { heuristicApprovalEligible } from './approval.js';
 
-const SUBSTANTIVE = new Set(['bind', 'post-tool', 'stop', 'subagent-stop', 'approve', 'ticket-update', 'ticket-create', 'relink', 'import', 'migration', 'handoff-tx']);
+// Owner edits applied through request transactions are substantive activity too (I7).
+const SUBSTANTIVE = new Set(['bind', 'post-tool', 'stop', 'subagent-stop', 'approve', 'ticket-update', 'ticket-create', 'relink', 'import', 'migration', 'handoff-tx', 'request-tx']);
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 function timelineEntry(ev, kind, text, { content_ref = null, coverage = 'complete', index = 0 } = {}) {
@@ -255,8 +256,8 @@ function handlePostTool(state, ev, result) {
     ticket.timeline.push(timelineEntry(ev, 'write', `${p.tool_name} ${writePaths.join(', ')}`, { coverage: 'complete' }));
     session.successful_write_count += 1;
     deriveStatusFromEvidence(ticket, { type: 'write', seq: ev.sequence ?? 0, evidence_id: ev.event_id }, repo);
-  } else if (p.commit && p.commit.sha) {
-    ticket.timeline.push(timelineEntry(ev, 'commit', `Commit ${p.commit.sha.slice(0, 10)}${p.commit.message ? `: ${p.commit.message}` : ''}`, { coverage: 'complete' }));
+  } else if (p.commit && typeof p.commit.sha === 'string' && p.commit.sha) {
+    ticket.timeline.push(timelineEntry(ev, 'commit', `Commit ${p.commit.sha.slice(0, 10)}${typeof p.commit.message === 'string' && p.commit.message ? `: ${p.commit.message}` : ''}`, { coverage: 'complete' }));
     session.successful_write_count += 1;
   } else if (p.pr && p.pr.url) {
     const pr = { id: deterministicId(`${ev.event_id}:pr:${p.pr.url}`), provider: p.pr.provider ?? 'unknown', url: p.pr.url, state: p.pr.state ?? 'unknown', opened_at: ev.occurred_at, merged_at: null, base_branch: p.pr.base_branch ?? null, head_branch: p.pr.head_branch ?? null, observed_at: ev.occurred_at, error: null, evidence_id: ev.event_id };

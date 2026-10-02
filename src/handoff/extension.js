@@ -122,7 +122,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (ctx.env && ctx.env.TRACKER_HOME) env.TRACKER_HOME = ctx.env.TRACKER_HOME;
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, logPath, model });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, model });
     } catch (err) {
       return fail(worker, h, 'spawn-failed', err.message);
     }

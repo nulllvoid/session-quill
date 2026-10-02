@@ -116,9 +116,13 @@ test('A07 malformed input and hook failures never block the session, and a valid
     let out = '';
     let err = '';
     const code = await main(['hook', 'PreToolUse'], { env: s.env, stdout: (x) => { out += x; }, stderr: (x) => { err += x; }, stdin: async () => '{not json' });
-    assert.equal(code, 0);
-    assert.equal(out, '');
+    assert.equal(code, 0, 'the hook process itself never fails');
+    assert.match(out, /"permissionDecision":"deny"/, 'a PreToolUse the gate cannot evaluate fails closed');
     assert.match(err, /malformed hook input/);
+    let stopOut = '';
+    const stopCode = await main(['hook', 'Stop'], { env: s.env, stdout: (x) => { stopOut += x; }, stderr: () => {}, stdin: async () => '{not json' });
+    assert.equal(stopCode, 0);
+    assert.equal(stopOut, '', 'non-gate hooks never block the session');
     const outputs = [];
     for (const [tool_name, tool_input] of [['Edit', { file_path: 'C:/repo/a.js' }], ['Bash', { command: 'rm -rf build' }], ['mcp__jira__create_issue', {}], ['Read', { file_path: 'x' }]]) {
       outputs.push(s.hook('PreToolUse', { session_id: 'bound-1', tool_name, tool_input, tool_use_id: `b-${tool_name}` }));

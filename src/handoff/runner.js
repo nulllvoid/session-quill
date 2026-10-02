@@ -54,7 +54,10 @@ export function allowedToolsFor({ mode, permissions = {} }) {
   allowed.push('Read', 'Glob', 'Grep', 'Bash(git status*)', 'Bash(git diff*)', 'Bash(git log*)', 'Bash(git show*)');
   disallowed.push('WebFetch', 'WebSearch', 'Bash(git push*)', 'Bash(gh pr merge*)', 'Bash(git merge*)', 'Bash(git checkout main*)', 'Bash(git checkout master*)');
   if (mode === 'attempt-fix' && permissions.edit_source) {
-    allowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash(npm test*)', 'Bash(npm run*)', 'Bash(node *)', 'Bash(pytest*)', 'Bash(go test*)', 'Bash(cargo test*)', 'Bash(git add*)');
+    // Test runners only: no general-purpose interpreters (`node *`, `npm run *`) that would turn
+    // "edit source" into arbitrary code execution with the owner's credentials. Running the
+    // repository's own tests still executes repository code; the README says so plainly.
+    allowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash(npm test*)', 'Bash(node --test*)', 'Bash(npx vitest*)', 'Bash(npx jest*)', 'Bash(pytest*)', 'Bash(go test*)', 'Bash(cargo test*)', 'Bash(git add*)');
   } else {
     disallowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit');
   }
@@ -100,16 +103,30 @@ export function killTree(child) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* ignore */ } }
 }
 
-export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd, tools, env = {}, logPath, maxTurns = 40, model = null }) {
+const CREDENTIAL_VARS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITLAB_TOKEN', 'BITBUCKET_TOKEN', 'GIT_ASKPASS', 'SSH_ASKPASS'];
+
+// The agent's environment: nested-session markers removed; unless push/PR was explicitly granted,
+// provider tokens are removed and git is told never to prompt, so a non-permitted push fails.
+export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {}) {
+  const childEnv = { ...baseEnv, ...extra };
+  delete childEnv.CLAUDECODE;
+  delete childEnv.CLAUDE_CODE_ENTRYPOINT;
+  if (!(permissions.push_branch || permissions.open_draft_pr)) {
+    for (const k of CREDENTIAL_VARS) delete childEnv[k];
+    childEnv.GIT_TERMINAL_PROMPT = '0';
+    childEnv.GIT_ASKPASS = 'echo';
+  }
+  return childEnv;
+}
+
+export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd, tools, env = {}, permissions = {}, logPath, maxTurns = 40, model = null }) {
   const args = [...claudeArgs, '-p', prompt, '--output-format', 'json', '--permission-mode', 'dontAsk', '--max-turns', String(maxTurns)];
   if (tools.allowed.length) args.push('--allowedTools', ...tools.allowed);
   if (tools.disallowed.length) args.push('--disallowedTools', ...tools.disallowed);
   if (model) args.push('--model', model);
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const log = fs.openSync(logPath, 'a');
-  const childEnv = { ...process.env, ...env };
-  delete childEnv.CLAUDECODE;
-  delete childEnv.CLAUDE_CODE_ENTRYPOINT;
+  const childEnv = childEnvFor(permissions, process.env, env);
   const child = spawn(claudePath, args, { cwd, env: childEnv, detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '';
   child.stdout.on('data', (d) => { stdout += d.toString('utf8'); try { fs.writeSync(log, d); } catch { /* ignore */ } });

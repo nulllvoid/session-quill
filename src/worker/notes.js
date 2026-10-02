@@ -10,7 +10,9 @@ export const GENERATED_SECTIONS = ['timeline', 'plans', 'conclusions', 'files', 
 const HEADINGS = {
   timeline: 'Timeline', plans: 'Approved plans', conclusions: 'Conclusions', files: 'Files touched', prs: 'PRs and deployments', followups: 'Follow-ups', handoffs: 'Handoff notes',
 };
-const MARKER_RE = /<!-- tracker:generated:([a-z-]+) start hash=([0-9a-f]{64}) -->\n([\s\S]*?)<!-- tracker:generated:\1 end -->\n/g;
+// Markers are matched with optional carriage returns so a CRLF-converted note is still recognized
+// (its block hashes will then mismatch and the file is treated as a conflict, never overwritten).
+const MARKER_RE = /<!-- tracker:generated:([a-z-]+) start hash=([0-9a-f]{64}) -->\r?\n([\s\S]*?)<!-- tracker:generated:\1 end -->\r?\n/g;
 
 function block(section, body) {
   const text = body.endsWith('\n') ? body : `${body}\n`;
@@ -110,12 +112,15 @@ export function renderHandoffNote(handoff, { state }) {
 export function parseNote(text) {
   const result = { frontmatter: null, frontmatterText: null, authored: { summary: '\n', notes: '\n' }, generated: {}, hasMarkers: false };
   let rest = text;
-  if (text.startsWith('---\n')) {
-    const end = text.indexOf('\n---\n', 4);
-    if (end !== -1) {
-      result.frontmatterText = text.slice(4, end + 1);
+  const fmOpen = /^---\r?\n/.exec(text);
+  if (fmOpen) {
+    const close = /\r?\n---\r?\n/g;
+    close.lastIndex = fmOpen[0].length;
+    const end = close.exec(text);
+    if (end) {
+      result.frontmatterText = text.slice(fmOpen[0].length, end.index + 1);
       try { result.frontmatter = parseYaml(result.frontmatterText); } catch { result.frontmatter = null; }
-      rest = text.slice(end + 5);
+      rest = text.slice(end.index + end[0].length);
     }
   }
   const markers = [...rest.matchAll(MARKER_RE)];
@@ -124,16 +129,16 @@ export function parseNote(text) {
     const [, section, hash, body] = m;
     result.generated[section] = { hash, body, intact: contentHash(body) === hash, start: m.index, end: m.index + m[0].length };
   }
-  const summaryHeading = '## Summary\n';
-  const sIdx = rest.indexOf(summaryHeading);
-  if (sIdx !== -1) {
+  const summaryHeading = /## Summary\r?\n/.exec(rest);
+  if (summaryHeading) {
     const firstMarker = markers.length ? markers[0].index : rest.length;
-    result.authored.summary = rest.slice(sIdx + summaryHeading.length, firstMarker);
+    result.authored.summary = rest.slice(summaryHeading.index + summaryHeading[0].length, firstMarker);
   }
-  const notesHeading = '## Notes\n';
   const lastEnd = markers.length ? markers[markers.length - 1].index + markers[markers.length - 1][0].length : 0;
-  const nIdx = rest.indexOf(notesHeading, lastEnd);
-  if (nIdx !== -1) result.authored.notes = rest.slice(nIdx + notesHeading.length);
+  const notesRe = /## Notes\r?\n/g;
+  notesRe.lastIndex = lastEnd;
+  const notesHeading = notesRe.exec(rest);
+  if (notesHeading) result.authored.notes = rest.slice(notesHeading.index + notesHeading[0].length);
   return result;
 }
 
@@ -155,6 +160,11 @@ export function writeNote(file, ticket, { state, index = {}, force = false }) {
     const parsed = parseNote(existing);
     authored = parsed.authored;
     if (!force) {
+      // A file we cannot recognize as one of ours is never overwritten: it may be entirely authored.
+      if (!parsed.hasMarkers || parsed.frontmatter === null) {
+        addIssue(ticket, 'note-layout-unrecognized');
+        return 'conflict';
+      }
       const edited = Object.entries(parsed.generated).filter(([, b]) => !b.intact).map(([s]) => s);
       const prior = index[ticket.id];
       const fmEdited = prior && parsed.frontmatterText !== null && contentHash(parsed.frontmatterText) !== prior.frontmatter_hash;
@@ -167,6 +177,7 @@ export function writeNote(file, ticket, { state, index = {}, force = false }) {
   }
   clearIssues(ticket, 'generated-block-edited:');
   clearIssues(ticket, 'generated-frontmatter-edited');
+  clearIssues(ticket, 'note-layout-unrecognized');
   const text = renderTicketNote(ticket, { state, authored });
   const fmText = text.slice(4, text.indexOf('\n---\n', 4) + 1);
   index[ticket.id] = { path: file, frontmatter_hash: contentHash(fmText), revision: ticket.revision };

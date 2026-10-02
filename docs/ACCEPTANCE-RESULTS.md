@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 287 tests, 286 passed, 1 skipped (symlink creation not permitted on this account), 0 failed |
+| Test command | `npm test` → 295 tests, 294 passed, 1 skipped (symlink creation not permitted on this account), 0 failed |
 
 Other operating systems (macOS, Linux, WSL) have **not** been run yet; they must be recorded here before being advertised as supported.
 
@@ -21,12 +21,12 @@ Other operating systems (macOS, Linux, WSL) have **not** been run yet; they must
 | ID | Status | Evidence |
 | --- | --- | --- |
 | A01 | Automated (in-process fixtures) | `tests/acceptance/phase0.test.js`, `tests/gate/*.test.js` — writes, unknown shell, redirects, substitutions, mutating MCP denied; reads and every allowlisted shell form pass |
-| A02 | Automated (in-process) | plan-file exception only for the session's claimed plan path under the plan directory; source edits in plan mode denied. **Limitation:** the host exposes no plan path in hook input, so the first plan-mode write inside `~/.claude/plans` is taken as the session's plan file (see ledger ruling) |
+| A02 | Automated (in-process) | plan-file exception only for the session's claimed plan path under the plan directory; source edits in plan mode denied. **Limitation:** the host exposes no plan path in hook input, so the first plan-mode `Write` of a Markdown file directly inside `~/.claude/plans` is taken as the session's plan file ([ADR 0004](decisions/0004-plan-path-first-claim.md)) |
 | A03 | Automated | distinct identities for two sessions in one cwd and a subagent; missing `session_id` denies covered writes and never falls back to cwd |
 | A04 | **Pending manual** | real approved/rejected/cancelled `ExitPlanMode` payloads and Stop/subagent payloads from a live host; fixtures in `tests/fixtures/hooks/` follow the documented shapes |
 | A05 | Automated | `tests/acceptance/phase0.test.js`, `tests/server/http.test.js` — 202 after persistence, note revision change, confirmation; unauthenticated / wrong-Origin / wrong-Host / missing CSRF cannot mutate |
 | A06 | **Pending manual** | installed command names (`/session-tracker:*`) and status-line composition on a live host; `claude plugin validate` passes |
-| A07 | Automated | malformed input and hook failures exit 0 without blocking; bound sessions emit no decision (never an `allow` override); non-gate capture failure reports a gap |
+| A07 | Automated | the hook process never fails; a PreToolUse the gate cannot evaluate (malformed input, internal error, failed capture) fails closed for every covered tool while reads pass; non-gate hooks never block; bound sessions emit no decision (never an `allow` override). Host fail-open limit: a hook the host times out or cannot launch is outside the guarantee (TRD) |
 
 ## Phase 1 — persistence, attribution and recovery
 
