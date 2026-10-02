@@ -13,7 +13,7 @@ Session Quill is a proposed public Claude Code plugin for ticket-bound sessions,
 | [Data contract](DATA-CONTRACT.md) | Canonical fields, enums, identities, requests and state transitions |
 | [UI design](UI-DESIGN.md) | Views, capabilities, interaction outcomes, responsive layout and visual system |
 | [Acceptance scenarios](ACCEPTANCE.md) | Testable phase gates and traceability back to review findings |
-| [Architecture decisions](decisions/) | Worker serialization, local-first dashboard, tested hook compatibility, plan-path first claim, gate modes and zero-command binding, unlinked work inbox |
+| [Architecture decisions](decisions/) | Worker serialization, local-first dashboard, tested hook compatibility, plan-path first claim, gate modes and zero-command binding, unlinked work inbox, schedules and Bitbucket |
 | [Architecture guide](ARCHITECTURE.md) | Contributor-facing map of the code and the invariants it keeps |
 | [Acceptance results](ACCEPTANCE-RESULTS.md) | What has been verified, on which platforms, and what is still pending |
 

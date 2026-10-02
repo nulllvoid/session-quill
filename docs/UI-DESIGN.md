@@ -53,7 +53,7 @@ Use [DATA-CONTRACT](DATA-CONTRACT.md) directly; do not create a second list of i
 
 | Screen | Content | Required states |
 | --- | --- | --- |
-| Header | Name, global project filter, last sync/next scheduled run, connection and capture health, Refresh, theme toggle | Never synced; fresh; ageing; stale; capture gap; provider error; offline; refresh queued/running/failed |
+| Header | Name, global project filter, last sync/next scheduled run, connection and capture health, Refresh, Schedules (owner only: each schedule's cadence, next run, last result, recent runs and Run now; ADR 0007), theme toggle | Never synced; fresh; ageing; stale; capture gap; provider error; offline; refresh queued/running/failed |
 | Pick next | Owner-only "Unlinked work" inbox first (sessions with files or commits but no ticket: files, commits, last checkpoint; Attach to…, Create from key, Dismiss as no-ticket, each with the undo window); then up to five ranked cards with reason, raw-score explanation, displayed score, next action and age; separate blocked list with blocker text | No unlinked work (inbox hidden); fewer than five; no eligible work; everything blocked; unknown provider evidence; attach conflict after new work |
 | Board | Six columns: todo, active, review, deploy-pending, blocked, done; stale badge/filter overlays active cards; done collapsed by default | Empty columns; 40+ cards paged; zero filter results; loading/error |
 | Tree | Parents, direct-child completion counts, nested children, unresolved imported links | Empty; orphan; cycles rejected with issue; depth > 3 navigable through detail |

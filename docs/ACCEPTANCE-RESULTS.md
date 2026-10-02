@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 376 tests, 375 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking and the unlinked work inbox, ADRs 0005–0006) |
+| Test command | `npm test` → 402 tests, 401 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, the unlinked work inbox and schedules, ADRs 0005–0007) |
 
 ### Platform matrix (GitHub Actions, commit `bcd989e`)
 
@@ -112,6 +112,19 @@ Hook timings are in-process (`runHook`) and exclude Node process start-up (~40�
 | A46 | Automated | over the authenticated HTTP API: unlinked work in the snapshot; create-from-key applies after 10 s; ticket has the files and link; session linked |
 | A47 | Automated | attach conflicts after new work; dismiss applies; a POST without the owner cookie is refused |
 | A48 | Automated | link-external relinks with a rendered https link; old key kept as alias |
+
+## Phase 7 — schedules and the Bitbucket provider (ADR 0007)
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A49 | Automated | `tests/acceptance/phase7.test.js` — Kolkata store, weekday 19:30 cron fires once at 14:00 UTC; snapshot next run moves to Monday |
+| A50 | Automated | five missed hourly slots across a restart give one catch-up run; next slot 14:00 UTC |
+| A51 | Automated | run-job over the HTTP API: 202 with no delay, trigger manual; unknown schedule 400; Refresh applied |
+| A52 | Automated (loopback Bitbucket Server) | bearer token from `QUILL_TEST_BB_TOKEN`; PR merged → deploy-pending with staging and production obligations; token absent from snapshot, journal and health log. **Pending manual:** Bitbucket Cloud and a real Server/Data Center instance |
+
+Unit coverage: `tests/schedule/cron.test.js` (DST gap, day OR rule, time zones), `tests/schedule/config.test.js`, `tests/schedule/schedule-run.test.js`, `tests/schedule/extension.test.js` (one run per job, catch-up, interrupted runs, live config edits), `tests/reconcile/bitbucket.test.js` (host pinning, auth, errors that never include the token). The Schedules panel was checked in the built-in browser against the dev seed, including Run now.
+
+CI now runs `npm run test:ci`, which also writes TAP; when a job fails, `scripts/ci-annotate.mjs` publishes each failing test as a check annotation, readable without signing in to GitHub.
 
 Inbox and key chips were also checked in the built-in browser against the dev seed (`node scripts/dev-seed.mjs`): create-from-key queued with an undo countdown, applied after the window and emptied the inbox; tracker keys render as new-tab links with copy buttons; local keys offer "Link to external…". At 375 px the page is wider than the screen because of the header and sidebar, which predates this step.
 

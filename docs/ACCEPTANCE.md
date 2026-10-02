@@ -85,6 +85,15 @@ All Must scenarios must pass, with exceptions explicitly removed from the advert
 | A47 | FR-9 | An attach queued before more work arrived becomes a conflict and attaches nothing; dismiss removes the item; unauthenticated callers can do neither |
 | A48 | FR-8, FR-9 | "Link to external" turns a local key into a tracker key with a working https link and keeps the old key as an alias |
 
+## Phase 7 — Schedules and the Bitbucket provider (ADR 0007)
+
+| ID | Requirement | Scenario and expected outcome |
+| --- | --- | --- |
+| A49 | FR-10 | A `[[schedule]]` cron slot in a non-UTC store time zone runs reconcile once at the slot; the snapshot shows next run, last result and history, and the header's next sync follows it |
+| A50 | FR-10 | Slots missed while the worker was stopped run once on restart (trigger catch-up), and the next run is the next future slot |
+| A51 | FR-10 | Run now starts a named schedule immediately with no undo delay; unknown names are refused; Refresh still runs within one tick |
+| A52 | FR-10, FR-11 | A Bitbucket Server PR is polled with a token from a named environment variable; merge moves the ticket to deploy-pending with one obligation per environment; the token appears in no snapshot, journal or health log |
+
 ## Review resolution traceability
 
 | Review issue | Resolved contract | Acceptance |

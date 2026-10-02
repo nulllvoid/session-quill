@@ -12,7 +12,8 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Unlinked work inbox.** Files and commits from a session with no ticket wait on Pick next. Attach them to a ticket, create the ticket from its key, or dismiss them; each action has a 10-second undo. Tracker keys open their ticket in a new tab and copy with one click.
 - **Ticket gate modes.** `nudge` (default) never blocks and asks once at the end of a turn about unlinked work. `strict` denies supported write tools, unknown shell commands and unregistered tools until the session is bound, while dedicated reads and a tested read-only shell subset pass through. `off` only captures. The gate is a workflow aid, not a sandbox: `/session-quill:ticket off` disables it per session, audibly.
 - **Durable capture.** Hooks persist events to local ingress before acknowledging; one worker per store journals them, rebuilds generated state, and writes markdown notes (plain folder or Obsidian vault) within 30 seconds. Your own Summary and Notes sections are preserved byte-for-byte.
-- **Dashboard.** Pick next, Board, Tree, Sessions and Deployments views with revision-checked edits, a 10-second undo window, explicit conflicts, deterministic reconciliation every two hours and a Refresh that runs immediately.
+- **Dashboard.** Pick next, Board, Tree, Sessions and Deployments views with revision-checked edits, a 10-second undo window, explicit conflicts, scheduled reconciliation (every two hours unless you set your own schedules) and a Refresh that runs immediately.
+- **Schedules and providers.** Named jobs run on cron or interval schedules in your time zone, with a Schedules panel and Run now. PR state comes from GitHub (`gh`) or Bitbucket Cloud and Server.
 - **Sharing.** Read-only standalone HTML snapshots with an export time; no credentials, request code or local paths.
 - **Handoffs.** Analyse, analyse with follow-ups, or attempt a fix in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions and a 20-minute cap.
 
@@ -81,6 +82,36 @@ mode = "nudge"                                 # off | nudge | strict
 ```
 
 A repository can make the gate stricter than your own setting but never looser, and it can narrow your `prefixes` list but never widen it. In `strict` mode a mention only links the session when `prefixes` is set. A `.quill.toml` that cannot be parsed makes its repository strict until it is fixed. Patterns match within whitespace-free words of up to 100 characters. The worker picks up edits to either file within about 10 seconds. `gate_enabled = false` still works and means `mode = "off"`.
+
+## Schedules
+
+Without configuration the worker reconciles every two hours. To choose your own cadence, add `[[schedule]]` tables to `~/.claude/quill/config.toml` (repositories cannot schedule jobs):
+
+```toml
+[[schedule]]
+name = "reconcile"
+job  = "reconcile"
+every = "2h"                 # or 30m, 1d
+
+[[schedule]]
+name = "evening-sync"
+job  = "reconcile"
+cron = "30 19 * * 1-5"       # minute hour day-of-month month day-of-week, in the store's time zone
+```
+
+A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. `reconcile` is the job available today; `digest`, `publish`, `agent` and `tracker-sync` are accepted and skipped until they ship.
+
+## Bitbucket pull requests
+
+Set the repository's provider in `~/.claude/quill/config.toml` and put a token in an environment variable the worker can read. Quill never stores the token, and sends it only to the host you configure.
+
+```toml
+[repos.my-repo]
+provider = "bitbucket"
+token_env = "BITBUCKET_TOKEN"                       # an access token, sent as a bearer token
+# username_env = "BITBUCKET_USERNAME"               # set this to use an app password with basic auth instead
+# provider_url = "https://bitbucket.example.com"    # Bitbucket Server/Data Center; omit for bitbucket.org
+```
 
 ## First tracked session
 

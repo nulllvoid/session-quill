@@ -130,7 +130,9 @@ The durable store keeps complete checkpoint blobs; oversized transport fields ar
 
 ## Reconciliation and lifecycle
 
-The worker reconciles every two hours, all days, with immediate catch-up after startup/wake. Manual Refresh queues an immediate run independent of that schedule. Deterministic work includes link repair, lifecycle, staleness and ranking. Optional category suggestions require explicit acceptance; default category is research when neither repo nor command supplies one.
+The worker reconciles every two hours, all days, with immediate catch-up after startup/wake. Manual Refresh queues an immediate run independent of that schedule.
+
+Schedules ([ADR 0007](decisions/0007-schedules-and-bitbucket.md)): reconciliation runs as the `reconcile` job of a scheduler that reads `[[schedule]]` tables from user config (`name`, `job`, and one of `cron` in the store's IANA time zone or `every`, optional `enabled`). With none, `reconcile` runs every `sync_interval_hours`. Each job runs at most once at a time; missed slots collapse into one catch-up run; every run is journaled as `schedule-run` events and a run left unfinished is marked interrupted on restart. `run-job` requests start a named schedule immediately with no undo delay. Jobs named by the roadmap but not built yet are accepted with a warning and not run. Deterministic work includes link repair, lifecycle, staleness and ranking. Optional category suggestions require explicit acceptance; default category is research when neither repo nor command supplies one.
 
 Each run:
 1. Import pending captured events and validated manual imports.
@@ -219,7 +221,8 @@ Resolved defaults:
 - LOCAL prefix; project from init; category research unless configured.
 - Gate mode nudge (strict and off available, ADR 0005); auto-binding only with a configured `[tracker]`; approval phrases off.
 - Stale active tickets after 5 days; live <= 30 min; extinct >= 48 h.
-- Reconcile every 2 h, all days, local IANA time zone; catch up once on wake.
+- Reconcile every 2 h, all days, local IANA time zone; catch up once on wake. Custom cadences and extra jobs come from `[[schedule]]` in user config (ADR 0007).
+- PR providers: GitHub through `gh`; Bitbucket Cloud or Server/Data Center over REST (`provider = "bitbucket"`, `provider_url` for Server, `token_env`/`username_env` naming environment variables). Tokens are sent only to the configured host.
 - Handoff analyse-followups, source off; commit/push/PR permissions off.
 - Optional PMLA profile contains Bitbucket polling and configured private skills; no private paths or credentials ship publicly.
 - A provider missing at runtime shows unknown evidence rather than fabricated PR/deployment state.

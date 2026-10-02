@@ -141,7 +141,9 @@ PreToolUse stores attribution before execution. A PostToolUse result refers to t
 ## Mutation request
 
 Fields: id, store_id, actor_id, kind, target_id (nullable), expected_revision (nullable), payload, created_at, not_before, state, applied_revision (nullable), error (nullable), result (nullable), retry_of (nullable).
-kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external.
+kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external, run-job.
+
+- run-job (ADR 0007) has no target and payload { schedule }; it names a configured schedule, has no undo delay and is applied by the scheduler like refresh.
 
 - attach-unbound and dismiss-unbound target a session id; expected_revision is the session's unbound_work.revision. attach-unbound takes exactly one of ticket_id or key (a tracker key like PROJ-123, with optional title) plus bind (default true: link the session from then on if it is still unlinked). link-external targets a ticket with its revision and takes key plus optional system and https url; a key owned by another ticket is refused. All three have the 10 s undo window (ADR 0006).
 error: code, message, retryable, current_revision (nullable).
@@ -157,6 +159,14 @@ error: code, message, retryable, current_revision (nullable).
 - After crash, an applying request is resolved from its transaction event: applied if committed, otherwise safely re-evaluated against expected_revision. Remote effects belong to handoff state and are not blindly repeated.
 - Transient failures can be explicitly retried using a new ID/retry_of; uncertain remote results need reconciliation first.
 - Permission denial occurs before a request enters the queue. Only the local owner may submit mutations in v1.
+
+## Schedule
+
+Schedule record (ADR 0007), folded from `schedule-run` events: name, job, last_started_at, last_finished_at, last_outcome (ok, failed, interrupted; nullable), last_error, last_summary, running_run_id (nullable), runs[] (newest first, at most 20: run_id, trigger (schedule, catch-up, manual, refresh), started_at, finished_at, outcome, summary, error).
+
+`schedule-run` event payload: schedule, job, run_id, phase (started, finished), trigger (started), outcome, summary and error (finished).
+
+The snapshot carries `schedules[]` built from config and these records: name, job, cron or every, enabled, running, next_due, the last_* fields and the newest 10 runs. Exports never include it.
 
 ## Handoff
 
