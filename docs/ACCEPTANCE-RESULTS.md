@@ -14,7 +14,17 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
 | Test command | `npm test` → 295 tests, 294 passed, 1 skipped (symlink creation not permitted on this account), 0 failed |
 
-Other operating systems (macOS, Linux, WSL) have **not** been run yet; they must be recorded here before being advertised as supported.
+### Platform matrix (GitHub Actions, commit `bcd989e`)
+
+| OS | Node 22 | Node 24 | Notes |
+| --- | --- | --- | --- |
+| Ubuntu (ubuntu-latest) | pass | pass | Unix socket lock, `git worktree`, fake `claude` subprocess |
+| macOS (macos-latest) | pass | pass | same suite |
+| Windows (windows-latest) | pass | pass | named-pipe lock; 8.3 short-name TEMP paths exercised the plan-path canonicalization fix |
+
+Run: https://github.com/nulllvoid/session-quill/actions/runs/37018025766 (296 tests, 295 passed, 1 skipped per job; the full A19 profile also passed on Ubuntu). Two earlier runs failed and led to fixes: plan-path canonicalization for not-yet-created files, and an unhandled socket reset in the ownership lock's owner probe.
+
+**WSL** has not been run. Hook timings on CI are not recorded (the perf test prints them in the job log).
 
 ## Phase 0 — host and transport compatibility
 
@@ -93,4 +103,4 @@ Hook timings are in-process (`runHook`) and exclude Node process start-up (~40�
 
 ## Phase 5 — release evidence
 
-Not started. Required before public release: two outside installs under 10 minutes using the README only; macOS, Linux and WSL runs of `npm test` and the A19 profile with cold-start hook timings; A04/A06 against a live host. License (MIT, `LICENSE`) and repository owner (github.com/nulllvoid/session-quill) are decided.
+Partially done. Done: license (MIT), repository owner (github.com/nulllvoid/session-quill), Ubuntu/macOS/Windows test matrix in CI, public documentation (README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, architecture guide). Still required: two outside installs under 10 minutes using the README only; WSL run; cold-start hook timings per OS; A04/A06 against a live Claude Code host; a tagged `v0.1.0` release.
