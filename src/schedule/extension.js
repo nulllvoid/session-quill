@@ -7,13 +7,14 @@ import { nextAfter } from './cron.js';
 import { createJobs } from './jobs.js';
 import { defaultProviders } from '../reconcile/providers/index.js';
 import path from 'node:path';
-import { normalizePublishers, destinationOf, KIND_LABELS } from '../publish/config.js';
+import { normalizePublishers, consentId, KIND_LABELS } from '../publish/config.js';
+import { killExecutors } from '../publish/artifact-client.js';
 
 const CATCH_UP_SLACK_MS = 60_000;
 const SCHEDULED_REQUESTS = new Set(['refresh', 'run-job', 'publish']);
 
-export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 5000, artifactClientFor } = {}) {
-  const impl = jobs ?? createJobs({ providers: providers ?? defaultProviders(ctx.config, ctx.env), artifactClientFor });
+export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 5000, artifactClientFor, trackerFetch } = {}) {
+  const impl = jobs ?? createJobs({ providers: providers ?? defaultProviders(ctx.config, ctx.env), artifactClientFor, trackerFetch });
   let worker0 = null;
   let schedules = [];
   let loadedFrom;
@@ -125,11 +126,13 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
     const job = running.get('publish');
     return publishers(worker).map((p) => {
       const rec = worker.state.publishers.get(p.name);
-      const destination = destinationOf(p);
-      const url = (rec && rec.url) || p.url || null;
+      const destination = consentId(p);
+      // The configured URL is the destination; the last-published one is shown only as history.
+      const url = p.url || (rec && rec.url) || null;
+      const lastUrl = rec && rec.url && rec.url !== url ? rec.url : null;
       return {
         name: p.name, kind: p.kind, label: KIND_LABELS[p.kind], executor: p.executor, title: p.title, fields: p.fields, projects: p.projects, include_links: p.include_links, after_reconcile: p.after_reconcile,
-        destination_label: p.kind === 'artifact' ? (url ?? 'a new claude.ai artifact') : path.basename(p.path), url,
+        destination_label: p.kind === 'artifact' ? (url ?? 'a new claude.ai artifact') : path.basename(p.path), url, last_url: lastUrl, consent_id: destination, consent_ids: rec ? [...rec.confirmed] : [],
         confirmed: !!(rec && rec.confirmed.includes(destination)), running: !!(job && (job.schedule === `publish:${p.name}` || job.schedule === 'publish:all' || job.schedule === 'publish:after-reconcile')),
         last_published_at: rec ? rec.last_published_at : null, last_outcome: rec ? rec.last_outcome : null, last_error: rec ? rec.last_error : null, last_summary: rec ? rec.last_summary : null,
         runs: rec ? rec.runs.slice(0, 5) : [],
@@ -203,6 +206,8 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
       }
     },
     async onStop() {
+      // A headless artifact executor must not outlive the worker (ADR 0010).
+      killExecutors();
       if (!running.size || stopWaitMs <= 0) return;
       await Promise.race([Promise.all([...running.values()].map((r) => r.promise)), new Promise((r) => setTimeout(r, stopWaitMs).unref())]);
     },

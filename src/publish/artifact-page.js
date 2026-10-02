@@ -2,11 +2,54 @@
 // the artifact's shared db (`tickets/<key>`, `meta/page`) and render live, as text nodes only.
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// Page code only a two-way page carries (ADR 0011): editors' controls and the viewer's identity.
+const EDIT_JS = `function save(r, field, value) {
+  const edits = {};
+  edits[field] = { by: uid, at: new Date().toISOString() };
+  const patch = { _edits: edits };
+  patch[field] = value;
+  dbRef.doc('tickets/' + r.__id).update(patch).then(() => {
+    document.getElementById('status').textContent = 'Saved. Session Quill applies it on its next publish.';
+  }, (e) => { document.getElementById('status').textContent = 'Could not save (' + (e && e.code ? e.code : 'error') + ').'; });
+}
+function editCell(r) {
+  const td = node('td', undefined, 'edit');
+  if (EDITABLE.includes('status')) {
+    const sel = node('select');
+    sel.setAttribute('aria-label', 'Status of ' + r.key);
+    for (const st of EDIT_STATUSES) { const o = node('option', STATUS[st] || st); o.value = st; if (st === r.status) o.selected = true; sel.append(o); }
+    sel.addEventListener('change', () => save(r, 'status', sel.value));
+    td.append(sel);
+  }
+  if (EDITABLE.includes('next')) {
+    const input = node('input');
+    input.type = 'text';
+    input.value = r.next || '';
+    input.maxLength = 2000;
+    input.setAttribute('aria-label', 'Next action for ' + r.key);
+    const btn = node('button', 'Save');
+    btn.type = 'button';
+    btn.addEventListener('click', () => save(r, 'next', input.value.trim()));
+    td.append(input, btn);
+  }
+  return td;
+}
+`;
+const USER_JS = `if (db && EDITABLE.length) {
+  const user = await claude.use("user");
+  canEdit = user ? !!(await user.canEdit()) : false;
+  uid = user && canEdit ? await user.id() : null;
+}
+`;
+
 export const PAGE_CAPABILITIES = { db: { rules: [{ path: '', read: 'interact', write: 'admin' }] } };
 
 const LABELS = { key: 'Key', title: 'Title', status: 'Status', category: 'Category', priority: 'Priority', next: 'Next', blocker: 'Blocker', due: 'Due', updated: 'Updated', pr: 'PRs', deployments: 'Deployments', stale: 'Stale', external: 'Tracker' };
 
-export function renderArtifactPage({ title, fields }) {
+// twoWay (ADR 0011): editors get status and next-action controls; each edit records who and when,
+// and Session Quill brings it back as a revision-checked request on its next publish.
+export function renderArtifactPage({ title, fields, twoWay = false }) {
+  const editable = twoWay ? ['status', 'next'].filter((f) => fields.includes(f)) : [];
   const cols = fields.filter((f) => f !== 'status');
   return `<title>${esc(title)}</title>
 <style>
@@ -26,6 +69,10 @@ th, td { text-align: left; vertical-align: top; padding: 8px 14px; border-top: 1
 thead th { border-top: 0; color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 td.key { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
 #status { color: var(--warn); }
+td.edit { white-space: nowrap; }
+td.edit select, td.edit input, td.edit button { font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; margin-right: 4px; }
+td.edit input { width: 14em; max-width: 100%; }
+td.edit :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 </style>
 <main>
   <h1>${esc(title)}</h1>
@@ -35,13 +82,18 @@ td.key { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-s
 </main>
 <script type="module">
 const COLS = ${JSON.stringify(cols)};
+const EDITABLE = ${JSON.stringify(editable)};
+let canEdit = false;
+let uid = null;
+let dbRef = null;
+const EDIT_STATUSES = ['todo', 'active', 'review', 'deploy-pending', 'done'];
 const LABELS = ${JSON.stringify(LABELS)};
 const ORDER = ['active', 'review', 'deploy-pending', 'blocked', 'todo', 'done'];
 const STATUS = { todo: 'To do', active: 'Active', review: 'Review', 'deploy-pending': 'Deploy pending', blocked: 'Blocked', done: 'Done' };
 const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 let rows = [];
 let meta = null;
-function render() {
+${twoWay ? EDIT_JS : ''}function render() {
   const groups = document.getElementById('groups');
   groups.replaceChildren();
   if (meta && meta.published_at) document.getElementById('meta').textContent = 'Published by Session Quill · updated ' + new Date(meta.published_at).toLocaleString();
@@ -53,11 +105,13 @@ function render() {
     const table = node('table');
     const head = node('tr');
     for (const c of COLS) { const th = node('th', LABELS[c] || c); th.scope = 'col'; head.append(th); }
+    if (canEdit && EDITABLE.length) { const th = node('th', 'Edit'); th.scope = 'col'; head.append(th); }
     table.append(node('thead')); table.tHead.append(head);
     const body = node('tbody');
     for (const r of list) {
       const tr = node('tr');
       for (const c of COLS) tr.append(node('td', r[c] === true ? 'yes' : r[c] === false ? '' : String(r[c] ?? ''), c === 'key' ? 'key' : undefined));
+      ${twoWay ? 'if (canEdit && EDITABLE.length) tr.append(editCell(r));' : ''}
       body.append(tr);
     }
     table.append(body);
@@ -71,11 +125,12 @@ function render() {
 render();
 const claude = window.claude;
 const db = claude && typeof claude.use === 'function' ? await claude.use("db") : null;
-if (!db) {
+dbRef = db;
+${twoWay ? USER_JS : ''}if (!db) {
   document.getElementById('status').textContent = 'Open this page on claude.ai to see the live rows.';
 } else {
   db.collection('tickets').onSnapshot((snap) => {
-    rows = snap.docs.map((d) => d.data()).filter((r) => r && !(r._quill && r._quill.in_scope === false));
+    rows = snap.docs.map((d) => Object.assign({ __id: d.id }, d.data())).filter((r) => r && !(r._quill && r._quill.in_scope === false));
     render();
   }, (e) => { document.getElementById('status').textContent = 'The rows are unavailable right now (' + e.code + ').'; });
   db.doc('meta/page').onSnapshot((d) => { meta = d.exists ? d.data() : null; render(); }, () => {});

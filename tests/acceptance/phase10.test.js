@@ -81,7 +81,7 @@ test('A63 a live artifact keeps rows edited on the page: only fields nobody else
     s.ingest('ticket-update', { ticket_id: 'aaaaaaaa-1111-4111-8111-000000000003', fields: { status: 'done' }, source: 'manual' });
     s.w.tick();
     s.w.config = { ...s.w.config, publish: [{ name: 'team', kind: 'artifact', executor: 'cli', fields: ['key', 'title', 'status', 'next'], projects: ['demo'] }] };
-    await publish(c, { publisher: 'team' });
+    await publish(c, { publisher: 'team', confirm: true });
     await s.settle();
     const after = JSON.parse(fs.readFileSync(store, 'utf8'));
     assert.deepEqual([after.docs['tickets/PROJ-1'].data.title, after.docs['tickets/PROJ-1'].data.next], ['Renamed on the page', 'Ship it']);

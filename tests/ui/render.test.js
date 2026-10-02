@@ -501,3 +501,13 @@ test('an artifact published from a Claude Code session shows the command to run 
   s.publishers[0] = { ...s.publishers[0], confirmed: false };
   assert.match(renderPublishDialog(s, { now: NOW, pending: [] }), /data-publisher="team" data-confirm="true"[^>]*>[\s\S]*?Confirm destination/);
 });
+
+test('ticket detail shows what the tracker says (status, assignee, fix versions) and warns when the key is not found there', () => {
+  const s = snapshot();
+  const t = s.tickets[0];
+  t.external = { system: 'jira', key: 'PROJ-7', url: 'https://example.atlassian.net/browse/PROJ-7', validation: 'valid', validated_at: '2026-10-02T11:00:00Z', error: null, remote: { title: 'Remote <title>', status: 'In Review', assignee: 'Sam Lee', fix_versions: ['1.4'], fetched_at: '2026-10-02T11:00:00Z' } };
+  const html = renderDetail(t, s, { now: NOW, pending: [], content: {} });
+  assert.match(html, /tracker-remote"[\s\S]*?Jira[\s\S]*?In Review[\s\S]*?Sam Lee[\s\S]*?fix 1\.4/);
+  t.external = { ...t.external, validation: 'not-found', remote: null, error: 'jira has no such issue' };
+  assert.match(renderDetail(t, s, { now: NOW, pending: [], content: {} }), /PROJ-7 was not found in Jira/);
+});

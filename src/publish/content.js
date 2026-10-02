@@ -25,7 +25,9 @@ function value(t, field) {
 
 export function rowsFor(snapshot, publisher, { exportedAt } = {}) {
   const sanitized = sanitizeSnapshot(snapshot, { fields: exportFields(publisher.fields), projects: publisher.projects, includeLinks: publisher.include_links, exportedAt });
-  return sanitized.tickets.map((t) => Object.fromEntries(publisher.fields.map((f) => [f, value(t, f)])));
+  // _ticket travels with each row (never written to a destination) so page edits can be checked
+  // against the revision that was published (ADR 0011).
+  return sanitized.tickets.map((t) => ({ ...Object.fromEntries(publisher.fields.map((f) => [f, value(t, f)])), _ticket: { id: t.id, revision: t.revision } }));
 }
 
 const cell = (v) => String(v ?? '').replace(/\|/g, '\\|').replace(/[\r\n]+/g, ' ');

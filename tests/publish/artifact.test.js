@@ -21,7 +21,7 @@ test('row planning creates missing rows, writes only fields nobody else changed,
   const byId = Object.fromEntries(writes.map((w) => [w.doc_id, w]));
   assert.deepEqual(byId['PROJ-1'], { op: 'update', collection: 'tickets', doc_id: 'PROJ-1', if_version: 7, data: { status: 'review', _quill: { in_scope: true, published_at: '2026-10-03T10:00:00Z' } } });
   assert.deepEqual(byId['PROJ-2'], { op: 'set', collection: 'tickets', doc_id: 'PROJ-2', data: { key: 'PROJ-2', status: 'active', next: 'Start', _quill: { in_scope: true, published_at: '2026-10-03T10:00:00Z' } } });
-  assert.deepEqual(byId['PROJ-3'], { op: 'update', collection: 'tickets', doc_id: 'PROJ-3', if_version: 2, data: { _quill: { in_scope: false, published_at: '2026-10-03T10:00:00Z' } } }, 'out of scope is marked, never deleted');
+  assert.deepEqual(byId['PROJ-3'], { op: 'update', collection: 'tickets', doc_id: 'PROJ-3', if_version: 2, data: { status: { __delete__: true }, next: { __delete__: true }, _quill: { in_scope: false, published_at: '2026-10-03T10:00:00Z' } } }, 'out of scope: blanked to its key and marker, never deleted');
   assert.ok(!byId['OTHER-9'], 'rows Quill did not create are left alone');
   assert.deepEqual(conflicts, [{ key: 'PROJ-1', field: 'next', kept: 'Edited by Sam' }]);
   assert.deepEqual(published['PROJ-1'], { key: 'PROJ-1', status: 'review', next: 'Write tests' }, 'a kept edit is not recorded as published');

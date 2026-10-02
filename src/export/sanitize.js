@@ -65,7 +65,8 @@ function sanitizeTicket(t, o) {
     else if (f === 'plans') out.plans = (t.plans ?? []).map(({ content_ref, preview, ...p }) => (o.includeCheckpoints ? { ...p, preview } : p));
     else if (f === 'conclusions') out.conclusions = (t.conclusions ?? []).map(({ content_ref, preview, ...c }) => (o.includeCheckpoints ? { ...c, preview } : c));
     else if (f === 'jira') out.jira = t.jira ? (o.includeLinks ? { ...t.jira } : (({ url, ...j }) => j)(t.jira)) : null;
-    else if (f === 'external') out.external = t.external ? (o.includeLinks ? { ...t.external } : (({ url, ...x }) => x)(t.external)) : null;
+    // Remote tracker data (assignees, fix versions) stays on the owner's dashboard (ADR 0011).
+    else if (f === 'external') out.external = t.external ? (({ remote, ...x }) => (o.includeLinks ? x : (({ url, ...y }) => y)(x)))(t.external) : null;
     else if (f === 'files_touched') out.files_touched = (t.files_touched ?? []).map((x) => ({ repo_id: x.repo_id, relative_path: x.relative_path, first_seen: x.first_seen, last_seen: x.last_seen }));
     else out[f] = t[f];
   }

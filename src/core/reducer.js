@@ -227,6 +227,35 @@ export const PUBLISH_HISTORY = 20;
 
 // One finished publish of one publisher (ADR 0010). `confirmed` records the owner's consent to that
 // destination, which later publishes to the same destination rely on.
+// Remote tracker data for linked tickets (ADR 0011). Recorded beside the ticket, never in its own
+// fields, and without a revision bump, so a sync can never make an owner's edit conflict.
+function applyTrackerSync(state, ev, result) {
+  const p = ev.payload;
+  if (!p || !Array.isArray(p.results)) return { rejected: 'tracker-sync-invalid' };
+  for (const r of p.results) {
+    const t = state.tickets.get(r.ticket_id);
+    if (!t || !t.external || t.external.key !== r.key) continue;
+    const ext = { ...t.external, error: r.error ?? null };
+    if (r.validation) { ext.validation = r.validation; ext.validated_at = p.synced_at ?? ev.occurred_at; }
+    if (r.remote) ext.remote = { title: r.remote.title ?? null, status: r.remote.status ?? null, assignee: r.remote.assignee ?? null, fix_versions: Array.isArray(r.remote.fix_versions) ? r.remote.fix_versions.slice(0, 10) : [], fetched_at: p.synced_at ?? ev.occurred_at };
+    t.external = ext;
+    if (t.jira && t.jira.key === r.key && r.validation) t.jira = { ...t.jira, validation: r.validation, validated_at: ext.validated_at, error: ext.error };
+    result.changed.add(t.id);
+  }
+  return {};
+}
+
+// A comment left on a two-way artifact page, matched to a ticket by its key (ADR 0011). It joins the
+// ticket's timeline as data; the journal's source identity keeps each comment to one entry.
+function applyArtifactComment(state, ev, result) {
+  const p = ev.payload;
+  const t = p && state.tickets.get(p.ticket_id);
+  if (!t || typeof p.text !== 'string') return { rejected: 'comment-invalid' };
+  t.timeline.push(timelineEntry(ev, 'comment', `Comment on the ${p.publisher} page: ${p.text.slice(0, 500)}`));
+  result.changed.add(t.id);
+  return {};
+}
+
 function applyPublishRun(state, ev) {
   const p = ev.payload;
   if (!p || typeof p.publisher !== 'string' || typeof p.run_id !== 'string' || typeof p.outcome !== 'string') return { rejected: 'publish-invalid' };
@@ -813,6 +842,8 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       Object.assign(result, handleHandoffTx(state, ev, result));
       break;
     case 'publish-run': Object.assign(result, applyPublishRun(state, ev)); break;
+    case 'tracker-sync': Object.assign(result, applyTrackerSync(state, ev, result)); break;
+    case 'artifact-comment': Object.assign(result, applyArtifactComment(state, ev, result)); break;
     case 'schedule-run':
       Object.assign(result, applyScheduleRun(state, ev));
       break;

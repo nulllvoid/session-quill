@@ -29,15 +29,17 @@ for (const step of plan.steps) {
       fs.writeFileSync(file, JSON.stringify(doc.data));
       documents.push({ doc_id: id, version: doc.version });
     }
-    steps.push({ op: 'read', ok: true, documents });
+    steps.push({ op: 'read', collection: step.collection, ok: true, documents });
+  } else if (step.op === 'comments') {
+    steps.push({ op: 'comments', ok: true, threads: store.threads ?? [] });
   } else if (step.op === 'batch') {
-    const writes = JSON.parse(fs.readFileSync(path.join(process.cwd(), step.file), 'utf8'));
+    const writes = Array.isArray(step.writes) ? step.writes.map((w) => ({ ...w, data: JSON.parse(fs.readFileSync(path.join(process.cwd(), w.file), 'utf8')) })) : JSON.parse(fs.readFileSync(path.join(process.cwd(), step.file), 'utf8'));
     const stale = writes.find((w) => store.docs[`${w.collection}/${w.doc_id}`] && store.docs[`${w.collection}/${w.doc_id}`].version !== w.if_version);
     if (stale) { steps.push({ op: 'batch', ok: false, error: `document ${stale.doc_id} changed (now version ${store.docs[`${stale.collection}/${stale.doc_id}`].version})` }); break; }
     for (const w of writes) {
       const key = `${w.collection}/${w.doc_id}`;
       const prev = store.docs[key];
-      const merge = (a, b) => { const out = { ...a }; for (const [k, v] of Object.entries(b)) out[k] = v && typeof v === 'object' && !Array.isArray(v) && a && typeof a[k] === 'object' ? merge(a[k], v) : v; return out; };
+      const merge = (a, b) => { const out = { ...a }; for (const [k, v] of Object.entries(b)) { if (v && v.__delete__ === true) { delete out[k]; continue; } out[k] = v && typeof v === 'object' && !Array.isArray(v) && a && typeof a[k] === 'object' ? merge(a[k], v) : v; } return out; };
       const data = w.op === 'set' ? w.data : merge(prev ? prev.data : {}, w.data);
       store.docs[key] = { version: (prev ? prev.version : 0) + 1, data };
     }

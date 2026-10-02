@@ -7,9 +7,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadContext, latestSnapshot, cliEvent } from '../context.js';
-import { normalizePublishers, destinationOf, KIND_LABELS } from '../../publish/config.js';
+import { normalizePublishers, consentId, KIND_LABELS } from '../../publish/config.js';
 import { rowsFor } from '../../publish/content.js';
-import { beginArtifactPublish, continueArtifactPublish } from '../../publish/artifact.js';
+import { beginArtifactPublish, continueArtifactPublish, resolvePlan } from '../../publish/artifact.js';
 import { executorPrompt } from '../../publish/artifact-client.js';
 import { writeIngress } from '../../core/ingress.js';
 import { readJsonIfExists, writeJsonAtomic } from '../../lib/atomic-fs.js';
@@ -18,6 +18,8 @@ import { uuid } from '../../lib/ids.js';
 import { nowIso } from '../../lib/time.js';
 import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest } from './handoff.js';
+import { bodyHash, EDIT_DELAY_MS } from '../../server/requests.js';
+import { addMs } from '../../lib/time.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const publishDir = (ctx, name) => path.join(quillHome(ctx.env), 'publish', name);
@@ -73,6 +75,22 @@ async function run(ctx, io, name, flags) {
   return 0;
 }
 
+// Two-way artifacts (ADR 0011): page edits become revision-checked requests (with the normal undo
+// window) and comments become ticket timeline entries, through ingress like any CLI change.
+function bringBack(ctx, publisher, done) {
+  const now = nowIso();
+  for (const e of done.edits ?? []) {
+    const kind = e.field === 'status' ? 'set-status' : 'set-next-action';
+    const payload = e.field === 'status' ? { status: e.value } : { next_action: String(e.value ?? '') };
+    const body = { id: uuid(), kind, target_id: e.ticket_id, expected_revision: e.expected_revision, payload };
+    const request = { ...body, created_at: now, not_before: addMs(now, EDIT_DELAY_MS), actor_id: `artifact:${publisher}`, retry_of: null, body_hash: bodyHash(body) };
+    writeIngress(cliEvent(ctx, { kind: 'request', payload: request, ticket_id: e.ticket_id, source_identity: `request:${request.id}` }), ctx.env);
+  }
+  for (const c of done.comments ?? []) {
+    writeIngress(cliEvent(ctx, { kind: 'artifact-comment', payload: { publisher, ...c }, ticket_id: c.ticket_id, source_identity: `artifact-comment:${publisher}:${c.comment_id}` }), ctx.env);
+  }
+}
+
 function journal(ctx, payload) {
   writeIngress(cliEvent(ctx, { kind: 'publish-run', payload, source_identity: `publish-run:${payload.run_id}:${payload.publisher}:${payload.outcome}` }), ctx.env);
 }
@@ -82,7 +100,7 @@ function writeRun(ctx, io, p, step, pending) {
   fs.mkdirSync(dir, { recursive: true });
   for (const [file, content] of Object.entries(step.files)) fs.writeFileSync(path.join(dir, file), content);
   fs.writeFileSync(path.join(dir, 'plan.json'), JSON.stringify(step.plan, null, 2));
-  const resolved = { ...step.plan, steps: step.plan.steps.map((s) => ({ ...s, ...(s.file ? { file_path: path.join(dir, s.file) } : {}), ...(s.out_dir ? { out_dir: path.join(dir, s.out_dir) } : {}) })) };
+  const resolved = resolvePlan(step.plan, dir);
   writeJsonAtomic(path.join(publishDir(ctx, p.name), 'pending.json'), { ...pending, dir, context: step.context });
   const result = path.join(dir, 'result.json');
   io.println(`Run directory: ${dir}`);
@@ -98,8 +116,12 @@ function plan(ctx, io, name, flags) {
   const snap = latestSnapshot(ctx);
   if (!snap) throw new TrackerError('worker-offline', 'no published snapshot yet; start the worker with `quill worker start`');
   const info = (snap.publishers ?? []).find((x) => x.name === name);
-  const destination = destinationOf(p);
-  const confirmed = !!(info && info.confirmed);
+  // Consent is checked against this command's own view of the config (ADR 0010): a destination or
+  // scope changed since the worker last confirmed it needs --confirm again.
+  const destination = consentId(p);
+  const confirmed = !!(info && Array.isArray(info.consent_ids) && info.consent_ids.includes(destination));
+  const pendingPath = path.join(publishDir(ctx, name), 'pending.json');
+  if (fs.existsSync(pendingPath) && flags.restart !== true) throw new TrackerError('publish-in-progress', `a publish of ${name} is already in progress; finish it with --result, or start over with --restart`);
   if (!confirmed && flags.confirm !== true) {
     throw new TrackerError('confirmation-required', `nothing has been sent to ${p.url ?? 'a new claude.ai artifact'} yet; rerun with --confirm to send ${p.fields.join(', ')} of tickets in ${p.projects ? p.projects.join(', ') : 'every project'} there`);
   }
@@ -116,13 +138,18 @@ function result(ctx, io, name, file) {
   const pendingPath = path.join(publishDir(ctx, name), 'pending.json');
   const pending = readJsonIfExists(pendingPath);
   if (!pending) throw new TrackerError('usage', `no publish of ${name} is in progress; start one with \`quill publish ${name} --plan\``);
+  const expected = path.join(pending.dir, 'result.json');
+  if (path.resolve(file).toLowerCase() !== path.resolve(expected).toLowerCase()) throw new TrackerError('usage', `that is not the result file of the publish in progress (expected ${expected})`);
   let outcome;
   try {
     const parsed = JSON.parse(fs.readFileSync(path.resolve(file), 'utf8'));
     outcome = continueArtifactPublish(pending.context, parsed, pending.dir);
   } catch (err) {
     fs.rmSync(pendingPath, { force: true });
-    journal(ctx, { publisher: name, run_id: pending.run_id, outcome: 'failed', error: err.message, destination: pending.destination, confirmed: pending.confirm, trigger: 'session' });
+    // A page created before the failure is kept, so the next publish updates it instead of making another.
+    const statePath = path.join(publishDir(ctx, name), 'state.json');
+    if (err.url && !(readJsonIfExists(statePath) || {}).url) writeJsonAtomic(statePath, { url: err.url, page_hash: null, rows: {}, seen_comments: [] });
+    journal(ctx, { publisher: name, run_id: pending.run_id, outcome: 'failed', error: err.message, url: err.url ?? null, destination: pending.destination, confirmed: pending.confirm, trigger: 'session' });
     throw new TrackerError(err.code ?? 'artifact-failed', `${name}: ${err.message}`);
   }
   if (!outcome.done) {
@@ -132,6 +159,7 @@ function result(ctx, io, name, file) {
   }
   writeJsonAtomic(path.join(publishDir(ctx, name), 'state.json'), outcome.done.state);
   fs.rmSync(pendingPath, { force: true });
+  bringBack(ctx, name, outcome.done);
   journal(ctx, { publisher: name, run_id: pending.run_id, outcome: 'ok', summary: outcome.done.summary, url: outcome.done.url, destination: pending.destination, confirmed: pending.confirm, trigger: 'session' });
   io.println(`${name}: ${outcome.done.summary} — ${outcome.done.url}`);
   return 0;

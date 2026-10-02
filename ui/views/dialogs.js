@@ -136,7 +136,8 @@ export function renderPublishDialog(rawSnapshot, { now, pending = [] } = {}) {
   const canRun = !!(snapshot.capabilities && snapshot.capabilities.refresh);
   const items = (snapshot.publishers ?? []).map((p) => {
     const queued = pending.some((r) => r.kind === 'publish' && ACTIVE_REQUEST.has(r.state) && r.payload && (r.payload.publisher === p.name || r.payload.publisher === null));
-    const where = p.url ? `<a href="${attr(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.url)}</a>` : `<code>${esc(p.destination_label)}</code>`;
+    const safeUrl = p.url && /^https:\/\/claude\.ai\//.test(p.url) ? p.url : null;
+    const where = `${safeUrl ? `<a href="${attr(safeUrl)}" target="_blank" rel="noopener noreferrer">${esc(safeUrl)}</a>` : `<code>${esc(p.destination_label)}</code>`}${p.last_url && p.last_url !== p.url ? ` <span class="muted">(last published to ${esc(p.last_url)})</span>` : ''}`;
     const scope = `${esc((p.fields ?? []).join(', '))} of tickets in ${p.projects && p.projects.length ? esc(p.projects.join(', ')) : 'every project'}${p.include_links ? ', with links' : ''}`;
     const last = p.last_outcome === 'failed' ? `<div class="small critical">${esc(p.last_error ?? 'failed')}</div>`
       : p.last_published_at ? `<div class="small">Last published ${timeEl(p.last_published_at, now, tz)}${p.last_summary ? ` — ${esc(p.last_summary)}` : ''}</div>` : '<div class="small muted">Not published yet.</div>';

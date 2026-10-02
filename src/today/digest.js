@@ -5,7 +5,7 @@ import path from 'node:path';
 import { writeMarkedSection, markers, inertMarkdown } from '../lib/marked-section.js';
 
 export const { start: START, end: END } = markers('digest');
-const LABELS = { commit: ['commit', 'commits'], pr: ['PR', 'PRs'], deployment: ['deployment', 'deployments'], status: ['status change', 'status changes'], write: ['file write', 'file writes'], plan: ['plan', 'plans'], conclusion: ['conclusion', 'conclusions'], handoff: ['agent run', 'agent runs'], bind: ['binding', 'bindings'] };
+const LABELS = { commit: ['commit', 'commits'], pr: ['PR', 'PRs'], deployment: ['deployment', 'deployments'], status: ['status change', 'status changes'], write: ['file write', 'file writes'], plan: ['plan', 'plans'], conclusion: ['conclusion', 'conclusions'], handoff: ['agent run', 'agent runs'], comment: ['page comment', 'page comments'], bind: ['binding', 'bindings'] };
 const ORDER = Object.keys(LABELS);
 
 const oneLine = (s) => inertMarkdown(String(s ?? '').replace(/[\r\n]+/g, ' ').trim());

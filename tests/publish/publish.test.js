@@ -45,7 +45,7 @@ test('publish rows come from the export sanitizer: configured fields and project
   const rows = rowsFor(s, pub);
   assert.equal(rows.length, s.tickets.length);
   const r0 = rows.find((r) => r.key === s.tickets[0].key);
-  assert.deepEqual(Object.keys(r0).sort(), ['deployments', 'key', 'next', 'pr', 'status', 'title', 'updated']);
+  assert.deepEqual(Object.keys(r0).filter((k) => !k.startsWith('_')).sort(), ['deployments', 'key', 'next', 'pr', 'status', 'title', 'updated']);
   assert.match(r0.next, /\[path redacted\]/);
   assert.equal(r0.deployments, 'stage: done · prod: pending');
   const withPr = rows.find((r) => r.pr);
