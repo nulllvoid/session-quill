@@ -35,7 +35,7 @@ export function renderDeploymentDialog(ticket, { mode = 'record', deploymentId =
 export function renderExportDialog(snapshot, preview) {
   const projects = [...new Map(snapshot.tickets.map((t) => [t.project_id, t.project_name])).entries()];
   const fields = ['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'tags', 'prs', 'deployments', 'files_touched_count', 'plans_count', 'children_ids', 'summary'];
-  const defaults = new Set(['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'deployments', 'children_ids']);
+  const defaults = new Set(['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'prs', 'deployments', 'children_ids']);
   return `<form class="dialog-form export-form" data-form="export">
 <h2 id="dialog-title">${icon('download')}Export read-only snapshot</h2>
 <p class="muted small">Creates a standalone HTML copy with an export time. It will not update, cannot be revoked after you share it, and is saved locally — nothing is uploaded or messaged.</p>
