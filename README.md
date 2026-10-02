@@ -1,32 +1,41 @@
-# Session Tracker — docs
+# Session Tracker — requirements and design
 
-Design documents for **Session Tracker**: a public Claude Code plugin that gives every developer their own session tracker — no write without a ticket, every session logged to the developer's own notes (markdown folder or Obsidian vault) and tagged to the real project, plus a personal dashboard with status, pick-next and a one-click agent handoff.
+Session Tracker is a proposed public Claude Code plugin for ticket-bound sessions, recoverable local notes and a personal dashboard with agent handoff.
 
-Working name `session-tracker`; final name, licence (MIT proposed) and repo home are open questions.
+**Status: revised draft v0.2, 2026-10-02. Implementation has not started.** The v0.2 revision resolves the requirements review; runtime and integration claims still require the acceptance work below.
 
 ## Documents
 
-| Doc | What it answers | Live, editable copy |
-| --- | --- | --- |
-| [docs/PRD.md](docs/PRD.md) | Why, for whom, what must be true (goals, metrics, scope, requirements, release plan, risks) | — |
-| [docs/TRD.md](docs/TRD.md) | How it is built: architecture, note schema, ticket gate, capture hooks, interval agent, handoff agent, packaging, migration, rollout | [Claude Doc](https://claude.ai/code/artifact/e7c5396d-215e-40fd-8e8a-37cb7f1ee220) |
-| [docs/UI-DESIGN.md](docs/UI-DESIGN.md) | Brief for the designer: users, principles, screen map, data, screens, components, interactions, visual system, deliverables | [Claude Doc](https://claude.ai/code/artifact/5aac569c-9868-4eb4-92eb-b79cf1bf295c) |
-| [docs/decisions/](docs/decisions/) | Architecture decision records | — |
-| [docs/diagrams/](docs/diagrams/) | Rendered diagrams (PNG) from the live docs; Mermaid sources are inline in the markdown | — |
+| Document | Purpose |
+| --- | --- |
+| [PRD](docs/PRD.md) | Product guarantees, scope, requirements, defaults and release gates |
+| [TRD](docs/TRD.md) | Gate behavior, durable writer, attribution, reconciliation, UI transport, handoff and migration |
+| [Data contract](docs/DATA-CONTRACT.md) | Canonical fields, enums, identities, requests and state transitions |
+| [UI design](docs/UI-DESIGN.md) | Views, capabilities, interaction outcomes, responsive layout and visual system |
+| [Acceptance scenarios](docs/ACCEPTANCE.md) | Testable phase gates and traceability back to review findings |
+| [Architecture decisions](docs/decisions/) | Worker serialization, local-first dashboard and tested hook compatibility |
 
-The live Claude Docs are the editing surface (comments, inline edits); the markdown here is the committed snapshot. Re-export after meaningful changes and commit.
+## v0.2 decisions
 
-## Layout
+- Gate coverage is explicit; it does not promise filesystem-wide enforcement.
+- One local worker serializes writes. Events persist before acknowledgement; healthy note materialization is bounded at 30 seconds.
+- Bindings use explicit session/agent identities and preserve event history through rebinding.
+- Staleness is a flag; full checkpoints remain available behind shortened previews.
+- The local dashboard is the v1 baseline. Read-only HTML exports support sharing; hosted live sharing is deferred until its adapter is verified.
+- Edits have revision checks, a real undo window and explicit conflict/failure outcomes.
+- Handoffs use isolated source checkouts and separate read/edit/commit/push/PR permissions.
+- Single-owner-machine operation, approval phrases off and all-day two-hour reconciliation are the defaults.
 
-```
-docs/
-  PRD.md            product requirements
-  TRD.md            technical requirements and design
-  UI-DESIGN.md      UI design spec for the designer / design agent
-  decisions/        ADRs, one file per decision
-  diagrams/         architecture, handoff-flow, rollout, screen-map, board-wireframe (PNG)
-```
+## Source of truth
 
-## Status
+The committed markdown is authoritative for v0.2. The data contract governs field/state definitions; PRD governs scope; TRD governs mechanics; UI governs presentation. Conflicts must be resolved in these files before implementation.
 
-Draft v0.1, 2026-10-02. Build has not started; the open-questions checklist at the end of the TRD gates phase 1.
+Earlier live Claude documents and PNGs under [docs/diagrams](docs/diagrams/) are historical v0.1 references and have not been synchronized. Current architecture and screen maps are inline Mermaid in the revised documents; do not build from the old images.
+
+Historical editing copies: [technical design](https://claude.ai/code/artifact/e7c5396d-215e-40fd-8e8a-37cb7f1ee220), [UI design](https://claude.ai/code/artifact/5aac569c-9868-4eb4-92eb-b79cf1bf295c).
+
+## Next implementation gate
+
+Begin phase 0 with actual Claude Code hook fixtures and an authenticated local UI-to-store request round trip. Record exact supported runtime versions and operating systems. Passing a document consistency check is not evidence that the software or integrations work.
+
+Final public repository ownership/license and real deployment paths/credentials remain release or initialization inputs. This repository revision does not install a plugin, migrate PMLA, publish a dashboard or share private data.

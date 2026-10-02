@@ -1,14 +1,20 @@
-# ADR 0003 — Settings hooks for v1; the mods API as a later option
+# ADR 0003 — Version-tested settings hooks and explicit identity
 
-Date: 2026-10-02 · Status: accepted (draft)
+Date: 2026-10-02 · Status: accepted for v0.2 design; compatibility prototype pending
 
 ## Context
-Claude Code offers settings hooks (SessionStart, PreToolUse, PostToolUse, Stop, PreCompact, SessionEnd, ...) and a newer mods API (`tool.check`, `session.compact`, `ui.render`, ...) that can also draw a status band natively.
+
+Hook payloads and plugin command names need verification against supported Claude Code releases. Directory identity cannot distinguish parallel sessions in the same repository.
 
 ## Decision
-v1 uses settings hooks registered from the plugin's `hooks/hooks.json`, all routed to `tracker hook`. A mod is a phase 6 option for the status band and tighter gating.
+
+Use plugin settings hooks routed to `tracker hook`. Versioned fixtures define supported events, native shell tools, approved-plan extraction, plan-file exceptions, subagent identity, failure behavior and command names. Do not claim compatibility with untested older releases. Mods remain optional later work.
+
+Bindings use explicit session/agent identity; directory fallback is forbidden. Missing identity denies covered operations with a diagnostic. A valid binding permits normal host permission processing; it must not produce an unconditional permission override.
 
 ## Consequences
-- Works on older Claude Code versions and is the documented, stable surface.
-- The status line reads the binding file instead of a native band.
-- Two facts to verify in phase 1: whether subagent tool calls carry the parent `session_id` (fallback: cwd-based binding lookup), and the exact PostToolUse behaviour for ExitPlanMode on approval versus rejection.
+
+- Phase 0 verifies host versions and operating systems before compatibility is advertised.
+- Help and denial text use the actual namespaced command, not an assumed alias.
+- Preserve existing status-line configuration; use composition or a CLI status fallback.
+- Verify against [hooks](https://code.claude.com/docs/en/hooks) and [plugins](https://code.claude.com/docs/en/plugins); references do not replace release fixtures.
