@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Session Tracker</title>
+<link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body data-layout="desktop" data-detail="closed">
+<a class="skip" href="#main">Skip to content</a>
+<nav id="sidebar" class="sidebar" aria-label="Views"></nav>
+<div class="shell">
+  <header id="header" class="topbar-wrap"></header>
+  <div id="filters" class="filters"></div>
+  <div class="layout">
+    <main id="main" class="main" role="tabpanel" tabindex="-1"></main>
+    <aside id="detail" class="detail-panel" hidden aria-label="Ticket detail"></aside>
+  </div>
+</div>
+<dialog id="dialog" class="dialog" aria-labelledby="dialog-title"></dialog>
+<div id="live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+<script type="module" src="/ui/app.js"></script>
+</body>
+</html>

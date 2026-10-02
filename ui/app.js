@@ -1,0 +1,520 @@
+// Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
+import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot } from './components.js';
+import { renderHeader, renderSidebar } from './views/header.js';
+import { renderPickNext } from './views/picknext.js';
+import { renderBoard } from './views/board.js';
+import { renderTree } from './views/tree.js';
+import { renderSessions } from './views/sessions.js';
+import { renderDeployments } from './views/deployments.js';
+import { renderDetail } from './views/detail.js';
+import { renderHandoffForm } from './views/handoff-form.js';
+import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog } from './views/dialogs.js';
+import { createApi, uuidv4 } from './lib/api.js';
+
+const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments'];
+const POLL_VISIBLE_MS = 2000;
+const POLL_HIDDEN_MS = 30000;
+
+const appState = {
+  snapshot: null,
+  online: true,
+  view: 'picknext',
+  filters: { project: '', category: '', tag: '', repo: '', machine: '', stale: false, q: '' },
+  selected: null,
+  requests: new Map(),
+  refresh: null,
+  dialog: null,
+  theme: null,
+  boardExpanded: new Set(),
+  boardPages: {},
+  sessionsPage: 0,
+  treeRoot: null,
+  content: {},
+  loadedTicket: null,
+  lastFocus: null,
+  error: null,
+  receipt: null,
+  endpoint: typeof location !== 'undefined' && location.host ? location.host : null,
+};
+
+function setReceipt(text, tone = 'neutral') {
+  appState.receipt = { text, tone, at: nowIso() };
+}
+
+let api;
+let pollTimer = null;
+let countdownTimer = null;
+
+function $(sel) { return document.querySelector(sel); }
+function nowIso() { return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'); }
+function announce(text) { const el = $('#live'); if (el) { el.textContent = ''; setTimeout(() => { el.textContent = text; }, 30); } }
+
+function readHash() {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const view = params.get('view');
+  if (VIEWS.includes(view)) appState.view = view;
+  for (const k of ['project', 'category', 'tag', 'repo', 'machine', 'q']) if (params.has(k)) appState.filters[k] = params.get(k);
+  appState.filters.stale = params.get('stale') === '1';
+  if (params.get('ticket')) appState.selected = params.get('ticket');
+  if (params.get('root')) appState.treeRoot = params.get('root');
+}
+
+function writeHash() {
+  const params = new URLSearchParams();
+  params.set('view', appState.view);
+  for (const [k, v] of Object.entries(appState.filters)) if (v && k !== 'stale') params.set(k, v);
+  if (appState.filters.stale) params.set('stale', '1');
+  if (appState.selected) params.set('ticket', appState.selected);
+  if (appState.treeRoot) params.set('root', appState.treeRoot);
+  const next = `#${params.toString()}`;
+  if (location.hash !== next) history.replaceState(null, '', next);
+}
+
+function layoutMode() {
+  const w = window.innerWidth;
+  if (w >= 1280) return 'desktop';
+  if (w >= 900) return 'medium';
+  return 'narrow';
+}
+
+function applyTheme() {
+  const stored = (() => { try { return localStorage.getItem('st-theme'); } catch { return null; } })();
+  appState.theme = stored ?? (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  document.documentElement.dataset.theme = appState.theme;
+}
+
+function render() {
+  const s = appState.snapshot;
+  const now = nowIso();
+  const main = $('#main');
+  if (!s) { main.innerHTML = `<div class="empty"><h3>Loading…</h3><p>Waiting for the first snapshot from the worker.</p></div>`; return; }
+  const scroll = main.scrollTop;
+  const searchFocused = document.activeElement && document.activeElement.id === 'search';
+  const searchPos = searchFocused ? document.activeElement.selectionStart : null;
+  $('#sidebar').innerHTML = renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online });
+  $('#header').innerHTML = renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt });
+  if (searchFocused) { const sInput = $('#search'); if (sInput) { sInput.focus(); if (searchPos !== null) sInput.setSelectionRange(searchPos, searchPos); } }
+  $('#filters').innerHTML = renderFilterBar(s);
+  const pending = [...appState.requests.values()];
+  const opts = { now, pending, selected: appState.selected };
+  let html = '';
+  if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, opts);
+  else if (appState.view === 'board') html = renderBoard(s, appState.filters, { ...opts, layout: layoutMode() === 'desktop' ? 'columns' : 'list', expanded: appState.boardExpanded, pages: appState.boardPages });
+  else if (appState.view === 'tree') html = renderTree(s, appState.filters, { root: appState.treeRoot });
+  else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
+  else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
+  main.innerHTML = (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + html;
+  main.scrollTop = scroll;
+  document.body.dataset.layout = layoutMode();
+  renderDetailPanel(now, pending);
+  renderDialog();
+  writeHash();
+}
+
+function renderFilterBar(s) {
+  const f = appState.filters;
+  const tokens = [];
+  for (const [k, v] of Object.entries(f)) {
+    if (!v || k === 'project') continue;
+    tokens.push(`<button type="button" class="token" data-action="clear-filter" data-filter="${attr(k)}" aria-label="Remove filter ${attr(k)}">${esc(k)}: ${esc(k === 'stale' ? 'stale only' : v)} ${icon('x')}</button>`);
+  }
+  const categories = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
+  const repos = s.repos ?? [];
+  const tags = [...new Set(s.tickets.flatMap((t) => t.tags.filter((x) => !x.startsWith('tracker/'))))];
+  const projects = [...new Map(s.tickets.map((t) => [t.project_id, t.project_name])).entries()];
+  return `<span class="eyebrow">Triage lens</span>
+  <label>Project <select data-filter="project" aria-label="Project filter (applies to every view)"><option value="">All</option>${projects.map(([id, name]) => `<option value="${attr(id)}" ${f.project === id ? 'selected' : ''}>${esc(name ?? id)}</option>`).join('')}</select></label>
+  <label>Category <select data-filter="category"><option value="">All</option>${categories.map((c) => `<option value="${c}" ${f.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+  ${repos.length ? `<label>Repo <select data-filter="repo"><option value="">All</option>${repos.map((r) => `<option value="${attr(r.id)}" ${f.repo === r.id ? 'selected' : ''}>${esc(r.display_name)}</option>`).join('')}</select></label>` : ''}
+  ${tags.length ? `<label>Tag <select data-filter="tag"><option value="">All</option>${tags.map((t) => `<option value="${attr(t)}" ${f.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
+  <label class="check"><input type="checkbox" data-filter="stale" ${f.stale ? 'checked' : ''}> Stale only</label>
+  ${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
+}
+
+function renderDetailPanel(now, pending) {
+  const panel = $('#detail');
+  const s = appState.snapshot;
+  const ticket = appState.selected ? ticketById(s, appState.selected) : null;
+  const mode = layoutMode();
+  panel.hidden = !ticket;
+  document.body.dataset.detail = ticket ? 'open' : 'closed';
+  if (!ticket) { panel.innerHTML = ''; panel.removeAttribute('aria-modal'); return; }
+  const modal = mode !== 'desktop';
+  panel.setAttribute('role', modal ? 'dialog' : 'complementary');
+  if (modal) panel.setAttribute('aria-modal', 'true'); else panel.removeAttribute('aria-modal');
+  const active = document.activeElement;
+  const activeId = active && panel.contains(active) ? active.id || active.dataset.action : null;
+  const selectionStart = active && panel.contains(active) && active.tagName === 'TEXTAREA' ? active.selectionStart : null;
+  const editing = active && panel.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
+  if (editing) return; // never clobber an in-progress edit on poll
+  panel.innerHTML = renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket });
+  if (activeId) { const el = panel.querySelector(`#${CSS.escape(activeId)}`) || panel.querySelector(`[data-action="${CSS.escape(activeId)}"]`); if (el) { el.focus(); if (selectionStart !== null && el.setSelectionRange) el.setSelectionRange(selectionStart, selectionStart); } }
+}
+
+function renderDialog() {
+  const host = $('#dialog');
+  const d = appState.dialog;
+  if (!d) { if (host.open) host.close(); host.innerHTML = ''; return; }
+  const s = appState.snapshot;
+  let html = '';
+  if (d.type === 'handoff') html = renderHandoffForm(ticketById(s, d.ticket), s, { retryOf: d.retryOf });
+  else if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status);
+  else if (d.type === 'deployment') html = renderDeploymentDialog(ticketById(s, d.ticket), { mode: d.mode, deploymentId: d.deploymentId });
+  else if (d.type === 'export') html = renderExportDialog(s, d.preview);
+  else if (d.type === 'help') html = renderHelpDialog();
+  if (host.dataset.key !== JSON.stringify(d)) {
+    host.innerHTML = `<div class="dialog-inner" role="document">${html}${d.error ? `<p class="critical small" role="alert">${esc(d.error)}</p>` : ''}</div>`;
+    host.dataset.key = JSON.stringify(d);
+    if (!host.open) host.showModal();
+    const first = host.querySelector('textarea, input:not([type=hidden]):not([disabled]), select, button');
+    if (first) first.focus();
+  }
+}
+
+async function poll() {
+  clearTimeout(pollTimer);
+  try {
+    const snap = normalizeSnapshot(await api.getSnapshot());
+    const changed = !appState.snapshot || snap.generation_id !== appState.snapshot.generation_id;
+    appState.snapshot = snap;
+    appState.online = true;
+    appState.error = null;
+    syncRequests(snap);
+    if (changed) { appState.content = {}; appState.loadedTicket = null; }
+    render();
+  } catch (err) {
+    if (err.code === 'unauthenticated') { appState.error = err.message; appState.online = false; }
+    else appState.online = false;
+    render();
+  }
+  if (!api.static) pollTimer = setTimeout(poll, document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS);
+}
+
+function syncRequests(snap) {
+  for (const r of snap.requests ?? []) {
+    const local = appState.requests.get(r.id);
+    if (local && local.state === 'already-applied') continue;
+    if (local || ['pending', 'applying', 'conflict', 'failed'].includes(r.state)) {
+      const prev = local ? local.state : null;
+      appState.requests.set(r.id, { ...local, ...r, original: local ? local.original : null });
+      if (prev && prev !== r.state && ['applied', 'conflict', 'failed', 'cancelled'].includes(r.state)) {
+        const label = r.kind.replace(/-/g, ' ');
+        const text = `${label} ${r.state}${r.state === 'conflict' ? ': the ticket changed first' : ''}${r.state === 'failed' && r.error ? `: ${r.error.message}` : ''}`;
+        announce(text);
+        setReceipt(`${text} (request ${r.id.slice(0, 8)}, ${r.updated_at ?? nowIso()})`, r.state === 'applied' ? 'good' : r.state === 'cancelled' ? 'neutral' : 'critical');
+      }
+    }
+  }
+  if (appState.refresh && appState.refresh.id) {
+    const r = (snap.requests ?? []).find((x) => x.id === appState.refresh.id);
+    if (r) {
+      const prevState = appState.refresh.state;
+      appState.refresh = { ...appState.refresh, ...r };
+      if (r.state === 'applied' && prevState !== 'applied') setReceipt(`reconciliation run ${r.result && r.result.run_id ? r.result.run_id.slice(0, 8) : ''} completed; last sync ${snap.meta.last_sync ?? 'unknown'}`, 'good');
+      if (r.state === 'failed' && prevState !== 'failed') setReceipt(`refresh failed${r.error ? `: ${r.error.message}` : ''}`, 'critical');
+      if (r.state === 'applied') setTimeout(() => { if (appState.refresh && appState.refresh.id === r.id) { appState.refresh = null; render(); } }, 4000);
+    }
+  }
+}
+
+async function submit(body, { original = null, announceText } = {}) {
+  if (!appState.online) { announce('Offline: nothing was queued.'); appState.error = 'Offline: the request was not sent and is not queued.'; render(); return null; }
+  const id = body.id ?? uuidv4();
+  const req = { ...body, id, state: 'sending', original, not_before: null };
+  appState.requests.set(id, req);
+  render();
+  try {
+    const rec = await api.submit({ ...body, id });
+    appState.requests.set(id, { ...rec, original });
+    announce(announceText ?? `${body.kind.replace(/-/g, ' ')} queued`);
+    setReceipt(`${body.kind.replace(/-/g, ' ')} persisted as request ${id.slice(0, 8)} (${rec.state}${rec.not_before && rec.not_before !== rec.created_at ? `, applies at ${rec.not_before}` : ''})`, 'neutral');
+  } catch (err) {
+    appState.requests.set(id, { ...req, state: 'failed', error: { code: err.code, message: err.message, retryable: err.status !== 400 && err.status !== 409 } });
+    if (err.status === 401 || !err.status) appState.online = false;
+    announce(`Request failed: ${err.message}`);
+    setReceipt(`request rejected before the queue: ${err.message}`, 'critical');
+  }
+  render();
+  return id;
+}
+
+async function cancelRequest(id) {
+  try {
+    const out = await api.cancel(id);
+    const local = appState.requests.get(id) ?? {};
+    if (out.outcome === 'cancelled') { appState.requests.set(id, { ...local, ...out.request, state: 'cancelled' }); announce('Edit cancelled'); setTimeout(() => { appState.requests.delete(id); render(); }, 3000); }
+    else if (out.outcome === 'already-applied') { appState.requests.set(id, { ...local, ...out.request, state: 'already-applied' }); announce('Too late to cancel: the edit was already applied'); }
+    else if (out.outcome === 'applying') announce('The edit is being applied right now and can no longer be cancelled');
+    else appState.requests.set(id, { ...local, ...out.request });
+  } catch (err) {
+    announce(`Cancel failed: ${err.message}`);
+  }
+  render();
+}
+
+function ticketRevision(id) {
+  const t = ticketById(appState.snapshot, id);
+  return t ? t.revision : null;
+}
+
+function handleAction(el) {
+  const a = el.dataset.action;
+  const s = appState.snapshot;
+  switch (a) {
+    case 'refresh': {
+      const id = uuidv4();
+      appState.refresh = { id, state: 'sending' };
+      render();
+      api.submit({ id, kind: 'refresh', payload: {} }).then((rec) => { appState.refresh = { ...rec }; render(); }).catch((err) => { appState.refresh = { id, state: 'failed', error: { message: err.message } }; if (!err.status) appState.online = false; render(); });
+      break;
+    }
+    case 'theme': {
+      appState.theme = appState.theme === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = appState.theme;
+      try { localStorage.setItem('st-theme', appState.theme); } catch { /* ignore */ }
+      render();
+      break;
+    }
+    case 'help': appState.dialog = { type: 'help' }; render(); break;
+    case 'export': appState.dialog = { type: 'export', preview: null }; render(); break;
+    case 'close-detail': closeDetail(); break;
+    case 'close-dialog': closeDialog(); break;
+    case 'handoff': appState.dialog = { type: 'handoff', ticket: el.dataset.ticket, retryOf: el.dataset.retryOf ?? null }; render(); break;
+    case 'record-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'record', deploymentId: el.dataset.deployment ?? null }; render(); break;
+    case 'waive-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'waive', deploymentId: el.dataset.deployment ?? null }; render(); break;
+    case 'toggle-column': if (appState.boardExpanded.has('done')) appState.boardExpanded.delete('done'); else appState.boardExpanded.add('done'); render(); break;
+    case 'column-page': appState.boardPages[el.dataset.column] = Number(el.dataset.page); render(); break;
+    case 'toggle-stale': appState.filters.stale = !appState.filters.stale; render(); break;
+    case 'sessions-page': appState.sessionsPage = Number(el.dataset.page); render(); break;
+    case 'tree-root': appState.treeRoot = el.dataset.root || null; render(); break;
+    case 'clear-filter': appState.filters[el.dataset.filter] = el.dataset.filter === 'stale' ? false : ''; render(); break;
+    case 'clear-filters': appState.filters = { ...appState.filters, category: '', tag: '', repo: '', machine: '', stale: false, q: '' }; render(); break;
+    case 'cancel-request': cancelRequest(el.dataset.request); break;
+    case 'discard-request': appState.requests.delete(el.dataset.request); render(); break;
+    case 'retry-request':
+    case 'resubmit-request': {
+      const r = appState.requests.get(el.dataset.request);
+      if (!r) break;
+      appState.requests.delete(r.id);
+      submit({ kind: r.kind, target_id: r.target_id, expected_revision: ticketRevision(r.target_id), payload: r.payload, retry_of: r.id }, { announceText: 'Resubmitted against the current revision' });
+      break;
+    }
+    case 'reverse-request': {
+      const r = appState.requests.get(el.dataset.request);
+      if (!r || !r.original) break;
+      appState.requests.delete(r.id);
+      submit({ kind: r.kind, target_id: r.target_id, expected_revision: ticketRevision(r.target_id), payload: r.original }, { announceText: 'Reversal queued as a new revision-checked edit' });
+      break;
+    }
+    case 'cancel-handoff': {
+      const h = s.handoffs.find((x) => x.id === el.dataset.handoff);
+      if (h) submit({ kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticketRevision(h.ticket_id), payload: { handoff_id: h.id } }, { announceText: 'Handoff cancellation requested' });
+      break;
+    }
+    case 'load-content': {
+      const hash = el.dataset.hash;
+      api.getContent(hash, el.dataset.generation).then((text) => { appState.content[hash] = text ?? '(content unavailable: capture incomplete)'; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
+      break;
+    }
+    case 'load-ticket': {
+      api.getTicket(el.dataset.ticket, el.dataset.generation).then((t) => { appState.loadedTicket = t; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
+      break;
+    }
+    case 'export-preview': {
+      const form = el.closest('form');
+      const params = exportParams(form);
+      api.exportPreview(params).then((preview) => { appState.dialog = { ...appState.dialog, preview, params }; render(); }).catch((err) => { appState.dialog = { ...appState.dialog, error: err.message }; render(); });
+      break;
+    }
+    default: break;
+  }
+}
+
+function exportParams(form) {
+  const fd = new FormData(form);
+  return { projects: fd.getAll('project').join(','), fields: fd.getAll('field').join(','), include_checkpoints: fd.get('include_checkpoints') ? '1' : '0', include_links: fd.get('include_links') ? '1' : '0' };
+}
+
+function openDetail(id, source) {
+  appState.lastFocus = source ?? document.activeElement;
+  appState.selected = id;
+  appState.loadedTicket = null;
+  render();
+  const panel = $('#detail');
+  const first = panel.querySelector('[data-action="close-detail"]');
+  if (first && layoutMode() !== 'desktop') first.focus();
+}
+
+function closeDetail() {
+  appState.selected = null;
+  render();
+  if (appState.lastFocus && document.contains(appState.lastFocus)) appState.lastFocus.focus();
+}
+
+function closeDialog() {
+  const host = $('#dialog');
+  appState.dialog = null;
+  if (host.open) host.close();
+  host.innerHTML = '';
+  delete host.dataset.key;
+  if (appState.lastFocus && document.contains(appState.lastFocus)) appState.lastFocus.focus();
+}
+
+function visibleTicketIds() {
+  return [...document.querySelectorAll('#main [data-ticket]')].map((el) => el.dataset.ticket);
+}
+
+function toLocalIso(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+function handleSubmit(form) {
+  const kind = form.dataset.form;
+  const ticketId = form.dataset.ticket;
+  const revision = Number(form.dataset.revision);
+  const t = ticketId ? ticketById(appState.snapshot, ticketId) : null;
+  const fd = new FormData(form);
+  if (kind === 'next-action') {
+    submit({ kind: 'set-next-action', target_id: ticketId, expected_revision: revision, payload: { next_action: String(fd.get('next_action') ?? '').trim() } }, { original: { next_action: t.next_action } });
+  } else if (kind === 'status') {
+    const status = form.dataset.status;
+    const payload = { status };
+    if (status === 'blocked') payload.blocker = String(fd.get('blocker') ?? '').trim();
+    const choice = fd.get('deployment_choice');
+    if (choice) {
+      payload.deployment_choice = choice;
+      if (choice !== 'leave') {
+        payload.deployments = [...form.querySelectorAll('.obligation')].map((row, i) => {
+          const item = { pr_id: row.dataset.pr, environment: row.dataset.environment };
+          if (choice === 'waive') item.waiver_reason = String(fd.get(`waiver_${i}`) ?? '').trim();
+          else { item.deployed_at = toLocalIso(fd.get(`deployed_at_${i}`)); item.evidence = String(fd.get(`evidence_${i}`) ?? '').trim() || null; }
+          return item;
+        });
+      }
+    }
+    closeDialog();
+    submit({ kind: 'set-status', target_id: ticketId, expected_revision: revision, payload }, { original: { status: t.status, blocker: t.blocker } });
+  } else if (kind === 'deployment') {
+    const items = [...form.querySelectorAll('.obligation')].map((row, i) => {
+      const cb = row.querySelector('input[type=checkbox]');
+      if (!cb || !cb.checked) return null;
+      const item = { pr_id: cb.dataset.pr, environment: cb.dataset.environment };
+      const waiver = fd.get(`waiver_${i}`);
+      if (waiver !== null) item.waiver_reason = String(waiver).trim();
+      else { item.deployed_at = toLocalIso(fd.get(`deployed_at_${i}`)); item.evidence = String(fd.get(`evidence_${i}`) ?? '').trim() || null; }
+      return item;
+    }).filter(Boolean);
+    if (!items.length) { appState.dialog = { ...appState.dialog, error: 'Select at least one obligation.' }; render(); return; }
+    closeDialog();
+    submit({ kind: 'record-deployment', target_id: ticketId, expected_revision: revision, payload: { items } });
+  } else if (kind === 'handoff') {
+    const permissions = {};
+    for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr']) permissions[k] = fd.get(k) === 'on';
+    const payload = { mode: fd.get('mode'), note: String(fd.get('note') ?? '').trim(), permissions, branch: String(fd.get('branch') ?? '').trim() || null };
+    const retryOf = form.dataset.retryOf || null;
+    closeDialog();
+    submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: retryOf }, { announceText: 'Handoff request accepted; execution is tracked separately' });
+  } else if (kind === 'export') {
+    const d = appState.dialog;
+    api.exportRun({ ...(d.params ?? exportParams(form)) }).then((res) => { announce(`Snapshot saved to ${res.path}`); appState.dialog = { ...d, saved: res.path, error: null }; closeDialog(); appState.error = null; alert(`Saved read-only snapshot to ${res.path}. Share the file yourself; it will not update.`); }).catch((err) => { appState.dialog = { ...d, error: err.message }; render(); });
+  }
+}
+
+function onKey(e) {
+  const target = e.target;
+  const inInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
+  const dialogOpen = $('#dialog').open;
+  if (e.key === 'Escape') {
+    if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
+    if (appState.selected && !inInput) { e.preventDefault(); closeDetail(); return; }
+    if (inInput && target.form && target.form.dataset.form === 'next-action') { target.value = ticketById(appState.snapshot, target.form.dataset.ticket).next_action; target.blur(); return; }
+  }
+  if (inInput || dialogOpen) {
+    if (e.key === 'Enter' && !e.shiftKey && target.tagName === 'TEXTAREA' && target.form && target.form.dataset.form === 'next-action') { e.preventDefault(); handleSubmit(target.form); }
+    return;
+  }
+  if (e.key === '/') { e.preventDefault(); const s = $('#search'); if (s) s.focus(); return; }
+  if (/^[1-5]$/.test(e.key)) { appState.view = VIEWS[Number(e.key) - 1]; render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
+  if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
+  const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
+  if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
+  if (card && e.key === 'h' && card.querySelector('[data-action="handoff"]')) { e.preventDefault(); appState.lastFocus = card; appState.dialog = { type: 'handoff', ticket: card.dataset.ticket }; render(); return; }
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && target && target.dataset && target.dataset.action === 'detail-nav' && appState.selected) {
+    e.preventDefault();
+    const ids = visibleTicketIds();
+    const idx = ids.indexOf(appState.selected);
+    const next = ids[idx + (e.key === 'ArrowRight' ? 1 : -1)];
+    if (next) { appState.selected = next; appState.loadedTicket = null; render(); const nav = $('#detail [data-action="detail-nav"]'); if (nav) nav.focus(); }
+  }
+}
+
+function onClick(e) {
+  const copy = e.target.closest('[data-copy]');
+  if (copy && navigator.clipboard) { navigator.clipboard.writeText(copy.dataset.copy).then(() => announce(`Copied ${copy.dataset.copy}`)).catch(() => {}); e.stopPropagation(); return; }
+  const open = e.target.closest('[data-open]');
+  if (open) { e.preventDefault(); openDetail(open.dataset.open, open); return; }
+  const action = e.target.closest('[data-action]');
+  if (action && action.dataset.action !== 'detail-nav') { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
+  const tab = e.target.closest('[data-view]');
+  if (tab) { appState.view = tab.dataset.view; appState.treeRoot = null; render(); return; }
+  const card = e.target.closest('#main [data-ticket][role=button]');
+  if (card && !e.target.closest('button, a, [data-copy]')) openDetail(card.dataset.ticket, card);
+}
+
+function onChange(e) {
+  const el = e.target;
+  if (el.dataset.filter) {
+    appState.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
+    appState.boardPages = {};
+    appState.sessionsPage = 0;
+    render();
+    if (el.dataset.filter === 'q') { const s = $('#search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
+    return;
+  }
+  if (el.dataset.action === 'status-select') {
+    const status = el.value;
+    const t = ticketById(appState.snapshot, el.dataset.ticket);
+    if (!t || status === t.status) return;
+    appState.lastFocus = el;
+    if (status === 'blocked' || (status === 'done' && t.deployments.some((d) => d.state === 'pending'))) {
+      appState.dialog = { type: 'status', ticket: t.id, status };
+      render();
+    } else {
+      submit({ kind: 'set-status', target_id: t.id, expected_revision: t.revision, payload: { status } }, { original: { status: t.status, blocker: t.blocker } });
+    }
+  }
+}
+
+function startCountdown() {
+  clearInterval(countdownTimer);
+  countdownTimer = setInterval(() => {
+    const anyPending = [...appState.requests.values()].some((r) => r.state === 'pending');
+    if (anyPending && !document.hidden) renderDetailPanel(nowIso(), [...appState.requests.values()]);
+  }, 1000);
+}
+
+export function startApp() {
+  applyTheme();
+  readHash();
+  const staticSnapshot = window.__SNAPSHOT__ ?? null;
+  api = createApi({ staticSnapshot });
+  document.addEventListener('click', onClick);
+  document.addEventListener('keydown', onKey);
+  document.addEventListener('change', onChange);
+  document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { appState.filters.q = e.target.value; const main = $('#main'); main.innerHTML = ''; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
+  document.addEventListener('submit', (e) => { const form = e.target.closest('form[data-form]'); if (form) { e.preventDefault(); handleSubmit(form); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+  window.addEventListener('online', () => poll());
+  window.addEventListener('hashchange', () => { readHash(); render(); });
+  window.addEventListener('resize', () => render());
+  $('#dialog').addEventListener('close', () => { if (appState.dialog) { appState.dialog = null; render(); } });
+  startCountdown();
+  poll();
+}
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startApp);
+  else startApp();
+}

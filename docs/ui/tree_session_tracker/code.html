@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_dashboard" name="shell-type"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script type='text/javascript' nonce='+3Qh3ROeCBODOLoxsYrm0A==' src='https://contribution.usercontent.google.com/i_LySo4uMNH6wvNlCuKXt_ic8fSRTsIukwv3G3yEzPduCQxtkcjtVWYORVh3W_LfLkZu-8cgPfPXz5TckEnt7QIwyVPxTCOEnRt9HYWitXJOODBB0Has_LlZ5d276T74c9o_awSfxn8u26ViFIGoNyENRINpqpGN8Iwm1tOkZF9EUD9O4e_DcE6Emb1oRRdNgTXMzna_mzIxd1bPOczj54-X1mS9FlAhpEEqFFXaTA4c7i4b9MP-3W6k6ONAQLlXaeiQ0PctQzKMutPD-ObzjKKuXLlwMlVk9Wn2bSRzaVnSpdJoR7bFjAmH0PgGUmvw0OA0c9LYt2IXtlihe21jZMrvp6VaD2Ov2uwlCW_qwejvpUMQ3NuU-JN6lrlpttUFM8_ske4E40J9EZWYmB34qI5YSKKBjwmLQwIPxD4xxZSfZJgeowNANb7Y14kp1zrO5pYolBt0rtx8gqG4hMkhlgQal2NKvh7RQwrsta7tt14EE-QfpXI92s_Zt73_ZV8R7TINrH6eCDxk1g2gBt9IgFlkstGKPPgqIvQnEWrOFmrWgTJ48tAz6MtQU4MoplIfohip2e4KuKetthjrShR2OG7EbkUNYTE_epjhUX2h1yvxBuPFFFAzD0iFXsXDStmVL8dakVaQCzao99TV6ZBQvjLMDpC90q1j5zBa_f1t9OBBs1wzf4Nltpx6Ij7oC4K2DmbotlO8IfVnHvrDszUBYlvIxRAGuNjU3bfNIWwj_zSlsyYnmMZs9v3SQD4a1K-x-f8flgnFND4WrnAjQuqYof2a2U_6YCT1MfU9sA'></script><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"inverse-on-surface":"#29313a","error":"#ffb4ab","freshness-stale":"#f0883e","on-secondary-fixed-variant":"#5a21ab","bg":"#0d1117","primary-fixed-dim":"#acc7ff","status-todo":"#8b949e","tertiary-container":"#27a640","text":"#f0f6fc","primary":"#acc7ff","on-error":"#690005","text-faint":"#6e7681","surface-dim":"#0b141c","background":"#0b141c","surface-container-high":"#222b33","focus-ring":"#2f81f7","text-muted":"#8b949e","freshness-fresh":"#3fb950","on-tertiary-fixed-variant":"#005317","on-tertiary-container":"#00320a","status-done":"#3fb950","tertiary":"#67df70","status-deploy":"#d29922","primary-container":"#498fff","accent":"#2f81f7","on-tertiary":"#00390d","on-primary-fixed-variant":"#004492","inverse-primary":"#005bbf","on-background":"#dae3ee","surface-container-lowest":"#060f16","surface":"#161b22","border-strong":"#484f58","error-container":"#93000a","surface-tint":"#acc7ff","border":"#30363d","tertiary-fixed":"#83fc89","primary-fixed":"#d7e2ff","outline-variant":"#414754","on-secondary":"#41008b","status-active":"#2f81f7","secondary-container":"#5a21ab","surface-bright":"#313a43","surface-raised":"#21262d","secondary-fixed-dim":"#d5bbff","status-review":"#a371f7","outline":"#8b909f","on-surface-variant":"#c1c6d6","tertiary-fixed-dim":"#67df70","surface-variant":"#2d363e","secondary-fixed":"#ecdcff","on-error-container":"#ffdad6","secondary":"#d5bbff","on-primary":"#002f68","on-primary-fixed":"#001a40","surface-container":"#182028","inverse-surface":"#dae3ee","surface-container-highest":"#2d363e","status-blocked":"#f85149","freshness-critical":"#f85149","on-tertiary-fixed":"#002105","surface-container-low":"#141c24","on-primary-container":"#00285b","on-secondary-container":"#c6a5ff","on-surface":"#dae3ee","on-secondary-fixed":"#270058","freshness-ageing":"#d29922"},borderRadius:{"DEFAULT":"0.25rem","lg":"0.5rem","xl":"0.75rem","full":"9999px"},spacing:{"gutter-sm":"0.5rem","gutter":"1rem","margin":"1rem","space-sm":"0.5rem","space-xl":"1.5rem","margin-mobile":"0.75rem","space-lg":"1rem","space-md":"0.75rem","space-xs":"0.25rem"},fontFamily:{"headline-lg":["Inter"],"body-md":["Inter"],"body-lg":["Inter"],"label-sm":["JetBrains Mono"],"headline-md":["Inter"],"code-sm":["JetBrains Mono"],"headline-sm":["Inter"],"body-sm":["Inter"],"code-key":["JetBrains Mono"],"label-md":["JetBrains Mono"],"label-lg":["JetBrains Mono"]},fontSize:{"headline-lg":["22px",{"lineHeight":"30.8px","letterSpacing":"-0.01em","fontWeight":"600"}],"body-md":["13px",{"lineHeight":"18.2px","fontWeight":"400"}],"body-lg":["15px",{"lineHeight":"21px","fontWeight":"400"}],"label-sm":["11px",{"lineHeight":"15.4px","letterSpacing":"0.02em","fontWeight":"500"}],"headline-md":["17px",{"lineHeight":"23.8px","letterSpacing":"-0.005em","fontWeight":"600"}],"code-sm":["11px",{"lineHeight":"15.4px","fontWeight":"400"}],"headline-sm":["15px",{"lineHeight":"21px","letterSpacing":"0em","fontWeight":"600"}],"body-sm":["11.5px",{"lineHeight":"16.1px","fontWeight":"400"}],"code-key":["12px",{"lineHeight":"16.8px","letterSpacing":"-0.02em","fontWeight":"600"}],"label-md":["12px",{"lineHeight":"16.8px","fontWeight":"500"}],"label-lg":["13px",{"lineHeight":"18.2px","fontWeight":"600"}]}}}};</script></head><body class="bg-bg text-on-surface font-body-md text-body-md antialiased min-h-screen"><aside class="fixed left-0 top-0 h-full w-64 bg-surface-container-lowest z-50 flex flex-col justify-between py-4"><div class="flex flex-col gap-4"><div class="px-4 flex items-center justify-between"><div class="flex items-center gap-2"><span class="material-symbols-outlined text-primary text-[18px]">terminal</span><span class="font-label-sm text-label-sm uppercase tracking-wider text-text-muted">Workspace Nodes</span></div><span class="font-code-sm text-code-sm text-text-faint px-1.5 py-0.5 rounded bg-surface-container-high">LOCAL</span></div><nav class="flex flex-col gap-0.5 px-2" data-active-classes="bg-surface-raised text-text font-semibold border-l-2 border-primary"><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="pick-next" href="#"><span class="font-body-md text-body-md">Pick Next</span><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">1</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="board" href="#"><span class="font-body-md text-body-md">Board</span><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">2</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="tree" href="#"><span class="font-body-md text-body-md">Tree</span><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">3</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="sessions" href="#"><span class="font-body-md text-body-md">Sessions</span><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">4</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="deployments" href="#"><span class="font-body-md text-body-md">Deployments</span><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">5</kbd></a></nav><div class="px-4 pt-3"><div class="font-label-sm text-label-sm uppercase tracking-wider text-text-faint mb-2">Runtime Context</div><div class="p-2.5 rounded bg-surface-container-low flex flex-col gap-1.5"><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Host</span><span class="font-code-sm text-code-sm text-text">macOS Darwin</span></div><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Branch</span><span class="font-code-sm text-code-sm text-primary">feat/reconcile-v2</span></div><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Uncommitted</span><span class="font-code-sm text-code-sm text-status-deploy">3 files</span></div></div></div></div><div class="px-4 flex flex-col gap-2"><div class="p-2.5 rounded bg-surface flex flex-col gap-1"><div class="flex items-center justify-between font-label-sm text-label-sm"><span class="text-text-muted">Loopback</span><span class="text-freshness-fresh">ACTIVE</span></div><span class="font-code-sm text-code-sm text-text-faint">127.0.0.1:49152</span></div><div class="flex items-center justify-between pt-2"><span class="font-code-sm text-code-sm text-text-faint">© 2025 Local Daemon</span><span class="font-label-sm text-label-sm text-text-faint">IPC v2.4</span></div></div></aside><div class="pl-64"><header class="fixed top-0 left-64 right-0 h-28 bg-surface-container-lowest/90 backdrop-blur-xl z-40 flex flex-col justify-between px-6 pt-2.5 pb-2 shadow-[0_1px_8px_rgba(0,0,0,0.4)]"><div class="flex items-center justify-between gap-4 w-full"><div class="flex items-center gap-4 min-w-0"><div class="flex items-center gap-2.5 flex-shrink-0"><img alt="Session Tracker Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1VzGR1bkTHz8A5tdteReByH6fzti4AwCNB4F3JHMjOC_PP2NNLe4zEftkO569P4mS390oxI2NmkBBEMjl5ldbfxmhbFFjpwQRliHyKtHcsq5kHpO3VslzT-woUHd4JQMT0eUmoFEZ2vlF-H6qWyIufLGtVc6HWe5HkH9HK6Uth8cfiPDHnz4H9TBJjz94tWmIMN1Bac2JCrE7wlrze6C1Xw0cl13tus-6xRy6kc_DY6_KtY4foxcqfB_g"/><div class="flex items-center gap-2"><span class="font-headline-sm text-headline-sm text-text tracking-tight">Session Tracker</span><span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container-high text-text-muted font-medium">v0.2 draft</span></div></div><div class="h-4 w-px bg-surface-variant flex-shrink-0"></div><div class="relative flex-shrink-0"><select aria-label="Global Project Filter" class="appearance-none bg-surface-container-low text-text font-body-sm text-body-sm pl-2.5 pr-8 py-1.5 rounded cursor-pointer hover:bg-surface transition-colors focus:outline-none focus:ring-1 focus:ring-focus-ring"><option>session-tracker (active)</option><option>All Projects</option><option>infra-core</option></select><span class="material-symbols-outlined absolute right-2 top-1.5 text-[16px] text-text-muted pointer-events-none">expand_more</span></div><nav class="hidden xl:flex items-center gap-1" data-active-classes="bg-surface-raised text-text font-semibold rounded"><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="pick-next" href="#">Pick next</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="board" href="#">Board</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="tree" href="#">Tree</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="sessions" href="#">Sessions</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="deployments" href="#">Deployments</a></nav></div><div class="flex items-center gap-3 flex-shrink-0"><div class="relative w-64 lg:w-72"><span class="material-symbols-outlined absolute left-2.5 top-2 text-[16px] text-text-muted pointer-events-none">search</span><input class="w-full bg-surface-container-low text-text font-body-sm text-body-sm pl-8 pr-7 py-1.5 rounded placeholder-text-faint hover:bg-surface focus:bg-surface focus:outline-none focus:ring-1 focus:ring-focus-ring transition-colors" placeholder="Search tickets, keys, tags..." type="text"/><kbd class="absolute right-2 top-1.5 font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint leading-none">/</kbd></div><div class="h-4 w-px bg-surface-variant"></div><button class="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-container-high transition-colors" title="Keyboard Shortcuts (?)" type="button"><span class="material-symbols-outlined text-[18px]">help</span></button><button class="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-container-high transition-colors" title="Theme: Dark active" type="button"><span class="material-symbols-outlined text-[18px]">dark_mode</span></button><div class="flex items-center gap-1.5 px-2 py-1 rounded bg-surface-container-low font-code-sm text-code-sm text-text-muted"><span class="h-1.5 w-1.5 rounded-full bg-freshness-fresh"></span><span>127.0.0.1:49152</span><span class="font-label-sm text-label-sm text-primary font-semibold">[Owner]</span></div><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></div><div class="flex items-center justify-between w-full pt-1.5 text-code-sm font-code-sm text-text-muted"><div class="flex items-center gap-3 flex-wrap"><div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-freshness-fresh/10 text-freshness-fresh font-medium"><span class="h-1.5 w-1.5 rounded-full bg-freshness-fresh"></span><span>Sync: 14m ago (fresh)</span></div><span class="text-text-faint">Next in 1h 46m</span><span class="text-surface-variant">•</span><div class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-status-done animate-pulse"></span><span>Worker: connected (pid 4192)</span></div><span class="text-surface-variant">•</span><span>GitHub: <span class="text-status-done">ok</span> · Bitbucket: <span class="text-status-done">ok</span></span><span class="text-surface-variant">•</span><span>Capture: 0 pending / 0 gaps</span></div><div class="flex items-center gap-2 flex-shrink-0"><span class="text-text-faint">Status: <span class="text-text">Idle</span></span><button class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface-raised hover:bg-surface-bright text-text font-label-sm text-label-sm transition-colors focus:ring-1 focus:ring-focus-ring" type="button"><span class="material-symbols-outlined text-[14px]">refresh</span><span>Refresh</span><kbd class="font-label-sm text-label-sm text-text-faint leading-none bg-surface-container-high px-1 rounded">r</kbd></button></div></div></header><div aria-live="polite" class="fixed top-28 left-64 right-0 z-30 bg-surface-container-high px-6 py-1.5 flex items-center justify-between font-code-sm text-code-sm text-text-muted shadow-sm"><div class="flex items-center gap-2"><span class="material-symbols-outlined text-[14px] text-tertiary">sync_alt</span><span>Receipt: Background reconciliation synced 14 local tickets at 14:02:18 UTC. No conflicts detected.</span></div><span class="font-label-sm text-label-sm text-text-faint uppercase tracking-wider">Telemetry Live</span></div><main class="w-full pt-36 bg-bg px-6 min-h-screen"><div class="flex flex-col w-full">
+<!-- View Header & Global Control Strip -->
+<div class="flex flex-col gap-3 pb-4">
+<div class="flex flex-wrap items-center justify-between gap-4">
+<div class="flex flex-col gap-1">
+<div class="flex items-center gap-2.5">
+<span class="material-symbols-outlined text-primary text-[20px]">account_tree</span>
+<h1 class="font-headline-md text-headline-md text-text tracking-tight">Hierarchy &amp; Subagent Execution Tree</h1>
+<span class="font-code-sm text-code-sm px-2 py-0.5 rounded bg-surface-container text-primary font-medium">14 tickets · 3 root initiatives · 1 unresolved</span>
+</div>
+<div class="flex items-center gap-2 text-text-muted font-body-sm text-body-sm">
+<span>Read-only topological view</span>
+<span class="text-text-faint">•</span>
+<span class="font-code-sm text-code-sm text-text-faint">Cycles and self-parenting strictly rejected by schema invariant &lt;tree-dag-v1&gt;</span>
+</div>
+</div>
+<!-- Quick Action Toolbar -->
+<div class="flex items-center gap-2 flex-wrap">
+<div class="flex items-center rounded bg-surface-container-low p-0.5">
+<span class="font-label-sm text-label-sm px-2 text-text-faint">PROJECT</span>
+<div class="bg-surface px-2.5 py-1 rounded text-text font-code-sm text-code-sm flex items-center gap-1.5 cursor-pointer hover:bg-surface-raised transition-colors">
+<span class="h-2 w-2 rounded-full bg-accent"></span>
+<span>session-tracker</span>
+<span class="material-symbols-outlined text-[14px] text-text-muted">unfold_more</span>
+</div>
+</div>
+<div class="flex items-center rounded bg-surface-container-low p-0.5">
+<button class="px-2.5 py-1 rounded hover:bg-surface text-text-muted hover:text-text font-body-sm text-body-sm flex items-center gap-1 transition-colors" id="btn-expand-all" type="button">
+<span class="material-symbols-outlined text-[15px]">unfold_more</span>
+<span>Expand All</span>
+</button>
+<button class="px-2.5 py-1 rounded hover:bg-surface text-text-muted hover:text-text font-body-sm text-body-sm flex items-center gap-1 transition-colors" id="btn-collapse-done" type="button">
+<span class="material-symbols-outlined text-[15px]">filter_list</span>
+<span>Collapse Done</span>
+</button>
+</div>
+<div class="flex items-center gap-1 px-2.5 py-1 rounded bg-surface-container-low font-code-sm text-code-sm text-text-muted">
+<span class="material-symbols-outlined text-[14px] text-accent">layers</span>
+<span>Depth:</span>
+<span class="text-text font-semibold">3 Levels</span>
+</div>
+</div>
+</div>
+<!-- Informational Note Banner (Technical Brutalism helper callout) -->
+<div class="flex items-center justify-between p-2.5 rounded bg-surface-container-low text-text-muted font-body-sm text-body-sm">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-status-active">info</span>
+<span>Tree hierarchy is read-only navigation in v1. Subtasks and child allocations are created via CLI (<code class="font-code-sm text-code-sm px-1 py-0.5 rounded bg-surface-container-high text-primary">st subtask add</code>) or permitted handoff worktree runs.</span>
+</div>
+<div class="flex items-center gap-3">
+<span class="font-code-sm text-code-sm text-freshness-fresh flex items-center gap-1">
+<span class="h-1.5 w-1.5 rounded-full bg-freshness-fresh"></span> DAG Valid
+        </span>
+<a class="font-code-sm text-code-sm text-primary hover:underline" href="#">CLI Spec →</a>
+</div>
+</div>
+</div>
+<!-- Main View Grid: Left Tree Canvas (Wide) + Right Selected Node Inspector (Docked ~420px) -->
+<div class="grid grid-cols-1 xl:grid-cols-12 gap-4 items-start w-full">
+<!-- Left Tree Explorer Panel (xl:col-span-8) -->
+<div class="xl:col-span-8 flex flex-col gap-4">
+<!-- ROOT NODE 1: Epic / High-Level Feature -->
+<section class="rounded-lg bg-surface-container-low p-3.5 flex flex-col gap-3 shadow-md" id="root-node-1">
+<!-- Root Header Item -->
+<div class="p-3 rounded-lg bg-surface-raised hover:bg-surface-bright transition-colors cursor-pointer flex flex-col gap-2 shadow-sm" onclick="selectNode(&#39;LOCAL-session-store-e4f5&#39;, this)">
+<div class="flex items-center justify-between gap-3 flex-wrap">
+<div class="flex items-center gap-2">
+<button class="w-5 h-5 rounded flex items-center justify-center bg-surface-container hover:bg-surface-container-high text-text-muted" onclick="event.stopPropagation(); toggleBranch(&#39;branch-1&#39;);" type="button">
+<span class="material-symbols-outlined text-[16px] transition-transform duration-150" id="icon-branch-1">expand_more</span>
+</button>
+<span class="font-code-key text-code-key text-text-muted">LOCAL-session-store-e4f5</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-deploy/15 text-status-deploy font-medium">P1 HIGH</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/15 text-status-active font-semibold flex items-center gap-1">
+<span class="h-1.5 w-1.5 rounded-full bg-status-active"></span>ACTIVE
+              </span>
+</div>
+<div class="flex items-center gap-2 font-code-sm text-code-sm text-text-faint">
+<span class="flex items-center gap-1 text-freshness-fresh">
+<span class="material-symbols-outlined text-[14px]">check_circle</span>
+                2 / 3 children done (66%)
+              </span>
+<span>•</span>
+<span>4 files</span>
+<span>•</span>
+<span class="text-text-muted">repo: session-tracker</span>
+</div>
+</div>
+<div class="font-headline-sm text-headline-sm text-text pl-7">
+            Sync distributed snapshot blobs across remote daemon clusters
+          </div>
+<div class="pl-7 flex items-center justify-between text-body-sm font-body-sm text-text-muted">
+<span class="flex items-center gap-1.5 font-code-sm text-code-sm text-text-faint">
+<span class="material-symbols-outlined text-[14px]">fork_right</span>
+              origin/feat/snapshot-blobs
+            </span>
+<span class="font-code-sm text-code-sm text-text-faint">rev 4 · updated 42m ago</span>
+</div>
+</div>
+<!-- Level 1 Branch Children Container -->
+<div class="flex flex-col gap-2 pl-4 sm:pl-7 relative" id="branch-1">
+<!-- Ambient Vertical Stem (CSS visual guide without direct border) -->
+<div class="absolute left-2.5 sm:left-4 top-0 bottom-4 w-0.5 bg-surface-container-high pointer-events-none"></div>
+<!-- Child 1: Level 1 (Completed) -->
+<div class="relative pl-4 flex flex-col gap-1.5 p-2.5 rounded-lg bg-surface hover:bg-surface-raised transition-colors group cursor-pointer" onclick="selectNode(&#39;LOCAL-session-store-e4f5.1&#39;, this)">
+<div class="absolute -left-1.5 sm:-left-3 top-4 w-3.5 h-0.5 bg-surface-container-high"></div>
+<div class="flex items-center justify-between gap-2 flex-wrap">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-done text-[16px]">check_circle</span>
+<span class="font-code-key text-code-key text-text-faint group-hover:text-text-muted">LOCAL-session-store-e4f5.1</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-muted">P2</span>
+<span class="font-label-sm text-label-sm px-2 py-0.2 rounded-full bg-status-done/15 text-status-done font-medium">DONE</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-faint">Completed 2d ago by <span class="text-text-muted">shivam</span></span>
+</div>
+<div class="font-body-md text-body-md text-text-muted line-clamp-1 pl-6">
+              Define chunked binary blob transport schema with frame compression
+            </div>
+</div>
+<!-- Child 2: Level 1 (Completed) -->
+<div class="relative pl-4 flex flex-col gap-1.5 p-2.5 rounded-lg bg-surface hover:bg-surface-raised transition-colors group cursor-pointer" onclick="selectNode(&#39;LOCAL-session-store-e4f5.2&#39;, this)">
+<div class="absolute -left-1.5 sm:-left-3 top-4 w-3.5 h-0.5 bg-surface-container-high"></div>
+<div class="flex items-center justify-between gap-2 flex-wrap">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-done text-[16px]">check_circle</span>
+<span class="font-code-key text-code-key text-text-faint group-hover:text-text-muted">LOCAL-session-store-e4f5.2</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-deploy/15 text-status-deploy font-medium">P1</span>
+<span class="font-label-sm text-label-sm px-2 py-0.2 rounded-full bg-status-done/15 text-status-done font-medium">DONE</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-faint">Completed 1d ago · PR #77 merged</span>
+</div>
+<div class="font-body-md text-body-md text-text-muted line-clamp-1 pl-6">
+              Implement staging store generation switch and manifest validation
+            </div>
+</div>
+<!-- Child 3: Level 1 (Selected Node - Active with Subagent Execution Child) -->
+<div class="relative pl-4 flex flex-col gap-2 p-3 rounded-lg bg-surface-raised shadow-md transition-all cursor-pointer ring-1 ring-primary/40" id="node-e4f5-3" onclick="selectNode(&#39;LOCAL-session-store-e4f5.3&#39;, this)">
+<div class="absolute -left-1.5 sm:-left-3 top-5 w-3.5 h-0.5 bg-surface-container-high"></div>
+<div class="flex items-center justify-between gap-2 flex-wrap">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[18px]">radio_button_checked</span>
+<span class="font-code-key text-code-key text-primary font-semibold">LOCAL-session-store-e4f5.3</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-deploy/15 text-status-deploy font-medium">P1 HIGH</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/15 text-status-active font-semibold flex items-center gap-1">
+<span class="h-1.5 w-1.5 rounded-full bg-status-active animate-pulse"></span>ACTIVE
+                </span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-primary/20 text-primary uppercase font-bold">SELECTED</span>
+</div>
+<div class="flex items-center gap-2 font-code-sm text-code-sm">
+<span class="text-text-muted">1 subtask</span>
+<span class="text-text-faint">•</span>
+<span class="text-freshness-fresh">Sync 14m ago</span>
+</div>
+</div>
+<div class="font-headline-sm text-headline-sm text-text pl-6">
+              Sync soak verification and gate unlock for production cluster
+            </div>
+<div class="pl-6 flex items-center gap-3 text-body-sm font-body-sm text-text-muted flex-wrap">
+<span class="font-code-sm text-code-sm px-2 py-0.5 rounded bg-surface-container-high text-text">
+                &gt; Next: Promote verified staging build to production cluster
+              </span>
+<span class="text-text-faint font-code-sm text-code-sm">Owner: Local Worker</span>
+</div>
+<!-- LEVEL 2 CHILD: Subagent / Handoff Worktree Execution Node -->
+<div class="mt-2 pl-4 sm:pl-6 relative">
+<div class="absolute left-1.5 sm:left-2 top-0 bottom-3 w-0.5 bg-secondary/40"></div>
+<div class="relative pl-4 p-2.5 rounded bg-surface hover:bg-surface-container transition-colors flex flex-col gap-1.5 shadow-sm" onclick="event.stopPropagation(); selectNode(&#39;LOCAL-session-store-e4f5.3.1&#39;, this)">
+<div class="absolute -left-2.5 sm:-left-3.5 top-3.5 w-3 h-0.5 bg-secondary/40"></div>
+<div class="flex items-center justify-between gap-2 flex-wrap">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-secondary text-[16px]">smart_toy</span>
+<span class="font-code-key text-code-key text-secondary">LOCAL-session-store-e4f5.3.1</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.2 rounded bg-surface-container text-text-muted">P2</span>
+<span class="font-label-sm text-label-sm px-2 py-0.2 rounded-full bg-status-review/15 text-status-review font-semibold">IN REVIEW</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.2 rounded bg-secondary/20 text-secondary">Subagent Handoff</span>
+</div>
+<div class="flex items-center gap-2 font-code-sm text-code-sm text-text-faint">
+<span class="text-primary hover:underline">PR #88 opened</span>
+<span>•</span>
+<span class="text-status-done">Passing (12/12)</span>
+</div>
+</div>
+<div class="font-body-md text-body-md text-text pl-6">
+                  Automate multi-tier soak test runner via worker IPC
+                </div>
+<div class="pl-6 flex items-center gap-2 font-code-sm text-code-sm text-text-faint">
+<span class="material-symbols-outlined text-[14px] text-secondary">account_tree</span>
+<span>Worktree: <code class="text-text-muted">.worktrees/handoff-88-soak</code></span>
+<span>•</span>
+<span>Mode: <span class="text-secondary font-medium">attempt-fix</span></span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- ROOT NODE 2: Core Engine / Active Execution -->
+<section class="rounded-lg bg-surface-container-low p-3.5 flex flex-col gap-3 shadow-md" id="root-node-2">
+<div class="p-3 rounded-lg bg-surface-raised hover:bg-surface-bright transition-colors cursor-pointer flex flex-col gap-2 shadow-sm" onclick="selectNode(&#39;LOCAL-session-capture-a1b2c3d4&#39;, this)">
+<div class="flex items-center justify-between gap-3 flex-wrap">
+<div class="flex items-center gap-2">
+<button class="w-5 h-5 rounded flex items-center justify-center bg-surface-container hover:bg-surface-container-high text-text-muted" onclick="event.stopPropagation(); toggleBranch(&#39;branch-2&#39;);" type="button">
+<span class="material-symbols-outlined text-[16px] transition-transform duration-150" id="icon-branch-2">expand_more</span>
+</button>
+<span class="font-code-key text-code-key text-text-muted">LOCAL-session-capture-a1b2c3d4</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-blocked/15 text-status-blocked font-bold">P0 CRITICAL</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/15 text-status-active font-semibold flex items-center gap-1">
+<span class="h-1.5 w-1.5 rounded-full bg-status-active"></span>ACTIVE
+              </span>
+</div>
+<div class="flex items-center gap-2 font-code-sm text-code-sm text-text-faint">
+<span class="flex items-center gap-1 text-freshness-ageing">
+<span class="material-symbols-outlined text-[14px]">timelapse</span>
+                1 / 2 children done (50%)
+              </span>
+<span>•</span>
+<span class="text-status-blocked font-semibold">Critical Path</span>
+<span>•</span>
+<span>14 files</span>
+</div>
+</div>
+<div class="font-headline-sm text-headline-sm text-text pl-7">
+            Preserve session checkpoints and recovery journal across daemon restart
+          </div>
+<div class="pl-7 flex items-center justify-between text-body-sm font-body-sm text-text-muted">
+<span class="font-code-sm text-code-sm text-text-faint flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[14px]">lock_clock</span>
+              Storage generation 4 lock acquired
+            </span>
+<span class="font-code-sm text-code-sm text-text-faint">rev 9 · updated 7m ago</span>
+</div>
+</div>
+<!-- Level 1 Branch Children Container -->
+<div class="flex flex-col gap-2 pl-4 sm:pl-7 relative" id="branch-2">
+<div class="absolute left-2.5 sm:left-4 top-0 bottom-4 w-0.5 bg-surface-container-high pointer-events-none"></div>
+<!-- Child 2.1: Done -->
+<div class="relative pl-4 flex flex-col gap-1.5 p-2.5 rounded-lg bg-surface hover:bg-surface-raised transition-colors group cursor-pointer" onclick="selectNode(&#39;LOCAL-session-capture-a1b2c3d4.1&#39;, this)">
+<div class="absolute -left-1.5 sm:-left-3 top-4 w-3.5 h-0.5 bg-surface-container-high"></div>
+<div class="flex items-center justify-between gap-2 flex-wrap">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-done text-[16px]">check_circle</span>
+<span class="font-code-key text-code-key text-text-faint group-hover:text-text-muted">LOCAL-session-capture-a1b2c3d4.1</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-blocked/15 text-status-blocked font-semibold">P0</span>
+<span class="font-label-sm text-label-sm px-2 py-0.2 rounded-full bg-status-done/15 text-status-done font-medium">DONE</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-faint">Signed off in rev 8</span>
+</div>
+<div class="font-body-md text-body-md text-text-muted line-clamp-1 pl-6">
+              Deterministic ingress journal with monotonic sequence numbers
+            </div>
+</div>
+<!-- Child 2.2: Active Next Priority -->
+<div class="relative pl-4 flex flex-col gap-2 p-2.5 rounded-lg bg-surface hover:bg-surface-raised transition-colors group cursor-pointer" onclick="selectNode(&#39;LOCAL-session-capture-a1b2c3d4.2&#39;, this)">
+<div class="absolute -left-1.5 sm:-left-3 top-4 w-3.5 h-0.5 bg-surface-container-high"></div>
+<div class="flex items-center justify-between gap-2 flex-wrap">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-active text-[16px]">play_circle</span>
+<span class="font-code-key text-code-key text-primary group-hover:underline">LOCAL-session-capture-a1b2c3d4.2</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-blocked/15 text-status-blocked font-bold">P0</span>
+<span class="font-label-sm text-label-sm px-2 py-0.2 rounded-full bg-status-active/15 text-status-active font-semibold">ACTIVE</span>
+</div>
+<span class="font-code-sm text-code-sm text-freshness-stale">In progress (active lease)</span>
+</div>
+<div class="font-body-md text-body-md text-text pl-6">
+              ExitPlanMode durable journal tail verification under SIGKILL
+            </div>
+<div class="pl-6 flex items-center gap-2 font-code-sm text-code-sm text-text-faint">
+<span class="material-symbols-outlined text-[14px] text-accent">chevron_right</span>
+<span>Next: Finalize stream parser unit tests and verify journal rollback integrity</span>
+</div>
+</div>
+</div>
+</section>
+<!-- ROOT NODE 3: Orphan & Unresolved Imported Links / Acceptance A17 -->
+<section class="rounded-lg bg-surface-container-low p-3.5 flex flex-col gap-3 shadow-md" id="root-node-3">
+<div class="p-3 rounded-lg bg-surface-raised hover:bg-surface-bright transition-colors cursor-pointer flex flex-col gap-2 shadow-sm" onclick="selectNode(&#39;LOCAL-jira-oauth-e9f0a1b2&#39;, this)">
+<div class="flex items-center justify-between gap-3 flex-wrap">
+<div class="flex items-center gap-2">
+<button class="w-5 h-5 rounded flex items-center justify-center bg-surface-container hover:bg-surface-container-high text-text-muted" onclick="event.stopPropagation(); toggleBranch(&#39;branch-3&#39;);" type="button">
+<span class="material-symbols-outlined text-[16px] transition-transform duration-150" id="icon-branch-3">expand_more</span>
+</button>
+<span class="font-code-key text-code-key text-text-muted">LOCAL-jira-oauth-e9f0a1b2</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-deploy/15 text-status-deploy font-medium">P1</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-blocked/15 text-status-blocked font-semibold flex items-center gap-1">
+<span class="h-1.5 w-1.5 rounded-full bg-status-blocked"></span>BLOCKED
+              </span>
+<!-- Acceptance A17: Explicit validation issue badge -->
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded bg-error-container text-on-error-container font-semibold flex items-center gap-1">
+<span class="material-symbols-outlined text-[12px]">warning</span>
+                Unresolved remote parent
+              </span>
+</div>
+<div class="flex items-center gap-2 font-code-sm text-code-sm text-freshness-critical">
+<span>0 / 1 children</span>
+<span>•</span>
+<span class="text-text-faint">External Provider Offline</span>
+</div>
+</div>
+<div class="font-headline-sm text-headline-sm text-text pl-7">
+            Jira external link validation adapter and OAuth handshake fallback
+          </div>
+<div class="pl-7 flex items-center justify-between text-body-sm font-body-sm text-text-muted">
+<div class="flex items-center gap-2 font-code-sm text-code-sm text-text-faint">
+<span class="material-symbols-outlined text-[14px] text-error">link_off</span>
+<span>Remote Parent Ref: <code class="text-text-muted">JIRA-PROJ-8910</code> (HTTP 404 / Non-resolvable)</span>
+</div>
+<button class="font-label-sm text-label-sm px-2 py-0.5 rounded bg-surface hover:bg-surface-bright text-primary transition-colors flex items-center gap-1" onclick="event.stopPropagation(); alert(&#39;CLI Command: st hierarchy repair LOCAL-jira-oauth-e9f0a1b2&#39;);" type="button">
+<span class="material-symbols-outlined text-[13px]">build</span>
+              Repair via CLI
+            </button>
+</div>
+</div>
+<!-- Level 1 Branch Child Container (Blocked Leaf) -->
+<div class="flex flex-col gap-2 pl-4 sm:pl-7 relative" id="branch-3">
+<div class="absolute left-2.5 sm:left-4 top-0 bottom-4 w-0.5 bg-surface-container-high pointer-events-none"></div>
+<div class="relative pl-4 flex flex-col gap-1.5 p-2.5 rounded-lg bg-surface hover:bg-surface-raised transition-colors group cursor-pointer" onclick="selectNode(&#39;LOCAL-jira-oauth-e9f0a1b2.1&#39;, this)">
+<div class="absolute -left-1.5 sm:-left-3 top-4 w-3.5 h-0.5 bg-surface-container-high"></div>
+<div class="flex items-center justify-between gap-2 flex-wrap">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-blocked text-[16px]">cancel</span>
+<span class="font-code-key text-code-key text-text-muted">LOCAL-jira-oauth-e9f0a1b2.1</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-muted">P2</span>
+<span class="font-label-sm text-label-sm px-2 py-0.2 rounded-full bg-status-blocked/15 text-status-blocked font-medium">BLOCKED</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-faint">Parent link unresolved</span>
+</div>
+<div class="font-body-md text-body-md text-text-faint line-clamp-1 pl-6">
+              Establish token rotation cron and cryptographic verification test suite
+            </div>
+</div>
+</div>
+</section>
+<!-- Visual Metric Card / Subagent Hierarchy Topology Map -->
+<section class="p-4 rounded-lg bg-surface-container-low flex flex-col gap-3">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[18px]">hub</span>
+<span class="font-headline-sm text-headline-sm text-text">Subtree Allocation &amp; Worker Graph</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-faint">Live telemetry IPC stream</span>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+<div class="p-3 rounded bg-surface flex flex-col gap-1.5">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-text-faint">Root Completion</span>
+<div class="flex items-baseline gap-2">
+<span class="font-headline-lg text-headline-lg text-text">64%</span>
+<span class="font-code-sm text-code-sm text-freshness-fresh">+12% today</span>
+</div>
+<!-- Progress bar -->
+<div class="w-full h-1.5 rounded-full bg-surface-container-high overflow-hidden">
+<div class="h-full bg-freshness-fresh rounded-full" style="width: 64%"></div>
+</div>
+</div>
+<div class="p-3 rounded bg-surface flex flex-col gap-1.5">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-text-faint">Active Subagent Runs</span>
+<div class="flex items-baseline gap-2">
+<span class="font-headline-lg text-headline-lg text-secondary">1</span>
+<span class="font-code-sm text-code-sm text-text-muted">isolated worktree</span>
+</div>
+<div class="flex items-center gap-1.5 font-code-sm text-code-sm text-text-faint">
+<span class="h-1.5 w-1.5 rounded-full bg-status-done animate-pulse"></span>
+<span>Worker PID 4192 active</span>
+</div>
+</div>
+<div class="p-3 rounded bg-surface flex flex-col gap-1.5">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-text-faint">DAG Constraints</span>
+<div class="flex items-baseline gap-2">
+<span class="font-headline-lg text-headline-lg text-freshness-fresh">0 Errors</span>
+<span class="font-code-sm text-code-sm text-text-faint">strict DAG</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-faint">Acyclic invariant verified</span>
+</div>
+</div>
+</section>
+</div>
+<!-- Right Selected Node Docked Inspector (~420px docked desktop view) -->
+<aside class="xl:col-span-4 rounded-lg bg-surface-container-low p-4 flex flex-col gap-4 shadow-xl xl:sticky xl:top-36" id="inspector-panel">
+<!-- Inspector Header -->
+<div class="flex flex-col gap-2 pb-3">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-text-faint flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[14px] text-primary">dock_to_left</span>
+            Node Inspector
+          </span>
+<div class="flex items-center gap-1">
+<button class="px-2 py-0.5 rounded bg-surface hover:bg-surface-raised font-label-sm text-label-sm text-text-muted hover:text-text transition-colors flex items-center gap-1" onclick="copyActiveKey()" title="Copy Ticket Key" type="button">
+<span class="material-symbols-outlined text-[14px]">content_copy</span>
+<span>Copy</span>
+</button>
+<span class="font-code-sm text-code-sm text-text-faint px-1.5 py-0.5 rounded bg-surface-container" id="inspector-rev">rev 2</span>
+</div>
+</div>
+<div class="flex items-center gap-2 flex-wrap pt-1">
+<span class="font-code-key text-headline-sm text-primary font-bold tracking-tight" id="inspector-key">LOCAL-session-store-e4f5.3</span>
+<span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-deploy/15 text-status-deploy font-bold" id="inspector-priority">P1 HIGH</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/15 text-status-active font-semibold" id="inspector-status">ACTIVE</span>
+</div>
+<!-- Breadcrumb Hierarchy Path -->
+<div class="flex items-center gap-1 text-code-sm font-code-sm text-text-faint overflow-x-auto py-1">
+<span class="text-text-muted hover:underline cursor-pointer">session-tracker</span>
+<span>/</span>
+<span class="text-text-muted hover:underline cursor-pointer">LOCAL-session-store-e4f5</span>
+<span>/</span>
+<span class="text-primary font-semibold">e4f5.3</span>
+</div>
+</div>
+<!-- Title & Next Action Strip -->
+<div class="flex flex-col gap-2">
+<h2 class="font-headline-sm text-headline-sm text-text" id="inspector-title">
+          Sync soak verification and gate unlock for production cluster
+        </h2>
+<div class="p-3 rounded-lg bg-surface flex flex-col gap-1.5">
+<div class="flex items-center justify-between font-label-sm text-label-sm">
+<span class="text-primary flex items-center gap-1 font-semibold">
+<span class="material-symbols-outlined text-[15px]">terminal</span>
+              NEXT ACTION
+            </span>
+<span class="text-text-faint font-code-sm text-code-sm">Ack: 10s auto-save</span>
+</div>
+<div class="font-body-md text-body-md text-text pl-1" id="inspector-next-action">
+            Promote verified staging build to production cluster
+          </div>
+</div>
+</div>
+<!-- Subtree Progress & Metrics -->
+<div class="p-3 rounded-lg bg-surface flex flex-col gap-2.5">
+<div class="flex items-center justify-between font-label-sm text-label-sm">
+<span class="text-text-muted">SUBTREE PROGRESS</span>
+<span class="text-primary font-code-sm text-code-sm">1 direct child (1 in review)</span>
+</div>
+<div class="w-full h-1.5 rounded-full bg-surface-container-high overflow-hidden">
+<div class="h-full bg-status-review rounded-full" style="width: 50%"></div>
+</div>
+<div class="flex items-center justify-between font-code-sm text-code-sm text-text-faint pt-0.5">
+<span>0 Done</span>
+<span class="text-status-review font-semibold">1 Review (Subagent)</span>
+<span>0 Blocked</span>
+</div>
+</div>
+<!-- Subagent Handoff Metadata -->
+<div class="p-3 rounded-lg bg-surface flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-secondary flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]">smart_toy</span>
+            Subagent Run Details
+          </span>
+<span class="font-code-sm text-code-sm px-1.5 py-0.2 rounded bg-secondary/20 text-secondary">attempt-fix</span>
+</div>
+<div class="flex flex-col gap-1 font-code-sm text-code-sm">
+<div class="flex items-center justify-between">
+<span class="text-text-muted">Worktree:</span>
+<span class="text-text">.worktrees/handoff-88-soak</span>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-text-muted">Linked PR:</span>
+<span class="text-primary hover:underline cursor-pointer">#88 (feat/soak-runner)</span>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-text-muted">Permissions:</span>
+<span class="text-text-muted">[read, write, test, pr]</span>
+</div>
+<div class="flex items-center justify-between">
+<span class="text-text-muted">Soak Status:</span>
+<span class="text-status-done font-medium">12 passed / 0 failed</span>
+</div>
+</div>
+</div>
+<!-- Deployments & Pipeline Summary -->
+<div class="p-3 rounded-lg bg-surface flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-text-muted">Cluster Deployments</span>
+<span class="font-code-sm text-code-sm text-freshness-fresh">Healthy</span>
+</div>
+<div class="flex flex-col gap-2 font-code-sm text-code-sm">
+<div class="flex items-center justify-between p-1.5 rounded bg-surface-container">
+<span class="text-text-muted">PR #79 Core Engine</span>
+<span class="text-status-done flex items-center gap-1 font-medium">
+<span class="material-symbols-outlined text-[14px]">check</span> MERGED
+            </span>
+</div>
+<div class="flex items-center justify-between p-1.5 rounded bg-surface-container">
+<span class="text-text-muted">Staging Soak</span>
+<span class="text-status-done flex items-center gap-1 font-medium">
+<span class="material-symbols-outlined text-[14px]">done_all</span> VERIFIED
+            </span>
+</div>
+<div class="flex items-center justify-between p-1.5 rounded bg-surface-container">
+<span class="text-text-muted">Production Gate</span>
+<span class="text-status-deploy flex items-center gap-1 font-medium">
+<span class="material-symbols-outlined text-[14px]">pending</span> Awaiting Promotion
+            </span>
+</div>
+</div>
+</div>
+<!-- Navigation & Action Buttons -->
+<div class="flex flex-col gap-2 pt-1">
+<div class="grid grid-cols-2 gap-2">
+<button class="px-3 py-2 rounded bg-surface-raised hover:bg-surface-bright text-text font-body-sm text-body-sm flex items-center justify-center gap-1.5 transition-colors" onclick="alert(&#39;Navigating to Board view focused on LOCAL-session-store-e4f5.3&#39;);" type="button">
+<span class="material-symbols-outlined text-[16px] text-text-muted">view_kanban</span>
+<span>Open in Board</span>
+</button>
+<button class="px-3 py-2 rounded bg-surface-raised hover:bg-surface-bright text-text font-body-sm text-body-sm flex items-center justify-center gap-1.5 transition-colors" onclick="alert(&#39;Handoff telemetry log opened.&#39;);" type="button">
+<span class="material-symbols-outlined text-[16px] text-secondary">history</span>
+<span>Handoff Log</span>
+</button>
+</div>
+<button class="w-full py-2.5 px-4 rounded bg-accent hover:bg-accent/90 text-text font-label-lg text-label-lg flex items-center justify-center gap-2 shadow transition-colors" onclick="triggerGateUnlock()" type="button">
+<span class="material-symbols-outlined text-[18px]">verified</span>
+<span>Unlock &amp; Promote to Production</span>
+</button>
+</div>
+<!-- Inspector Footer Metadata -->
+<div class="flex items-center justify-between pt-2 text-code-sm font-code-sm text-text-faint">
+<span>Created: 2025-05-12T10:14:00Z</span>
+<span>Telemetry ID: #tm-9921</span>
+</div>
+</aside>
+</div>
+</div>
+<!-- Inline Interactive Script for Collapsing, Node Selection, and Toast Simulation -->
+<script>
+  function toggleBranch(branchId) {
+    const branch = document.getElementById(branchId);
+    const iconId = 'icon-' + branchId;
+    const icon = document.getElementById(iconId);
+    if (!branch) return;
+    
+    if (branch.classList.contains('hidden')) {
+      branch.classList.remove('hidden');
+      if (icon) icon.innerText = 'expand_more';
+    } else {
+      branch.classList.add('hidden');
+      if (icon) icon.innerText = 'chevron_right';
+    }
+  }
+
+  function selectNode(key, element) {
+    // Update inspector data dynamically
+    const keyEl = document.getElementById('inspector-key');
+    const titleEl = document.getElementById('inspector-title');
+    const priorityEl = document.getElementById('inspector-priority');
+    const statusEl = document.getElementById('inspector-status');
+    const nextActionEl = document.getElementById('inspector-next-action');
+    
+    if (!keyEl) return;
+
+    keyEl.innerText = key;
+
+    // Visual active selection feedback
+    document.querySelectorAll('[id^="node-"]').forEach(el => {
+      el.classList.remove('ring-1', 'ring-primary/40');
+    });
+    if (element) {
+      element.classList.add('ring-1', 'ring-primary/40');
+    }
+
+    if (key.includes('a1b2c3d4')) {
+      titleEl.innerText = 'Preserve session checkpoints and recovery journal across daemon restart';
+      priorityEl.innerText = 'P0 CRITICAL';
+      priorityEl.className = 'font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-blocked/15 text-status-blocked font-bold';
+      statusEl.innerText = 'ACTIVE';
+      statusEl.className = 'font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/15 text-status-active font-semibold';
+      nextActionEl.innerText = 'ExitPlanMode durable journal tail verification under SIGKILL';
+    } else if (key.includes('jira-oauth')) {
+      titleEl.innerText = 'Jira external link validation adapter and OAuth handshake fallback';
+      priorityEl.innerText = 'P1 HIGH';
+      priorityEl.className = 'font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-deploy/15 text-status-deploy font-bold';
+      statusEl.innerText = 'BLOCKED';
+      statusEl.className = 'font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-blocked/15 text-status-blocked font-semibold';
+      nextActionEl.innerText = 'Repair remote parent relationship via CLI command: `st hierarchy repair`';
+    } else {
+      titleEl.innerText = 'Sync soak verification and gate unlock for production cluster';
+      priorityEl.innerText = 'P1 HIGH';
+      priorityEl.className = 'font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-status-deploy/15 text-status-deploy font-bold';
+      statusEl.innerText = 'ACTIVE';
+      statusEl.className = 'font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/15 text-status-active font-semibold';
+      nextActionEl.innerText = 'Promote verified staging build to production cluster';
+    }
+  }
+
+  function copyActiveKey() {
+    const key = document.getElementById('inspector-key')?.innerText || 'LOCAL-session-store-e4f5.3';
+    navigator.clipboard?.writeText(key).then(() => {
+      alert('Copied ticket key: ' + key);
+    }).catch(() => {
+      alert('Key: ' + key);
+    });
+  }
+
+  function triggerGateUnlock() {
+    alert('Dispatched production deployment gate unlock signal to daemon worker (pid 4192). Handoff acknowledged.');
+  }
+
+  // Hook global toolbar buttons
+  document.getElementById('btn-expand-all')?.addEventListener('click', () => {
+    ['branch-1', 'branch-2', 'branch-3'].forEach(id => {
+      const el = document.getElementById(id);
+      const icon = document.getElementById('icon-' + id);
+      if (el) el.classList.remove('hidden');
+      if (icon) icon.innerText = 'expand_more';
+    });
+  });
+
+  document.getElementById('btn-collapse-done')?.addEventListener('click', () => {
+    // Hide completed leaf items
+    document.querySelectorAll('#branch-1 > div, #branch-2 > div').forEach(node => {
+      if (node.innerText.includes('DONE')) {
+        node.classList.toggle('hidden');
+      }
+    });
+  });
+</script></main></div></body></html>

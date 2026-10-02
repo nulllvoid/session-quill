@@ -1,14 +1,20 @@
-# ADR 0001 — One CLI is the only writer to the store
+# ADR 0001 — Serialize generated-state writes through one local worker
 
-Date: 2026-10-02 · Status: accepted (draft)
+Date: 2026-10-02 · Status: accepted for v0.2 design; implementation unverified
 
 ## Context
-Hooks, the interval agent and the handoff agent all need to update notes. Three writers with three code paths would drift and would make the audit trail unreliable.
+
+One CLI code path does not serialize concurrent processes. Parallel sessions, sync and handoffs can lose updates without enforced ownership and ordering.
 
 ## Decision
-A single `tracker` CLI (Node, no dependencies, shipped in the plugin) is the only process that writes ticket, session and handoff notes. Hooks call `tracker hook`; agents call `tracker child`, `tracker note`, `tracker sync`. The CLI appends every event to `~/.claude/tracker/events.jsonl` before touching any note (append-first), and a `tracker replay` command can rebuild notes from the log.
+
+Hooks and CLI commands submit immutable, uniquely identified ingress events. One worker per owner/store holds an OS-released exclusive local socket/pipe ownership lock, journals events and serially updates generated notes, binding snapshots, requests and dashboard projections. A second worker refuses to start while the first owns the lock.
+
+Successful receipt requires durable ingress persistence. Replay is duplicate-safe; note replacement is atomic and projection revisions expose interrupted multi-file updates. User-authored sections are preserved; changes to generated sections raise conflicts. See [TRD](../TRD.md#durability-and-concurrency) and [data contract](../DATA-CONTRACT.md).
 
 ## Consequences
-- One place for schema, debouncing and validation of the closed sets (`status`, `category`).
-- The interval agent edits ticket notes only through the CLI, so UI edits and hook writes cannot overwrite each other silently.
-- The CLI must stay fast (under 200 ms per hook) and must never block a session except for the gate.
+
+- A supervised local worker is a core dependency; its timer flushes pending notes within 30 s even without another hook.
+- Non-gate hooks persist ingress during worker outages; unavailable storage is reported as a capture gap.
+- Covered writes require a healthy gate and binding. Host hook runtime failure remains outside the enforcement guarantee.
+- Active multi-machine writing is excluded; vault synchronization does not transfer writer ownership.

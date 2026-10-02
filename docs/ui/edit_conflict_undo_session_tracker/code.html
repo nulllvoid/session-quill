@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_dashboard" name="shell-type"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script type='text/javascript' nonce='0DkEJsgN2rr6VT0b5opYiw==' src='https://contribution.usercontent.google.com/icOouakqhTE86p-Kjg_vwodDZzQ5--yCPJxR4vdiAfjwwfILUjY5wrvPnnmL2CJ95ZL6qzlRL0NUAR4D77FEYXcgSqhnEWiLdEDJd6kvF6L-fRly_TIVDelDNEOzT_1M-DjXzU9l4Q_q2qc9diyTqCANrlWyRo0dmpXSrswyvd_GL5wVl_PFaGwd0_FSglCeew4ZZBLSu6yIVDG6URwEf2BvcN2E0xx5G3-KnmqFa12E6RM9_zah6ORwXz-kpw6bpUpXlkcQnJxjFyQcjDLVO68TF5dwu3YqnL8-n_-mNz7d-qjKD6kIP-inhhtZH3uUa3__IJnBRSj8UiZPHfoGqEHRV4G934zVBu23mp2Jl1iq2IcKdsokj2BFvIM1Jh879dXo8QyzJV8v61Vbaag67xkNboLejWxwNXo-7Lrt4z34Hk1GpdmMfRtApTDlajCh-aGwTEEdrjmXVTkwMUekGwaRd02HKY2CxjJ-qRZALTmsoWGK5xgdiSaDDH-YQ_MkQcCbhosolR3SKyDlyDMdA8HwQTlIaF6lXuLnzLEveFgktiPxp72DFpK7lA6YaJs52Zcp0_RSP9olJL3Q7KI6Vaa1kybaHLBh4HDQvutm6aAYzQaCVcTzvhX3MK15ugxRR9VUdi8AW7snzXWL1mU67Y_9YVCQCeb-oY_TnPO6vcF8nijdCYRLYOOVsmxicYT6dARs_Z3v0C2GxI7b_uYnUAFxzFrGmitaTCdSNPkDsLUnePQyxCIE8mtVrZBjyEj3zfnRnVTv3Y4BW6mTs_9sKPAlXdJWDAVXVV-e1w'></script><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"on-primary-fixed-variant":"#004492","tertiary-container":"#27a640","surface-variant":"#2d363e","secondary-container":"#5a21ab","on-primary-container":"#00285b","status-review":"#a371f7","secondary-fixed-dim":"#d5bbff","freshness-fresh":"#3fb950","focus-ring":"#2f81f7","status-deploy":"#d29922","bg":"#0d1117","tertiary":"#67df70","outline-variant":"#414754","surface-container-high":"#222b33","secondary-fixed":"#ecdcff","on-tertiary-fixed-variant":"#005317","primary":"#acc7ff","text-faint":"#6e7681","text":"#f0f6fc","background":"#0b141c","on-tertiary-container":"#00320a","on-error-container":"#ffdad6","secondary":"#d5bbff","error-container":"#93000a","primary-fixed-dim":"#acc7ff","status-done":"#3fb950","freshness-critical":"#f85149","on-secondary":"#41008b","on-primary":"#002f68","surface-container":"#182028","surface-bright":"#313a43","surface-container-highest":"#2d363e","inverse-surface":"#dae3ee","on-tertiary":"#00390d","on-background":"#dae3ee","on-secondary-fixed":"#270058","surface-tint":"#acc7ff","on-secondary-container":"#c6a5ff","surface-container-low":"#141c24","on-surface":"#dae3ee","primary-container":"#498fff","outline":"#8b909f","on-surface-variant":"#c1c6d6","border":"#30363d","status-active":"#2f81f7","freshness-ageing":"#d29922","inverse-primary":"#005bbf","status-blocked":"#f85149","on-tertiary-fixed":"#002105","surface":"#161b22","border-strong":"#484f58","error":"#ffb4ab","text-muted":"#8b949e","on-primary-fixed":"#001a40","primary-fixed":"#d7e2ff","surface-container-lowest":"#060f16","accent":"#2f81f7","surface-dim":"#0b141c","freshness-stale":"#f0883e","tertiary-fixed-dim":"#67df70","inverse-on-surface":"#29313a","on-secondary-fixed-variant":"#5a21ab","status-todo":"#8b949e","tertiary-fixed":"#83fc89","surface-raised":"#21262d","on-error":"#690005"},borderRadius:{"DEFAULT":"0.25rem","lg":"0.5rem","xl":"0.75rem","full":"9999px"},spacing:{"space-md":"0.75rem","margin-mobile":"0.75rem","space-lg":"1rem","space-xl":"1.5rem","space-xs":"0.25rem","gutter":"1rem","gutter-sm":"0.5rem","space-sm":"0.5rem","margin":"1rem"},fontFamily:{"body-sm":["Inter"],"body-lg":["Inter"],"label-lg":["JetBrains Mono"],"headline-md":["Inter"],"code-key":["JetBrains Mono"],"label-sm":["JetBrains Mono"],"label-md":["JetBrains Mono"],"body-md":["Inter"],"code-sm":["JetBrains Mono"],"headline-lg":["Inter"],"headline-sm":["Inter"]},fontSize:{"body-sm":["11.5px",{"lineHeight":"16.1px","fontWeight":"400"}],"body-lg":["15px",{"lineHeight":"21px","fontWeight":"400"}],"label-lg":["13px",{"lineHeight":"18.2px","fontWeight":"600"}],"headline-md":["17px",{"lineHeight":"23.8px","letterSpacing":"-0.005em","fontWeight":"600"}],"code-key":["12px",{"lineHeight":"16.8px","letterSpacing":"-0.02em","fontWeight":"600"}],"label-sm":["11px",{"lineHeight":"15.4px","letterSpacing":"0.02em","fontWeight":"500"}],"label-md":["12px",{"lineHeight":"16.8px","fontWeight":"500"}],"body-md":["13px",{"lineHeight":"18.2px","fontWeight":"400"}],"code-sm":["11px",{"lineHeight":"15.4px","fontWeight":"400"}],"headline-lg":["22px",{"lineHeight":"30.8px","letterSpacing":"-0.01em","fontWeight":"600"}],"headline-sm":["15px",{"lineHeight":"21px","letterSpacing":"0em","fontWeight":"600"}]}}}};</script></head><body class="bg-bg text-on-surface font-body-md text-body-md antialiased min-h-screen"><aside class="fixed left-0 top-0 h-full w-64 bg-surface-container-lowest z-50 flex flex-col justify-between py-4"><div class="flex flex-col gap-4"><div class="px-4 flex items-center justify-between"><div class="flex items-center gap-2"><span class="material-symbols-outlined text-primary text-[18px]">terminal</span><span class="font-label-sm text-label-sm uppercase tracking-wider text-text-muted">Workspace Nodes</span></div><span class="font-code-sm text-code-sm text-text-faint px-1.5 py-0.5 rounded bg-surface-container-high">LOCAL</span></div><nav class="flex flex-col gap-0.5 px-2" data-active-classes="bg-surface-raised text-text font-semibold border-l-2 border-primary"><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="pick-next" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">target</span><span class="font-body-md text-body-md">Pick Next</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">1</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="board" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">view_kanban</span><span class="font-body-md text-body-md">Board</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">2</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="tree" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">account_tree</span><span class="font-body-md text-body-md">Tree</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">3</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="sessions" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">history</span><span class="font-body-md text-body-md">Sessions</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">4</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="deployments" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">rocket_launch</span><span class="font-body-md text-body-md">Deployments</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">5</kbd></a></nav><div class="px-4 pt-3"><div class="font-label-sm text-label-sm uppercase tracking-wider text-text-faint mb-2">Runtime Context</div><div class="p-2.5 rounded bg-surface-container-low flex flex-col gap-1.5"><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Host</span><span class="font-code-sm text-code-sm text-text">macOS Darwin</span></div><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Branch</span><span class="font-code-sm text-code-sm text-primary">feat/reconcile-v2</span></div><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Uncommitted</span><span class="font-code-sm text-code-sm text-status-deploy">3 files</span></div></div></div></div><div class="px-4 flex flex-col gap-2"><div class="p-2.5 rounded bg-surface flex flex-col gap-1"><div class="flex items-center justify-between font-label-sm text-label-sm"><span class="text-text-muted">Loopback</span><span class="text-freshness-fresh">ACTIVE</span></div><span class="font-code-sm text-code-sm text-text-faint">127.0.0.1:49152</span></div><div class="flex items-center justify-between pt-2"><span class="font-code-sm text-code-sm text-text-faint">© 2025 Local Daemon</span><span class="font-label-sm text-label-sm text-text-faint">IPC v2.4</span></div></div></aside><div class="pl-64"><header class="fixed top-0 left-64 right-0 h-28 bg-surface-container-lowest/90 backdrop-blur-xl z-40 flex flex-col justify-between px-6 pt-2.5 pb-2 shadow-[0_1px_8px_rgba(0,0,0,0.4)]"><div class="flex items-center justify-between gap-4 w-full"><div class="flex items-center gap-4 min-w-0"><div class="flex items-center gap-2.5 flex-shrink-0"><img alt="Session Tracker Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1VzGR1bkTHz8A5tdteReByH6fzti4AwCNB4F3JHMjOC_PP2NNLe4zEftkO569P4mS390oxI2NmkBBEMjl5ldbfxmhbFFjpwQRliHyKtHcsq5kHpO3VslzT-woUHd4JQMT0eUmoFEZ2vlF-H6qWyIufLGtVc6HWe5HkH9HK6Uth8cfiPDHnz4H9TBJjz94tWmIMN1Bac2JCrE7wlrze6C1Xw0cl13tus-6xRy6kc_DY6_KtY4foxcqfB_g"/><div class="flex items-center gap-2"><span class="font-headline-sm text-headline-sm text-text tracking-tight">Session Tracker</span><span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container-high text-text-muted font-medium">v0.2 draft</span></div></div><div class="h-4 w-px bg-surface-variant flex-shrink-0"></div><div class="relative flex-shrink-0"><select aria-label="Global Project Filter" class="appearance-none bg-surface-container-low text-text font-body-sm text-body-sm pl-2.5 pr-8 py-1.5 rounded cursor-pointer hover:bg-surface transition-colors focus:outline-none focus:ring-1 focus:ring-focus-ring"><option>session-tracker (active)</option><option>All Projects</option><option>infra-core</option></select><span class="material-symbols-outlined absolute right-2 top-1.5 text-[16px] text-text-muted pointer-events-none">expand_more</span></div><nav class="hidden xl:flex items-center gap-1" data-active-classes="bg-surface-raised text-text font-semibold rounded"><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="pick-next" href="#">Pick next</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="board" href="#">Board</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="tree" href="#">Tree</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="sessions" href="#">Sessions</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="deployments" href="#">Deployments</a></nav></div><div class="flex items-center gap-3 flex-shrink-0"><div class="relative w-64 lg:w-72"><span class="material-symbols-outlined absolute left-2.5 top-2 text-[16px] text-text-muted pointer-events-none">search</span><input class="w-full bg-surface-container-low text-text font-body-sm text-body-sm pl-8 pr-7 py-1.5 rounded placeholder-text-faint hover:bg-surface focus:bg-surface focus:outline-none focus:ring-1 focus:ring-focus-ring transition-colors" placeholder="Search tickets, keys, tags..." type="text"/><kbd class="absolute right-2 top-1.5 font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint leading-none">/</kbd></div><div class="h-4 w-px bg-surface-variant"></div><button class="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-container-high transition-colors" title="Keyboard Shortcuts (?)" type="button"><span class="material-symbols-outlined text-[18px]">help</span></button><button class="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-container-high transition-colors" title="Theme: Dark active" type="button"><span class="material-symbols-outlined text-[18px]">dark_mode</span></button><div class="flex items-center gap-1.5 px-2 py-1 rounded bg-surface-container-low font-code-sm text-code-sm text-text-muted"><span class="h-1.5 w-1.5 rounded-full bg-freshness-fresh"></span><span>127.0.0.1:49152</span><span class="font-label-sm text-label-sm text-primary font-semibold">[Owner]</span></div><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></div><div class="flex items-center justify-between w-full pt-1.5 text-code-sm font-code-sm text-text-muted"><div class="flex items-center gap-3 flex-wrap"><div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-freshness-fresh/10 text-freshness-fresh font-medium"><span class="h-1.5 w-1.5 rounded-full bg-freshness-fresh"></span><span>Sync: 14m ago (fresh)</span></div><span class="text-text-faint">Next in 1h 46m</span><span class="text-surface-variant">•</span><div class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-status-done animate-pulse"></span><span>Worker: connected (pid 4192)</span></div><span class="text-surface-variant">•</span><span>GitHub: <span class="text-status-done">ok</span> · Bitbucket: <span class="text-status-done">ok</span></span><span class="text-surface-variant">•</span><span>Capture: 0 pending / 0 gaps</span></div><div class="flex items-center gap-2 flex-shrink-0"><span class="text-text-faint">Status: <span class="text-text">Idle</span></span><button class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface-raised hover:bg-surface-bright text-text font-label-sm text-label-sm transition-colors focus:ring-1 focus:ring-focus-ring" type="button"><span class="material-symbols-outlined text-[14px]">refresh</span><span>Refresh</span><kbd class="font-label-sm text-label-sm text-text-faint leading-none bg-surface-container-high px-1 rounded">r</kbd></button></div></div></header><div aria-live="polite" class="fixed top-28 left-64 right-0 z-30 bg-surface-container-high px-6 py-1.5 flex items-center justify-between font-code-sm text-code-sm text-text-muted shadow-sm"><div class="flex items-center gap-2"><span class="material-symbols-outlined text-[14px] text-tertiary">sync_alt</span><span>Receipt: Background reconciliation synced 14 local tickets at 14:02:18 UTC. No conflicts detected.</span></div><span class="font-label-sm text-label-sm text-text-faint uppercase tracking-wider">Telemetry Live</span></div><main class="w-full pt-36 bg-bg px-6 min-h-screen"><div class="flex flex-col w-full relative">
+<!-- Top 10s Cancellation Undo Toast Bar (A28 / TRD.md Transport) -->
+<div class="w-full mb-5 rounded-lg bg-surface-container-high shadow-xl overflow-hidden transition-all duration-300" id="undo-toast">
+<div class="flex items-center justify-between px-4 py-2.5 gap-4">
+<div class="flex items-center gap-3 min-w-0">
+<div class="w-7 h-7 rounded-full bg-status-done/15 text-status-done flex items-center justify-center flex-shrink-0">
+<span class="material-symbols-outlined text-[16px]">check_circle</span>
+</div>
+<div class="flex items-center gap-2 min-w-0 flex-wrap">
+<span class="font-headline-sm text-headline-sm text-text">Status transition scheduled</span>
+<span class="text-text-faint">•</span>
+<span class="font-code-sm text-code-sm text-on-surface-variant">Status → <span class="text-status-done font-medium">Done</span> on</span>
+<code class="font-code-key text-code-key px-1.5 py-0.5 rounded bg-surface-container text-primary">LOCAL-session-store-e4f5.3</code>
+<span class="text-text-faint">•</span>
+<span class="font-code-sm text-code-sm text-status-deploy">Applying in <span class="font-semibold" id="countdown-num">6</span>s</span>
+<span class="font-label-sm text-label-sm text-text-faint hidden sm:inline">(Not-Before: 14:02:28 UTC)</span>
+</div>
+</div>
+<div class="flex items-center gap-2 flex-shrink-0">
+<button class="flex items-center gap-1.5 px-3 py-1 rounded bg-primary text-on-primary font-label-md text-label-md hover:bg-primary-fixed-dim transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-focus-ring" id="undo-btn" type="button">
+<span class="material-symbols-outlined text-[15px]">undo</span>
+<span>Undo Action</span>
+<kbd class="font-code-sm text-code-sm px-1 py-0.2 rounded bg-on-primary/20 text-on-primary font-normal leading-none ml-0.5">z / Esc</kbd>
+</button>
+<button class="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-raised transition-colors" id="dismiss-toast-btn" title="Dismiss countdown" type="button">
+<span class="material-symbols-outlined text-[16px]">close</span>
+</button>
+</div>
+</div>
+<!-- Visual Progress Fill for 10s Window (Currently at 60%) -->
+<div class="w-full h-1 bg-surface-container-lowest">
+<div class="h-full bg-status-deploy transition-all duration-1000 ease-linear" id="undo-progress" style="width: 60%;"></div>
+</div>
+</div>
+<!-- Main Background Board / Ticket Detail View (Dimmed by modal, strictly crisp terminal slate aesthetic) -->
+<div class="w-full grid grid-cols-1 xl:grid-cols-12 gap-5 opacity-40 pointer-events-none select-none filter blur-[0.5px]">
+<!-- Board Columns Summary -->
+<div class="xl:col-span-8 flex flex-col gap-4">
+<div class="flex items-center justify-between px-3 py-2 rounded bg-surface-container-low">
+<div class="flex items-center gap-3">
+<span class="font-code-key text-code-key text-text-muted uppercase">Active Stream // Session Pipeline</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-surface-raised text-primary">6 In-Flight</span>
+</div>
+<div class="flex items-center gap-2 font-code-sm text-code-sm text-text-faint">
+<span>Snapshot Rev #419</span>
+<span class="text-surface-variant">•</span>
+<span>SHA: 8cf3a09e</span>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+<!-- Todo Column -->
+<div class="flex flex-col gap-2 p-2.5 rounded bg-surface-container-lowest">
+<div class="flex items-center justify-between px-1 py-1">
+<span class="font-label-md text-label-md text-text-muted uppercase">Ready [2]</span>
+<span class="material-symbols-outlined text-[16px] text-text-faint">playlist_add</span>
+</div>
+<div class="p-3 rounded bg-surface-raised shadow-sm flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-code-key text-code-key text-primary">LOCAL-tree-sync-811c</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-todo/20 text-status-todo font-medium">TODO</span>
+</div>
+<p class="font-body-md text-body-md text-text font-semibold">Verify branch tree diffing against git index cache</p>
+<div class="px-2 py-1 rounded bg-surface-container-low font-code-sm text-code-sm text-text-muted flex items-center gap-1.5">
+<span class="text-text-faint">&gt;</span>
+<span class="truncate">Inspect dirty buffer map</span>
+</div>
+</div>
+<div class="p-3 rounded bg-surface-raised shadow-sm flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-code-key text-code-key text-primary">LOCAL-auth-audit-22b0</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-todo/20 text-status-todo font-medium">TODO</span>
+</div>
+<p class="font-body-md text-body-md text-text font-semibold">Enforce TLS peer validation on loopback socket</p>
+<div class="px-2 py-1 rounded bg-surface-container-low font-code-sm text-code-sm text-text-muted flex items-center gap-1.5">
+<span class="text-text-faint">&gt;</span>
+<span class="truncate">Add CA stub tests</span>
+</div>
+</div>
+</div>
+<!-- Active Column -->
+<div class="flex flex-col gap-2 p-2.5 rounded bg-surface-container-lowest">
+<div class="flex items-center justify-between px-1 py-1">
+<span class="font-label-md text-label-md text-status-active uppercase">Active [2]</span>
+<span class="material-symbols-outlined text-[16px] text-status-active">play_circle</span>
+</div>
+<!-- Clashing Card -->
+<div class="p-3 rounded bg-surface-raised shadow-md flex flex-col gap-2 ring-1 ring-status-blocked">
+<div class="flex items-center justify-between">
+<span class="font-code-key text-code-key text-primary">LOCAL-session-capture-a1b2c3d4</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-blocked/20 text-status-blocked font-medium">CONFLICT</span>
+</div>
+<p class="font-body-md text-body-md text-text font-semibold">Finalize stream parser unit tests and verify journal rollback</p>
+<div class="px-2 py-1 rounded bg-surface-container font-code-sm text-code-sm text-status-deploy flex items-center gap-1.5">
+<span class="material-symbols-outlined text-[14px]">sync_problem</span>
+<span class="truncate">Revision 3 → 4 collision detected</span>
+</div>
+</div>
+<div class="p-3 rounded bg-surface-raised shadow-sm flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-code-key text-code-key text-primary">LOCAL-telemetry-491a</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/20 text-status-active font-medium">ACTIVE</span>
+</div>
+<p class="font-body-md text-body-md text-text font-semibold">Expose loopback TCP latency metric to status line</p>
+</div>
+</div>
+<!-- Done Column -->
+<div class="flex flex-col gap-2 p-2.5 rounded bg-surface-container-lowest">
+<div class="flex items-center justify-between px-1 py-1">
+<span class="font-label-md text-label-md text-status-done uppercase">Done [2]</span>
+<span class="material-symbols-outlined text-[16px] text-status-done">task_alt</span>
+</div>
+<div class="p-3 rounded bg-surface-raised shadow-sm flex flex-col gap-2">
+<div class="flex items-center justify-between">
+<span class="font-code-key text-code-key text-text-muted">LOCAL-session-store-e4f5.3</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-done/20 text-status-done font-medium">DONE (6s)</span>
+</div>
+<p class="font-body-md text-body-md text-text-muted">Persist session rollback tokens to local rocksdb journal</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Side Docked Ticket Preview Container -->
+<div class="xl:col-span-4 rounded-lg bg-surface-container-low p-4 flex flex-col gap-4">
+<div class="flex items-center justify-between pb-2">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-text-muted text-[18px]">terminal</span>
+<span class="font-label-md text-label-md text-text">Ticket Inspector</span>
+</div>
+<span class="font-code-sm text-code-sm px-2 py-0.5 rounded bg-surface-container-high text-text-muted">DRAFT #3</span>
+</div>
+<div class="h-32 rounded bg-surface-container-lowest p-3 font-code-sm text-code-sm text-text-faint overflow-hidden">
+<div>[transport] PUSH req_uuid=9f182c1a ticket=LOCAL-session-capture-a1b2c3d4</div>
+<div class="text-status-blocked">&gt;&gt; HTTP 409 CONFLICT: Rev mismatch (expected 3, current 4)</div>
+<div>[worker] debian-worker patched ticket via hook at 14:02:20 UTC</div>
+<div class="text-primary">&gt;&gt; Holding local draft buffer for resolution dialog...</div>
+</div>
+</div>
+</div>
+<!-- ACTIVE MODAL OVERLAY: Edit Conflict Detected (Revision Collision) (A29, A30, A31, TRD.md) -->
+<div class="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-surface-container-lowest/80 backdrop-blur-md transition-opacity" id="conflict-modal-overlay">
+<div class="w-full max-w-4xl max-h-[92vh] flex flex-col rounded-xl bg-surface shadow-[0_20px_50px_rgba(0,0,0,0.85)] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+<!-- Modal Header -->
+<div class="flex items-start justify-between px-6 py-4 bg-surface-container-high gap-4 flex-shrink-0">
+<div class="flex flex-col gap-1 min-w-0">
+<div class="flex items-center gap-3 flex-wrap">
+<div class="w-7 h-7 rounded bg-error-container text-error flex items-center justify-center flex-shrink-0">
+<span class="material-symbols-outlined text-[18px]">sync_problem</span>
+</div>
+<h2 class="font-headline-md text-headline-md text-text font-semibold tracking-tight">Edit Conflict Detected</h2>
+<div class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-container font-code-key text-code-key text-primary">
+<span class="material-symbols-outlined text-[14px]">confirmation_number</span>
+<span>LOCAL-session-capture-a1b2c3d4</span>
+</div>
+<div class="flex items-center gap-1 px-2 py-0.5 rounded bg-error/15 text-error font-code-sm text-code-sm font-semibold">
+<span>Expected Rev 3</span>
+<span class="text-text-faint">≠</span>
+<span>Stored Rev 4</span>
+</div>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+            Another client or background worker updated this ticket while your edit was pending. Review the state differences below before applying a resolution.
+          </p>
+</div>
+<button class="w-8 h-8 rounded-lg flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-raised transition-colors flex-shrink-0" id="modal-close-icon" title="Close dialog" type="button">
+<span class="material-symbols-outlined text-[20px]">close</span>
+</button>
+</div>
+<!-- Modal Body / Diff Content (Scrollable) -->
+<div class="flex-1 overflow-y-auto p-6 flex flex-col gap-5 bg-surface">
+<!-- Metadata Context Strip -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 rounded-lg bg-surface-container-low font-code-sm text-code-sm">
+<div class="flex items-center gap-2">
+<span class="text-text-muted">Transport Status:</span>
+<span class="px-1.5 py-0.5 rounded bg-error-container/30 text-error font-semibold">409 Conflict</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-text-muted">Collision Key:</span>
+<span class="text-text font-code-key text-code-key">next_action</span>
+</div>
+<div class="flex items-center gap-2">
+<span class="text-text-muted">Receipt Sync ID:</span>
+<span class="text-primary truncate">rcpt_9fa2-88cd1</span>
+</div>
+</div>
+<!-- Side-by-Side Comparison Container -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+<!-- LEFT COLUMN: Your Proposed Edit (Local Draft) -->
+<div class="flex flex-col rounded-lg bg-surface-container-low p-4 gap-3.5 shadow-sm">
+<div class="flex items-center justify-between pb-2 bg-surface-container/40 -mx-4 -mt-4 p-3 rounded-t-lg">
+<div class="flex items-center gap-2 min-w-0">
+<span class="w-2.5 h-2.5 rounded-full bg-status-active flex-shrink-0 animate-ping"></span>
+<span class="w-2.5 h-2.5 rounded-full bg-status-active flex-shrink-0 -ml-4.5"></span>
+<span class="font-headline-sm text-headline-sm text-text">Your Proposed Edit</span>
+</div>
+<span class="font-code-sm text-code-sm px-2 py-0.5 rounded bg-status-active/20 text-status-active font-medium">Draft Pending (Rev 3)</span>
+</div>
+<!-- Field 1: Next Action -->
+<div class="flex flex-col gap-1.5">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-text-muted">Next Action Field</span>
+<span class="font-code-sm text-code-sm text-status-blocked flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px]">change_history</span> Clashing
+                </span>
+</div>
+<div class="p-3 rounded bg-surface-raised font-code-sm text-code-sm text-text leading-relaxed">
+                Finalize stream parser unit tests and verify journal rollback integrity under SIGKILL
+              </div>
+</div>
+<!-- Field 2: Priority -->
+<div class="flex items-center justify-between py-1.5 bg-surface-container/30 px-3 rounded">
+<span class="font-label-sm text-label-sm text-text-muted uppercase">Priority</span>
+<span class="font-label-md text-label-md text-error font-bold flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-error"></span>
+                P0 (Critical)
+              </span>
+</div>
+<!-- Field 3: Status -->
+<div class="flex items-center justify-between py-1.5 bg-surface-container/30 px-3 rounded">
+<span class="font-label-sm text-label-sm text-text-muted uppercase">Status</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/20 text-status-active font-semibold">Active</span>
+</div>
+<!-- Field 4: Origin & Timestamp -->
+<div class="flex flex-col gap-1 pt-2 font-code-sm text-code-sm text-text-faint">
+<div class="flex items-center justify-between">
+<span>Modified:</span>
+<span class="text-text font-medium">14:02:18 UTC (Local Owner)</span>
+</div>
+<div class="flex items-center justify-between">
+<span>Origin:</span>
+<span class="text-text">macOS Darwin (pid 4192 / UI)</span>
+</div>
+</div>
+</div>
+<!-- RIGHT COLUMN: Current Stored Revision (Remote Rev 4) -->
+<div class="flex flex-col rounded-lg bg-surface-container-low p-4 gap-3.5 shadow-sm">
+<div class="flex items-center justify-between pb-2 bg-surface-container/40 -mx-4 -mt-4 p-3 rounded-t-lg">
+<div class="flex items-center gap-2 min-w-0">
+<span class="w-2.5 h-2.5 rounded-full bg-status-deploy flex-shrink-0"></span>
+<span class="font-headline-sm text-headline-sm text-text">Current Stored Revision</span>
+</div>
+<span class="font-code-sm text-code-sm px-2 py-0.5 rounded bg-surface-container-high text-status-deploy font-medium">Rev 4 (Published)</span>
+</div>
+<!-- Field 1: Next Action -->
+<div class="flex flex-col gap-1.5">
+<div class="flex items-center justify-between">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-text-muted">Next Action Field</span>
+<span class="font-code-sm text-code-sm text-status-deploy flex items-center gap-1">
+<span class="material-symbols-outlined text-[13px]">deployed_code</span> Ingress Rev
+                </span>
+</div>
+<div class="p-3 rounded bg-surface-raised font-code-sm text-code-sm text-on-surface-variant leading-relaxed">
+                Promote verified staging build to production cluster (Updated via Hook rev 4)
+              </div>
+</div>
+<!-- Field 2: Priority -->
+<div class="flex items-center justify-between py-1.5 bg-surface-container/30 px-3 rounded">
+<span class="font-label-sm text-label-sm text-text-muted uppercase">Priority</span>
+<span class="font-label-md text-label-md text-error font-bold flex items-center gap-1.5">
+<span class="w-2 h-2 rounded-full bg-error"></span>
+                P0 (Critical)
+              </span>
+</div>
+<!-- Field 3: Status -->
+<div class="flex items-center justify-between py-1.5 bg-surface-container/30 px-3 rounded">
+<span class="font-label-sm text-label-sm text-text-muted uppercase">Status</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/20 text-status-active font-semibold">Active (via debian-worker)</span>
+</div>
+<!-- Field 4: Origin & Timestamp -->
+<div class="flex flex-col gap-1 pt-2 font-code-sm text-code-sm text-text-faint">
+<div class="flex items-center justify-between">
+<span>Modified:</span>
+<span class="text-text font-medium">14:02:20 UTC (2s later)</span>
+</div>
+<div class="flex items-center justify-between">
+<span>Origin:</span>
+<span class="text-text">shivam (via CLI / ingress webhook)</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Inline Visual Diff Section -->
+<div class="flex flex-col rounded-lg bg-surface-container-lowest p-4 gap-2.5">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-tertiary">difference</span>
+<span class="font-label-md text-label-md text-text">Payload Diff: `next_action`</span>
+</div>
+<span class="font-code-sm text-code-sm text-text-faint">Line comparison against rev 4</span>
+</div>
+<div class="rounded bg-background p-3 font-code-sm text-code-sm flex flex-col gap-1 font-mono select-text overflow-x-auto">
+<div class="flex items-start gap-2 text-status-blocked bg-error-container/15 px-2 py-1 rounded">
+<span class="font-bold select-none">-</span>
+<span class="text-text-muted select-none w-5 text-right">01</span>
+<span>Finalize stream parser unit tests and verify journal rollback integrity under SIGKILL</span>
+</div>
+<div class="flex items-start gap-2 text-status-done bg-tertiary-container/15 px-2 py-1 rounded">
+<span class="font-bold select-none">+</span>
+<span class="text-text-muted select-none w-5 text-right">01</span>
+<span>Promote verified staging build to production cluster (Updated via Hook rev 4)</span>
+</div>
+</div>
+</div>
+<!-- Merge Preview / Custom Override Text Area (Toggled when 'Merge' or 'Force' selected) -->
+<div class="hidden flex flex-col rounded-lg bg-surface-container p-4 gap-2" id="merge-preview-container">
+<div class="flex items-center justify-between">
+<span class="font-label-md text-label-md text-primary font-semibold">Composite Rev 5 Next Action Proposal:</span>
+<span class="font-code-sm text-code-sm text-text-faint">Will commit with explicit collision receipt</span>
+</div>
+<textarea class="w-full bg-surface-container-lowest text-text font-code-sm text-code-sm p-2.5 rounded focus:outline-none focus:ring-2 focus:ring-focus-ring resize-none" id="composite-input" rows="2">Finalize stream parser unit tests and verify journal rollback integrity under SIGKILL; then promote verified staging build to production cluster (rev 5 merged)</textarea>
+</div>
+<!-- Resolution Feedback Notification -->
+<div class="hidden flex items-center justify-between p-3 rounded bg-surface-container-high font-code-sm text-code-sm" id="action-receipt-bar">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-freshness-fresh text-[16px]">check_circle</span>
+<span class="text-text" id="receipt-text">Reconciling with local IPC daemon...</span>
+</div>
+<span class="font-label-sm text-label-sm text-primary uppercase tracking-wider">Ack 200 OK</span>
+</div>
+</div>
+<!-- Resolution Buttons Footer (ACCEPTANCE A31 Resolution Options) -->
+<div class="px-6 py-4 bg-surface-container-high flex flex-col sm:flex-row items-center justify-between gap-3 flex-shrink-0">
+<div class="flex items-center gap-2 w-full sm:w-auto">
+<button class="w-full sm:w-auto px-3.5 py-1.5 rounded bg-surface-raised hover:bg-surface-bright text-text font-label-md text-label-md transition-colors" id="btn-cancel-dialog" type="button">
+            Keep Open (Inspect)
+          </button>
+</div>
+<div class="flex items-center flex-wrap sm:flex-nowrap gap-2 w-full sm:w-auto justify-end">
+<!-- Button 1: Discard My Edit & Keep Stored Rev 4 -->
+<button class="flex-1 sm:flex-initial px-3.5 py-1.5 rounded bg-surface-raised hover:bg-error-container hover:text-on-error-container text-on-surface-variant font-label-md text-label-md transition-colors flex items-center justify-center gap-1.5" id="btn-discard" title="Revert local buffer and discard changes" type="button">
+<span class="material-symbols-outlined text-[15px]">delete_sweep</span>
+<span>Discard My Edit (Keep Rev 4)</span>
+</button>
+<!-- Button 2: Merge & Resubmit as Rev 5 -->
+<button class="flex-1 sm:flex-initial px-3.5 py-1.5 rounded bg-surface-variant hover:bg-surface-bright text-text font-label-md text-label-md transition-colors flex items-center justify-center gap-1.5" id="btn-merge" title="Combine both notes into revision 5" type="button">
+<span class="material-symbols-outlined text-[15px]">call_merge</span>
+<span>Merge &amp; Resubmit as Rev 5</span>
+</button>
+<!-- Button 3: Force Override as Rev 5 -->
+<button class="flex-1 sm:flex-initial px-4 py-1.5 rounded bg-primary text-on-primary hover:bg-primary-fixed-dim font-label-md text-label-md font-semibold transition-colors flex items-center justify-center gap-1.5 shadow-sm focus:outline-none focus:ring-2 focus:ring-focus-ring" id="btn-force" title="Overwrite stored Rev 4 with local draft" type="button">
+<span class="material-symbols-outlined text-[15px]">bolt</span>
+<span>Force Override as Rev 5</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+<script>
+  (function initConflictFlow() {
+    // 10-Second Undo Timer Interactive Logic
+    let secondsLeft = 6;
+    const countdownEl = document.getElementById('countdown-num');
+    const progressEl = document.getElementById('undo-progress');
+    const toastEl = document.getElementById('undo-toast');
+    const undoBtn = document.getElementById('undo-btn');
+    const dismissBtn = document.getElementById('dismiss-toast-btn');
+
+    const timer = setInterval(() => {
+      secondsLeft--;
+      if (countdownEl) countdownEl.textContent = secondsLeft;
+      if (progressEl) {
+        progressEl.style.width = (secondsLeft * 10) + '%';
+      }
+      if (secondsLeft <= 0) {
+        clearInterval(timer);
+        if (toastEl) {
+          toastEl.classList.add('opacity-0', 'h-0', 'mb-0');
+          setTimeout(() => toastEl.remove(), 400);
+        }
+      }
+    }, 1000);
+
+    const cancelCountdown = () => {
+      clearInterval(timer);
+      if (toastEl) {
+        toastEl.classList.add('opacity-0');
+        setTimeout(() => toastEl.remove(), 250);
+      }
+    };
+
+    if (undoBtn) {
+      undoBtn.addEventListener('click', () => {
+        alert("Action Cancelled: Restored LOCAL-session-store-e4f5.3 status back to 'Active'");
+        cancelCountdown();
+      });
+    }
+
+    if (dismissBtn) {
+      dismissBtn.addEventListener('click', cancelCountdown);
+    }
+
+    // Modal Resolution Actions
+    const overlay = document.getElementById('conflict-modal-overlay');
+    const closeBtn = document.getElementById('modal-close-icon');
+    const cancelDialogBtn = document.getElementById('btn-cancel-dialog');
+    const btnDiscard = document.getElementById('btn-discard');
+    const btnMerge = document.getElementById('btn-merge');
+    const btnForce = document.getElementById('btn-force');
+    const mergePreview = document.getElementById('merge-preview-container');
+    const receiptBar = document.getElementById('action-receipt-bar');
+    const receiptText = document.getElementById('receipt-text');
+
+    const closeModal = () => {
+      if (overlay) {
+        overlay.classList.add('opacity-0', 'pointer-events-none');
+        setTimeout(() => {
+          overlay.remove();
+        }, 200);
+      }
+    };
+
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (cancelDialogBtn) cancelDialogBtn.addEventListener('click', closeModal);
+
+    // Option 1: Discard
+    if (btnDiscard) {
+      btnDiscard.addEventListener('click', () => {
+        if (receiptBar && receiptText) {
+          receiptBar.classList.remove('hidden');
+          receiptText.textContent = "Reverted local buffer. Ticket now synced to remote Rev 4.";
+          setTimeout(closeModal, 900);
+        }
+      });
+    }
+
+    // Option 2: Merge & Resubmit
+    if (btnMerge) {
+      btnMerge.addEventListener('click', () => {
+        if (mergePreview && mergePreview.classList.contains('hidden')) {
+          mergePreview.classList.remove('hidden');
+          btnMerge.textContent = "Confirm & Submit Merged Rev 5";
+        } else {
+          if (receiptBar && receiptText) {
+            receiptBar.classList.remove('hidden');
+            receiptText.textContent = "Merged payload committed successfully as Revision 5.";
+            setTimeout(closeModal, 900);
+          }
+        }
+      });
+    }
+
+    // Option 3: Force Override
+    if (btnForce) {
+      btnForce.addEventListener('click', () => {
+        const confirmForce = confirm("Are you sure you want to force override stored Rev 4? A superseding Rev 5 will be broadcasted to all workers.");
+        if (confirmForce) {
+          if (receiptBar && receiptText) {
+            receiptBar.classList.remove('hidden');
+            receiptText.textContent = "Force committed local draft as Revision 5. Remote notified.";
+            setTimeout(closeModal, 900);
+          }
+        }
+      });
+    }
+
+    // Keyboard Shortcuts (z / Esc to undo top toast, Esc to close modal when not undoing)
+    window.addEventListener('keydown', (e) => {
+      if ((e.key === 'z' || e.key === 'Z') && secondsLeft > 0) {
+        if (undoBtn) undoBtn.click();
+      }
+      if (e.key === 'Escape') {
+        if (secondsLeft > 0) {
+          cancelCountdown();
+        } else if (overlay) {
+          closeModal();
+        }
+      }
+    });
+  })();
+</script></main></div></body></html>

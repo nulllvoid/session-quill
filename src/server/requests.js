@@ -1,0 +1,216 @@
+// Durable, revision-checked mutation requests (DATA-CONTRACT §Mutation request).
+import { createHash } from 'node:crypto';
+import { isUuid, uuid } from '../lib/ids.js';
+import { addMs, isIsoZ } from '../lib/time.js';
+import { TrackerError } from '../lib/errors.js';
+import { TICKET_STATUSES, repoFor } from '../core/state.js';
+import { outstandingObligations } from '../core/transitions.js';
+import { validateHandoffRequest } from '../handoff/permissions.js';
+
+export const EDIT_DELAY_MS = 10_000;
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh'];
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel']);
+const REVISION_OPTIONAL = new Set(['handoff-cancel']);
+const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
+const TERMINAL = new Set(['applied', 'conflict', 'failed', 'cancelled']);
+
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+
+export function bodyHash(body) {
+  return createHash('sha256').update(stableStringify({ kind: body.kind, target_id: body.target_id ?? null, expected_revision: body.expected_revision ?? null, payload: body.payload ?? {} })).digest('hex');
+}
+
+function normalizeDeploymentItems(items, ticket, { requireChoice } = {}) {
+  if (!Array.isArray(items) || !items.length) throw new TrackerError('request-invalid', 'deployment items must be a non-empty array');
+  return items.map((item) => {
+    if (!item || typeof item !== 'object') throw new TrackerError('request-invalid', 'deployment item must be an object');
+    const obligation = ticket.deployments.find((d) => d.pr_id === item.pr_id && d.environment === item.environment);
+    if (!obligation) throw new TrackerError('obligation-missing', `no deployment obligation for ${item.pr_id}/${item.environment}`);
+    if (item.waiver_reason !== undefined && item.waiver_reason !== null) {
+      if (!String(item.waiver_reason).trim()) throw new TrackerError('waiver-reason-required', 'a waived deployment requires a reason');
+      return { pr_id: item.pr_id, environment: item.environment, state: 'waived', waiver_reason: String(item.waiver_reason).trim() };
+    }
+    if (requireChoice === 'waive') throw new TrackerError('waiver-reason-required', 'a waived deployment requires a reason');
+    if (!item.deployed_at || !isIsoZ(item.deployed_at)) throw new TrackerError('deployed-at-required', 'mark deployed requires deployed_at (RFC 3339 UTC)');
+    return { pr_id: item.pr_id, environment: item.environment, state: 'deployed', deployed_at: item.deployed_at, evidence: item.evidence ? String(item.evidence).slice(0, 500) : null };
+  });
+}
+
+export function validateRequestBody(body, state, nowIso) {
+  if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
+  if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
+  const payload = body.payload ?? {};
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) throw new TrackerError('request-invalid', 'payload must be an object');
+  let target = null;
+  if (TICKET_KINDS.has(body.kind)) {
+    if (!body.target_id) throw new TrackerError('target-required', `${body.kind} requires target_id`);
+    target = state.tickets.get(body.target_id);
+    if (!target) throw new TrackerError('target-unknown', `unknown ticket ${body.target_id}`);
+    if (!REVISION_OPTIONAL.has(body.kind) && (!Number.isInteger(body.expected_revision) || body.expected_revision < 0)) throw new TrackerError('expected-revision-required', 'ticket edits require expected_revision');
+  }
+  let normalized = {};
+  switch (body.kind) {
+    case 'set-next-action': {
+      if (typeof payload.next_action !== 'string') throw new TrackerError('request-invalid', 'next_action must be a string');
+      if (payload.next_action.length > 2000) throw new TrackerError('request-invalid', 'next_action too long');
+      normalized = { next_action: payload.next_action.trim() };
+      break;
+    }
+    case 'set-status': {
+      if (!TICKET_STATUSES.includes(payload.status)) throw new TrackerError('status-invalid', `status must be one of ${TICKET_STATUSES.join(', ')}`);
+      normalized = { status: payload.status };
+      if (payload.status === 'blocked') {
+        if (!(typeof payload.blocker === 'string' && payload.blocker.trim())) throw new TrackerError('blocker-required', 'blocked requires blocker text');
+        normalized.blocker = payload.blocker.trim().slice(0, 500);
+      }
+      if (payload.status === 'done' && outstandingObligations(target).length) {
+        const choice = payload.deployment_choice;
+        if (!['record', 'waive', 'leave'].includes(choice)) throw new TrackerError('deployment-choice-required', 'done with outstanding deployments requires deployment_choice: record, waive or leave');
+        normalized.deployment_choice = choice;
+        if (choice !== 'leave') normalized.deployments = normalizeDeploymentItems(payload.deployments, target, { requireChoice: choice });
+      } else if (Array.isArray(payload.deployments) && payload.deployments.length) {
+        normalized.deployments = normalizeDeploymentItems(payload.deployments, target);
+      }
+      break;
+    }
+    case 'record-deployment':
+      normalized = { items: normalizeDeploymentItems(payload.items, target) };
+      break;
+    case 'handoff':
+      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id) });
+      break;
+    case 'handoff-cancel': {
+      const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
+      if (!h || h.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
+      normalized = { handoff_id: h.id };
+      break;
+    }
+    case 'refresh':
+      normalized = {};
+      break;
+    default:
+      throw new TrackerError('kind-invalid', 'unknown kind');
+  }
+  return {
+    id: body.id,
+    kind: body.kind,
+    target_id: target ? target.id : null,
+    expected_revision: target && !REVISION_OPTIONAL.has(body.kind) ? body.expected_revision : (Number.isInteger(body.expected_revision) ? body.expected_revision : null),
+    payload: normalized,
+    created_at: nowIso,
+    not_before: DELAYED_KINDS.has(body.kind) ? addMs(nowIso, EDIT_DELAY_MS) : nowIso,
+    actor_id: 'owner',
+    retry_of: typeof body.retry_of === 'string' && isUuid(body.retry_of) ? body.retry_of : null,
+    body_hash: bodyHash(body),
+  };
+}
+
+// Returns { status, request } where status is 202 (new or identical repost) or 409 (same id, other body).
+export function submitRequest(worker, body, { actor = 'owner' } = {}) {
+  const now = worker.now();
+  const existing = body && body.id ? worker.state.requests.get(body.id) : null;
+  if (existing) {
+    if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
+    throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
+  }
+  const request = validateRequestBody(body, worker.state, now);
+  request.actor_id = actor;
+  const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
+  if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
+  const record = worker.state.requests.get(request.id);
+  worker.publishRequest(request.id);
+  return { status: 202, request: record };
+}
+
+function currentValues(ticket) {
+  return { revision: ticket.revision, next_action: ticket.next_action, status: ticket.status, blocker: ticket.blocker, deployments: ticket.deployments, updated_at: ticket.updated_at };
+}
+
+export function evaluateRequest(worker, req) {
+  const { state } = worker;
+  const ticket = req.target_id ? state.tickets.get(req.target_id) : null;
+  if (req.kind !== 'refresh' && !ticket) return { outcome: 'failed', error: { code: 'target-unknown', message: 'ticket no longer exists', retryable: false, current_revision: null } };
+  if (ticket && req.expected_revision !== null && ticket.revision !== req.expected_revision) {
+    return { outcome: 'conflict', error: { code: 'revision-conflict', message: `ticket is at revision ${ticket.revision}, request expected ${req.expected_revision}`, retryable: false, current_revision: ticket.revision }, result: { current: currentValues(ticket) } };
+  }
+  switch (req.kind) {
+    case 'set-next-action':
+      return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { next_action: req.payload.next_action } } };
+    case 'set-status': {
+      const fields = { status: req.payload.status };
+      if (req.payload.blocker !== undefined) fields.blocker = req.payload.blocker;
+      if (Array.isArray(req.payload.deployments)) fields.deployments = req.payload.deployments;
+      return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields } };
+    }
+    case 'record-deployment':
+      return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { deployments: req.payload.items } } };
+    case 'handoff': {
+      const existing = [...state.handoffs.values()].find((h) => h.ticket_id === ticket.id && ['queued', 'running'].includes(h.state));
+      if (existing) return { outcome: 'failed', error: { code: 'handoff-reserved', message: `handoff ${existing.id} is already ${existing.state} for this ticket`, retryable: true, current_revision: ticket.revision }, result: { existing_handoff_id: existing.id } };
+      const handoff = {
+        schema_version: 1, store_id: state.meta.store_id, id: uuid(), revision: 1, created_at: worker.now(), updated_at: worker.now(),
+        ticket_id: ticket.id, request_id: req.id, mode: req.payload.mode, note: req.payload.note, permissions: req.payload.permissions,
+        base_ticket_revision: ticket.revision, repo_id: ticket.repo_id ?? null, base_commit: null, branch: req.payload.branch ?? null, state: 'queued',
+        requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,
+        children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
+      };
+      return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
+    }
+    case 'handoff-cancel': {
+      const h = state.handoffs.get(req.payload.handoff_id);
+      if (!h) return { outcome: 'failed', error: { code: 'handoff-unknown', message: 'handoff no longer exists', retryable: false, current_revision: ticket.revision } };
+      if (!['queued', 'running'].includes(h.state)) return { outcome: 'failed', error: { code: 'handoff-terminal', message: `handoff is already ${h.state}`, retryable: false, current_revision: ticket.revision }, result: { state: h.state } };
+      return { outcome: 'applied', mutation: { type: 'handoff-cancel', handoff_id: h.id }, result: { handoff_id: h.id, was: h.state } };
+    }
+    default:
+      return { outcome: 'failed', error: { code: 'kind-invalid', message: 'unsupported request kind', retryable: false, current_revision: null } };
+  }
+}
+
+function finish(worker, req, evaluation) {
+  const payload = { request_id: req.id, outcome: evaluation.outcome, error: evaluation.error ?? null, result: evaluation.result ?? null, mutation: evaluation.mutation ?? null };
+  worker.emit('request-tx', payload, { source_identity: `request-tx:${req.id}:${evaluation.outcome}` });
+  worker.publishRequest(req.id);
+}
+
+// Serialized application of due requests; refresh requests are owned by the reconciliation extension.
+export function applyDueRequests(worker, nowIso) {
+  let applied = 0;
+  for (const req of [...worker.state.requests.values()]) {
+    if (req.state !== 'pending' || req.kind === 'refresh') continue;
+    if (req.not_before > nowIso) continue;
+    worker.emit('request-tx', { request_id: req.id, outcome: 'applying' }, { source_identity: `request-tx:${req.id}:applying` });
+    finish(worker, req, evaluateRequest(worker, req));
+    applied += 1;
+  }
+  return applied;
+}
+
+// After a crash an `applying` request has no terminal transaction: re-evaluate it safely.
+export function recoverApplying(worker) {
+  for (const req of [...worker.state.requests.values()]) {
+    if (req.state !== 'applying' || req.kind === 'refresh') continue;
+    finish(worker, req, evaluateRequest(worker, req));
+  }
+}
+
+export function cancelRequest(worker, id) {
+  const req = worker.state.requests.get(id);
+  if (!req) return { outcome: 'unknown', request: null };
+  if (req.state === 'pending') {
+    worker.emit('request-tx', { request_id: id, outcome: 'cancelled' }, { source_identity: `request-tx:${id}:cancelled` });
+    worker.publishRequest(id);
+    return { outcome: 'cancelled', request: worker.state.requests.get(id) };
+  }
+  if (req.state === 'applying') return { outcome: 'applying', request: req };
+  if (req.state === 'applied') return { outcome: 'already-applied', request: req };
+  return { outcome: 'already-terminal', request: req };
+}
+
+export function isTerminal(req) {
+  return TERMINAL.has(req.state);
+}

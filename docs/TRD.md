@@ -1,309 +1,234 @@
 # Session Tracker — Technical Requirements & Design (TRD)
 
-Status: draft v0.1 · 2026-10-02 · Owner: Shivam
-Live doc (editable, with comments): https://claude.ai/code/artifact/e7c5396d-215e-40fd-8e8a-37cb7f1ee220
-Companion docs: [PRD](PRD.md) · [UI design spec](UI-DESIGN.md) · [Decisions](decisions/)
+Status: revised draft v0.2 · 2026-10-02 · Owner: Shivam
+Companions: [PRD](PRD.md), [data contract](DATA-CONTRACT.md), [UI](UI-DESIGN.md), [acceptance](ACCEPTANCE.md), [decisions](decisions/).
 
-## Problem and goals
-
-The tracker is a public tool: anyone using Claude Code gets their own session tracker that ties every session to a real project and ticket, so no session's work is lost when they switch away. It starts from the PMLA stack (hooks → Obsidian → agent → artifact) and generalises it: pluggable backends, any project, installable as a plugin.
-
-What v1 must guarantee:
-
-- No write without a ticket. Edit, Write or commit in a session with no bound work item is refused until one is bound. A local note (markdown folder or Obsidian vault) is the mandatory entry; Jira or Notion are optional links.
-- Every write, approved plan and conclusion lands in the store within seconds, on the right note, with project, category, tags and a parent link.
-- A session that goes extinct (closed, compacted, forgotten) still has its last state, conclusions and next action readable in the store and in the UI.
-- The UI answers two questions at a glance: what is the status of each item, and what should I pick next.
-- Any item can be handed to an agent that reads its note, looks at local source when needed, and files child follow-ups.
-- Installable by anyone: one plugin install and one `tracker init`; hooks and notes work offline on the user's machine with no cloud dependency.
-- Project tagging is automatic: `tracker init` in a repo records the project, so every ticket and session carries the real project name without manual tagging.
-
-Out of scope for v1: Jira or Notion as system of record, shared team dashboards (one tracker per user), hosted sync between users.
+This is an implementable design contract, not a claim that integrations have already been built or tested. The committed documents are authoritative for v0.2. Earlier live documents and PNG diagrams are historical v0.1 references and must not override this design.
 
 ## Architecture
 
-![Session tracker architecture: hooks write the vault once; agents and the UI read from it](diagrams/architecture.png)
-
 ```mermaid
 flowchart LR
-  subgraph machine["User's machine"]
-    S["Claude Code session<br/>hook events call tracker hook"] -->|hook events| C["tracker CLI<br/>gate · append-first events.jsonl"]
-    C -->|ticket and session notes| V[("Store: markdown folder / Obsidian vault<br/>tickets · sessions · handoffs")]
-    H["Handoff agent (fire-only task)<br/>reads note + local source, files children"] -->|handoff note + child notes, via tracker CLI| C
-  end
-  V <-->|reads notes, applies UI edits| A["Interval agent (every 2 h)<br/>reconcile · stale · pick-next"]
-  A <-->|db rows out, requests + edits in| U["Artifact UI<br/>board · tree · sessions · deploys"]
-  A -->|queued handoffs| H
+  H["Claude Code hooks / CLI"] --> I["Durable local ingress"]
+  I --> W["One local worker / serialized writer"]
+  W --> J["Journal + full checkpoint blobs"]
+  W --> N["Markdown / Obsidian projections"]
+  W --> D["Local dashboard projections"]
+  U["Owner UI on loopback"] -->|"authenticated requests"| W
+  D --> U
+  W --> A["Handoff in isolated checkout"]
+  A -->|"results via CLI"| I
+  D --> X["Previewed read-only HTML export"]
 ```
 
-Sessions never touch the vault directly: the tracker CLI is the single writer, the interval agent mirrors the vault into the artifact database, and the handoff agent files its results back through the same CLI. This is the PMLA v2 flow (hooks → vault → agent → artifact) with the gate, the handoff loop and the shared database added.
+The local worker owns scheduling, projection updates and request processing. Deterministic reconciliation never requires a model. Handoff reasoning is an optional model-backed operation. Hosted artifact databases, remote device bridges and hosted task APIs are not v1 dependencies.
 
-## Vault schema
+One logical store has one owner machine and one worker. Machine identity is a persisted UUID, not a hostname. Copying or syncing a store never authorizes a second writer. Moving ownership requires stopping the first worker and explicitly importing/transferring the full journal, blobs and store metadata; concurrent multi-machine merge is unsupported.
 
-One folder `Tracker/` in the vault, four note types, all linked through frontmatter so Dataview or Bases can build any view without parsing bodies.
+## Durability and concurrency
 
-| Note type | Path | One per | Key frontmatter |
-| --- | --- | --- | --- |
-| Ticket | `Tracker/tickets/<KEY>.md` | work item (feature, bug, vuln, infra, research) | key, title, status, category, priority, parent, children, jira, repo, prs, sessions, next_action, last_activity |
-| Session | `Tracker/sessions/<session_id>.md` | Claude Code session | session_id, ticket, machine, cwd, started, ended, state (live / ended / extinct), writes, last_checkpoint |
-| Follow-up | `Tracker/tickets/<KEY>-f<n>.md` | child task, filed by you or the handoff agent | ticket fields + parent `[[KEY]]`, origin (handoff / manual) |
-| Handoff | `Tracker/handoffs/<KEY>-<ts>.md` | one handoff run | ticket, requested_at, mode, result, children_created |
+1. Each hook or CLI producer assigns an event UUID. It writes an exclusive temporary file under `~/.claude/tracker/ingress/`, flushes it and atomically renames it to `<event_id>.json`. Only complete files are eligible for ingestion. Referenced checkpoint blobs must be persisted before the event. A successful receipt means this persistence completed, not that notes already changed.
+2. The worker holds an exclusive per-store local socket/named-pipe ownership lock released by the OS on exit. The endpoint is derived from owner and store UUIDs; startup verifies the canonical store path. Never steal ownership on a timer. A competing worker refuses to start.
+3. The worker serially validates ingress, assigns a monotonically increasing sequence, appends to `events.jsonl`, flushes the journal and only then acknowledges ingestion. Duplicate event IDs or source identities have one effect. A restarted worker scans its checkpoint plus the journal tail before applying new events.
+4. Ticket, session, request and binding projections are written to temporary files in their destination directory and atomically replaced. Windows replacement retries do not fall back to truncating the destination. A commit manifest identifies a completed projection generation; the UI only reads complete generations.
+5. Dirty notes flush no later than 30 s after the first unmaterialized event. Later events cannot postpone that deadline. Stop, SessionEnd and explicit sync request an early flush. The persistent worker timer handles the case where no more hooks arrive.
+6. Ingress is retained until its journal entry is flushed. A crash between journal append and ingress cleanup therefore causes harmless redelivery. A torn journal tail is quarantined and recovered from remaining ingress; corruption in the middle stops replay and reports recovery required.
+7. Bind/create/relink commands wait for a worker-confirmed revision; an offline command must not pretend binding changed. Non-gate capture can still persist ingress while the worker is unavailable. Gate writes require a healthy worker and readable committed binding.
+8. Hook p95 budget is 200 ms; persistence timeout is 1 s. On capture failure, emit a non-blocking diagnostic and record a health error when storage becomes available. Do not return success receipts for failed persistence. Gate error responses deny covered operations, but host timeout/crash behavior is outside the gate guarantee.
 
-Ticket frontmatter, as hooks write it:
+The worker updates its local health heartbeat every 5 s; a heartbeat older than 15 s is unavailable for gate decisions. Binding snapshots are published immediately after their journal transaction, independently of the 30 s note timer. Ingress may arrive out of order: tool results wait for their matching pre-call attribution record; they are not assigned by ingestion order. Missing pre-call records remain unresolved and visible after one reconciliation run. Wall-clock timestamps describe observations; journal sequence and binding revisions determine update order.
 
-```yaml
-type: ticket
-key: DIQ-412
-title: KRaft migration - JDK21 broker rollout
-status: active        # todo | active | blocked | review | deploy-pending | done | stale
-category: infra       # feature | bugfix | vuln | infra | research | analysis
-priority: P2
-parent: "[[DIQ-400]]"
-children: ["[[DIQ-412-f1]]"]
-jira: DIQ-412
-repo: data-iq/kafka-platform
-prs: ["https://bitbucket.org/paytmmoney/kafka-platform/pull-requests/88"]
-sessions: [a1b2c3, d4e5f6]
-next_action: "Verify controller quorum on stage after the JDK21 image"
-last_activity: 2026-10-02T14:03
-tags: [tracker/status/active, tracker/cat/infra, kafka]
+Use local filesystems for ingress/journal. Test flush/rename behavior on each supported platform. Durability covers tested process-crash recovery; power loss, disk loss and third-party sync corruption require backups and are not absolute guarantees.
+
+Replay reduces events into generated state; it never runs tools, resends remote requests, pushes branches or restarts handoffs. Duplicate successful tool events do not increment counts twice. Full replay writes a staging store, validates it, then switches generations. Default replay keeps the original store and offers a comparison.
+
+User-authored text lives outside marked generated blocks. Preserve it byte-for-byte on ordinary updates. Compare generated-block hashes before replacement; external changes create a conflict and keep the original file. A user can explicitly import supported field changes through the CLI, creating journal events, or restore the generated block after preview. Never silently absorb manual generated edits. A full backup is required to reconstruct authored text on an empty disk; the journal alone rebuilds only generated content.
+
+## Canonical schema
+
+[DATA-CONTRACT.md](DATA-CONTRACT.md) is authoritative for fields, enums, identities and transitions. Both markdown and dashboard JSON derive from it; the UI must not invent extra fields.
+
+Store layout:
+
+```text
+Tracker/
+  store.json
+  tickets/<safe-key>.md
+  sessions/<session-id>.md
+  handoffs/<handoff-id>.md
+  authored/                 # preserved user attachments, if any
+~/.claude/tracker/
+  config.toml
+  ingress/
+  events.jsonl
+  blobs/<content-hash>
+  state/                    # binding snapshots, request state, indexes
+  projections/
 ```
 
-Ticket body keeps a fixed heading order so hooks append under the right one: Summary, Timeline (dated log, newest first), Approved plans, Conclusions, Files touched, PRs and deployments, Follow-ups, Handoff notes.
+Ticket body order: user Summary; generated Timeline, Approved plans, Conclusions, Files touched, PRs and deployments, Follow-ups, Handoff notes; user Notes. Generated links use stable internal IDs, rendering current ticket keys. Validate path components and canonical destination containment; neither keys nor imported links may escape the store.
 
-Rules:
-
-- `status` and `category` are closed sets; hooks and the agent write only those values. `stale` is set by the agent, never by a hook.
-- Parent/child is `parent:` on the child plus `children:` on the parent; the agent reconciles both sides every run.
-- Tags mirror status and category (`tracker/status/*`, `tracker/cat/*`) so graph view and tag search work without plugins.
-- Key is the Jira key when one exists, else `LOCAL-<slug>`; `/ticket relink` moves a LOCAL key to a Jira key later and leaves an alias.
-- Session notes are the audit log, ticket notes the curated view. Hooks write both; the agent edits ticket notes only.
+Use UTC RFC 3339 timestamps with explicit offsets normalized to `Z`; dates such as due dates use YYYY-MM-DD and the store's configured IANA time zone. Schema version is independent of plugin version.
 
 ## Ticket gate
 
-A `PreToolUse` hook denies every write in a session that has no bound ticket, and tells Claude exactly how to bind one. Reads, searches and plan mode are never gated, so a research-only session costs nothing.
+The gate applies only to tool calls delivered to its supported hooks. It is not a security sandbox or a guarantee about arbitrary filesystem changes.
 
-What counts as a write:
+| Operation while unbound | Decision |
+| --- | --- |
+| Dedicated Read, Glob and Grep | Pass through to normal host permissions |
+| Supported Edit, Write, MultiEdit and NotebookEdit | Deny, except the verified host plan-file exception |
+| Bash or native PowerShell | Permit only the tested read-only grammar below; otherwise deny |
+| Registered mutating MCP/other tools | Deny |
+| Unregistered tools with unknown effects | Deny until bound, except explicitly registered non-mutating host control tools |
+| Tracker bind/create/show/off commands | Permit only validated direct CLI invocation targeting tracker state |
+| Host plan controls and approved plan-file exception | Permit; capture approval only on verified successful approval outcome |
 
-- Tools `Edit`, `Write`, `MultiEdit`, `NotebookEdit` (matcher on tool name).
-- `Bash` commands matching `git commit|git push|git merge|git rebase|mv |rm |sed -i|> ` and package publish commands; everything else in Bash passes.
-- Subagent tool calls fire the same hooks; whether they carry the parent session id is checked in phase 1, with a cwd-based lookup of the binding as the fallback, so the rule still covers `Agent` fan-out.
+The initial shell read subset is deliberately small: exact `pwd`, `git status` (`--short`, `--branch`, `--porcelain` only), literal-path `ls`/`cat` on Bash, and literal-path `Get-Location`/`Get-ChildItem`/`Get-Content` on PowerShell with an explicitly tested option grammar. Deny pipelines, redirects, command substitution, statement separators, script execution, environment assignments, unknown options and shell profiles that can run arbitrary setup. Start shell tools without user startup profiles where the host supports it; document that ambient command wrappers/aliases remain outside the guarantee. Dedicated read/search tools remain available when a shell form is rejected. Add read forms only with fixtures, never a write-command blacklist.
 
-Binding model:
+An active binding permits these operations to proceed through normal host permissions; do not emit an unconditional host permission `allow` override. Gate-off is scoped to the session or explicit user configuration, emits an audit event, remains visible and ends on explicit re-enable. Provide both `/ticket off` and `/ticket on`.
 
-- Binding lives in `~/.claude/tracker/sessions/<session_id>.json`: `{ticket, bound_at, cwd, machine}`. One ticket per session; rebinding is allowed and logged.
-- `/ticket DIQ-412` binds an existing note. `/ticket new "<title>" --cat infra --parent DIQ-400` creates the note from the template, then binds. `/ticket` alone prints the current binding.
-- The slash command is a Claude Code command (`commands/ticket.md` in the plugin) that runs `tracker bind …`; the gate's deny message says the same thing, so Claude recovers on its own after one refused write.
-- On `SessionStart`, the hook injects the binding (or the instruction to bind) into context, so a resumed session knows its ticket without being asked.
-- Status line shows `[DIQ-412 · active]` or `[no ticket]`, read from the same binding file.
+The plan-file exemption permits only the exact canonical host-designated plan path for that session, under the verified plan directory, excluding symlink/reparse escapes. Host plan mode alone never exempts source edits. Phase 0 must prove reliable plan-path identification; if unavailable, that host version is unsupported for the full gate/read/plan contract, rather than silently widening the exception.
 
-Gate decision, per tool call:
+Tracker initialization is a terminal/setup operation. Direct tracker state-changing commands are narrowly exempt so a user can bind before source writes; arbitrary shell wrappers around them are not exempt. This gate remains a user-controlled workflow aid: disabling it is possible and logged when observable.
 
-1. Read `session_id`, `tool_name`, `tool_input` from the hook's stdin JSON.
-2. Not a write → exit 0, allow.
-3. Binding file exists and its note exists in the vault → allow; record the write (see capture hooks).
-4. Otherwise → return `permissionDecision: deny` with reason `No ticket bound. Run /ticket <KEY> or /ticket new "<title>" before writing.` and append an `unticketed_write_blocked` event to the session log.
+## Binding and attribution
 
-Escape hatch: `TRACKER_GATE=off` in the environment (or `/ticket off` for the session) disables the gate but still logs; the UI shows those sessions as unticketed so they can be tagged later.
+- Identity is store ID + machine ID + host session ID, with optional agent ID and explicit parent mapping from verified lifecycle events. Never resolve a binding by cwd.
+- Each binding change increments a binding revision and closes the previous history interval. Rebind affects future calls only.
+- Before a tool runs, capture its tool-call ID and current ticket/binding revision. PostToolUse refers to that saved attribution, even if the session was rebound while it ran. If the call ID or parent mapping is missing, quarantine attribution as unresolved; never guess another session's ticket.
+- A subagent inherits the parent's binding at launch. Its ongoing calls retain that binding unless explicitly rebound; a later parent rebind is not retroactive.
+- Resume restores identity and history. Project changes require explicit rebinding/confirmation through the CLI; do not retag older events when cwd changes.
+- Session records contain all bindings and ticket IDs. Ticket session lists derive from attributed events/bindings, including active sessions before SessionEnd.
+- Local keys are `<prefix>-<slug>-<short-id>`, default prefix LOCAL; child keys use a serialized parent counter. Stable ticket UUIDs never change. Relinking changes the displayed key and adds an alias atomically; reject an existing key/alias collision.
+- Jira bind validates syntax locally. With a configured provider, successful remote validation sets valid; network/auth outage sets pending with a reason and allows local binding. A definitive missing key sets invalid; preserve the local ticket and require correction of the external link, not deletion of its audit history.
 
-## Capture hooks
+## Capture and approval
 
-Every Claude Code hook event routes to one CLI, `tracker hook`, which appends an event to a local log and then updates the bound ticket's note. The gate is the only hook that can block; every other hook exits 0 even when the vault write fails, so tracking never stalls a session.
+| Event | Persisted behavior |
+| --- | --- |
+| SessionStart | Create/resume identity; inject current binding/help; resume does not reset history |
+| UserPromptSubmit | First prompt produces a sanitized 80-character title; subsequent prompts are inspected only for enabled approval matching and not retained wholesale |
+| PreToolUse | Gate decision and attribution snapshot; an allowed attempt is not counted as a successful write |
+| PostToolUse | Capture successful supported file writes; commit/PR metadata from tested adapters; actual approved-plan content on verified ExitPlanMode success |
+| PostToolUseFailure | Record failure and possible partial changes as unknown; do not claim no files changed |
+| Stop | Persist full assistant checkpoint as a blob; derive 1,500-character preview and marker-based conclusions referencing the full text |
+| PreCompact | Save recovery summary from already captured events/checkpoints; this is not a claim to capture the host's eventual compaction summary |
+| SubagentStart / SubagentStop | Record explicit parent/agent identities and full final checkpoint when available |
+| SessionEnd | Mark ended and flush; abrupt termination without this event is recovered by time-based lifecycle rules |
 
-| Hook event | Matcher / trigger | What lands in the vault |
-| --- | --- | --- |
-| SessionStart | all | Session note created (machine, cwd, started); binding or bind instruction injected into context |
-| UserPromptSubmit | first prompt of the session | Session title = first 80 chars; later prompts are not logged |
-| PreToolUse | write tools (see gate) | Allow or deny; denied attempts logged as `unticketed_write_blocked` |
-| PostToolUse | Edit, Write, MultiEdit, NotebookEdit | `write` event: path, tool; ticket Files touched (deduped) and `last_activity` |
-| PostToolUse | Bash: `git commit`, `git push`, PR create | Commit hash and message to Timeline; PR URL to `prs`; status to `review` on first PR |
-| PostToolUse | ExitPlanMode (returns = plan approved) | Plan text to Approved plans with date and session id; tag `plan` |
-| Stop | end of each assistant turn | Last assistant message saved as session `last_checkpoint` (1,500 chars); if it carries a conclusion marker (`## Conclusion`, `Decision:`, `Recommendation:`) it is appended to Conclusions |
-| PreCompact | before context compaction | Digest of files touched and last checkpoint written to the session note; `compacted` counter incremented |
-| SessionEnd | session closes | Session `state: ended`, duration, write count; ticket `sessions[]` updated |
+Shell/MCP write counts include only changes verified by the relevant adapter. Other permitted bound calls are recorded as tool activity with change coverage unknown. Do not fabricate file paths or classify every successful shell command as a write. PR and commit provider failures remain visible.
 
-Approved research and analysis: a checkpoint becomes approved in one of two ways. `/approve` (or `/approve "<note>"`) promotes the latest checkpoint into the ticket's Conclusions under an "Approved analysis" entry. A short affirmative prompt (`approved`, `lgtm`, `go ahead`, `ship it`) right after a checkpoint does the same through the UserPromptSubmit hook; the phrase list is configurable and can be turned off.
+Explicit approval selects the latest checkpoint for the current binding, or an explicit checkpoint ID belonging to that ticket. No checkpoint is a useful error. Approval uses a unique checkpoint/ticket key, so repeated approval has one effect.
 
-Categorisation and tagging:
+Optional heuristic defaults off. When enabled, match the complete trimmed case-insensitive next user prompt against the phrase list (approved, lgtm, go ahead, ship it), within 10 min of the checkpoint, on the same binding with no intervening tool activity or prompt. Quoted text, added sentences and negation do not match. Record heuristic provenance; never infer tool/deployment permission from it.
 
-- Category comes from `/ticket new --cat`, or the agent infers it later from the note (CVE or vuln words → `vuln`; upgrade, migrate, cluster → `infra`). Hooks never guess a category.
-- Hooks add mechanical tags only: repo name, languages from file extensions, `plan`, `conclusion`, `pr`, `blocked-write`.
-- Children: `/ticket new --parent <KEY>` or `tracker child "<title>"` from inside a session; the handoff agent files children with `origin: handoff`.
+The durable store keeps complete checkpoint blobs; oversized transport fields are streamed/chunked, not silently truncated. Missing content becomes a capture error and an incomplete checkpoint, not an approved full analysis.
 
-Implementation notes:
+## Reconciliation and lifecycle
 
-- One Node script (no dependencies; Claude Code already needs Node), shipped in the plugin at `${CLAUDE_PLUGIN_ROOT}/bin/tracker.js`; `hooks.json` in the plugin registers it for every event and it dispatches on `hook_event_name`.
-- Append-first: `~/.claude/tracker/events.jsonl` gets the event before any vault write, so a vault that is locked or unsynced loses nothing; a replay command rebuilds notes from the log.
-- Budget under 200 ms per hook. Ticket note rewrites are debounced to once per 30 s per ticket via a dirty flag that Stop and SessionEnd flush.
-- `~/.claude/tracker/config.toml` holds store path, machine name, gate on/off, approve phrases, category list; a per-repo `.tracker.toml` adds the project (see Packaging). The same config works on macOS, Linux and Windows or WSL; only paths differ.
-
-Claude Code's newer mods API (`tool.check`, `session.compact`, `ui.render`) could replace these settings hooks and draw the status band natively. v1 stays on settings hooks because they are stable and work on older versions; a mod is a phase 6 option.
-
-## Interval agent
-
-The agent is the existing "Delivery tracker agent" generalised: a scheduled task that reads the vault, reconciles ticket notes, scores what to pick next, and pushes rows into the artifact's database. Interval is configurable; default every 2 hours on weekdays 09:00–21:00 IST, plus an on-demand fire from the UI's Refresh button.
+The worker reconciles every two hours, all days, with immediate catch-up after startup/wake. Manual Refresh queues an immediate run independent of that schedule. Deterministic work includes link repair, lifecycle, staleness and ranking. Optional category suggestions require explicit acceptance; default category is research when neither repo nor command supplies one.
 
 Each run:
+1. Import pending captured events and validated manual imports.
+2. Reconcile all open ticket/session identities, even if their files have not changed; incremental parsing is only a content optimization.
+3. Poll configured PR providers for nonterminal PRs, including records with unchanged note mtimes. Retain last known evidence and a provider error on failure.
+4. Recompute time-derived state and ranking, validate the graph, publish one complete dashboard generation.
+5. Set last_sync only after successful publication. A failed provider may produce a usable local generation with an explicit provider error; never mark remote evidence fresh.
 
-1. Load every note under `Tracker/` changed since the last run (by `last_activity` and file mtime), plus the events log for sessions with no note yet.
-2. Reconcile: fill `children[]` from `parent:` links, update `sessions[]`, infer missing `category`, pull PR state from Bitbucket when a PR URL is present (merged → `deploy-pending`, deployment noted in session → `done`).
-3. Mark sessions: `live` if a Stop event in the last 30 min, `ended` if SessionEnd fired, `extinct` if neither for 48 h. Extinct sessions with unpromoted checkpoints get a Timeline line on their ticket so the work is visible.
-4. Mark tickets `stale` when `active` with no activity for 5 days (configurable); `blocked` tickets are never marked stale.
-5. Score pick-next and write the top 5 with reasons.
-6. Write rows (tickets, sessions, handoffs, pick-next, `last_sync`) to the artifact database in one batch; the page reads them live.
-7. Process pending handoff requests (see Handoff agent) or hand them to the fire-only handoff task.
+Session state: ended on SessionEnd; otherwise live while a captured event is <= 30 min old, idle after 30 min and before 48 h, extinct at >= 48 h. A new event/resume returns idle/extinct to live. Live is an activity indicator, not a process liveness guarantee and never a source-edit lock. Compaction does not end a session.
 
-Pick-next score, per open ticket (higher first):
+Ticket stale is a derived flag: status active and last substantive activity >= 5 days old. Reconciliation, polling and derived-state writes do not reset activity. New work clears the flag without losing status; blocked/done tickets do not acquire it. A journaled notification for an extinct unpromoted checkpoint is emitted once per checkpoint, not on every sync.
 
-| Signal | Points | Why |
-| --- | --- | --- |
-| Priority P0 / P1 / P2 / P3 | 40 / 25 / 10 / 0 | Stated urgency wins |
-| Deadline within 3 days / 7 days | +30 / +15 | From `due` in frontmatter or Jira |
-| `deploy-pending` older than 2 days | +20 | Shipped work that is not done is cheapest to finish |
-| `review` with PR open > 1 day | +15 | Unblocks others |
-| Has `next_action` set | +10 | Resumable without rereading |
-| Parent has other children done | +10 | Finishing a tree |
-| `stale` | +10 | Surface before it is forgotten |
-| `blocked` | −50 | Not pickable; listed separately with the blocker |
+## Workflow and deployments
 
-The agent writes the reason string with the score ("P1, PR open 3 days, next action set") so the UI can show why, not just a number.
+The data contract defines status transitions and manual override precedence. PR evidence can propose/derive review and deploy-pending, but must not overwrite a blocked state or an explicit manual status at the same evidence version. Repeated polls do not undo a user's choice.
 
-Where it runs: the vault is local, so the task needs the computer. It runs as a scheduled task requiring the machine that hosts the vault, reading notes through the device bridge; if the vault is synced to a second machine (Obsidian Sync or git), either machine can host the run. A local fallback (`tracker sync` on cron or Task Scheduler) does steps 1–5 without Claude and writes the rows directly.
+Deployments track individual merged PRs and environments, not a single ticket boolean. Mark deployed requires selected PR IDs, environment, timestamp and evidence/note. A waived deployment requires a reason. A ticket can be done with outstanding deployments after explicit user confirmation; it remains listed in Deployments until each obligation is deployed or waived. Never equate a draft PR with a merged deployment obligation.
 
-## Artifact UI
+## Pick-next
 
-One Claude artifact, "Session Tracker", replaces the PMLA Delivery Tracker page. It reads rows the agent writes to the artifact database, so it is never republished for data changes; only layout changes need a republish. Header shows `last sync` and a Refresh button that queues an on-demand agent run. The full UI specification is in [UI-DESIGN.md](UI-DESIGN.md).
+Eligible candidates are statuses todo, active, review and deploy-pending. Exclude blocked and done before scoring; blocked records form a separate list with blocker text.
 
-| View | Shows | Interactions |
-| --- | --- | --- |
-| Pick next | Top 5 tickets with score and reason; blocked list beneath with the blocker | Open ticket; Handoff |
-| Board | Columns by status (todo, active, review, deploy-pending, blocked, stale, done); cards carry key, title, category chip, priority, last activity, session count | Filter by category, tag, repo, machine; search |
-| Tree | Parent → children, collapsed by default; progress per parent (3 of 5 children done) | Expand; open; add child (creates a `LOCAL-` note via the agent) |
-| Sessions | Every session, newest first: ticket, machine, state (live / ended / extinct), writes, last checkpoint | Filter extinct-with-unpromoted-work; open ticket |
-| Deployments pending | Tickets with merged PRs not yet deployed, oldest first; the end-to-end journey (plan → PRs → deploy) for recently touched tickets at the top, as the PMLA tracker shows today | Mark deployed (writes a row the agent applies to the note) |
-| Ticket detail (side panel) | Summary, next action, timeline, approved plans, conclusions, files touched, PRs, follow-ups, handoff runs | Edit next action; set status; Handoff |
+| Signal | Raw points |
+| --- | --- |
+| Priority P0 / P1 / P2 / P3 | 40 / 25 / 10 / 0 |
+| Due overdue or within 3 local calendar days / within 7 days | 30 / 15 (exclusive) |
+| Oldest pending merged PR >= 2 days old | 20 |
+| Oldest open PR >= 1 day old, status review | 15 |
+| Nonempty next_action | 10 |
+| Parent has another direct child done | 10 |
+| stale flag true | 10 |
 
-Handoff button, on every ticket card and in the detail panel:
+Display score = min(100, raw score). Rank by raw score descending, then due ascending (null last), priority ascending, last_activity ascending and stable ticket ID. Reasons list actual contributing signals. Show at most five, and fewer when fewer eligible candidates exist. Provider-unknown dates earn no age points and show the evidence limitation.
 
-- Opens a small form: mode (`analyse`, `analyse + file follow-ups`, `attempt fix`), optional note, and whether local source may be read.
-- Writes a `handoffs` row `{ticket, mode, note, allow_source, requested_at, status: queued}`; the card shows "queued" at once.
-- The agent picks the row up on its next run or fires the handoff task immediately; the row moves to `running` then `done` with a link to the handoff note and any children created.
+## Local dashboard and request transport
 
-Data capabilities: the page declares `db` (shared, durable rows: `tickets`, `sessions`, `handoffs`, `picknext`, `meta`). Writes from the page are limited to `handoffs`, `sync_requests` and small edits (`next_action`, `status`, `deployed`) that the agent applies to the vault on its next run; the vault stays the source of truth. No browser storage beyond remembered filters.
+`tracker ui` opens a dashboard served by the worker on loopback only. It never binds to a LAN/public interface in v1. Initialization starts/supervises the worker via the OS service mechanism; CLI diagnostics expose ownership, backlog and errors. UI loss of connection leaves the last rendered generation visible with an offline banner and disables submissions.
 
-## Handoff agent
+The worker provides versioned JSON endpoints:
+- `GET /v1/snapshot`: complete generation, collections and capabilities.
+- `GET /v1/tickets/<id>?generation=<id>` and `GET /v1/content/<hash>?generation=<id>`: paged detail and full permitted content from that generation; return generation-expired so the client can reload rather than mixing revisions.
+- `GET /v1/requests/<id>`: acknowledgement and outcome.
+- `POST /v1/requests`: authenticated mutation, returning 202 only after persistence.
+- `POST /v1/requests/<id>/cancel`: durable cancellation with explicit race outcome.
 
-The handoff agent is the existing "Vuln handoff agent" generalised to any ticket: a fire-only scheduled task that takes one `handoffs` row, works from the vault first, and writes everything back through the tracker CLI so the audit trail stays complete.
+Bind to loopback; validate Host and Origin, reject cross-origin requests, and require an owner session plus CSRF protection for mutation. Bootstrap through a one-use CLI-generated secret exchanged for an HttpOnly SameSite cookie; remove the secret from the URL immediately. Do not place reusable tokens in export, history, logs or browser storage. Phase 0 proves this round trip and rejects unauthenticated/cross-origin calls.
 
-![Handoff flow: a handoff reads the note first and touches source only when allowed](diagrams/handoff-flow.png)
+UI polls every 2 s while visible, backs off while hidden and reconnects after wake. Requests and handoff progress publish independently of two-hour reconciliation. A Refresh run begins within 5 s on an available idle worker; an existing run is reused with its ID. Long work is off the serialization lane so hooks and requests remain responsive. Offline UI actions are not claimed queued; only acknowledged persisted requests are queued.
 
-```mermaid
-flowchart TD
-  Q["Handoff queued<br/>from the UI Handoff button, with a mode"] --> R["Read the ticket<br/>note, children, session checkpoints, events"]
-  R --> D1{"Source allowed,<br/>machine online?"}
-  D1 -- yes --> I["Inspect the repo<br/>git log and touched files"]
-  D1 -- no --> W["Write the analysis<br/>findings, risks, proposed next actions"]
-  I --> W
-  W --> D2{"Mode?"}
-  D2 -- analyse --> M1["analyse<br/>handoff note only, next action suggested"]
-  D2 -- "analyse + follow-ups (default)" --> M2["analyse + follow-ups<br/>child notes with parent link, parent next_action set"]
-  D2 -- "attempt fix" --> M3["attempt fix<br/>skill on a branch, draft PR, deploy child; no push to main"]
-  M1 --> Z["Close the handoff<br/>ticket note updated, row done, UI shows the link"]
-  M2 --> Z
-  M3 --> Z
-```
+Request state/validation is defined in DATA-CONTRACT. Ticket edits have a 10 s not-before window for undo. Cancellation is serialized against application; success means cancelled, while already applied means show applied and offer a new revision-checked reversal. Handoff and Refresh do not have the edit undo delay.
 
-Source access is opt-in per handoff and needs the machine that holds the clone online; without it the agent still produces an analysis from the note, checkpoints and PR links. `attempt fix` never pushes to main: it works on a branch, opens a draft PR, and files a `deploy-pending` child so the Deployments view tracks it.
+`tracker ui --static` creates standalone read-only HTML without service dependencies. `tracker export` additionally requires project/field selection and an exact preview; checkpoint bodies, paths and private links are excluded by default. Export never sends messages or uploads automatically. Exported files show generated_at, last_sync and snapshot limitations, and contain no request code, owner token or local store URI.
 
-What the agent writes:
+Hosted adapters are phase 6. They must prove per-user storage isolation, authenticated owner requests, enforced viewer-only access, revocation, request deduplication, delivery acknowledgement, offline behavior and an actual worker wake-up mechanism before live sharing is offered.
 
-- `Tracker/handoffs/<KEY>-<ts>.md`: request, sources read, findings, risks, proposed next actions, children created, run duration.
-- Child notes `<KEY>-f<n>.md` with `parent: [[KEY]]`, `origin: handoff`, `status: todo`, a one-line `next_action` each, and the same category as the parent.
-- Parent ticket: Handoff notes section gets a dated link; `next_action` is set to the first child's; `status` moves to `blocked` only when the analysis names a blocker outside the repo.
-- The `handoffs` row: `status: done`, note link, child keys; `status: failed` with the reason when the machine was offline and source was required.
+## Handoff execution
 
-Guardrails: one handoff per ticket at a time; a run is capped at 20 minutes; the agent never edits files touched by a live session (a session with a Stop event in the last 30 minutes) and says so in the handoff note instead.
+Modes use wire values analyse, analyse-followups, attempt-fix. Default is analyse-followups with no source access. Permissions are a per-request object, never inferred from approval text:
+- read_source: optional for analysis; required for attempt-fix.
+- edit_source: required for attempt-fix and limited to an isolated checkout.
+- commit: separate opt-in, off by default.
+- push_branch: separate opt-in, requires commit and an explicit non-default destination branch.
+- open_draft_pr: separate opt-in, requires push_branch and configured provider credentials.
 
-## Packaging for other users
+Never push a default/protected branch, merge or deploy. Without push/PR permission, attempt-fix delivers local diff/tests and optionally a local commit; it does not promise a PR. A source-requesting handoff requires the registered repo and owner machine. If source is unavailable, fail with a reason rather than silently changing scope; a new note-only analysis request is available.
 
-The tool ships as one Claude Code plugin, `session-tracker`, that anyone installs with one command. The core (gate, capture, local notes, project tagging) runs offline on the user's machine; the agent, the artifact and the mirror backends are optional layers on top.
+The worker atomically reserves one queued/running handoff per ticket; duplicate request IDs return the existing run. Fix runs for the same repo are serialized in v1. A clean isolated Git worktree is created from the recorded base commit; it never incorporates another live session's dirty changes or writes its checkout. If worktree creation fails, fail the request. Analysis treats imported notes/source as data, not instructions to expand permissions. All agent file and command access is confined to the allowed checkout and tracker result API.
 
-| Part | Files in the plugin | Purpose |
-| --- | --- | --- |
-| Manifest | `.claude-plugin/plugin.json` | Name, version, description |
-| Hooks | `hooks/hooks.json` → `bin/tracker.js` | Gate and capture for every hook event |
-| Commands | `commands/ticket.md`, `approve.md`, `handoff.md`, `tracker.md` | `/ticket`, `/approve`, `/handoff`, `/tracker init`, `status`, `sync`, `ui`, `agent install` |
-| Skill | `skills/tracker-agent/SKILL.md` | The interval-agent and handoff procedures, run by a scheduled task or by `/tracker sync` in any session |
-| Agent | `agents/handoff.md` | Subagent definition so handoffs can run locally without a cloud task |
-| UI | `ui/tracker.html` | Artifact page template, published per user by `/tracker ui` |
-| Templates | `templates/*.md` | Ticket, session, follow-up and handoff notes |
+Execution time starts on entering running; wall-clock timeout is 20 min and includes sleep. Cancellation/timeout stops the agent and its subprocess group, preserves patches/logs/results and reports cancelled/timed-out. Unknown remote effects are recorded as uncertain and reconciled before any retry. Retain recovery checkout paths; cleanup is explicit after results are accepted.
 
-Backends are store adapters chosen in `tracker init`. At least one local store is mandatory; that is what lets the gate work offline and keeps the audit trail on the user's disk.
+An interrupted running request becomes failed with interrupted reason on restart. Never automatically retry a fix or remote side effect. An explicit retry creates a new run referencing the previous run; it reconciles prior branch/PR/child IDs first. Child creation uses a stable run/result-item identity and cannot duplicate on result redelivery.
 
-| Backend | Role | Notes |
-| --- | --- | --- |
-| Markdown folder | local store (default) | Same note format as the Obsidian layout; needs no Obsidian |
-| Obsidian vault | local store | The markdown folder placed inside a vault; tags and frontmatter are Dataview and Bases friendly |
-| Notion | mirror | A database with the same properties, pushed by the agent; hooks never write to it |
-| Jira | link and status | Key validated at bind; status synced both ways by the agent; optional |
-| Linear, GitHub Issues | link | Later candidates on the same adapter interface |
+Only analyse-followups creates children by default. Suggested next_action updates use the parent's recorded revision and become conflicts if it changed. A blocker is a suggestion; the agent cannot silently overwrite a newer owner status. A draft PR creates no deploy-pending child. Deployment obligations appear only when merge evidence arrives.
 
-Project tagging: `tracker init` run inside a repo writes `.tracker.toml` with the project name, default category, issue tracker and key prefix, and store path. Every session started in that repo inherits the project, so tickets and sessions carry `project:` without manual tagging, and `/ticket new` defaults to that project's key prefix. A user-level `~/.claude/tracker/config.toml` holds machine name, store defaults and gate settings.
+## Configuration and packaging
 
-Per-user tracker: each user publishes their own artifact with `/tracker ui` (private by default, shareable by them) and their own scheduled agent with `/tracker agent install`. Nothing is shared between users unless they share the artifact. Users without cloud scheduled tasks run `/tracker sync` inside any Claude Code session or `tracker sync` from cron; `tracker ui --static` writes a self-contained HTML dashboard next to the store for a fully offline setup.
+Ship plugin manifest, hook config, namespaced commands, CLI, local worker, UI assets, templates, optional handoff agent and PMLA profile. Core uses Node built-ins; validate the restricted TOML/YAML subsets written by tracker, preserve unknown authored text, and reject unsupported syntax rather than lossy parsing.
 
-Distribution and privacy:
+`tracker init` collects store path and project defaults, writes user config and a per-repo .tracker.toml, checks prerequisites, registers the worker and verifies a round trip. Re-running is idempotent and preserves existing hook/status-line setup. Git clones need a documented plugin load/install command; cloning alone is not installation.
 
-- Source on GitHub under MIT; installed from a plugin marketplace entry (`/plugin marketplace add <owner>/session-tracker`, then `/plugin install session-tracker`) or as a git clone for people without marketplace access.
-- No telemetry. The only data that leaves the machine is what the user's own agent pushes to their own artifact or mirror backend.
-- Versioned note format (`tracker_version` in frontmatter) with `tracker migrate` for upgrades.
-- Supported: macOS, Linux, Windows native and WSL; Node 18 or newer.
+Configuration precedence: explicit CLI option, session override, repo defaults, user defaults. Store ownership and handoff permissions cannot be weakened by repository config. Secrets remain in the user's credential store or environment, never committed repo config.
 
-## Migration from PMLA v2 and rollout
+Resolved defaults:
+- Working name session-tracker; final public license and repository owner are release inputs.
+- Single owner machine; plain markdown default, optional Obsidian path.
+- LOCAL prefix; project from init; category research unless configured.
+- Gate on; approval phrases off.
+- Stale active tickets after 5 days; live <= 30 min; extinct >= 48 h.
+- Reconcile every 2 h, all days, local IANA time zone; catch up once on wake.
+- Handoff analyse-followups, source off; commit/push/PR permissions off.
+- Optional PMLA profile contains Bitbucket polling and configured private skills; no private paths or credentials ship publicly.
+- A provider missing at runtime shows unknown evidence rather than fabricated PR/deployment state.
 
-PMLA becomes one category (`vuln`) inside the generic tracker; nothing in the existing vault is deleted, and the v2 hooks stay on disk for a week as rollback.
+Pin tested Node and Claude Code version ranges during phase 0; refuse unsupported configurations with a diagnostic. Do not claim Node is bundled with Claude Code. Native Windows and WSL use distinct machine/store ownership unless explicitly transferred.
 
-- Existing per-ticket notes move to `Tracker/tickets/<KEY>.md` with normalised frontmatter (`type: ticket`, `category: vuln`); status maps open → `todo` or `active`, PR raised → `review`, merged → `deploy-pending`, deployed → `done`. A one-shot `tracker migrate --dry-run` prints the mapping before anything is written.
-- The "deployments pending" section becomes the `deploy-pending` status plus the Deployments view; the exclusion rule (only when a session says so) is kept as a `deploy: skipped` frontmatter flag.
-- `~/.claude/hooks/pmla` entries in `settings.json` are swapped for `tracker hook` in one edit.
-- The daily "Delivery tracker agent" is re-pointed at the new layout and artifact and moved to the 2-hour interval.
-- The fire-only "Vuln handoff agent" becomes the generic handoff task; it invokes the `vuln-triage` skill when category is `vuln` and mode is `attempt fix`.
-- The PMLA Delivery Tracker artifact stays read-only until the new one has synced for a week, then is retired.
+## Migration and rollout
 
-Rollout runs in six phases, each gated before the next starts. This install is the reference installation through phase 4; phase 5 is the public release.
+`tracker migrate --dry-run` inventories source notes, maps identities/statuses and lists ambiguous records without writing. Migration requires a full backup of notes, hooks/settings, journal and blobs. Import every generated source value as migration events and preserve authored sections and original paths in the manifest.
 
-![Rollout: four gated phases lead to the public release in phase 5](diagrams/rollout.png)
+PMLA mapping: open maps to active only with explicit in-progress evidence, otherwise todo; PR raised to review; merged to deploy-pending; deployed to done. Legacy stale maps to active plus derived stale unless prior status evidence exists. Legacy deploy skipped becomes a waiver with imported provenance and a reason; missing reason requires review. Preserve all existing files until verification succeeds.
 
-```mermaid
-flowchart TD
-  P1["Phase 1 · Core plugin, local<br/>tracker.js, hooks, /ticket, /approve, markdown or Obsidian store"] --> G1{"gate: one session tracked end to end, no manual note edits"}
-  G1 --> P2["Phase 2 · Migrate PMLA (reference install)<br/>notes normalised, hooks swapped, v2 kept for rollback"]
-  P2 --> G2{"gate: every PMLA ticket shows the right status in Dataview"}
-  G2 --> P3["Phase 3 · Agent and UI<br/>2-hourly agent, artifact DB, Pick next, Board, Sessions, Deploys"]
-  P3 --> G3{"gate: artifact matches the store after two scheduled runs"}
-  G3 --> P4["Phase 4 · Handoff<br/>handoff task and local subagent, child notes, Tree view"]
-  P4 --> G4{"gate: one handoff files a correct child note"}
-  G4 --> P5["Phase 5 · Public release<br/>README, init wizard, marketplace entry, static UI, two outside testers"]
-  P5 --> G5{"gate: a fresh machine installs and tracks a session in under 10 min"}
-  G5 --> P6["Phase 6 · Extend<br/>Notion mirror, Jira status sync, Linear and GitHub links"]
-```
+Pause old hooks/agents before enabling the new writer; snapshot settings and switch atomically to avoid double capture. Verify ticket counts, links, checkpoints and deployment obligations. Rollback restores original settings and untouched source notes; newer tracker events are preserved/exported for reconciliation, not discarded.
 
-No phase has a date yet; each starts when the previous gate passes, and phases 1 to 4 are sized at one working session each.
-
-## Open questions
-
-Decisions needed before phase 1 starts; defaults in brackets are what the build will assume if unanswered.
-
-- [ ] Tool name (`session-tracker` is a placeholder) and where the repo lives: personal GitHub or a Paytm Money org? [personal, MIT]
-- [ ] v1 backends: markdown folder and Obsidian only, with Jira as a link; Notion and Jira status sync in phase 6? [yes]
-- [ ] PMLA-specific parts (vuln category, Bitbucket PR polling, `vuln-triage` skill): ship as an optional profile in the public plugin, or keep as a private overlay? [optional profile]
-- [ ] Distribution: marketplace entry plus git clone, or git clone only at first? [both]
-- [ ] Machines: hooks v2 are on the Mac; this session is linked to a Windows machine. Which machines run Claude Code, and is the store synced between them? [Mac only for phases 1–4]
-- [ ] Store path and whether `Tracker/` can be a new top-level folder, or must sit under the existing PMLA folder. [new top-level `Tracker/`]
-- [ ] Jira project key for ticket keys (`DIQ-412` is a placeholder). [`LOCAL-<slug>` until confirmed]
-- [ ] Gate scope for Bash: block `git commit`/`push` and destructive commands only, or any command that writes files? [commit, push, merge, rm, mv, sed -i, redirects]
-- [ ] Approve heuristics: keep the affirmative-phrase detection on, or require `/approve` every time? [on, with the default phrase list]
-- [ ] Stale threshold and extinct threshold. [5 days, 48 h]
-- [ ] Agent interval and hours. [every 2 h, weekdays 09:00–21:00 IST]
-- [ ] Handoff default mode and whether `attempt fix` may commit without you. [`analyse + follow-ups`; fixes land on a branch, never pushed]
-- [ ] Retire the PMLA artifact after one week, or keep it as a vuln-only view of the new one? [retire]
+Keep the old PMLA dashboard read-only until at least one week of verified operation, then retire only through an explicit operator action. Follow the [PRD phase gates](PRD.md#release-plan) and [acceptance scenarios](ACCEPTANCE.md); no one-session implementation estimate is asserted.

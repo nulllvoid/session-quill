@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="web_dashboard" name="shell-type"/><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/><style>@layer base{html,body{margin:0;padding:0;}body{overscroll-behavior:none;}main>:first-child{margin-top:0!important;}main>:last-child{margin-bottom:0!important;}}::-webkit-scrollbar{display:none;}</style><script type='text/javascript' nonce='wH59k6l/3G2IYkVol6eTRw==' src='https://contribution.usercontent.google.com/LmT72kxTASDra7936t_rA7kleREXAwxbExXXfYWWbJivs62IKpS8LmBbPyuTg9Blx4iDv0NI6_19wIogTpqZIhML4np3CYvc7rP-oGIsoRInN4EKm1H_IFUgWCjZWk2Zdu8y6eE4AFvnCx2iC-1upgBVKrJNjKGMxHLnaD1zRCg_PMj4eJ_yIOUXDKqZXMmC-YM9QaRdpuUGrqhNN_RTTGpOwZ9Cfgm_a0O1WVyrZmgxwBqTnZxJy_PoK_rECnAbNa7B13qXaIgTwBIxt-gkJ4OFcOv6ovEk0QLiWm8Rz21aoz3D-zZ5-ijV8lOJFzCOdYaBX7oTRjzXzAm95NC6Q_GKU7A9Ruzu_tzqIcyhKF_EGXN1xK3kaiXMMRaXA-P00EOtSqbqjdOMmWQdALtPzBND2iCQnK1ygBAXTxrfT-UK5Xf0Jtwt6T-_GEY2ID8y8uAyCGn0gUeho8PjSK1ZOL4VzhUq2b68lwH-tnIWAt5Qnt95wCdPy2NZYJNSvcwc0NakXWfUfRjhhpR_C-IeP-MM1ZsavLVtfGa-FLe3j_DZ6xP-EzjX9NYNCChULSzPaRZ4I3juGT6IL66OV4sfchBOtCRMQ1mcQZVEi9v1xhG40qq1WSXloM0Ey2ekzYw-wUhHOZskXWSgZzWaavkcfjA5U1w7IQbL7rHtn3q4IMhyVXOpznAdwA6j05Lz7I7yB_sygkxyjr-LLt5docnn4At5vYeMGAtqKV427UZFvebX_X_Jhvazvm2IdQldTHvdJSQafKeIN8csnwkfBjTuzgn1q9elrVSUxXznbg'></script><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config={darkMode:"class",theme:{extend:{colors:{"on-primary-fixed-variant":"#004492","tertiary-container":"#27a640","surface-variant":"#2d363e","secondary-container":"#5a21ab","on-primary-container":"#00285b","status-review":"#a371f7","secondary-fixed-dim":"#d5bbff","freshness-fresh":"#3fb950","focus-ring":"#2f81f7","status-deploy":"#d29922","bg":"#0d1117","tertiary":"#67df70","outline-variant":"#414754","surface-container-high":"#222b33","secondary-fixed":"#ecdcff","on-tertiary-fixed-variant":"#005317","primary":"#acc7ff","text-faint":"#6e7681","text":"#f0f6fc","background":"#0b141c","on-tertiary-container":"#00320a","on-error-container":"#ffdad6","secondary":"#d5bbff","error-container":"#93000a","primary-fixed-dim":"#acc7ff","status-done":"#3fb950","freshness-critical":"#f85149","on-secondary":"#41008b","on-primary":"#002f68","surface-container":"#182028","surface-bright":"#313a43","surface-container-highest":"#2d363e","inverse-surface":"#dae3ee","on-tertiary":"#00390d","on-background":"#dae3ee","on-secondary-fixed":"#270058","surface-tint":"#acc7ff","on-secondary-container":"#c6a5ff","surface-container-low":"#141c24","on-surface":"#dae3ee","primary-container":"#498fff","outline":"#8b909f","on-surface-variant":"#c1c6d6","border":"#30363d","status-active":"#2f81f7","freshness-ageing":"#d29922","inverse-primary":"#005bbf","status-blocked":"#f85149","on-tertiary-fixed":"#002105","surface":"#161b22","border-strong":"#484f58","error":"#ffb4ab","text-muted":"#8b949e","on-primary-fixed":"#001a40","primary-fixed":"#d7e2ff","surface-container-lowest":"#060f16","accent":"#2f81f7","surface-dim":"#0b141c","freshness-stale":"#f0883e","tertiary-fixed-dim":"#67df70","inverse-on-surface":"#29313a","on-secondary-fixed-variant":"#5a21ab","status-todo":"#8b949e","tertiary-fixed":"#83fc89","surface-raised":"#21262d","on-error":"#690005"},borderRadius:{"DEFAULT":"0.25rem","lg":"0.5rem","xl":"0.75rem","full":"9999px"},spacing:{"space-md":"0.75rem","margin-mobile":"0.75rem","space-lg":"1rem","space-xl":"1.5rem","space-xs":"0.25rem","gutter":"1rem","gutter-sm":"0.5rem","space-sm":"0.5rem","margin":"1rem"},fontFamily:{"body-sm":["Inter"],"body-lg":["Inter"],"label-lg":["JetBrains Mono"],"headline-md":["Inter"],"code-key":["JetBrains Mono"],"label-sm":["JetBrains Mono"],"label-md":["JetBrains Mono"],"body-md":["Inter"],"code-sm":["JetBrains Mono"],"headline-lg":["Inter"],"headline-sm":["Inter"]},fontSize:{"body-sm":["11.5px",{"lineHeight":"16.1px","fontWeight":"400"}],"body-lg":["15px",{"lineHeight":"21px","fontWeight":"400"}],"label-lg":["13px",{"lineHeight":"18.2px","fontWeight":"600"}],"headline-md":["17px",{"lineHeight":"23.8px","letterSpacing":"-0.005em","fontWeight":"600"}],"code-key":["12px",{"lineHeight":"16.8px","letterSpacing":"-0.02em","fontWeight":"600"}],"label-sm":["11px",{"lineHeight":"15.4px","letterSpacing":"0.02em","fontWeight":"500"}],"label-md":["12px",{"lineHeight":"16.8px","fontWeight":"500"}],"body-md":["13px",{"lineHeight":"18.2px","fontWeight":"400"}],"code-sm":["11px",{"lineHeight":"15.4px","fontWeight":"400"}],"headline-lg":["22px",{"lineHeight":"30.8px","letterSpacing":"-0.01em","fontWeight":"600"}],"headline-sm":["15px",{"lineHeight":"21px","letterSpacing":"0em","fontWeight":"600"}]}}}};</script></head><body class="bg-bg text-on-surface font-body-md text-body-md antialiased min-h-screen"><aside class="fixed left-0 top-0 h-full w-64 bg-surface-container-lowest z-50 flex flex-col justify-between py-4"><div class="flex flex-col gap-4"><div class="px-4 flex items-center justify-between"><div class="flex items-center gap-2"><span class="material-symbols-outlined text-primary text-[18px]">terminal</span><span class="font-label-sm text-label-sm uppercase tracking-wider text-text-muted">Workspace Nodes</span></div><span class="font-code-sm text-code-sm text-text-faint px-1.5 py-0.5 rounded bg-surface-container-high">LOCAL</span></div><nav class="flex flex-col gap-0.5 px-2" data-active-classes="bg-surface-raised text-text font-semibold border-l-2 border-primary"><a aria-current="page" class="flex items-center justify-between px-3 py-2 rounded transition-colors bg-surface-raised text-text font-semibold border-l-2 border-primary" data-path="pick-next" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">target</span><span class="font-body-md text-body-md">Pick Next</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">1</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="board" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">view_kanban</span><span class="font-body-md text-body-md">Board</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">2</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="tree" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">account_tree</span><span class="font-body-md text-body-md">Tree</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">3</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="sessions" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">history</span><span class="font-body-md text-body-md">Sessions</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">4</kbd></a><a class="flex items-center justify-between px-3 py-2 rounded text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors" data-path="deployments" href="#"><div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-[16px]">rocket_launch</span><span class="font-body-md text-body-md">Deployments</span></div><kbd class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint">5</kbd></a></nav><div class="px-4 pt-3"><div class="font-label-sm text-label-sm uppercase tracking-wider text-text-faint mb-2">Runtime Context</div><div class="p-2.5 rounded bg-surface-container-low flex flex-col gap-1.5"><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Host</span><span class="font-code-sm text-code-sm text-text">macOS Darwin</span></div><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Branch</span><span class="font-code-sm text-code-sm text-primary">feat/reconcile-v2</span></div><div class="flex items-center justify-between"><span class="font-code-sm text-code-sm text-text-muted">Uncommitted</span><span class="font-code-sm text-code-sm text-status-deploy">3 files</span></div></div></div></div><div class="px-4 flex flex-col gap-2"><div class="p-2.5 rounded bg-surface flex flex-col gap-1"><div class="flex items-center justify-between font-label-sm text-label-sm"><span class="text-text-muted">Loopback</span><span class="text-freshness-fresh">ACTIVE</span></div><span class="font-code-sm text-code-sm text-text-faint">127.0.0.1:49152</span></div><div class="flex items-center justify-between pt-2"><span class="font-code-sm text-code-sm text-text-faint">© 2025 Local Daemon</span><span class="font-label-sm text-label-sm text-text-faint">IPC v2.4</span></div></div></aside><div class="pl-64"><header class="fixed top-0 left-64 right-0 h-28 bg-surface-container-lowest/90 backdrop-blur-xl z-40 flex flex-col justify-between px-6 pt-2.5 pb-2 shadow-[0_1px_8px_rgba(0,0,0,0.4)]"><div class="flex items-center justify-between gap-4 w-full"><div class="flex items-center gap-4 min-w-0"><div class="flex items-center gap-2.5 flex-shrink-0"><img alt="Session Tracker Logo" class="h-8 w-auto object-contain" src="https://lh3.googleusercontent.com/aida/AEtjO1VzGR1bkTHz8A5tdteReByH6fzti4AwCNB4F3JHMjOC_PP2NNLe4zEftkO569P4mS390oxI2NmkBBEMjl5ldbfxmhbFFjpwQRliHyKtHcsq5kHpO3VslzT-woUHd4JQMT0eUmoFEZ2vlF-H6qWyIufLGtVc6HWe5HkH9HK6Uth8cfiPDHnz4H9TBJjz94tWmIMN1Bac2JCrE7wlrze6C1Xw0cl13tus-6xRy6kc_DY6_KtY4foxcqfB_g"/><div class="flex items-center gap-2"><span class="font-headline-sm text-headline-sm text-text tracking-tight">Session Tracker</span><span class="font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container-high text-text-muted font-medium">v0.2 draft</span></div></div><div class="h-4 w-px bg-surface-variant flex-shrink-0"></div><div class="relative flex-shrink-0"><select aria-label="Global Project Filter" class="appearance-none bg-surface-container-low text-text font-body-sm text-body-sm pl-2.5 pr-8 py-1.5 rounded cursor-pointer hover:bg-surface transition-colors focus:outline-none focus:ring-1 focus:ring-focus-ring"><option>session-tracker (active)</option><option>All Projects</option><option>infra-core</option></select><span class="material-symbols-outlined absolute right-2 top-1.5 text-[16px] text-text-muted pointer-events-none">expand_more</span></div><nav class="hidden xl:flex items-center gap-1" data-active-classes="bg-surface-raised text-text font-semibold rounded"><a aria-current="page" class="px-2.5 py-1 transition-colors bg-surface-raised text-text font-semibold rounded" data-path="pick-next" href="#">Pick next</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="board" href="#">Board</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="tree" href="#">Tree</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="sessions" href="#">Sessions</a><a class="px-2.5 py-1 text-on-surface-variant hover:text-on-surface font-body-sm text-body-sm transition-colors" data-path="deployments" href="#">Deployments</a></nav></div><div class="flex items-center gap-3 flex-shrink-0"><div class="relative w-64 lg:w-72"><span class="material-symbols-outlined absolute left-2.5 top-2 text-[16px] text-text-muted pointer-events-none">search</span><input class="w-full bg-surface-container-low text-text font-body-sm text-body-sm pl-8 pr-7 py-1.5 rounded placeholder-text-faint hover:bg-surface focus:bg-surface focus:outline-none focus:ring-1 focus:ring-focus-ring transition-colors" placeholder="Search tickets, keys, tags..." type="text"/><kbd class="absolute right-2 top-1.5 font-label-sm text-label-sm px-1.5 py-0.5 rounded bg-surface-container text-text-faint leading-none">/</kbd></div><div class="h-4 w-px bg-surface-variant"></div><button class="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-container-high transition-colors" title="Keyboard Shortcuts (?)" type="button"><span class="material-symbols-outlined text-[18px]">help</span></button><button class="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-container-high transition-colors" title="Theme: Dark active" type="button"><span class="material-symbols-outlined text-[18px]">dark_mode</span></button><div class="flex items-center gap-1.5 px-2 py-1 rounded bg-surface-container-low font-code-sm text-code-sm text-text-muted"><span class="h-1.5 w-1.5 rounded-full bg-freshness-fresh"></span><span>127.0.0.1:49152</span><span class="font-label-sm text-label-sm text-primary font-semibold">[Owner]</span></div><div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center flex-shrink-0"><span class="material-symbols-outlined text-on-primary text-[18px]">person</span></div></div></div><div class="flex items-center justify-between w-full pt-1.5 text-code-sm font-code-sm text-text-muted"><div class="flex items-center gap-3 flex-wrap"><div class="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-freshness-fresh/10 text-freshness-fresh font-medium"><span class="h-1.5 w-1.5 rounded-full bg-freshness-fresh"></span><span>Sync: 14m ago (fresh)</span></div><span class="text-text-faint">Next in 1h 46m</span><span class="text-surface-variant">•</span><div class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-status-done animate-pulse"></span><span>Worker: connected (pid 4192)</span></div><span class="text-surface-variant">•</span><span>GitHub: <span class="text-status-done">ok</span> · Bitbucket: <span class="text-status-done">ok</span></span><span class="text-surface-variant">•</span><span>Capture: 0 pending / 0 gaps</span></div><div class="flex items-center gap-2 flex-shrink-0"><span class="text-text-faint">Status: <span class="text-text">Idle</span></span><button class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface-raised hover:bg-surface-bright text-text font-label-sm text-label-sm transition-colors focus:ring-1 focus:ring-focus-ring" type="button"><span class="material-symbols-outlined text-[14px]">refresh</span><span>Refresh</span><kbd class="font-label-sm text-label-sm text-text-faint leading-none bg-surface-container-high px-1 rounded">r</kbd></button></div></div></header><div aria-live="polite" class="fixed top-28 left-64 right-0 z-30 bg-surface-container-high px-6 py-1.5 flex items-center justify-between font-code-sm text-code-sm text-text-muted shadow-sm"><div class="flex items-center gap-2"><span class="material-symbols-outlined text-[14px] text-tertiary">sync_alt</span><span>Receipt: Background reconciliation synced 14 local tickets at 14:02:18 UTC. No conflicts detected.</span></div><span class="font-label-sm text-label-sm text-text-faint uppercase tracking-wider">Telemetry Live</span></div><main class="w-full pt-36 bg-bg px-6 min-h-screen"><div class="flex flex-col w-full pb-16">
+<!-- Interactive Modals / Drawers (Hidden by default) -->
+<div aria-labelledby="handoff-title" aria-modal="true" class="fixed inset-0 z-50 flex items-center justify-center bg-surface-container-lowest/80 backdrop-blur-sm hidden" id="handoff-dialog" role="dialog">
+<div class="w-full max-w-lg bg-surface p-6 rounded-xl shadow-2xl flex flex-col gap-4 text-on-surface">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[20px]">terminal</span>
+<h2 class="font-headline-sm text-headline-sm text-text" id="handoff-title">Initialize Autonomous Handoff</h2>
+</div>
+<button aria-label="Close dialog" class="w-7 h-7 rounded flex items-center justify-center text-text-muted hover:text-text hover:bg-surface-container transition-colors" onclick="closeHandoffModal()">
+<span class="material-symbols-outlined text-[18px]">close</span>
+</button>
+</div>
+<div class="p-3 bg-surface-container-low rounded-lg flex flex-col gap-1.5">
+<div class="flex items-center justify-between">
+<span class="font-code-sm text-code-sm text-text-muted">Target Ticket</span>
+<span class="font-code-key text-code-key text-primary" id="modal-ticket-key">LOCAL-session-capture-a1b2c3d4</span>
+</div>
+<div class="flex items-center justify-between">
+<span class="font-code-sm text-code-sm text-text-muted">Target Branch</span>
+<span class="font-code-sm text-code-sm text-text">feat/reconcile-v2</span>
+</div>
+</div>
+<div class="flex flex-col gap-2.5">
+<span class="font-label-sm text-label-sm uppercase tracking-wider text-text-faint">Granted Sandboxed Permissions</span>
+<label class="flex items-center gap-2 text-body-sm font-body-sm cursor-pointer hover:text-text text-on-surface-variant">
+<input checked="" class="rounded bg-surface-container-high text-primary focus:ring-0 w-4 h-4 cursor-pointer" type="checkbox"/>
+<span>Read workspace source tree &amp; runtime checkpoints</span>
+</label>
+<label class="flex items-center gap-2 text-body-sm font-body-sm cursor-pointer hover:text-text text-on-surface-variant">
+<input checked="" class="rounded bg-surface-container-high text-primary focus:ring-0 w-4 h-4 cursor-pointer" type="checkbox"/>
+<span>Execute local verification test suites (`go test ./...`)</span>
+</label>
+<label class="flex items-center gap-2 text-body-sm font-body-sm cursor-pointer hover:text-text text-on-surface-variant">
+<input checked="" class="rounded bg-surface-container-high text-primary focus:ring-0 w-4 h-4 cursor-pointer" type="checkbox"/>
+<span>Stage changes &amp; commit to `feat/reconcile-v2`</span>
+</label>
+<label class="flex items-center gap-2 text-body-sm font-body-sm cursor-pointer hover:text-text text-on-surface-variant">
+<input class="rounded bg-surface-container-high text-primary focus:ring-0 w-4 h-4 cursor-pointer" type="checkbox"/>
+<span>Push remote branch and create Draft Pull Request</span>
+</label>
+</div>
+<div class="p-2.5 rounded bg-surface-container-high flex items-start gap-2 text-body-sm font-body-sm text-freshness-ageing">
+<span class="material-symbols-outlined text-[16px] flex-shrink-0 mt-0.5">warning</span>
+<span>Process execution is local-only. Requires daemon IPC worker heartbeat (currently active pid 4192).</span>
+</div>
+<div class="flex items-center justify-end gap-3 pt-2">
+<button class="px-3 py-1.5 rounded bg-surface-container hover:bg-surface-raised font-label-md text-label-md text-text transition-colors" onclick="closeHandoffModal()">Cancel</button>
+<button class="px-4 py-1.5 rounded bg-focus-ring hover:bg-primary-container text-white font-label-md text-label-md flex items-center gap-1.5 shadow-md transition-colors" onclick="confirmHandoff()">
+<span class="material-symbols-outlined text-[16px]">play_arrow</span>
+<span>Dispatch Agent</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Notification Toast -->
+<div class="fixed bottom-6 right-6 z-50 bg-surface-raised text-text p-3 rounded-lg shadow-2xl flex items-center gap-2.5 font-code-sm text-code-sm transition-opacity duration-300 opacity-0 pointer-events-none" id="toast">
+<span class="material-symbols-outlined text-freshness-fresh text-[18px]">check_circle</span>
+<span id="toast-message">Key copied to clipboard</span>
+</div>
+<!-- Top Hero Context Header & Telemetry Grid -->
+<section class="flex flex-col gap-4 mb-6">
+<div class="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+<div class="flex flex-col gap-1">
+<div class="flex items-center gap-2.5">
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-status-active/15 text-status-active font-semibold uppercase tracking-wider">Dynamic Scheduler</span>
+<span class="font-code-sm text-code-sm text-text-faint">ALGO_V2 · WEIGHTED_SEVERITY</span>
+</div>
+<p class="font-body-lg text-body-lg text-on-surface-variant max-w-3xl">
+          Immediate next actions ranked by priority, PR aging, and deadlines. Non-eligible (blocked/done) excluded.
+        </p>
+</div>
+<!-- Live Pipeline Stats Widget -->
+<div class="flex items-center gap-2 bg-surface-container p-1.5 rounded-lg shadow-sm self-start lg:self-auto flex-wrap">
+<div class="flex items-center gap-2 px-2.5 py-1 rounded bg-surface-container-low font-code-sm text-code-sm text-text">
+<span class="w-2 h-2 rounded-full bg-status-active animate-ping"></span>
+<span class="font-semibold">5 candidate tickets evaluated</span>
+</div>
+<span class="text-surface-variant hidden sm:inline">•</span>
+<div class="flex items-center gap-1.5 px-2 py-1 font-code-sm text-code-sm text-freshness-critical">
+<span class="material-symbols-outlined text-[14px]">block</span>
+<span>1 blocked</span>
+</div>
+<span class="text-surface-variant hidden sm:inline">•</span>
+<div class="flex items-center gap-1.5 px-2 py-1 font-code-sm text-code-sm text-text-muted">
+<span>0 unassigned</span>
+</div>
+<span class="text-surface-variant hidden sm:inline">•</span>
+<div class="flex items-center gap-1.5 px-2 py-1 font-code-sm text-code-sm text-text-faint">
+<span class="material-symbols-outlined text-[13px]">schedule</span>
+<span>Last scored: 2m ago</span>
+</div>
+</div>
+</div>
+<!-- Triage Weight Visualizer Banner -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-3 bg-surface p-3 rounded-lg shadow-sm">
+<div class="flex flex-col gap-1 p-2 rounded bg-surface-container-low">
+<span class="font-label-sm text-label-sm text-text-faint uppercase">Top Scoring Factor</span>
+<div class="flex items-center justify-between">
+<span class="font-body-md text-body-md text-text font-medium">Critical Priority (P0)</span>
+<span class="font-code-key text-code-key text-status-blocked">+40 pts</span>
+</div>
+</div>
+<div class="flex flex-col gap-1 p-2 rounded bg-surface-container-low">
+<span class="font-label-sm text-label-sm text-text-faint uppercase">Staleness Penalty</span>
+<div class="flex items-center justify-between">
+<span class="font-body-md text-body-md text-text font-medium">PR Ageing &gt; 24h</span>
+<span class="font-code-key text-code-key text-freshness-ageing">+20 pts</span>
+</div>
+</div>
+<div class="flex flex-col gap-1 p-2 rounded bg-surface-container-low">
+<span class="font-label-sm text-label-sm text-text-faint uppercase">Actionability Bias</span>
+<div class="flex items-center justify-between">
+<span class="font-body-md text-body-md text-text font-medium">Prompt Specified</span>
+<span class="font-code-key text-code-key text-freshness-fresh">+10 pts</span>
+</div>
+</div>
+<div class="flex flex-col gap-1 p-2 rounded bg-surface-container-low">
+<span class="font-label-sm text-label-sm text-text-faint uppercase">Target Queue</span>
+<div class="flex items-center justify-between">
+<span class="font-body-md text-body-md text-text font-medium">Ready For Execution</span>
+<span class="font-label-sm text-label-sm text-primary font-semibold">4 Actionable</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Main Work Partition: Ranked Candidates Left (or Full), Blocked Right / Bottom -->
+<div class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+<!-- Primary Ranked Stack (8 or 12 Cols depending on screen) -->
+<div class="xl:col-span-8 flex flex-col gap-4">
+<div class="flex items-center justify-between px-1">
+<div class="flex items-center gap-2">
+<span class="font-label-lg text-label-lg uppercase tracking-wider text-text">Ranked Candidates</span>
+<span class="px-2 py-0.5 rounded-full bg-surface-container-high font-code-sm text-code-sm text-text-muted">Queue Depth: 4</span>
+</div>
+<div class="flex items-center gap-2 font-code-sm text-code-sm text-text-faint">
+<span>Sort: Dynamic Deterministic</span>
+<kbd class="px-1.5 py-0.5 rounded bg-surface-container text-text-faint font-label-sm">Shift+S</kbd>
+</div>
+</div>
+<!-- RANK #1: Highlighted Hero Priority Work -->
+<article class="bg-surface-raised rounded-xl shadow-xl p-5 flex flex-col gap-4 relative overflow-hidden transition-all duration-200 hover:shadow-2xl">
+<!-- Top accent highlight strip -->
+<div class="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-focus-ring via-primary to-status-active"></div>
+<!-- Header / Provenance Row -->
+<div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+<div class="flex items-center gap-2 flex-wrap">
+<span class="w-6 h-6 rounded-full bg-focus-ring text-white font-code-key text-code-key flex items-center justify-center font-bold">1</span>
+<button class="flex items-center gap-1.5 px-2 py-1 rounded bg-surface hover:bg-surface-container-high font-code-key text-code-key text-primary transition-colors group" onclick="copyToClipboard(&#39;LOCAL-session-capture-a1b2c3d4&#39;)" title="Click to copy key">
+<span>LOCAL-session-capture-a1b2c3d4</span>
+<span class="material-symbols-outlined text-[14px] text-text-faint group-hover:text-primary">content_copy</span>
+</button>
+<!-- Status Pill -->
+<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-status-active/15 text-status-active font-label-sm text-label-sm font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-status-active"></span>
+              ACTIVE
+            </span>
+<!-- Priority Pill -->
+<span class="px-2 py-0.5 rounded bg-error-container/40 text-freshness-critical font-label-sm text-label-sm font-bold tracking-tight">
+              P0 CRITICAL
+            </span>
+</div>
+<!-- Score Breakdown Pill with interactive popover logic -->
+<div class="relative group">
+<div class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-container-high font-code-sm text-code-sm text-text cursor-help shadow-sm">
+<span class="material-symbols-outlined text-[15px] text-freshness-fresh">speed</span>
+<span class="text-text-muted">Display Score:</span>
+<span class="font-bold text-freshness-fresh">95</span>
+<span class="text-text-faint">/ 100</span>
+</div>
+<!-- Score Hover Breakdown Tooltip -->
+<div class="absolute right-0 top-full mt-2 w-72 p-3 bg-surface rounded-lg shadow-2xl z-30 hidden group-hover:flex flex-col gap-2 font-code-sm text-code-sm text-text-muted pointer-events-none">
+<div class="flex items-center justify-between font-label-sm text-label-sm text-text">
+<span>Weighted Scoring Formula</span>
+<span class="text-freshness-fresh">Cap 100</span>
+</div>
+<div class="flex flex-col gap-1 pt-1">
+<div class="flex justify-between"><span>Priority P0 Weight:</span><span class="text-text">+40 pts</span></div>
+<div class="flex justify-between"><span>Deadline due in 2d:</span><span class="text-text">+30 pts</span></div>
+<div class="flex justify-between"><span>Pending merged PR (&gt;=2d):</span><span class="text-text">+20 pts</span></div>
+<div class="flex justify-between"><span>Nonempty next action:</span><span class="text-text">+10 pts</span></div>
+<div class="flex justify-between text-text-faint pt-1"><span>Raw total: 100 pts (capped 95)</span><span class="text-freshness-fresh">Final: 95</span></div>
+</div>
+</div>
+</div>
+</div>
+<!-- Ticket Title -->
+<h3 class="font-headline-md text-headline-md text-text font-bold tracking-tight leading-snug">
+          Preserve session checkpoints and recovery journal
+        </h3>
+<!-- Prominent Next Action (Above the Fold Prompt Strip) -->
+<div class="bg-surface p-3.5 rounded-lg flex flex-col gap-1.5 shadow-inner">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-1.5 text-text-faint font-label-sm text-label-sm uppercase tracking-wider">
+<span class="material-symbols-outlined text-[15px] text-status-active">keyboard_arrow_right</span>
+<span>Next Action Required</span>
+</div>
+<button class="flex items-center gap-1 text-text-muted hover:text-primary font-code-sm text-code-sm transition-colors" onclick="toggleActionEdit(&#39;action-1&#39;, &#39;input-1&#39;)" title="Edit action prompt">
+<span class="material-symbols-outlined text-[14px]">edit</span>
+<span>Edit inline</span>
+</button>
+</div>
+<div class="font-body-md text-body-md text-text font-medium pl-5" id="action-1">
+            Verify restart recovery from torn journal tail before committing generation manifest
+          </div>
+<div class="hidden flex-col gap-2 pl-5 pt-1" id="input-1">
+<textarea class="w-full bg-surface-container-low text-text p-2 rounded font-body-md text-body-md focus:outline-none focus:ring-2 focus:ring-focus-ring resize-none h-16" rows="2">Verify restart recovery from torn journal tail before committing generation manifest</textarea>
+<div class="flex items-center gap-2">
+<button class="px-2.5 py-1 rounded bg-focus-ring text-white font-label-sm text-label-sm" onclick="saveActionEdit(&#39;action-1&#39;, &#39;input-1&#39;)">Save Action</button>
+<button class="px-2 py-1 rounded bg-surface-container text-text-muted hover:text-text font-label-sm text-label-sm" onclick="toggleActionEdit(&#39;action-1&#39;, &#39;input-1&#39;)">Cancel</button>
+<span class="font-code-sm text-code-sm text-text-faint">Enter to commit · Esc to cancel</span>
+</div>
+</div>
+</div>
+<!-- Metadata & Touched Files Row -->
+<div class="flex flex-wrap items-center gap-y-2 gap-x-4 text-code-sm font-code-sm text-text-muted pt-1">
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">folder_open</span>
+<span class="text-text">session-tracker</span>
+</div>
+<span class="text-surface-variant">•</span>
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">hub</span>
+<span>repo: local/session-tracker</span>
+</div>
+<span class="text-surface-variant">•</span>
+<div class="flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">update</span>
+<span>updated 12m ago</span>
+</div>
+<span class="text-surface-variant">•</span>
+<div class="flex items-center gap-1 text-freshness-fresh">
+<span class="material-symbols-outlined text-[14px]">description</span>
+<span>4 files touched</span>
+</div>
+<span class="text-surface-variant">•</span>
+<div class="flex items-center gap-1 text-text-faint">
+<span class="material-symbols-outlined text-[14px]">schema</span>
+<span>2 plans</span>
+</div>
+</div>
+<!-- Card Footprint & Action Button Group -->
+<div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+<div class="flex items-center gap-2">
+<span class="px-2 py-1 rounded bg-surface-container font-code-sm text-code-sm text-text-faint flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px] text-status-done">lock_clock</span>
+<span>Sync Lock: Lease active (14m remaining)</span>
+</span>
+</div>
+<div class="flex items-center gap-2.5">
+<button class="px-3 py-1.5 rounded bg-surface hover:bg-surface-container font-label-md text-label-md text-text transition-colors flex items-center gap-1.5 shadow-sm" onclick="inspectTicket(&#39;LOCAL-session-capture-a1b2c3d4&#39;)">
+<span class="material-symbols-outlined text-[16px]">visibility</span>
+<span>Inspect Ticket</span>
+</button>
+<button class="px-4 py-1.5 rounded bg-focus-ring hover:bg-primary-container text-white font-label-md text-label-md transition-colors flex items-center gap-1.5 shadow-md" onclick="openHandoffModal(&#39;LOCAL-session-capture-a1b2c3d4&#39;)">
+<span class="material-symbols-outlined text-[16px]">terminal</span>
+<span>Handoff</span>
+<kbd class="font-label-sm text-label-sm bg-black/25 px-1 py-0.2 rounded text-white/80">h</kbd>
+</button>
+</div>
+</div>
+</article>
+<!-- RANK #2: Stale PR Work Item -->
+<article class="bg-surface rounded-xl shadow-md p-4 flex flex-col gap-3 transition-all duration-150 hover:bg-surface-raised">
+<div class="flex flex-wrap items-center justify-between gap-2">
+<div class="flex items-center gap-2 flex-wrap">
+<span class="w-5 h-5 rounded-full bg-surface-container-high text-text font-code-key text-code-key flex items-center justify-center font-bold">2</span>
+<button class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-container-low hover:bg-surface-container font-code-key text-code-key text-primary transition-colors group" onclick="copyToClipboard(&#39;LOCAL-reconciliation-b7c8d9e0&#39;)">
+<span>LOCAL-reconciliation-b7c8d9e0</span>
+<span class="material-symbols-outlined text-[13px] text-text-faint group-hover:text-primary">content_copy</span>
+</button>
+<!-- Review Status Pill -->
+<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-status-review/15 text-status-review font-label-sm text-label-sm font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-status-review"></span>
+              REVIEW
+            </span>
+<span class="px-2 py-0.5 rounded bg-surface-container-high text-freshness-ageing font-label-sm text-label-sm font-bold">
+              P1 HIGH
+            </span>
+<!-- Stale Indicator Badge (Explicit separate token) -->
+<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-freshness-stale/15 text-freshness-stale font-label-sm text-label-sm font-semibold">
+<span class="material-symbols-outlined text-[13px]">alarm</span>
+<span>Stale (6d inactive)</span>
+</span>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-container font-code-sm text-code-sm text-text-muted">
+<span>Score:</span>
+<span class="font-bold text-text">70</span>
+<span class="text-text-faint">/ 100</span>
+</div>
+</div>
+<h4 class="font-headline-sm text-headline-sm text-text font-semibold">
+          PR polling provider error isolation and 2-hour reconciliation timer
+        </h4>
+<!-- Action Strip -->
+<div class="bg-surface-container-low p-2.5 rounded-lg flex items-center gap-2">
+<span class="material-symbols-outlined text-text-faint text-[16px]">chevron_right</span>
+<span class="font-body-md text-body-md text-on-surface">
+            Run dry reconciliation on staged Bitbucket responses
+          </span>
+</div>
+<!-- PR Metadata Line -->
+<div class="flex items-center justify-between flex-wrap gap-2 text-code-sm font-code-sm pt-1">
+<div class="flex items-center gap-2 text-text-muted">
+<span class="material-symbols-outlined text-[14px] text-status-review">merge</span>
+<a class="text-primary hover:underline font-code-key text-code-key" href="#">#142 feat(worker): PR reconciliation batching</a>
+<span class="text-text-faint">(open 28h ago)</span>
+</div>
+<div class="flex items-center gap-2">
+<button class="px-2.5 py-1 rounded bg-surface-container hover:bg-surface-bright font-label-md text-label-md text-text transition-colors" onclick="inspectTicket(&#39;LOCAL-reconciliation-b7c8d9e0&#39;)">
+              Inspect Ticket
+            </button>
+<button class="px-3 py-1 rounded bg-surface-container-high hover:bg-surface-bright text-text font-label-md text-label-md transition-colors flex items-center gap-1" onclick="openHandoffModal(&#39;LOCAL-reconciliation-b7c8d9e0&#39;)">
+<span class="material-symbols-outlined text-[14px]">terminal</span>
+<span>Handoff</span>
+</button>
+</div>
+</div>
+</article>
+<!-- RANK #3: Deploy Pending Work Item -->
+<article class="bg-surface rounded-xl shadow-md p-4 flex flex-col gap-3 transition-all duration-150 hover:bg-surface-raised">
+<div class="flex flex-wrap items-center justify-between gap-2">
+<div class="flex items-center gap-2 flex-wrap">
+<span class="w-5 h-5 rounded-full bg-surface-container-high text-text font-code-key text-code-key flex items-center justify-center font-bold">3</span>
+<button class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-container-low hover:bg-surface-container font-code-key text-code-key text-primary transition-colors group" onclick="copyToClipboard(&#39;LOCAL-gate-read-c3d4e5f6&#39;)">
+<span>LOCAL-gate-read-c3d4e5f6</span>
+<span class="material-symbols-outlined text-[13px] text-text-faint group-hover:text-primary">content_copy</span>
+</button>
+<!-- Deploy Pending Status Pill -->
+<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-status-deploy/15 text-status-deploy font-label-sm text-label-sm font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-status-deploy"></span>
+              DEPLOY-PENDING
+            </span>
+<span class="px-2 py-0.5 rounded bg-surface-container-high text-text-muted font-label-sm text-label-sm font-medium">
+              P2 MEDIUM
+            </span>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-container font-code-sm text-code-sm text-text-muted">
+<span>Score:</span>
+<span class="font-bold text-text">40</span>
+<span class="text-text-faint">/ 100</span>
+</div>
+</div>
+<h4 class="font-headline-sm text-headline-sm text-text font-semibold">
+          Restricted PowerShell / Bash read-only syntax validation
+        </h4>
+<!-- Action Strip -->
+<div class="bg-surface-container-low p-2.5 rounded-lg flex items-center gap-2">
+<span class="material-symbols-outlined text-text-faint text-[16px]">chevron_right</span>
+<span class="font-body-md text-body-md text-on-surface">
+            Promote verified staging build to production cluster
+          </span>
+</div>
+<!-- Deployment Obligation Token Strip -->
+<div class="flex items-center justify-between flex-wrap gap-2 text-code-sm font-code-sm pt-1">
+<div class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-status-deploy/10 text-status-deploy font-medium">
+<span class="material-symbols-outlined text-[14px]">rocket</span>
+<span>prod-us-east: Merged PR #88 pending verification</span>
+</div>
+<div class="flex items-center gap-2">
+<button class="px-2.5 py-1 rounded bg-surface-container hover:bg-surface-bright font-label-md text-label-md text-text transition-colors" onclick="inspectTicket(&#39;LOCAL-gate-read-c3d4e5f6&#39;)">
+              Inspect Ticket
+            </button>
+<button class="px-3 py-1 rounded bg-status-deploy text-on-primary-container font-label-md text-label-md hover:bg-status-deploy/90 transition-colors flex items-center gap-1 font-semibold">
+<span class="material-symbols-outlined text-[15px]">send</span>
+<span>Deploy...</span>
+</button>
+</div>
+</div>
+</article>
+<!-- RANK #4: Todo Candidate Item -->
+<article class="bg-surface rounded-xl shadow-sm p-4 flex flex-col gap-3 transition-all duration-150 hover:bg-surface-raised opacity-90 hover:opacity-100">
+<div class="flex flex-wrap items-center justify-between gap-2">
+<div class="flex items-center gap-2 flex-wrap">
+<span class="w-5 h-5 rounded-full bg-surface-container-high text-text font-code-key text-code-key flex items-center justify-center font-bold">4</span>
+<button class="flex items-center gap-1.5 px-2 py-0.5 rounded bg-surface-container-low hover:bg-surface-container font-code-key text-code-key text-primary transition-colors group" onclick="copyToClipboard(&#39;LOCAL-export-preview-d5e6f7a8&#39;)">
+<span>LOCAL-export-preview-d5e6f7a8</span>
+<span class="material-symbols-outlined text-[13px] text-text-faint group-hover:text-primary">content_copy</span>
+</button>
+<!-- Todo Status Pill -->
+<span class="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-status-todo/15 text-status-todo font-label-sm text-label-sm font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-status-todo"></span>
+              TODO
+            </span>
+<span class="px-2 py-0.5 rounded bg-surface-container-high text-text-muted font-label-sm text-label-sm font-medium">
+              P2 MEDIUM
+            </span>
+</div>
+<div class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-container font-code-sm text-code-sm text-text-muted">
+<span>Score:</span>
+<span class="font-bold text-text">20</span>
+<span class="text-text-faint">/ 100</span>
+</div>
+</div>
+<h4 class="font-headline-sm text-headline-sm text-text font-semibold">
+          Static standalone HTML export without mutation credentials
+        </h4>
+<!-- Action Strip -->
+<div class="bg-surface-container-low p-2.5 rounded-lg flex items-center gap-2">
+<span class="material-symbols-outlined text-text-faint text-[16px]">chevron_right</span>
+<span class="font-body-md text-body-md text-on-surface">
+            Sanitize private filesystem paths from exported JSON fixtures
+          </span>
+</div>
+<div class="flex items-center justify-end gap-2 pt-1">
+<button class="px-2.5 py-1 rounded bg-surface-container hover:bg-surface-bright font-label-md text-label-md text-text transition-colors" onclick="inspectTicket(&#39;LOCAL-export-preview-d5e6f7a8&#39;)">
+            Inspect Ticket
+          </button>
+</div>
+</article>
+</div>
+<!-- Right Rail: Dedicated Blocked & Excluded Section + Scoring Telemetry -->
+<div class="xl:col-span-4 flex flex-col gap-6">
+<!-- BLOCKED SECTION (Explicit isolation as required) -->
+<section class="bg-surface rounded-xl shadow-lg p-5 flex flex-col gap-4 relative overflow-hidden">
+<div class="flex items-center justify-between">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-freshness-critical text-[20px]">cancel</span>
+<h3 class="font-headline-sm text-headline-sm text-text font-bold">Blocked Work</h3>
+</div>
+<span class="font-label-sm text-label-sm px-2 py-0.5 rounded bg-freshness-critical/15 text-freshness-critical font-semibold uppercase">
+            1 Ticket Excluded
+          </span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted">
+          Blocked tasks are automatically stripped from candidate ranking pools until dependency locks are cleared.
+        </p>
+<!-- Blocked Card Detail -->
+<div class="bg-surface-container-low rounded-lg p-4 flex flex-col gap-3 shadow-inner">
+<div class="flex items-center justify-between flex-wrap gap-2">
+<button class="flex items-center gap-1.5 font-code-key text-code-key text-primary hover:underline" onclick="copyToClipboard(&#39;LOCAL-jira-oauth-e9f0a1b2&#39;)">
+<span>LOCAL-jira-oauth-e9f0a1b2</span>
+<span class="material-symbols-outlined text-[13px] text-text-faint">content_copy</span>
+</button>
+<div class="flex items-center gap-1.5">
+<span class="px-2 py-0.5 rounded-full bg-status-blocked/15 text-status-blocked font-label-sm text-label-sm font-semibold">
+                BLOCKED
+              </span>
+<span class="px-1.5 py-0.5 rounded bg-surface-container-high text-freshness-ageing font-label-sm text-label-sm font-bold">
+                P1
+              </span>
+</div>
+</div>
+<h4 class="font-body-lg text-body-lg text-text font-semibold leading-tight">
+            Jira external link validation adapter
+          </h4>
+<!-- Explicit Blocker Text (Required By Specification) -->
+<div class="bg-status-blocked/10 p-3 rounded-lg flex flex-col gap-1 text-on-surface">
+<div class="flex items-center gap-1.5 text-freshness-critical font-label-sm text-label-sm font-bold uppercase tracking-wider">
+<span class="material-symbols-outlined text-[15px]">report_problem</span>
+<span>Active Blocker Provenance</span>
+</div>
+<p class="font-body-sm text-body-sm text-text font-medium leading-relaxed pl-5">
+              Blocked by: Upstream corporate SSO gateway token expiration (Awaiting IT security cert renewal).
+            </p>
+</div>
+<div class="flex items-center justify-between text-code-sm font-code-sm text-text-faint pt-1">
+<span>Dependency: IT-SEC-9941</span>
+<span>Logged: 3d ago</span>
+</div>
+<div class="flex items-center justify-end gap-2 pt-2">
+<button class="px-3 py-1.5 rounded bg-surface-container hover:bg-surface font-label-md text-label-md text-text transition-colors">
+              Edit Details
+            </button>
+<button class="px-3 py-1.5 rounded bg-surface-raised hover:bg-surface-bright text-freshness-fresh font-label-md text-label-md transition-colors flex items-center gap-1 shadow-sm" onclick="resolveBlocker(&#39;LOCAL-jira-oauth-e9f0a1b2&#39;)">
+<span class="material-symbols-outlined text-[15px]">check</span>
+<span>Resolve Blocker</span>
+</button>
+</div>
+</div>
+<!-- Blocker Audit Mini-Log -->
+<div class="p-3 bg-surface-container-lowest rounded font-code-sm text-code-sm text-text-faint flex flex-col gap-1">
+<div class="text-text-muted font-semibold flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">history</span>
+<span>Blocker Reconciliation Audit</span>
+</div>
+<div>• Probe ping received HTTP 401 Unauthorized from gate.corp</div>
+<div>• Next automatic unblock retry scheduled in 32m</div>
+</div>
+</section>
+<!-- Scoring Algorithm & Weights Telemetry Card -->
+<section class="bg-surface rounded-xl shadow-md p-5 flex flex-col gap-3.5">
+<div class="flex items-center justify-between">
+<h3 class="font-headline-sm text-headline-sm text-text font-semibold flex items-center gap-1.5">
+<span class="material-symbols-outlined text-primary text-[18px]">calculate</span>
+<span>Scoring Model Parameters</span>
+</h3>
+<span class="font-code-sm text-code-sm text-text-faint">v2.4.1</span>
+</div>
+<p class="font-body-sm text-body-sm text-text-muted">
+          Scores are recomputed dynamically upon commit telemetry, webhook web events, and terminal sync receipts.
+        </p>
+<!-- Inline Visual Scoring Weights Chart (SVG Under 2KB) -->
+<div class="p-3 bg-surface-container-low rounded-lg flex flex-col gap-2">
+<div class="flex items-center justify-between font-label-sm text-label-sm text-text-muted">
+<span>Score Factor Weights (Relative Scale)</span>
+<span class="font-code-sm text-code-sm text-primary">100 Max</span>
+</div>
+<svg class="w-full h-12" fill="none" viewbox="0 0 320 48" xmlns="http://www.w3.org/2000/svg">
+<!-- P0 Segment (40%) -->
+<rect fill="#f85149" fill-opacity="0.85" height="14" rx="3" width="128" x="0" y="8"></rect>
+<!-- Deadline (30%) -->
+<rect fill="#d29922" fill-opacity="0.85" height="14" rx="3" width="96" x="132" y="8"></rect>
+<!-- PR Aging (20%) -->
+<rect fill="#a371f7" fill-opacity="0.85" height="14" rx="3" width="64" x="232" y="8"></rect>
+<!-- Prompt (10%) -->
+<rect fill="#3fb950" fill-opacity="0.85" height="14" rx="3" width="20" x="300" y="8"></rect>
+<!-- Legend text rendered via SVG for crisp alignment -->
+<text fill="#8b949e" font-family="JetBrains Mono" font-size="9" x="2" y="38">P0 Priority (40)</text>
+<text fill="#8b949e" font-family="JetBrains Mono" font-size="9" x="134" y="38">Due (30)</text>
+<text fill="#8b949e" font-family="JetBrains Mono" font-size="9" x="234" y="38">PR (20)</text>
+<text fill="#8b949e" font-family="JetBrains Mono" font-size="9" x="296" y="38">Act</text>
+</svg>
+</div>
+<!-- Fast Shortcut Summary -->
+<div class="flex flex-col gap-1.5 pt-2 text-code-sm font-code-sm text-text-muted">
+<span class="font-label-sm text-label-sm text-text-faint uppercase">Keyboard Triggers</span>
+<div class="flex items-center justify-between">
+<span>Handoff top candidate</span>
+<kbd class="px-1.5 py-0.5 rounded bg-surface-container-high text-text font-label-sm">h</kbd>
+</div>
+<div class="flex items-center justify-between">
+<span>Cycle through candidates</span>
+<kbd class="px-1.5 py-0.5 rounded bg-surface-container-high text-text font-label-sm">j / k</kbd>
+</div>
+<div class="flex items-center justify-between">
+<span>Inspect current ticket</span>
+<kbd class="px-1.5 py-0.5 rounded bg-surface-container-high text-text font-label-sm">Space</kbd>
+</div>
+</div>
+</section>
+<!-- Local Daemon Sync Guarantee Card -->
+<div class="p-3.5 bg-surface-container-lowest rounded-xl flex items-center justify-between gap-3 text-body-sm font-body-sm text-text-muted shadow-sm">
+<div class="flex items-center gap-2.5">
+<span class="material-symbols-outlined text-freshness-fresh text-[18px]">verified</span>
+<div>
+<div class="font-medium text-text">Deterministic Triage Active</div>
+<div class="font-code-sm text-code-sm text-text-faint">No hallucinations · Strict local scoring</div>
+</div>
+</div>
+<span class="font-code-sm text-code-sm px-2 py-1 rounded bg-surface text-primary">v0.2</span>
+</div>
+</div>
+</div>
+</div>
+<script>
+  // Quick Clipboard Toast Trigger
+  function copyToClipboard(text) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+    }
+    showToast(`Key copied: ${text}`);
+  }
+
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    const toastMsg = document.getElementById('toast-message');
+    if (!toast || !toastMsg) return;
+    toastMsg.textContent = msg;
+    toast.classList.remove('opacity-0', 'pointer-events-none');
+    toast.classList.add('opacity-100');
+    setTimeout(() => {
+      toast.classList.remove('opacity-100');
+      toast.classList.add('opacity-0', 'pointer-events-none');
+    }, 2400);
+  }
+
+  // Inline Next Action Edit
+  function toggleActionEdit(viewId, inputId) {
+    const view = document.getElementById(viewId);
+    const input = document.getElementById(inputId);
+    if (!view || !input) return;
+    
+    if (view.classList.contains('hidden')) {
+      view.classList.remove('hidden');
+      input.classList.add('hidden');
+    } else {
+      view.classList.add('hidden');
+      input.classList.remove('hidden');
+      const textarea = input.querySelector('textarea');
+      if (textarea) textarea.focus();
+    }
+  }
+
+  function saveActionEdit(viewId, inputId) {
+    const view = document.getElementById(viewId);
+    const input = document.getElementById(inputId);
+    if (!view || !input) return;
+    const textarea = input.querySelector('textarea');
+    if (textarea) {
+      view.textContent = textarea.value;
+    }
+    view.classList.remove('hidden');
+    input.classList.add('hidden');
+    showToast('Next action updated locally');
+  }
+
+  // Autonomous Handoff Modal
+  function openHandoffModal(ticketKey) {
+    const modal = document.getElementById('handoff-dialog');
+    const keyTarget = document.getElementById('modal-ticket-key');
+    if (keyTarget && ticketKey) keyTarget.textContent = ticketKey;
+    if (modal) modal.classList.remove('hidden');
+  }
+
+  function closeHandoffModal() {
+    const modal = document.getElementById('handoff-dialog');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  function confirmHandoff() {
+    closeHandoffModal();
+    showToast('Autonomous handoff worker launched (PID 4210)');
+  }
+
+  function inspectTicket(ticketKey) {
+    showToast(`Inspecting ticket ${ticketKey}...`);
+  }
+
+  function resolveBlocker(ticketKey) {
+    showToast(`Queued unblock verification for ${ticketKey}`);
+  }
+
+  // Keyboard Navigation: 'h' for Handoff #1, 'Escape' for modal
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'h' && !e.target.matches('input, textarea, select')) {
+      e.preventDefault();
+      openHandoffModal('LOCAL-session-capture-a1b2c3d4');
+    }
+    if (e.key === 'Escape') {
+      closeHandoffModal();
+    }
+  });
+</script></main></div></body></html>

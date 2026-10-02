@@ -1,0 +1,96 @@
+# Session Tracker — Acceptance Results
+
+Recorded: 2026-10-02 · Implementation revision: v0.1.0 (branch `feat/session-tracker-v1`)
+Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a scenario-named test in `tests/acceptance/` (or a unit suite named below) passed on the environment in the table. "Pending manual" means the scenario needs a live Claude Code host, real network providers or a human and has not been executed.
+
+## Environment
+
+| Item | Value |
+| --- | --- |
+| OS | Windows 11 Pro 10.0.26200 (x64), native (not WSL) |
+| Node | 24.19.0 (plugin requires >= 22) |
+| Git | 2.55.0.windows.3 |
+| Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
+| Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
+| Test command | `npm test` → 295 tests, 294 passed, 1 skipped (symlink creation not permitted on this account), 0 failed |
+
+Other operating systems (macOS, Linux, WSL) have **not** been run yet; they must be recorded here before being advertised as supported.
+
+## Phase 0 — host and transport compatibility
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A01 | Automated (in-process fixtures) | `tests/acceptance/phase0.test.js`, `tests/gate/*.test.js` — writes, unknown shell, redirects, substitutions, mutating MCP denied; reads and every allowlisted shell form pass |
+| A02 | Automated (in-process) | plan-file exception only for the session's claimed plan path under the plan directory; source edits in plan mode denied. **Limitation:** the host exposes no plan path in hook input, so the first plan-mode `Write` of a Markdown file directly inside `~/.claude/plans` is taken as the session's plan file ([ADR 0004](decisions/0004-plan-path-first-claim.md)) |
+| A03 | Automated | distinct identities for two sessions in one cwd and a subagent; missing `session_id` denies covered writes and never falls back to cwd |
+| A04 | **Pending manual** | real approved/rejected/cancelled `ExitPlanMode` payloads and Stop/subagent payloads from a live host; fixtures in `tests/fixtures/hooks/` follow the documented shapes |
+| A05 | Automated | `tests/acceptance/phase0.test.js`, `tests/server/http.test.js` — 202 after persistence, note revision change, confirmation; unauthenticated / wrong-Origin / wrong-Host / missing CSRF cannot mutate |
+| A06 | **Pending manual** | installed command names (`/session-tracker:*`) and status-line composition on a live host; `claude plugin validate` passes |
+| A07 | Automated | the hook process never fails; a PreToolUse the gate cannot evaluate (malformed input, internal error, failed capture) fails closed for every covered tool while reads pass; non-gate hooks never block; bound sessions emit no decision (never an `allow` override). Host fail-open limit: a hook the host times out or cannot launch is outside the guarantee (TRD) |
+
+## Phase 1 — persistence, attribution and recovery
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A08 | Automated | parallel sessions on one/different tickets; in-flight rebind keeps attribution |
+| A09 | Automated | termination after ingress flush, after journal append, and a half-written generation directory; restart preserves acknowledged events, MANIFEST only points at complete generations |
+| A10 | Automated | redelivered tool events, approvals and requests have one effect |
+| A11 | Automated | note materializes at 30 s from the first pending event; later events do not postpone |
+| A12 | Automated | worker down + writable disk: ingress persists, backlog visible, restart drains; unusable ingress: no false receipt, non-gate hook exits 0 |
+| A13 | Automated | stale heartbeat denies covered writes; gate off allows with audit; gate on restores |
+| A14 | Automated | 4,000-char checkpoint fully retrievable after replay; duplicate approval idempotent; incomplete checkpoint not promotable |
+| A15 | Automated (unit) | `tests/core/reducer.test.js`, `tests/core/approval.test.js` — heuristic off never approves; exact phrase, 10-minute window, same binding; quoted/negated/extended prompts never match |
+| A16 | Automated | authored text byte-for-byte through update and replay; edited generated block → conflict with file kept; explicit restore and import create journal events; journal-only rebuild reports missing authored files |
+| A17 | Automated | distinct keys for duplicate slugs and children; relink keeps id/history/alias and the alias stays bindable; collision, traversal, self-parent and cycle rejected; Jira link pending while offline |
+| A18 | Automated | second worker refuses ownership (lock held); copy owned by another machine: doctor reports read-only, `worker start` refuses |
+| A19 | Automated (scaled, see below) | hook p95 1.7 ms with 10,000 tickets / 100,000 events; hook path performs zero journal reads |
+| A20 | Automated | torn tail quarantined and recovered from retained ingress; mid-log corruption stops the worker with `journal-corrupt` and doctor reports it; failed tool → partial coverage, not a verified write |
+
+### A19 measurements (this machine, warm)
+
+| Profile | Replay on start | Hook p50 | Hook p95 | Hook max | Ingest 1,000 events | Publish generation |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2,000 tickets / 20,000 events (default `npm test`) | 3.9 s | 1.4 ms | 1.7 ms | 13.2 ms | 648 ms | 18 ms |
+| 10,000 tickets / 100,000 events (`TRACKER_PERF_FULL=1`) | 12.9 s | 1.5 ms | 1.7 ms | 4.7 ms | 673 ms | 63 ms |
+
+Hook timings are in-process (`runHook`) and exclude Node process start-up (~40–80 ms on this machine), which the host incurs per hook invocation; the 200 ms budget still holds with margin. Cold-start numbers per OS remain to be recorded.
+
+## Phase 2 — migration
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A21 | Automated | `tests/migrate/run.test.js` — dry run writes nothing; lists mapped and ambiguous records including stale and skipped-deployment cases; every source note accounted for (ignored files listed) |
+| A22 | Automated | import creates replayable `migration` events, preserves originals and authored sections; counts, parent links, PR records, statuses and deployment obligations verified |
+| A23 | Automated (partial) | re-running import yields no duplicate effects; rollback restores source notes and settings from the backup and exports newer tracker events. **Pending manual:** the real PMLA layout (the profile assumes YAML frontmatter fields listed in `profiles/pmla/profile.json`) and pausing the legacy hooks |
+
+## Phase 3 — reconciliation, UI and sharing
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A24 | Automated | idle/extinct and stale at boundaries without note mtime change; new work clears stale; compaction does not end a session |
+| A25 | Automated | blocked/done excluded; overdue counted once; deterministic ties; cap at 100; fewer than five |
+| A26 | Automated | identical polls cannot undo manual blocked; per-environment obligations; draft and closed-unmerged create none; done-with-pending remains listed |
+| A27 | Automated | freshness states and offline display; provider failure keeps evidence age and shows a separate provider error |
+| A28 | Automated | same-revision clients: one applies, one conflicts; idempotent repost; mismatched body 409; stale retry conflicts |
+| A29 | Automated | cancel within the 10 s window; late cancel reports applied; reversal as a new revision-checked request |
+| A30 | Automated | refresh runs within one tick regardless of schedule; duplicates join one run; failed run retryable |
+| A31 | Automated | applying request after crash → applied or conflict, never permanent pending |
+| A32 | Automated | export contains selected fields only; no endpoints, tokens, local paths or private links; fixed export and sync times |
+| A33 | Automated (layout) + **Pending manual** (usability) | layouts verified in the built-in browser at 1440, 1024, 800 and 390 px (docked 420 px detail at 1440, modal at 1024, fullscreen below 900); read-only export has no mutation controls; 60-card / 200-row volumes and deep trees covered by `tests/ui/render.test.js`. Human usability timing not run |
+| A34 | Automated (contrast) + **Pending manual** | both themes meet measured 4.5:1 for every text/background pair (`tests/ui/tokens.test.js`); keyboard shortcuts implemented and input-safe. First-time-user timing and screen-reader walkthrough not run |
+
+## Phase 4 — handoff
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A35 | Automated | source-off runs in an empty sandbox with Read/Glob/Grep/Bash disallowed; attempt-fix without read/edit rejected; commit/push/PR each need their own permission |
+| A36 | Automated | isolated worktree at the recorded base commit; live dirty checkout untouched; unavailable repo fails the run rather than degrading to note-only |
+| A37 | Automated | one reservation per ticket; fixes per repo serialize; duplicate result delivery does not duplicate children |
+| A38 | Automated (shortened deadline) + **Pending manual** | timeout and cancellation kill the subprocess, preserve logs and partial results and show timed-out/cancelled (`tests/handoff/runner.test.js` with a 400 ms deadline). A real 20-minute wall-clock run including sleep has not been executed |
+| A39 | Automated | restart marks running runs failed/interrupted; no automatic rerun; uncertain effects recorded; explicit retry is a new run |
+| A40 | **Pending manual** | default fix returns local diff and tests (automated); explicitly authorized push to a non-default branch and draft PR creation need a real remote and `gh` |
+| A41 | Automated | parent change during a handoff conflicts the suggested next action; owner fields remain; missing runtime fails at dispatch with a reason |
+
+## Phase 5 — release evidence
+
+Not started. Required before public release: two outside installs under 10 minutes using the README only; macOS, Linux and WSL runs of `npm test` and the A19 profile with cold-start hook timings; A04/A06 against a live host; license and repository owner decided (`LICENSE-TBD.md`).

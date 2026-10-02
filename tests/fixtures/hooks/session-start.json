@@ -1,0 +1,9 @@
+{
+  "session_id": "sess-0001",
+  "transcript_path": "C:/Users/me/.claude/projects/x/sess-0001.jsonl",
+  "cwd": "C:/repo",
+  "permission_mode": "default",
+  "hook_event_name": "SessionStart",
+  "source": "startup",
+  "model": "claude-fable-5-1"
+}
