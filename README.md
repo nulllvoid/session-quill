@@ -117,10 +117,10 @@ Each merged PR then owes one deployment per environment. The ticket shows pendin
 name = "daily-digest"
 job  = "digest"
 cron = "30 19 * * 1-5"
-to   = ["vault-daily"]           # the store's daily/YYYY-MM-DD.md; or ["file"] with path = "..."
+to   = ["vault-daily"]           # the store's daily/YYYY-MM-DD.md; or ["file"] with path = "notes/digest.md" (relative to the store, or ~/...)
 ```
 
-The digest lives between `<!-- quill:digest:start -->` and `<!-- quill:digest:end -->`; your own text in the note is never touched, and if you edit the digest section Quill stops updating it until you clear it.
+The digest lives between `<!-- quill:digest:start -->` and `<!-- quill:digest:end -->`; your own text in the note is never touched, and if you edit the digest section Quill stops updating it until you empty it again.
 
 ## Bitbucket pull requests
 

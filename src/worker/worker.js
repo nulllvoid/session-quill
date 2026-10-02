@@ -134,10 +134,18 @@ export class Worker {
   // Effective deployment environments for a repository (ADR 0009): its own list, else the tracker's
   // (repository .quill.toml first, then user config), else production.
   environmentsFor(repoId) {
+    return this.environmentsResolution(repoId).list;
+  }
+
+  // { list, error }: error names why a repository's environments are unknown (an unreadable
+  // .quill.toml, an invalid list). The list then falls back to production for display only;
+  // reconciliation never journals a merge against it.
+  environmentsResolution(repoId) {
     const repo = repoId ? (this.config.repos ?? {})[repoId] : null;
+    if (repo && Array.isArray(repo.deployment_environments) && repo.deployment_environments.length) return { list: [...repo.deployment_environments], error: null };
     const scope = this.identity && repoId ? (this.identity.repos ?? []).find((r) => r.repo_id === repoId) : null;
-    const tracker = (scope && scope.tracker) || (this.identity && this.identity.tracker) || null;
-    return effectiveEnvironments(repo, tracker);
+    const source = scope ?? this.identity ?? {};
+    return { list: effectiveEnvironments(null, { environments: source.environments ?? null }), error: source.environments_error ?? null };
   }
 
   publishIdentity() {

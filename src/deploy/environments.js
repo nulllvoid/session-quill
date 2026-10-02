@@ -5,6 +5,17 @@ export const MAX_ENVIRONMENTS = 10;
 // sync, a release tag, the owner's word, or an accepted agent suggestion.
 export const EVIDENCE_KINDS = ['merge', 'tag', 'argocd', 'release', 'manual', 'agent'];
 
+// [tracker].environments read on its own, so a bad key pattern never loses them and a table holding
+// only environments never turns on key recognition. Returns null when unset or empty.
+export function environmentsFromTracker(tracker) {
+  if (!tracker || typeof tracker !== 'object' || tracker.environments === undefined) return null;
+  const list = tracker.environments;
+  if (!Array.isArray(list) || list.length > MAX_ENVIRONMENTS || list.some((e) => typeof e !== 'string' || !ENV_NAME_RE.test(e.trim())) || new Set(list.map((e) => e.trim())).size !== list.length) {
+    throw new Error('tracker.environments must be up to 10 distinct lowercase names such as stage and prod');
+  }
+  return list.length ? list.map((e) => e.trim()) : null;
+}
+
 // A repository's own deployment_environments win, then the tracker's environments, then production.
 export function effectiveEnvironments(repo, tracker) {
   if (repo && Array.isArray(repo.deployment_environments) && repo.deployment_environments.length) return [...repo.deployment_environments];

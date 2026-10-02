@@ -125,9 +125,16 @@ export function resolveGateMode(user = {}, repo = null) {
 // Repository [tracker] values override user values field by field; the result is validated. When
 // the user has a prefix allowlist, a repository may only narrow it: an empty or missing repo list
 // keeps the user's, and a list with no shared prefix disables auto-binding instead of widening it.
+// `environments` is deployment config, not key recognition (ADR 0009): a table holding only it is no tracker.
+function bindingTable(t) {
+  if (!t || typeof t !== 'object' || Array.isArray(t)) return t ?? null;
+  const { environments, ...rest } = t;
+  return Object.keys(rest).length ? rest : null;
+}
+
 export function resolveTracker(user = {}, repo = null, { warnings = [] } = {}) {
-  const u = user && user.tracker;
-  const r = repo && repo.tracker;
+  const u = bindingTable(user && user.tracker);
+  const r = bindingTable(repo && repo.tracker);
   if (!u && !r) return null;
   const merged = normalizeTracker({ ...(u ?? {}), ...(r ?? {}) });
   const userPrefixes = u ? normalizeTracker(u).prefixes : [];

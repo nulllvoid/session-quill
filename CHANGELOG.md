@@ -34,6 +34,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - `quill init` no longer writes `deployment_environments = ["production"]` for a new repository, so `[tracker].environments` applies; production remains the fallback.
+- A `job = "digest"` schedule, accepted and skipped by earlier versions, now runs and writes into the store's `daily/` folder by default.
 - The default gate mode is `nudge`. Set `[gate] mode = "strict"` for the v0.1 deny-until-bound behaviour. A repository can tighten the mode but never loosen it.
 - `ticket relink --jira` is now an alias of `--external` with `system = jira`; links may be any https URL.
 - Sessions started before `quill init` learn their session id on the first prompt.

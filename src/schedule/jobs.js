@@ -5,7 +5,7 @@ import { submitRequest } from '../server/requests.js';
 import { repoFor } from '../core/state.js';
 import { uuid } from '../lib/ids.js';
 import path from 'node:path';
-import { buildToday } from '../today/feed.js';
+import { buildToday, localDate } from '../today/feed.js';
 import { renderDigest, writeDigest, writeDigestFile } from '../today/digest.js';
 import { stateDir } from '../lib/paths.js';
 
@@ -40,13 +40,16 @@ export function createJobs({ providers }) {
     },
     // Writes one store-local day of the Today feed as markdown (ADR 0009): into the store's daily
     // note, a file, or both. Never overwrites a digest section someone edited.
-    async digest(worker, { settings }) {
-      const feed = buildToday(worker.state, { nowIso: worker.now(), days: 2 });
-      const date = settings.day === 'yesterday' ? previousDate(feed.generated_for) : feed.generated_for;
+    async digest(worker, { settings, due_at = null }) {
+      // The day comes from the slot the run is for, so a run caught up the next morning still
+      // writes the evening it missed.
+      const feed = buildToday(worker.state, { nowIso: worker.now(), days: 9 });
+      const slotDay = localDate(due_at ?? worker.now(), worker.state.meta.timezone || 'UTC');
+      const date = settings.day === 'yesterday' ? previousDate(slotDay) : slotDay;
       const day = feed.days.find((d) => d.date === date) ?? { date, tickets: [], sessions: 0 };
       const pendingDeployments = [];
       for (const t of worker.state.tickets.values()) for (const d of t.deployments ?? []) if (d.state === 'pending') pendingDeployments.push({ ticket_key: t.key, environment: d.environment });
-      pendingDeployments.sort((a, b) => (a.ticket_key < b.ticket_key ? -1 : a.ticket_key > b.ticket_key ? 1 : a.environment < b.environment ? -1 : 1));
+      pendingDeployments.sort((a, b) => (a.ticket_key < b.ticket_key ? -1 : a.ticket_key > b.ticket_key ? 1 : a.environment < b.environment ? -1 : a.environment > b.environment ? 1 : 0));
       const markdown = renderDigest(day, { pendingDeployments });
       const indexPath = path.join(stateDir(worker.env), 'digest-index.json');
       const written = [];

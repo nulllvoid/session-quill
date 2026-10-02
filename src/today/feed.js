@@ -13,13 +13,20 @@ function dateFormatter(timeZone) {
   };
 }
 
+// The store-local calendar date of an instant.
+export function localDate(iso, timeZone) {
+  return dateFormatter(timeZone)(iso);
+}
+
 export function buildToday(state, { nowIso, days = TODAY_DAYS, timezone = null } = {}) {
   const tz = timezone ?? state.meta.timezone ?? 'UTC';
   const dateOf = dateFormatter(tz);
   // One extra day of margin so the oldest local day is complete in any time zone.
   const cutoff = new Date(Date.parse(nowIso) - (days + 1) * DAY_MS).toISOString();
   const lastDate = dateOf(nowIso);
-  const firstDate = dateOf(new Date(Date.parse(nowIso) - (days - 1) * DAY_MS).toISOString());
+  // Calendar-day arithmetic, so a daylight-saving change never makes the window a day short or long.
+  const [y, m, d] = lastDate.split('-').map(Number);
+  const firstDate = new Date(Date.UTC(y, m - 1, d - (days - 1))).toISOString().slice(0, 10);
   const byDay = new Map();
   const dayFor = (date) => {
     if (!byDay.has(date)) byDay.set(date, { date, tickets: new Map(), sessions: 0 });

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadRepoConfig, resolveGateMode, resolveTracker } from './config.js';
 import { configPath } from '../lib/paths.js';
+import { environmentsFromTracker } from '../deploy/environments.js';
 
 // In strict mode an auto-binding unlocks writes, so it requires a prefix allowlist; without one the
 // tracker still renders links but nothing binds automatically.
@@ -24,6 +25,9 @@ export function buildRuntimeIdentity({ storeMeta, config }) {
   } catch (err) {
     warnings.push(`user config: ${err.message}`);
   }
+  let environments = null;
+  let environmentsError = null;
+  try { environments = environmentsFromTracker(config.tracker); } catch (err) { environmentsError = `user config: ${err.message}`; warnings.push(environmentsError); }
   const repos = [];
   for (const [repo_id, r] of Object.entries(config.repos ?? {})) {
     if (!r || !r.canonical_path) continue;
@@ -48,7 +52,14 @@ export function buildRuntimeIdentity({ storeMeta, config }) {
         warnings.push(`${repo_id}: ${err.message}`);
       }
     }
-    repos.push({ repo_id, path: path.resolve(r.canonical_path), project_id: (repoCfg && repoCfg.project_id) || r.project_id || null, gate_mode: gate.mode, tracker: repoTracker });
+    // Environments the repository cannot report (unreadable .quill.toml, invalid list) are unresolved,
+    // never silently replaced by the user's list (ADR 0009).
+    let repoEnvironments = environments;
+    let repoEnvironmentsError = environmentsError;
+    if (broken) { repoEnvironments = null; repoEnvironmentsError = `${repo_id} .quill.toml could not be read`; } else {
+      try { repoEnvironments = environmentsFromTracker(repoCfg && repoCfg.tracker) ?? environments; } catch (err) { repoEnvironments = null; repoEnvironmentsError = `${repo_id}: ${err.message}`; warnings.push(repoEnvironmentsError); }
+    }
+    repos.push({ repo_id, path: path.resolve(r.canonical_path), project_id: (repoCfg && repoCfg.project_id) || r.project_id || null, gate_mode: gate.mode, tracker: repoTracker, environments: repoEnvironments, environments_error: repoEnvironmentsError });
   }
   const identity = {
     store_id: storeMeta.store_id,
@@ -59,6 +70,8 @@ export function buildRuntimeIdentity({ storeMeta, config }) {
     approval_phrases_enabled: config.approval_phrases_enabled === true,
     allow_tools: (config.gate && Array.isArray(config.gate.allow_tools)) ? config.gate.allow_tools : [],
     tracker,
+    environments,
+    environments_error: environmentsError,
     default_project_id: config.default_project || Object.keys(config.projects ?? {})[0] || null,
     repos,
   };

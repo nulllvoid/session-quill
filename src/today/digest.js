@@ -1,19 +1,14 @@
 // The daily digest (ADR 0009): one day of the Today feed as markdown, written into a marked
 // section of a daily note (or a file). Text outside the section is never touched, and a section
 // edited since Quill last wrote it is never overwritten.
-import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
-import { TrackerError } from '../lib/errors.js';
-import { readJsonIfExists, writeJsonAtomic, writeFileAtomic } from '../lib/atomic-fs.js';
+import { writeMarkedSection, markers, inertMarkdown } from '../lib/marked-section.js';
 
-export const START = '<!-- quill:digest:start -->';
-export const END = '<!-- quill:digest:end -->';
+export const { start: START, end: END } = markers('digest');
 const LABELS = { commit: ['commit', 'commits'], pr: ['PR', 'PRs'], deployment: ['deployment', 'deployments'], status: ['status change', 'status changes'], write: ['file write', 'file writes'], plan: ['plan', 'plans'], conclusion: ['conclusion', 'conclusions'], handoff: ['agent run', 'agent runs'], bind: ['binding', 'bindings'] };
 const ORDER = Object.keys(LABELS);
 
-const hash = (s) => crypto.createHash('sha256').update(s).digest('hex');
-const oneLine = (s) => String(s ?? '').replace(/[\r\n]+/g, ' ').trim();
+const oneLine = (s) => inertMarkdown(String(s ?? '').replace(/[\r\n]+/g, ' ').trim());
 
 export function renderDigest(day, { pendingDeployments = [] } = {}) {
   const lines = [`## Session Quill — ${day.date}`, ''];
@@ -30,25 +25,7 @@ export function renderDigest(day, { pendingDeployments = [] } = {}) {
 // Writes `markdown` between the digest markers of `file` (created when missing). `indexPath` keeps
 // the hash of each section Quill wrote, so a section someone edited is reported instead of replaced.
 export function writeDigestFile({ file, markdown, indexPath }) {
-  const index = readJsonIfExists(indexPath) ?? {};
-  const section = `${START}\n${markdown.trimEnd()}\n${END}`;
-  let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const start = text.indexOf(START);
-  const end = start >= 0 ? text.indexOf(END, start) : -1;
-  if (start >= 0 && end >= 0) {
-    const current = text.slice(start, end + END.length);
-    if (index[file] !== hash(current)) throw new TrackerError('digest-conflict', `the digest section in ${file} was edited after Quill wrote it; clear that section to let Quill write it again`);
-    text = text.slice(0, start) + section + text.slice(end + END.length);
-  } else if (start >= 0 || text.includes(END)) {
-    throw new TrackerError('digest-conflict', `the digest markers in ${file} are incomplete; remove them to let Quill write the section again`);
-  } else {
-    text = text ? `${text.replace(/\s*$/, '')}\n\n${section}\n` : `${section}\n`;
-  }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  writeFileAtomic(file, text);
-  index[file] = hash(section);
-  writeJsonAtomic(indexPath, index);
-  return { path: file };
+  return writeMarkedSection({ file, marker: 'digest', markdown, indexPath, conflictCode: 'digest-conflict' });
 }
 
 export function writeDigest({ dir, date, markdown, indexPath }) {

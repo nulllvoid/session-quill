@@ -124,7 +124,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath });
     const current = worker.state.handoffs.get(h.id);
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
-    const environments = repoCfg ? repoCfg.deployment_environments ?? [] : [];
+    const environments = worker.environmentsFor ? worker.environmentsFor(ticket.repo_id) : repoCfg ? repoCfg.deployment_environments ?? [] : [];
     const render = (r) => renderRecipe(r, { ticket, url, note: h.note, prs: ticket.prs ?? [], deployments: ticket.deployments ?? [], environments });
     const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render });
     const tools = recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions });

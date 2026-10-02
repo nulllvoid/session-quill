@@ -38,6 +38,15 @@ async function pollProviders(worker, providers, now) {
         const result = await provider.fetchPr(pr.url);
         entry.last_success_at = now;
         entry.error = null;
+        const envs = result.state === 'merged' && worker.environmentsResolution ? worker.environmentsResolution(ticket.repo_id) : null;
+        if (envs && envs.error) {
+          // Never journal a merge against a guessed environment list: keep the PR unrecorded so the
+          // next run, after the config is fixed, creates the right obligations (ADR 0009).
+          const message = `deployment environments for ${ticket.repo_id ?? 'this repository'} are unresolved (${envs.error}); the merge is recorded once that is fixed`;
+          updates.push({ ticket_id: ticket.id, pr_id: pr.id, url: pr.url, error: message });
+          if (worker.recordHealthError) worker.recordHealthError({ kind: 'config-invalid', error: message });
+          continue;
+        }
         // The environments travel with the evidence so replay builds the same obligations (ADR 0009).
         updates.push({ ticket_id: ticket.id, pr_id: pr.id, url: pr.url, ...result, observed_at: result.observed_at ?? now, error: null, evidence_id: `${pr.url}:${result.state}:${result.merged_at ?? ''}`, ...(result.state === 'merged' && worker.environmentsFor ? { environments: worker.environmentsFor(ticket.repo_id) } : {}) });
       } catch (err) {

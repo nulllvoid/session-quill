@@ -1,4 +1,6 @@
 // [[schedule]] tables from user config (ADR 0007). Repository config cannot schedule jobs.
+import path from 'node:path';
+import os from 'node:os';
 import { parseCron, parseInterval, nextAfter } from './cron.js';
 
 export const JOBS = ['reconcile', 'agent', 'digest'];
@@ -41,9 +43,16 @@ export function normalizeSchedules(config = {}, { timeZone = 'UTC', now = Date.n
       const to = raw.to ?? ['vault-daily'];
       if (!Array.isArray(to) || !to.length || to.some((t) => !DIGEST_TARGETS.includes(t))) { warnings.push(`${where}: to may contain ${DIGEST_TARGETS.join(', ')}`); return; }
       if (to.includes('file') && (typeof raw.path !== 'string' || !raw.path.trim())) { warnings.push(`${where}: a file digest needs path = "<file.md>"`); return; }
+      // A file path is resolved against the store (never the worker's working directory); ~ is home.
+      let file = null;
+      if (to.includes('file')) {
+        const p = raw.path.trim();
+        if (!/\.md$/i.test(p)) { warnings.push(`${where}: path must end in .md`); return; }
+        file = p.startsWith('~') ? path.join(os.homedir(), p.slice(1).replace(/^[\\/]/, '')) : path.resolve(config.store_path ?? os.homedir(), p);
+      }
       const day = raw.day ?? 'today';
       if (!['today', 'yesterday'].includes(day)) { warnings.push(`${where}: day must be today or yesterday`); return; }
-      extra = { to: [...new Set(to)], path: to.includes('file') ? raw.path.trim() : null, day };
+      extra = { to: [...new Set(to)], path: file, day };
     }
     try {
       const enabled = raw.enabled !== false;

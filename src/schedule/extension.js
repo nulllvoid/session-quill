@@ -59,7 +59,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
     return schedules.find((s) => s.name === (r.payload && r.payload.schedule)) ?? null;
   }
 
-  function start(worker, s, trigger, requests) {
+  function start(worker, s, trigger, requests, { dueMs = null } = {}) {
     const run_id = uuid();
     rerun.delete(s.name);
     for (const r of requests) worker.emit('request-tx', { request_id: r.id, outcome: 'applying' }, { source_identity: `request-tx:${r.id}:applying` });
@@ -71,7 +71,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
       let error = null;
       let result = {};
       try {
-        result = (await impl[s.job](worker, { run_id, reason, schedule: s.name, settings: s })) ?? {};
+        result = (await impl[s.job](worker, { run_id, reason, schedule: s.name, settings: s, due_at: dueMs ? toIso(dueMs) : null })) ?? {};
         summary = result.summary ?? null;
       } catch (err) {
         outcome = 'failed';
@@ -147,7 +147,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
         if (!s.enabled || running.has(s.job)) continue;
         const next = nextDueMs(worker, s);
         if (next === null || nowMs < next) continue;
-        start(worker, s, rerun.has(s.name) || (next !== 0 && nowMs - next > CATCH_UP_SLACK_MS) ? 'catch-up' : 'schedule', []);
+        start(worker, s, rerun.has(s.name) || (next !== 0 && nowMs - next > CATCH_UP_SLACK_MS) ? 'catch-up' : 'schedule', [], { dueMs: next || null });
       }
     },
     async onStop() {
