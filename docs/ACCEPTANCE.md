@@ -7,13 +7,13 @@ These are release requirements, not tests already executed. Record host/runtime 
 
 | ID | Requirement | Scenario and expected outcome |
 | --- | --- | --- |
-| A01 | FR-1, FR-2, FR-13 | On each supported host/OS, unbound supported writes, unknown shell scripts, redirects, substitutions and registered mutating tools are denied; dedicated reads and every allowlisted shell form pass through normal host permissions |
+| A01 | FR-1, FR-2, FR-13 | (strict gate mode) On each supported host/OS, unbound supported writes, unknown shell scripts, redirects, substitutions and registered mutating tools are denied; dedicated reads and every allowlisted shell form pass through normal host permissions |
 | A02 | FR-2 | Unbound plan creation/approval succeeds only for the verified host plan path; source edits in plan mode and symlink/reparse escapes remain denied |
 | A03 | FR-3 | Two sessions in the same cwd plus a subagent receive distinct identity mappings; missing identity never falls back to cwd |
 | A04 | FR-5, FR-6 | Capture real approved/rejected/cancelled plan payloads and Stop/subagent payloads; rejected/cancelled plans never become approved records |
 | A05 | FR-11, FR-13 | A real local UI submits a request, receives durable acknowledgement, sees local note revision change and displays confirmation; unauthenticated, wrong-Origin and wrong-Host requests cannot mutate |
 | A06 | FR-13 | Actual installed command names and status-line integration work; existing user hooks/status line are preserved; absent or unsupported Node/host runtime gives an actionable diagnostic |
-| A07 | FR-1 | Verify gate exception, malformed input, hook crash and timeout behavior. Document host fail-open limits; a valid binding never bypasses normal host permissions |
+| A07 | FR-1 | (strict gate mode) Verify gate exception, malformed input, hook crash and timeout behavior. Document host fail-open limits; a valid binding never bypasses normal host permissions |
 
 ## Phase 1 — Persistence, attribution and recovery
 
@@ -24,7 +24,7 @@ These are release requirements, not tests already executed. Record host/runtime 
 | A10 | FR-5, FR-7 | Redeliver identical tool events, approvals and mutation requests; counts, timeline entries and revisions have one effect |
 | A11 | FR-5 | Submit one event then no further hooks: note materializes within 30 s. Continuous events cannot extend the first-event deadline |
 | A12 | FR-5 | Worker down but disk writable: capture persists pending ingress, visible backlog remains, restart drains it. Disk full/read-only: no false receipt; non-gate hook returns without blocking the session and reports a gap |
-| A13 | FR-1, FR-3 | Worker/binding unavailable: covered writes denied when hook can respond. Gate off allows the operation with a visible unticketed/gate-off record; gate on restores enforcement |
+| A13 | FR-1, FR-3 | (strict gate mode) Worker/binding unavailable: covered writes denied when hook can respond. Gate off allows the operation with a visible unticketed/gate-off record; gate on restores enforcement |
 | A14 | FR-6, FR-7 | A checkpoint longer than 1,500 characters remains fully retrievable/replayable. Duplicate approval is idempotent; missing/incomplete checkpoint cannot be promoted as complete |
 | A15 | FR-6 | Heuristic off never auto-approves. When enabled, only the entire next eligible phrase within 10 min matches; quoted, negated, extended, late and different-binding prompts do not |
 | A16 | FR-7 | Manual authored text survives update/replay byte-for-byte. Edited generated blocks become conflicts. Explicit import creates events. Journal-only rebuild does not claim recovery of missing authored files |
@@ -72,6 +72,15 @@ These are release requirements, not tests already executed. Record host/runtime 
 ## Phase 5 — Release evidence
 
 All Must scenarios must pass, with exceptions explicitly removed from the advertised support matrix rather than concealed. Two outside testers install and track a session under 10 min with prerequisites already present. Verify README diagnostics and uninstall instructions, startup/wake recovery, tested version ranges, complete backup/restore, and public fixtures free of private data. No migration, publication or external sharing is performed by these documentation changes.
+
+## Phase 6 — Zero-command tracking (ADR 0005)
+
+| ID | Requirement | Scenario and expected outcome |
+| --- | --- | --- |
+| A42 | FR-1, FR-3, FR-8 | With a `[tracker]` configured, a prompt that mentions a ticket key links the session with no command; the ticket is created under that key with its rendered link, later writes are attributed to it, and the worker confirms the provisional binding |
+| A43 | FR-3 | A session started on a branch containing a key is linked at SessionStart; a later prompt with another key switches it forward only, leaving earlier writes on the first ticket |
+| A44 | FR-1, FR-5 | Nudge mode never blocks unlinked writes, asks once at Stop (never while the stop hook is already active), and the user's reply with a key links the session for later work without reassigning earlier work |
+| A45 | FR-1 | Strict mode keeps the original deny matrix, its denial explains that mentioning a key links the session, and mentioning one lets the very next call through |
 
 ## Review resolution traceability
 

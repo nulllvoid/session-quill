@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Zero-command tracking ([ADR 0005](docs/decisions/0005-gate-modes-and-auto-binding.md)): a configured ticket key in a prompt or in the branch name links the session, creating the ticket under that key when needed.
+- `[tracker]` configuration (`system`, `domain`, `url_template`, `key_pattern`, `prefixes`, `sources`, `on_new_key`) in user config or a repository's `.quill.toml`, with validated patterns and bounded scans.
+- Gate modes `off`, `nudge` and `strict`; `nudge` asks once at the end of a turn about unlinked work instead of denying mid-task.
+- `ticket relink --external <KEY> [--system s] [--url https://...]` and a ticket `external` field for any tracker.
+- Acceptance scenarios A42–A45.
+
+### Changed
+
+- The default gate mode is `nudge`. Set `[gate] mode = "strict"` for the v0.1 deny-until-bound behaviour. A repository can tighten the mode but never loosen it.
+- `ticket relink --jira` is now an alias of `--external` with `system = jira`; links may be any https URL.
+- Sessions started before `quill init` learn their session id on the first prompt.
+- The `.quill.toml` parser accepts single-quoted literal strings.
+
 ## [0.1.0] - 2026-10-02
 
 First implementation of the v0.2 design (PRD, TRD, data contract, UI specification, acceptance scenarios).

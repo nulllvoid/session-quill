@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 295 tests, 294 passed, 1 skipped (symlink creation not permitted on this account), 0 failed |
+| Test command | `npm test` → 345 tests, 344 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, ADR 0005) |
 
 ### Platform matrix (GitHub Actions, commit `bcd989e`)
 
@@ -100,6 +100,17 @@ Hook timings are in-process (`runHook`) and exclude Node process start-up (~40�
 | A39 | Automated | restart marks running runs failed/interrupted; no automatic rerun; uncertain effects recorded; explicit retry is a new run |
 | A40 | **Pending manual** | default fix returns local diff and tests (automated); explicitly authorized push to a non-default branch and draft PR creation need a real remote and `gh` |
 | A41 | Automated | parent change during a handoff conflicts the suggested next action; owner fields remain; missing runtime fails at dispatch with a reason |
+
+## Phase 6 — zero-command tracking (ADR 0005)
+
+| ID | Status | Evidence |
+| --- | --- | --- |
+| A42 | Automated | `tests/acceptance/phase6.test.js` — prompt key links the session with no command; ticket created under the key with its rendered link; later writes attributed; provisional binding confirmed; note written |
+| A43 | Automated | branch key linked at SessionStart; a later prompt key switches forward only |
+| A44 | Automated | nudge never blocks; asks once at Stop and never while the stop hook is active; the reply links later work only |
+| A45 | Automated | strict deny matrix kept with a key hint; mentioning a key lets the next call through |
+
+Unit coverage: `tests/core/external-keys.test.js` (validation, bounded scans, non-ticket tokens, URL templates), `tests/hooks/autobind.test.js`, `tests/hooks/nudge.test.js`, `tests/hooks/gate-modes.test.js`, `tests/worker/identity.test.js`, `tests/core/external-bind.test.js`. **Pending manual:** the Stop `decision: "block"` nudge and `UserPromptSubmit` context against a live Claude Code host (the same host gap as A04/A06).
 
 ## Phase 5 — release evidence
 

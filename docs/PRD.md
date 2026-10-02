@@ -13,7 +13,7 @@ The existing PMLA Delivery Tracker is the reference migration, not a dependency 
 
 ## Guarantees and boundaries
 
-- With the gate enabled and functioning, supported mutating tool calls require a binding. Unknown shell commands are denied until bound; only the documented read-only shell subset is exempt. This is a workflow gate, not filesystem isolation: external processes, disabled hooks and unsupported tools are outside its guarantee.
+- In strict gate mode, when functioning, supported mutating tool calls require a binding. The default nudge mode never blocks; it binds from ticket keys in the prompt or branch and asks once at the end of a turn about unlinked work ([ADR 0005](decisions/0005-gate-modes-and-auto-binding.md)). Unknown shell commands are denied until bound; only the documented read-only shell subset is exempt. This is a workflow gate, not filesystem isolation: external processes, disabled hooks and unsupported tools are outside its guarantee.
 - Persisted events survive worker restarts and rebuild generated notes. A crash before the host emits an event, or storage failure preventing persistence, can leave a capture gap. Gaps must be visible; unobserved work cannot be promised recoverable.
 - Full captured checkpoints are retained; the UI may shorten previews. Approval attaches to an exact checkpoint, ticket and session.
 - Capture, notes, deterministic reconciliation and the local dashboard require no cloud account. Handoffs require an installed, authenticated Claude Code runtime; selected content may leave the machine through the user's configured model provider.
@@ -70,7 +70,7 @@ The documents use `/ticket` and `/approve` as shorthand. Installed plugin comman
 
 | ID | Requirement | Priority |
 | --- | --- | --- |
-| FR-1 | Gate supported mutating tools and unknown/mutating shell commands when unbound; enumerate exclusions and log gate-off use | Must |
+| FR-1 | Gate supported mutating tools and unknown/mutating shell commands when unbound (strict mode); enumerate exclusions and log gate-off use; offer nudge and off modes and bind automatically from configured ticket keys (ADR 0005) | Must |
 | FR-2 | Permit dedicated reads/searches, tested read-only shell subset and verified host plan-file writes; plan mode is not a blanket write exemption | Must |
 | FR-3 | Persist binding history by session/agent identity; support resume, rebinding and status display without directory fallback | Must |
 | FR-4 | Create valid tickets with project/category defaults, unique keys and validated parent links | Must |
@@ -113,6 +113,6 @@ No phase has a duration estimate until phase 0 provides evidence. Migration date
 
 ## Resolved defaults and remaining inputs
 
-Defaults: working name `session-quill`; markdown store; LOCAL keys; gate on; approval phrases off; active-ticket staleness 5 days; session extinction 48 h; sync every 2 h all days; handoff analyse with follow-ups; source access off; no remote push by default.
+Defaults: working name `session-quill`; markdown store; LOCAL keys plus external keys from a configured tracker; gate mode nudge; approval phrases off; active-ticket staleness 5 days; session extinction 48 h; sync every 2 h all days; handoff analyse with follow-ups; source access off; no remote push by default.
 
 Still needed at deployment: actual store/repository paths, provider credentials if used, PMLA inventory/backup, final repository owner and license choice. These are collected during initialization or release preparation; runtime behavior is defined in the [TRD](TRD.md#configuration-and-packaging).

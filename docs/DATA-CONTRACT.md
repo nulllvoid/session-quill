@@ -34,7 +34,7 @@ Staleness is a boolean derived from activity. It is not a ticket status. Counts 
 
 Required scalar fields: key, title, project_id, project_name, status, category, priority, next_action, last_activity.
 Read-only authored projections: summary and user_notes (strings, empty by default). They come from preserved user sections, not journal replay; an authored-content change republishes the detail projection without pretending a generated-field edit occurred.
-Nullable fields: parent_id, due, blocker, repo_id, jira.
+Nullable fields: parent_id, due, blocker, repo_id, jira, external.
 Arrays: aliases, children_ids, session_ids, tags, files_touched, plans, conclusions, timeline, prs, deployments, handoff_ids, validation_issues.
 Derived fields: stale, files_touched_count, plans_count, children_done_count.
 Control fields: status_source (manual, evidence, migration), status_evidence_id (nullable), manual_status_evidence_floor (sequence, default 0).
@@ -42,6 +42,7 @@ Control fields: status_source (manual, evidence, migration), status_evidence_id 
 - blocker is required and nonempty when status is blocked. next_action may be empty.
 - repo_id resolves through the local repository registry; the UI receives a display repo name, never an implicit filesystem permission.
 - jira: key, url (nullable), validation, validated_at (nullable), error (nullable).
+- external: system (jira, linear, github, custom), key, url (nullable, https only), validation, validated_at (nullable), error (nullable). Set when a ticket is created from or relinked to a tracker key (ADR 0005); jira-system records also fill `jira` for compatibility.
 - files_touched: repo_id, relative_path, first_seen, last_seen. Counts are deduplicated by repo and path; unknown changes are represented by timeline coverage, not guessed paths.
 - plans: id, session_id, checkpoint_id (nullable), content_ref, preview, approved_at, provenance. Full approved plan text is available through the local detail projection.
 - conclusions: id, session_id, checkpoint_id, content_ref, preview, recorded_at, approved_at (nullable), provenance (nullable).

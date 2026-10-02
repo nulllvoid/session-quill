@@ -74,6 +74,8 @@ Use UTC RFC 3339 timestamps with explicit offsets normalized to `Z`; dates such 
 
 The gate applies only to tool calls delivered to its supported hooks. It is not a security sandbox or a guarantee about arbitrary filesystem changes.
 
+Gate modes ([ADR 0005](decisions/0005-gate-modes-and-auto-binding.md)): `strict` enforces the matrix below; `nudge` (default) never denies a tool call and instead asks once at `Stop`, per session, when an unbound session changed files or committed; `off` captures only. Legacy `gate_enabled = false` means `off`. A repository `.quill.toml` may tighten the user's mode but never loosen it; unrecognized values and identities written without a mode are `strict`. The rest of this section describes `strict` mode.
+
 | Operation while unbound | Decision |
 | --- | --- |
 | Dedicated Read, Glob and Grep | Pass through to normal host permissions |
@@ -97,6 +99,7 @@ Quill initialization is a terminal/setup operation. Direct quill state-changing 
 - Identity is store ID + machine ID + host session ID, with optional agent ID and explicit parent mapping from verified lifecycle events. Never resolve a binding by cwd.
 - Each binding change increments a binding revision and closes the previous history interval. Rebind affects future calls only.
 - Before a tool runs, capture its tool-call ID and current ticket/binding revision. PostToolUse refers to that saved attribution, even if the session was rebound while it ran. If the call ID or parent mapping is missing, quarantine attribution as unresolved; never guess another session's ticket.
+- Zero-command binding (ADR 0005): with a `[tracker]` table configured, a key matching `key_pattern` and the prefix allowlist in a prompt (`UserPromptSubmit`) or in the branch read from `.git/HEAD` (`SessionStart`, unbound sessions only) binds the session. The hook writes a provisional binding snapshot before persisting the `bind` event; the worker keeps a fresh provisional snapshot until that event is applied, then publishes the confirmed binding. The reducer binds to the ticket whose key or alias matches, or creates it under that key with a deterministic id. Patterns are validated at config load and scans are bounded (4,000 characters, 10 keys). Bindings remain forward-only.
 - A subagent inherits the parent's binding at launch. Its ongoing calls retain that binding unless explicitly rebound; a later parent rebind is not retroactive.
 - Resume restores identity and history. Project changes require explicit rebinding/confirmation through the CLI; do not retag older events when cwd changes.
 - Session records contain all bindings and ticket IDs. Ticket session lists derive from attributed events/bindings, including active sessions before SessionEnd.
@@ -214,7 +217,7 @@ Resolved defaults:
 - Working name session-quill; final public license and repository owner are release inputs.
 - Single owner machine; plain markdown default, optional Obsidian path.
 - LOCAL prefix; project from init; category research unless configured.
-- Gate on; approval phrases off.
+- Gate mode nudge (strict and off available, ADR 0005); auto-binding only with a configured `[tracker]`; approval phrases off.
 - Stale active tickets after 5 days; live <= 30 min; extinct >= 48 h.
 - Reconcile every 2 h, all days, local IANA time zone; catch up once on wake.
 - Handoff analyse-followups, source off; commit/push/PR permissions off.

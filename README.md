@@ -8,7 +8,8 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 
 ![Pick next view of the Session Quill dashboard](docs/images/dashboard-pick-next.jpg)
 
-- **Ticket gate.** With the plugin loaded, supported write tools (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`), unknown shell commands and unregistered tools are denied until the session is bound to a ticket. Dedicated reads and a small tested read-only shell subset pass through. The gate is a workflow aid, not a sandbox: `/session-quill:ticket off` disables it per session, audibly.
+- **Zero-command tracking.** Mention a ticket key such as `PROJ-123` in a prompt, or start on a branch like `feat/PROJ-123-...`, and the session is linked to that ticket. Any tracker works through a URL template; no tracker host is built in.
+- **Ticket gate modes.** `nudge` (default) never blocks and asks once at the end of a turn about unlinked work. `strict` denies supported write tools, unknown shell commands and unregistered tools until the session is bound, while dedicated reads and a tested read-only shell subset pass through. `off` only captures. The gate is a workflow aid, not a sandbox: `/session-quill:ticket off` disables it per session, audibly.
 - **Durable capture.** Hooks persist events to local ingress before acknowledging; one worker per store journals them, rebuilds generated state, and writes markdown notes (plain folder or Obsidian vault) within 30 seconds. Your own Summary and Notes sections are preserved byte-for-byte.
 - **Dashboard.** Pick next, Board, Tree, Sessions and Deployments views with revision-checked edits, a 10-second undo window, explicit conflicts, deterministic reconciliation every two hours and a Refresh that runs immediately.
 - **Sharing.** Read-only standalone HTML snapshots with an export time; no credentials, request code or local paths.
@@ -60,10 +61,30 @@ node /path/to/session-quill/bin/quill.js worker start
 
 Optional: put the CLI on your `PATH` as `quill` (for example `npm link` or a shell alias) so the commands below read `quill ...`.
 
+## Link sessions to your tracker
+
+Add a `[tracker]` table to the repository's `.quill.toml` (shared with your team) or to `~/.claude/quill/config.toml` (just you). Secrets never go in either file.
+
+```toml
+[tracker]
+system       = "jira"                          # jira | linear | github | custom
+domain       = "https://example.atlassian.net"
+url_template = "{domain}/browse/{key}"         # linear: "{domain}/issue/{key}" · github: "{domain}/{repo}/issues/{number}"
+key_pattern  = '\b([A-Z][A-Z0-9]+-\d+)\b'      # the default; single quotes keep backslashes literal
+prefixes     = ["PROJ", "OPS"]                 # empty = any key except common tokens like UTF-8
+sources      = ["prompt", "branch"]
+on_new_key   = "switch"                        # switch | add | ignore
+
+[gate]
+mode = "nudge"                                 # off | nudge | strict
+```
+
+A repository can make the gate stricter than your own setting but never looser. The worker picks up edits to either file within about 10 seconds. `gate_enabled = false` still works and means `mode = "off"`.
+
 ## First tracked session
 
-1. Start Claude Code in the repository with the plugin loaded. The SessionStart hook injects `Session Quill session: <id>` and whether the session is bound.
-2. Create and bind a ticket: `/session-quill:ticket create "Preserve session checkpoints" --bind`. Supported writes are now permitted through normal Claude Code permissions.
+1. Start Claude Code in the repository with the plugin loaded. The SessionStart hook injects `Session Quill session: <id>` and whether the session is bound. On a branch such as `feat/PROJ-123-retry-flake`, the session is already linked to `PROJ-123`.
+2. Mention the ticket in your prompt, for example "PROJ-123: make the retry test deterministic". The session is linked before Claude's first tool call, and the ticket is created under that key if the store has none. Without a `[tracker]` table, run `/session-quill:ticket create "Preserve session checkpoints" --bind` instead.
 3. Work. Successful writes, commits, PR creation, approved plans (`ExitPlanMode`) and end-of-turn checkpoints are captured and attributed to the ticket.
 4. Promote the latest checkpoint as an approved plan with `/session-quill:approve`. Approval is recorded provenance, never permission to commit, push or deploy.
 5. Open the dashboard: `quill ui`. The command prints a one-use owner link (loopback only, 10-minute validity) and opens your browser.
