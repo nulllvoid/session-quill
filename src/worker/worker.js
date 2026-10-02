@@ -132,6 +132,7 @@ export class Worker {
   publishIdentity() {
     const { identity, warnings } = buildRuntimeIdentity({ storeMeta: this.storeMeta, config: this.config });
     writeRuntimeIdentity(identity, this.env);
+    this.identity = identity;
     for (const w of warnings) {
       if (this.identityWarnings.has(w)) continue;
       this.identityWarnings.add(w);

@@ -3,15 +3,21 @@ import { createHash } from 'node:crypto';
 import { isUuid, uuid } from '../lib/ids.js';
 import { addMs, isIsoZ } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
-import { TICKET_STATUSES, repoFor } from '../core/state.js';
+import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
 import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
+import { validateKey } from '../core/keys.js';
+import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
+import { scopeFor } from '../hooks/scope.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh'];
-const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel']);
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external'];
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external']);
+// Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
+const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
 const REVISION_OPTIONAL = new Set(['handoff-cancel']);
-const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
+const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external']);
+const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 const TERMINAL = new Set(['applied', 'conflict', 'failed', 'cancelled']);
 
 function stableStringify(value) {
@@ -51,6 +57,14 @@ export function validateRequestBody(body, state, nowIso) {
     target = state.tickets.get(body.target_id);
     if (!target) throw new TrackerError('target-unknown', `unknown ticket ${body.target_id}`);
     if (!REVISION_OPTIONAL.has(body.kind) && (!Number.isInteger(body.expected_revision) || body.expected_revision < 0)) throw new TrackerError('expected-revision-required', 'ticket edits require expected_revision');
+  }
+  let session = null;
+  if (SESSION_KINDS.has(body.kind)) {
+    if (!body.target_id) throw new TrackerError('target-required', `${body.kind} requires target_id`);
+    session = state.sessionsById.get(body.target_id);
+    if (!session) throw new TrackerError('target-unknown', `unknown session ${body.target_id}`);
+    if (!hasUnboundWork(session)) throw new TrackerError('unbound-gone', 'this session has no unlinked work to attach or dismiss');
+    if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) throw new TrackerError('expected-revision-required', 'unlinked-work actions require expected_revision');
   }
   let normalized = {};
   switch (body.kind) {
@@ -92,14 +106,45 @@ export function validateRequestBody(body, state, nowIso) {
     case 'refresh':
       normalized = {};
       break;
+    case 'attach-unbound': {
+      const hasTicket = typeof payload.ticket_id === 'string' && payload.ticket_id !== '';
+      const hasKey = typeof payload.key === 'string' && payload.key.trim() !== '';
+      if (hasTicket === hasKey) throw new TrackerError('request-invalid', 'attach-unbound needs exactly one of ticket_id or key');
+      const bind = payload.bind !== false;
+      if (hasTicket) {
+        if (!state.tickets.has(payload.ticket_id)) throw new TrackerError('target-unknown', `unknown ticket ${payload.ticket_id}`);
+        normalized = { ticket_id: payload.ticket_id, bind };
+      } else {
+        const key = payload.key.trim();
+        if (!EXTERNAL_KEY_RE.test(key)) throw new TrackerError('key-invalid', 'a ticket key like PROJ-123 is required');
+        validateKey(key);
+        normalized = { key, title: typeof payload.title === 'string' ? payload.title.trim().slice(0, 200) : '', bind };
+      }
+      break;
+    }
+    case 'dismiss-unbound':
+      normalized = {};
+      break;
+    case 'link-external': {
+      const key = typeof payload.key === 'string' ? payload.key.trim() : '';
+      if (!EXTERNAL_KEY_RE.test(key)) throw new TrackerError('key-invalid', 'a ticket key like PROJ-123 is required');
+      validateKey(key);
+      if (payload.system !== undefined && payload.system !== null && !TRACKER_SYSTEMS.includes(payload.system)) throw new TrackerError('system-invalid', `system must be one of ${TRACKER_SYSTEMS.join(', ')}`);
+      const url = typeof payload.url === 'string' && payload.url.trim() ? payload.url.trim() : null;
+      if (url && !isSafeExternalUrl(url)) throw new TrackerError('external-url-invalid', 'the external link must be an https:// URL without spaces or quotes');
+      const owner = state.keyIndex.get(key);
+      if (owner && owner !== target.id) throw new TrackerError('key-collision', `${key} already identifies another ticket`);
+      normalized = { key, system: payload.system ?? null, url };
+      break;
+    }
     default:
       throw new TrackerError('kind-invalid', 'unknown kind');
   }
   return {
     id: body.id,
     kind: body.kind,
-    target_id: target ? target.id : null,
-    expected_revision: target && !REVISION_OPTIONAL.has(body.kind) ? body.expected_revision : (Number.isInteger(body.expected_revision) ? body.expected_revision : null),
+    target_id: target ? target.id : (session ? session.id : null),
+    expected_revision: session ? body.expected_revision : (target && !REVISION_OPTIONAL.has(body.kind) ? body.expected_revision : (Number.isInteger(body.expected_revision) ? body.expected_revision : null)),
     payload: normalized,
     created_at: nowIso,
     not_before: DELAYED_KINDS.has(body.kind) ? addMs(nowIso, EDIT_DELAY_MS) : nowIso,
@@ -130,7 +175,58 @@ function currentValues(ticket) {
   return { revision: ticket.revision, next_action: ticket.next_action, status: ticket.status, blocker: ticket.blocker, deployments: ticket.deployments, updated_at: ticket.updated_at };
 }
 
+function trackerFor(worker, { cwd = null, repo_id = null } = {}) {
+  const identity = worker.identity;
+  if (!identity) return null;
+  if (repo_id) {
+    const r = (identity.repos ?? []).find((x) => x.repo_id === repo_id);
+    if (r) return r.tracker ?? null;
+  }
+  return cwd ? scopeFor(identity, cwd).tracker : identity.tracker ?? null;
+}
+
+function unboundCurrent(session) {
+  const w = session && session.unbound_work;
+  return { revision: w ? w.revision : null, files: w ? w.files.length : 0, commits: w ? w.commits.length : 0 };
+}
+
+function evaluateSessionRequest(worker, req) {
+  const { state } = worker;
+  const session = state.sessionsById.get(req.target_id);
+  if (!session || !hasUnboundWork(session)) {
+    return { outcome: 'failed', error: { code: 'unbound-gone', message: 'the unlinked work was already attached or dismissed', retryable: false, current_revision: session && session.unbound_work ? session.unbound_work.revision : null } };
+  }
+  if (session.unbound_work.revision !== req.expected_revision) {
+    return { outcome: 'conflict', error: { code: 'revision-conflict', message: `more work was captured in this session after you looked (revision ${session.unbound_work.revision}, request expected ${req.expected_revision})`, retryable: false, current_revision: session.unbound_work.revision }, result: { current: unboundCurrent(session) } };
+  }
+  const who = { session_id: session.host_session_id, agent_id: session.agent_id ?? null };
+  if (req.kind === 'dismiss-unbound') return { outcome: 'applied', mutation: { type: 'unbound-dismiss', session_id: session.id }, session: who };
+  let ticketId = req.payload.ticket_id ?? null;
+  let create = null;
+  if (ticketId && !state.tickets.has(ticketId)) return { outcome: 'failed', error: { code: 'target-unknown', message: 'that ticket no longer exists', retryable: false, current_revision: null } };
+  if (!ticketId) {
+    const key = req.payload.key;
+    ticketId = state.keyIndex.get(key) ?? null;
+    if (!ticketId) {
+      const scope = worker.identity ? scopeFor(worker.identity, session.cwd) : { project_id: null, repo_id: null, tracker: null };
+      const tracker = trackerFor(worker, { cwd: session.cwd });
+      const system = tracker ? tracker.system : 'custom';
+      const url = renderUrl(key, tracker);
+      const project_id = session.project_ids[session.project_ids.length - 1] ?? scope.project_id ?? Object.keys(state.meta.projects)[0] ?? null;
+      if (!project_id) return { outcome: 'failed', error: { code: 'project-required', message: 'no project is configured for new tickets', retryable: false, current_revision: null } };
+      const external = { system, key, url, validation: 'pending', validated_at: null, error: null };
+      create = {
+        id: externalTicketId(state.meta.store_id, key), key, title: req.payload.title || session.title || key, project_id, category: 'research', priority: 'P2', repo_id: scope.repo_id ?? null,
+        external, jira: system === 'jira' ? { key, url, validation: 'pending', validated_at: null, error: null } : null, created_via: 'inbox',
+      };
+      ticketId = create.id;
+    }
+  }
+  return { outcome: 'applied', mutation: { type: 'unbound-attach', session_id: session.id, ticket_id: ticketId, create, bind: req.payload.bind !== false }, result: { ticket_id: ticketId, created: !!create }, session: who };
+}
+
 export function evaluateRequest(worker, req) {
+  if (SESSION_KINDS.has(req.kind)) return evaluateSessionRequest(worker, req);
   const { state } = worker;
   const ticket = req.target_id ? state.tickets.get(req.target_id) : null;
   if (req.kind !== 'refresh' && !ticket) return { outcome: 'failed', error: { code: 'target-unknown', message: 'ticket no longer exists', retryable: false, current_revision: null } };
@@ -166,6 +262,17 @@ export function evaluateRequest(worker, req) {
       if (!['queued', 'running'].includes(h.state)) return { outcome: 'failed', error: { code: 'handoff-terminal', message: `handoff is already ${h.state}`, retryable: false, current_revision: ticket.revision }, result: { state: h.state } };
       return { outcome: 'applied', mutation: { type: 'handoff-cancel', handoff_id: h.id }, result: { handoff_id: h.id, was: h.state } };
     }
+    case 'link-external': {
+      const owner = state.keyIndex.get(req.payload.key);
+      if (owner && owner !== ticket.id) return { outcome: 'failed', error: { code: 'key-collision', message: `${req.payload.key} already identifies another ticket`, retryable: false, current_revision: ticket.revision } };
+      const tracker = trackerFor(worker, { repo_id: ticket.repo_id });
+      const system = req.payload.system ?? (tracker ? tracker.system : 'custom');
+      const url = req.payload.url ?? (tracker && tracker.system === system ? renderUrl(req.payload.key, tracker) : null);
+      const pending = { validation: 'pending', validated_at: null, error: 'no tracker provider configured; remote validation pending' };
+      const mutation = { type: 'relink', ticket_id: ticket.id, new_key: req.payload.key, external: { system, key: req.payload.key, url, ...pending } };
+      if (system === 'jira') mutation.jira = { key: req.payload.key, url, ...pending };
+      return { outcome: 'applied', mutation, result: { key: req.payload.key, url } };
+    }
     default:
       return { outcome: 'failed', error: { code: 'kind-invalid', message: 'unsupported request kind', retryable: false, current_revision: null } };
   }
@@ -173,7 +280,8 @@ export function evaluateRequest(worker, req) {
 
 function finish(worker, req, evaluation) {
   const payload = { request_id: req.id, outcome: evaluation.outcome, error: evaluation.error ?? null, result: evaluation.result ?? null, mutation: evaluation.mutation ?? null };
-  worker.emit('request-tx', payload, { source_identity: `request-tx:${req.id}:${evaluation.outcome}` });
+  // Session-targeted requests carry the session identity so the worker re-renders that session.
+  worker.emit('request-tx', payload, { source_identity: `request-tx:${req.id}:${evaluation.outcome}`, ...(evaluation.session ?? {}) });
   worker.publishRequest(req.id);
 }
 
