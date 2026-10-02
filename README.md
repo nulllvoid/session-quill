@@ -12,7 +12,7 @@ Design documents live under [docs/](docs/README.md). Acceptance evidence is reco
 
 ## Prerequisites
 
-- **Node.js 22 LTS or newer**, installed explicitly. Claude Code does **not** bundle Node; the hooks run `node` from your `PATH`.
+- **Node.js 22 LTS or newer**, installed explicitly. Node is **not bundled** with Claude Code; the hooks run `node` from your `PATH`.
 - **Claude Code 2.1.x** (hook payloads and plugin layout were verified against the 2.1.284 documentation).
 - **Git** and an authenticated **`claude`** CLI only if you use handoffs. **`gh`** only if you want GitHub PR polling.
 
