@@ -52,11 +52,12 @@ test('recipes: invalid frontmatter becomes a listed error, never a runnable reci
   }
 });
 
-test('recipes: a read-only recipe may narrow its tools; git log is allowed in either spelling', () => {
+test('recipes: a read-only recipe may narrow its tools; git log is accepted in either spelling', () => {
   const r = normalizeRecipe({ name: 'r', text: recipe('x', 'permissions: { read_source: true }\ntools: [Read, "Bash(git log --oneline:*)", "Bash(git show*)"]\n'), source: 'repo' });
   assert.equal(r.error, null);
   const t = recipeTools(r, r.permissions);
-  assert.deepEqual(t.allowed, ['Read', 'Bash(git log --oneline:*)', 'Bash(git show*)']);
+  assert.deepEqual(t.allowed, ['Read'], 'kept git read rules are left to the runtime\'s read-only check');
+  assert.ok(!t.disallowed.includes('Bash(git log*)') && !t.disallowed.includes('Bash(git show*)') && t.disallowed.includes('Bash(git diff*)'));
   assert.ok(t.disallowed.includes('Edit'));
   assert.deepEqual(recipeTools(r, { read_source: false }).allowed, [], 'without source access the run gets no tools at all');
 });

@@ -48,7 +48,10 @@ test('a recipe run uses its prompt, tools and time cap; declared outputs become 
     assert.match(seen.prompt, /Check the deployment state of PROJ-7/);
     assert.match(seen.prompt, /BEGIN TICKET NOTES \(data\)/);
     const allowed = seen.args.slice(seen.args.indexOf('--allowedTools') + 1, seen.args.indexOf('--disallowedTools'));
-    assert.deepEqual(allowed, ['Read', 'Grep', 'Glob', 'Bash(git log:*)', 'Bash(git show:*)']);
+    assert.deepEqual(allowed, ['Read', 'Grep', 'Glob'], 'git log/show stay with the runtime\'s read-only check, not an allow rule');
+    const denied = seen.args.slice(seen.args.indexOf('--disallowedTools') + 1);
+    assert.ok(denied.includes('Bash(git diff*)') && denied.includes('Bash(git log *--output*)'));
+    assert.ok(!denied.includes('Bash(git log*)') && !denied.includes('Bash(git show*)'), 'the recipe keeps git log and git show');
     const ticket = b.w.state.tickets.get(T1);
     assert.equal(ticket.next_action, '', 'nothing is applied without acceptance');
     assert.equal(ticket.children_ids.length, 0);

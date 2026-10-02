@@ -40,6 +40,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - Sessions started before `quill init` learn their session id on the first prompt.
 - The `.quill.toml` parser accepts single-quoted literal strings.
 
+### Security
+
+- Handoff and recipe agents can no longer use git read commands to write or read outside their checkout. Session Quill no longer passes allow rules for `git log`, `git show`, `git diff` or `git status`, because those rules approved options like `git log --output=<path>` before Claude Code's own read-only check could see them. Those commands now go through that check, which refuses `--output`, `--ext-diff`, `--textconv` and `--no-index` in any spelling. Deny rules for the literal forms back it up, and the agent's environment no longer carries `GIT_EXTERNAL_DIFF` or `GIT_CONFIG_*` overrides. See [TRD §Handoff execution](docs/TRD.md#handoff-execution) for what is and is not enforced.
+
 ## [0.1.0] - 2026-10-02
 
 First implementation of the v0.2 design (PRD, TRD, data contract, UI specification, acceptance scenarios).
