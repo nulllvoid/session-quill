@@ -418,3 +418,15 @@ table.sessions th { font-family: var(--mono); font-size: 11px; text-transform: u
 .schedules-table tr.runs td { border-top: none; padding-top: 0; }
 .chip[data-outcome="failed"], .chip[data-outcome="interrupted"] { color: var(--critical); }
 .chip[data-outcome="ok"] { color: var(--good); }
+
+/* Agents panel (ADR 0008) */
+.agents .recipes, .agents .suggestions { list-style: none; margin: 0; padding: 0; }
+.agents .recipe { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+.agents .recipe > div { flex-basis: 100%; }
+.agents .recipe .btn { margin-left: auto; }
+.agents h4 { margin: 12px 0 4px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.agents .suggestions { margin-top: 6px; border-left: 2px solid var(--border); padding-left: 8px; }
+.agents .suggestion { padding: 4px 0; overflow-wrap: anywhere; }
+.agents .suggestion pre.preview { white-space: pre-wrap; margin: 4px 0; }
+.chip[data-suggestion-state="accepted"] { color: var(--good); }
+.chip[data-suggestion-state="dismissed"] { color: var(--text-muted); }

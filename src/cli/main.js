@@ -17,6 +17,7 @@ const COMMANDS = {
   ui: () => import('./commands/ui.js'),
   export: () => import('./commands/export.js'),
   handoff: () => import('./commands/handoff.js'),
+  agent: () => import('./commands/agent.js'),
   migrate: () => import('./commands/migrate.js'),
 };
 
@@ -38,6 +39,9 @@ Usage: quill <command> [options]
   import <note.md>                          note restore <KEY>
   ui [--static <out.html>] [--open]         export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
   handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr]
+  agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
+  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr]
+  agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
   migrate --source <dir> [--profile pmla] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>
   hook <EventName>                          (reads host JSON on stdin)
 `;

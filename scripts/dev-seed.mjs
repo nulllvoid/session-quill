@@ -45,7 +45,18 @@ const w = new Worker({ config, storeMeta: meta, env, derive, log: (m) => console
 const providers = { for: () => ({ name: 'github', fetchPr: async (url) => { if (url.endsWith('/7')) return { state: 'merged', opened_at: '2026-09-28T08:00:00Z', merged_at: '2026-09-29T08:00:00Z', base_branch: 'main', head_branch: 'feat/journal' }; throw new Error('gh: authentication required (run gh auth login)'); } }) };
 const rext = reconcileExt(ctx, { providers });
 const sext = serverExt(ctx, { port });
-w.use(rext).use(sext).use(handoffExt(ctx));
+// Agent runs use the test fixture's fake runtime, so clicking Run in the dev dashboard never spends
+// model usage or touches a real checkout's history.
+const fakeAgent = path.join(root, 'tests', 'fixtures', 'fake-claude.js');
+const fakeResult = {
+  summary: 'The merged PR reached staging; production has no tag bump yet.',
+  next_action: 'Ask the release owner to promote v1.4 to production',
+  blocker: null,
+  children: [{ title: 'Add a production smoke check', category: 'infra', priority: 'P2', next_action: 'Write the check' }],
+  deploy_evidence: [{ environment: 'staging', state: 'deployed', evidence: 'deploy/staging/values.yaml tag bump to v1.4' }, { environment: 'production', state: 'pending', evidence: 'no tag bump found' }],
+  comment_draft: 'Merged and live on staging (v1.4). Production promotion pending.',
+};
+w.use(rext).use(sext).use(handoffExt(ctx, { claudePath: process.execPath, claudeArgs: [fakeAgent], spawnEnv: { FAKE_CLAUDE_SLEEP_MS: '1500', FAKE_CLAUDE_RESULT: JSON.stringify(fakeResult) } }));
 await w.start();
 
 const now = () => new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');

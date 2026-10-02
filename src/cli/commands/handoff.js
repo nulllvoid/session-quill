@@ -21,7 +21,7 @@ async function waitTerminal(ctx, requestId, timeoutMs) {
   return null;
 }
 
-async function submitRequest(ctx, io, body, flags) {
+export async function submitCliRequest(ctx, io, body, flags) {
   const id = uuid();
   const now = nowIso();
   const request = { id, kind: body.kind, target_id: body.target_id, expected_revision: body.expected_revision, payload: body.payload, created_at: now, not_before: now, actor_id: 'cli', retry_of: body.retry_of ?? null, body_hash: bodyHash(body) };
@@ -48,7 +48,7 @@ async function queue(ctx, io, args, flags) {
     open_draft_pr: flags['draft-pr'] === true,
   };
   const payload = validateHandoffRequest({ mode, note: flags.note ?? '', permissions, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo });
-  const terminal = await submitRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);
+  const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};
     throw new TrackerError(err.code ?? terminal.state, `handoff request ${terminal.state}: ${err.message ?? ''}${terminal.result && terminal.result.existing_handoff_id ? ` (existing run ${terminal.result.existing_handoff_id})` : ''}`);
@@ -77,7 +77,7 @@ async function cancel(ctx, io, args, flags) {
   const h = snap ? snap.handoffs.find((x) => x.id === id || x.id.startsWith(id ?? '')) : null;
   if (!h) throw new TrackerError('handoff-unknown', `unknown handoff ${id}`);
   const ticket = snap.tickets.find((x) => x.id === h.ticket_id);
-  const terminal = await submitRequest(ctx, io, { kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticket ? ticket.revision : null, payload: { handoff_id: h.id } }, flags);
+  const terminal = await submitCliRequest(ctx, io, { kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticket ? ticket.revision : null, payload: { handoff_id: h.id } }, flags);
   if (terminal.state !== 'applied') throw new TrackerError(terminal.error ? terminal.error.code : terminal.state, `cancellation ${terminal.state}: ${terminal.error ? terminal.error.message : ''}`);
   io.println(`Cancellation recorded for handoff ${h.id}; partial results and logs are preserved.`);
   return 0;

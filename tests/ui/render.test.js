@@ -12,6 +12,7 @@ import { renderDeployments } from '../../ui/views/deployments.js';
 import { renderDetail } from '../../ui/views/detail.js';
 import { renderHandoffForm } from '../../ui/views/handoff-form.js';
 import { renderHeader } from '../../ui/views/header.js';
+import { renderRecipeRunDialog, effectiveRecipes } from '../../ui/views/agents.js';
 import { snapshot, TID, ticket } from './fixtures.js';
 
 const NOW = '2026-10-02T12:00:00Z';
@@ -339,4 +340,71 @@ test('review: the Schedules dialog key ignores new generations and changes only 
   assert.notEqual(schedulesDialogKey(a, [req]), schedulesDialogKey(a, [{ ...req, state: 'applied' }]));
   assert.equal(schedulesDialogKey(a, []), schedulesDialogKey(a, [{ id: 'x', kind: 'edit', state: 'pending' }]), 'unrelated requests do not re-render');
   assert.match(renderSchedulesDialog(a, { now: NOW, pending: [] }), /<details data-schedule="reconcile">/, 'history can be reopened after a re-render');
+});
+
+const P = (over = {}) => ({ read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false, ...over });
+const R = (over) => ({ description: 'd', source: 'builtin', repo_id: null, mode: 'analyse', permissions: P(), tools: null, timeout_min: 20, inputs: [], outputs: ['summary'], legacy: false, schedulable: true, error: null, preview: '', ...over });
+
+function recipeSnapshot() {
+  const s = snapshot();
+  s.recipes = [
+    R({ name: 'deploy-check', description: 'Check deployments', permissions: P({ read_source: true }), timeout_min: 10, outputs: ['summary', 'deploy_evidence', 'next_action'] }),
+    R({ name: 'standup', description: 'Builtin standup', timeout_min: 5 }),
+    R({ name: 'standup', description: 'Team standup', source: 'repo', repo_id: 'demo', timeout_min: 5 }),
+    R({ name: 'broken', source: 'personal', error: 'commit requires edit_source' }),
+    R({ name: 'other-repo', description: 'Elsewhere only', source: 'repo', repo_id: 'elsewhere' }),
+    R({ name: 'attempt-fix', description: 'Fix it', mode: 'attempt-fix', legacy: true, permissions: P({ read_source: true, edit_source: true, commit: true, push_branch: true, open_draft_pr: true }) }),
+  ];
+  const t = s.tickets.find((x) => x.id === TID(5));
+  t.handoff_ids = ['h1', 'h2'];
+  s.handoffs.push({ ...s.handoffs[0], id: 'h2', state: 'done', error: null, mode: 'analyse', recipe: { name: 'deploy-check', source: 'builtin' }, legacy: false, suggestions: [
+    { id: 's1', type: 'next-action', state: 'proposed', text: 'Confirm <prod>' },
+    { id: 's2', type: 'deploy-evidence', state: 'proposed', items: [{ environment: 'production', state: 'deployed', evidence: 'tag v1.2' }] },
+    { id: 's3', type: 'comment-draft', state: 'proposed', text: 'Deployed to prod' },
+    { id: 's4', type: 'followup', state: 'accepted', title: 'Add alert' },
+  ] });
+  return { s, t };
+}
+
+test('the Agents panel lists the recipes for the ticket repository with permissions, and each run with its suggestions', () => {
+  const { s, t } = recipeSnapshot();
+  assert.deepEqual(effectiveRecipes(s, 'demo').map((r) => [r.name, r.source]), [['deploy-check', 'builtin'], ['standup', 'repo'], ['broken', 'personal'], ['attempt-fix', 'builtin']]);
+  const html = renderDetail(t, s, { now: NOW, pending: [], content: {} });
+  assert.match(html, /<h3>Agents/);
+  assert.match(html, /data-action="run-recipe" data-ticket="[^"]+" data-recipe="deploy-check"/);
+  assert.match(html, /Team standup/);
+  assert.doesNotMatch(html, /Builtin standup|Elsewhere only/);
+  assert.match(html, /broken[\s\S]{0,800}commit requires edit_source/);
+  assert.doesNotMatch(html, /data-recipe="broken"/);
+  assert.match(html, /Reads source · 10 min/);
+  assert.match(html, /Notes only · 5 min/);
+  assert.match(html, /Confirm &lt;prod&gt;/);
+  assert.match(html, /data-action="accept-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
+  assert.match(html, /data-action="dismiss-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
+  assert.match(html, /production: deployed — tag v1\.2/);
+  assert.match(html, /data-copy="Deployed to prod"/);
+  assert.match(html, /Add alert[\s\S]{0,120}Accepted/);
+  assert.doesNotMatch(html, /data-suggestion="s4"/);
+  const pending = renderDetail(t, s, { now: NOW, pending: [{ id: 'q', kind: 'accept-suggestion', target_id: t.id, state: 'pending', payload: { handoff_id: 'h2', suggestion_id: 's1' } }], content: {} });
+  assert.doesNotMatch(pending, /data-action="accept-suggestion"[^>]*data-suggestion="s1"/);
+  assert.match(pending, /Accepting…/);
+  const ro = renderDetail(t, { ...s, capabilities: { read: true } }, { now: NOW, pending: [], content: {} });
+  for (const action of ['run-recipe', 'accept-suggestion', 'dismiss-suggestion']) assert.equal(ro.includes(`data-action="${action}"`), false, action);
+});
+
+test('the recipe run dialog shows what the run may do and pre-selects only source access', () => {
+  const { s, t } = recipeSnapshot();
+  const fix = renderRecipeRunDialog(s.recipes.find((r) => r.name === 'attempt-fix'), t, s);
+  assert.match(fix, /data-form="recipe-run" data-ticket="[^"]+" data-revision="1" data-recipe="attempt-fix"/);
+  assert.match(fix, /name="read_source" checked/);
+  assert.match(fix, /name="edit_source" checked disabled/);
+  assert.match(fix, /name="commit"(?! checked)/);
+  assert.match(fix, /name="push_branch"(?! checked)/);
+  assert.match(fix, /name="branch"/);
+  assert.match(fix, /applies its next action and follow-ups directly/);
+  const standup = renderRecipeRunDialog(s.recipes.find((r) => r.source === 'repo' && r.name === 'standup'), t, s);
+  assert.match(standup, /works from the ticket notes only/);
+  assert.doesNotMatch(standup, /type="checkbox"/);
+  assert.match(standup, /Results arrive as suggestions you accept or dismiss/);
+  assert.match(standup, /repository recipe/);
 });

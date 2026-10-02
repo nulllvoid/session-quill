@@ -10,6 +10,7 @@ import { renderDetail } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
 import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
+import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
 
 const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments'];
 const POLL_VISIBLE_MS = 2000;
@@ -167,7 +168,12 @@ function renderDialog() {
     if (!sess) { appState.dialog = null; return renderDialog(); }
     html = renderAttachDialog(sess, s, { mode: d.mode });
   } else if (d.type === 'link-external') html = renderLinkExternalDialog(ticketById(s, d.ticket), s);
-  else if (d.type === 'schedules') html = renderSchedulesDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
+  else if (d.type === 'recipe-run') {
+    const t = ticketById(s, d.ticket);
+    const recipe = t ? effectiveRecipes(s, t.repo_id).find((r) => r.name === d.recipe && !r.error) : null;
+    if (!recipe) { appState.dialog = null; return renderDialog(); }
+    html = renderRecipeRunDialog(recipe, t, s, { retryOf: d.retryOf });
+  } else if (d.type === 'schedules') html = renderSchedulesDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
   // The Schedules panel follows live state: it re-renders only when what it shows changes, and keeps
   // focus and any open run history across that re-render.
   const key = d.type === 'schedules' ? `${JSON.stringify(d)}:${schedulesDialogKey(s, appState.requests.values())}` : JSON.stringify(d);
@@ -339,6 +345,13 @@ function handleAction(el) {
       submit({ kind: r.kind, target_id: r.target_id, expected_revision: targetRevision(r), payload: r.original }, { announceText: 'Reversal queued as a new revision-checked edit' });
       break;
     }
+    case 'run-recipe': appState.dialog = { type: 'recipe-run', ticket: el.dataset.ticket, recipe: el.dataset.recipe, retryOf: el.dataset.retryOf ?? null }; render(); break;
+    case 'accept-suggestion':
+    case 'dismiss-suggestion': {
+      const accept = el.dataset.action === 'accept-suggestion';
+      submit({ kind: el.dataset.action, target_id: el.dataset.ticket, expected_revision: accept ? ticketRevision(el.dataset.ticket) : null, payload: { handoff_id: el.dataset.handoff, suggestion_id: el.dataset.suggestion } }, { announceText: accept ? 'Accepting the suggestion; undo within 10 seconds' : 'Dismissing the suggestion; undo within 10 seconds' });
+      break;
+    }
     case 'cancel-handoff': {
       const h = s.handoffs.find((x) => x.id === el.dataset.handoff);
       if (h) submit({ kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticketRevision(h.ticket_id), payload: { handoff_id: h.id } }, { announceText: 'Handoff cancellation requested' });
@@ -449,6 +462,15 @@ function handleSubmit(form) {
     const retryOf = form.dataset.retryOf || null;
     closeDialog();
     submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: retryOf }, { announceText: 'Handoff request accepted; execution is tracked separately' });
+  } else if (kind === 'recipe-run') {
+    // Disabled boxes are not submitted: permissions the recipe requires come from the form itself.
+    const required = form.dataset.requiresEdit === 'true';
+    const permissions = {};
+    for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr']) permissions[k] = fd.get(k) === 'on';
+    if (required) { permissions.read_source = true; permissions.edit_source = true; }
+    const payload = { recipe: form.dataset.recipe, note: String(fd.get('note') ?? '').trim(), permissions, branch: String(fd.get('branch') ?? '').trim() || null };
+    closeDialog();
+    submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: form.dataset.retryOf || null }, { announceText: `${form.dataset.recipe} run requested; its results arrive as suggestions on the ticket` });
   } else if (kind === 'attach') {
     const key = String(fd.get('key') ?? '').trim();
     const bind = fd.get('bind') === 'on';
@@ -497,7 +519,7 @@ function onKey(e) {
 
 function onClick(e) {
   const copy = e.target.closest('[data-copy]');
-  if (copy && navigator.clipboard) { navigator.clipboard.writeText(copy.dataset.copy).then(() => announce(`Copied ${copy.dataset.copy}`)).catch(() => {}); e.stopPropagation(); return; }
+  if (copy && navigator.clipboard) { navigator.clipboard.writeText(copy.dataset.copy).then(() => announce(`Copied ${copy.dataset.copyLabel ?? copy.dataset.copy}`)).catch(() => {}); e.stopPropagation(); return; }
   const open = e.target.closest('[data-open]');
   if (open) { e.preventDefault(); openDetail(open.dataset.open, open); return; }
   const action = e.target.closest('[data-action]');
