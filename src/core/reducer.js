@@ -283,6 +283,7 @@ function handleRequest(state, ev, result) {
     schema_version: 1, store_id: state.meta.store_id, id: r.id, revision: 1, created_at: r.created_at ?? ev.occurred_at, updated_at: ev.occurred_at,
     actor_id: r.actor_id ?? 'owner', kind: r.kind, target_id: r.target_id ?? null, expected_revision: r.expected_revision ?? null, payload: r.payload ?? {},
     not_before: r.not_before ?? ev.occurred_at, state: 'pending', applied_revision: null, error: null, result: null, retry_of: r.retry_of ?? null, sequence: ev.sequence ?? 0,
+    body_hash: r.body_hash ?? null,
   });
   result.requestsChanged.add(r.id);
   return {};

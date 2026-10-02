@@ -58,6 +58,8 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     handoffs: [...state.handoffs.values()],
     requests,
     picknext: derived.picknext ?? [],
+    blocked: derived.blocked ?? [],
+    deployments_outstanding: derived.deployments_outstanding ?? [],
     meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id }),
     repos: Object.entries(state.meta.repos).map(([id, r]) => ({ id, project_id: r.project_id ?? null, display_name: r.display_name ?? id, default_branch: r.default_branch ?? 'main', deployment_environments: r.deployment_environments ?? ['production'] })),
     unresolved: state.unresolved.slice(-200),
