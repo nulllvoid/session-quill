@@ -1,4 +1,4 @@
-import { esc, attr, keyEl, sessionChip, timeEl, ticketById, pager, icon, emptyState, countLabel, normalizeSnapshot } from '../components.js';
+import { esc, attr, keyEl, sessionChip, timeEl, ticketById, pager, icon, emptyState, countLabel, normalizeSnapshot, hasUnlinkedWork } from '../components.js';
 
 export const SESSIONS_PAGE_SIZE = 50;
 
@@ -21,6 +21,7 @@ export function renderSessions(rawSnapshot, filters, { now, page = 0, selected =
     const history = s.bindings.filter((b) => b.ticket_id && b.ticket_id !== s.current_ticket_id).map((b) => ticketById(snapshot, b.ticket_id)).filter(Boolean);
     const flags = [];
     if (s.unpromoted) flags.push(`<span class="chip warning" title="A complete checkpoint has not been approved or dismissed">${icon('alert')}Unpromoted checkpoint</span>`);
+    if (hasUnlinkedWork(s)) flags.push(`<span class="chip warning" title="Changed files or committed without a ticket; see Pick next">${icon('inbox')}Unlinked work · ${esc(countLabel((s.unbound_work.files ?? []).length, 'file'))}</span>`);
     if (s.gate_enabled === false) flags.push(`<span class="chip critical">${icon('alert')}Gate off</span>`);
     if (s.capture_health && s.capture_health.status !== 'ok') flags.push(`<span class="chip warning">${icon('alert')}Capture ${esc(s.capture_health.status)}${s.capture_health.reason ? `: ${esc(s.capture_health.reason)}` : ''}</span>`);
     return `<tr data-session="${attr(s.id)}">

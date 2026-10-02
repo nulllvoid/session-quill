@@ -403,3 +403,11 @@ table.sessions th { font-family: var(--mono); font-size: 11px; text-transform: u
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
 .btn, .card, .nav-item, .token { transition: border-color 150ms ease, background-color 150ms ease; }
+
+/* Unlinked work inbox (ADR 0006) */
+.inbox { margin-bottom: 24px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 12px; max-width: 900px; }
+.inbox h2 { display: flex; align-items: center; gap: 8px; font-size: 17px; }
+.inbox ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.inbox-item { border-top: 1px solid var(--border); padding-top: 8px; }
+.inbox-item p { margin: 4px 0; overflow-wrap: anywhere; }
+.inbox-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }

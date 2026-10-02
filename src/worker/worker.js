@@ -15,6 +15,7 @@ import { TrackerError } from '../lib/errors.js';
 import { storeLayout } from '../config/store.js';
 import { loadUserConfig } from '../config/config.js';
 import { buildRuntimeIdentity, identityStamp } from '../config/runtime.js';
+import { keyExample } from '../core/external-keys.js';
 import { acquireLock } from './lock.js';
 import { writeBindingSnapshot, readBindingSnapshot, writeHeartbeat, writeRuntimeIdentity, snapshotFileName } from '../hooks/binding-snapshot.js';
 import { renderSessionNote, renderHandoffNote, writeNote, writeGeneratedNote } from './notes.js';
@@ -378,7 +379,8 @@ export class Worker {
     const now = this.now();
     const capture = captureHealth(this.env, { now, journalInfo: this.journalInfo ?? {} });
     const active = [...this.state.requests.values()].find((r) => r.kind === 'refresh' && ['pending', 'applying'].includes(r.state));
-    return { derived: this.derived(), capture, worker_seen_at: now, active_sync_request_id: active ? active.id : null };
+    const tracker = this.identity ? (this.identity.tracker ?? (this.identity.repos ?? []).map((r) => r.tracker).find(Boolean) ?? null) : null;
+    return { derived: this.derived(), capture, worker_seen_at: now, active_sync_request_id: active ? active.id : null, key_example: keyExample(tracker) };
   }
 
   publishGeneration() {

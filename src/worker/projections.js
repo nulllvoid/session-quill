@@ -13,7 +13,7 @@ export function ticketSummary(ticket) {
   return { ...rest, timeline: timeline.slice(-SNAPSHOT_TIMELINE_LIMIT), timeline_total: timeline.length };
 }
 
-export function buildMeta(state, { now, capture, worker_seen_at, active_sync_request_id = null }) {
+export function buildMeta(state, { now, capture, worker_seen_at, active_sync_request_id = null, key_example = 'PROJ-123' }) {
   const counts = { todo: 0, active: 0, blocked: 0, review: 0, 'deploy-pending': 0, done: 0 };
   let stale = 0;
   for (const t of state.tickets.values()) {
@@ -41,10 +41,11 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
     stale_ticket_count: stale,
     unresolved_event_count: state.unresolved.length,
     active_sync_request_id,
+    key_example,
   };
 }
 
-export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities }) {
+export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example }) {
   const dayAgo = addMs(generated_at, -24 * HOUR);
   const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo);
   return {
@@ -60,7 +61,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     picknext: derived.picknext ?? [],
     blocked: derived.blocked ?? [],
     deployments_outstanding: derived.deployments_outstanding ?? [],
-    meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id }),
+    meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id, key_example }),
     repos: Object.entries(state.meta.repos).map(([id, r]) => ({ id, project_id: r.project_id ?? null, display_name: r.display_name ?? id, default_branch: r.default_branch ?? 'main', deployment_environments: r.deployment_environments ?? ['production'] })),
     unresolved: state.unresolved.slice(-200),
   };

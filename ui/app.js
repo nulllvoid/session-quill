@@ -8,7 +8,7 @@ import { renderSessions } from './views/sessions.js';
 import { renderDeployments } from './views/deployments.js';
 import { renderDetail } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
-import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog } from './views/dialogs.js';
+import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 
 const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments'];
@@ -162,6 +162,11 @@ function renderDialog() {
   else if (d.type === 'deployment') html = renderDeploymentDialog(ticketById(s, d.ticket), { mode: d.mode, deploymentId: d.deploymentId });
   else if (d.type === 'export') html = renderExportDialog(s, d.preview);
   else if (d.type === 'help') html = renderHelpDialog();
+  else if (d.type === 'attach') {
+    const sess = (s.sessions ?? []).find((x) => x.id === d.session);
+    if (!sess) { appState.dialog = null; return renderDialog(); }
+    html = renderAttachDialog(sess, s, { mode: d.mode });
+  } else if (d.type === 'link-external') html = renderLinkExternalDialog(ticketById(s, d.ticket), s);
   if (host.dataset.key !== JSON.stringify(d)) {
     host.innerHTML = `<div class="dialog-inner" role="document">${html}${d.error ? `<p class="critical small" role="alert">${esc(d.error)}</p>` : ''}</div>`;
     host.dataset.key = JSON.stringify(d);
@@ -257,6 +262,15 @@ function ticketRevision(id) {
   return t ? t.revision : null;
 }
 
+// Inbox requests are checked against the session's unlinked-work revision, not a ticket's.
+function targetRevision(r) {
+  if (r.kind === 'attach-unbound' || r.kind === 'dismiss-unbound') {
+    const sess = (appState.snapshot.sessions ?? []).find((x) => x.id === r.target_id);
+    return sess && sess.unbound_work ? sess.unbound_work.revision : null;
+  }
+  return ticketRevision(r.target_id);
+}
+
 function handleAction(el) {
   const a = el.dataset.action;
   const s = appState.snapshot;
@@ -281,6 +295,9 @@ function handleAction(el) {
     case 'close-dialog': closeDialog(); break;
     case 'handoff': appState.dialog = { type: 'handoff', ticket: el.dataset.ticket, retryOf: el.dataset.retryOf ?? null }; render(); break;
     case 'record-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'record', deploymentId: el.dataset.deployment ?? null }; render(); break;
+    case 'attach-unbound': appState.dialog = { type: 'attach', session: el.dataset.session, mode: el.dataset.mode === 'create' ? 'create' : 'attach' }; render(); break;
+    case 'dismiss-unbound': submit({ kind: 'dismiss-unbound', target_id: el.dataset.session, expected_revision: Number(el.dataset.revision), payload: {} }, { announceText: 'Dismissal queued; undo within 10 seconds' }); break;
+    case 'link-external': appState.dialog = { type: 'link-external', ticket: el.dataset.ticket }; render(); break;
     case 'waive-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'waive', deploymentId: el.dataset.deployment ?? null }; render(); break;
     case 'toggle-column': if (appState.boardExpanded.has('done')) appState.boardExpanded.delete('done'); else appState.boardExpanded.add('done'); render(); break;
     case 'column-page': appState.boardPages[el.dataset.column] = Number(el.dataset.page); render(); break;
@@ -296,14 +313,14 @@ function handleAction(el) {
       const r = appState.requests.get(el.dataset.request);
       if (!r) break;
       appState.requests.delete(r.id);
-      submit({ kind: r.kind, target_id: r.target_id, expected_revision: ticketRevision(r.target_id), payload: r.payload, retry_of: r.id }, { announceText: 'Resubmitted against the current revision' });
+      submit({ kind: r.kind, target_id: r.target_id, expected_revision: targetRevision(r), payload: r.payload, retry_of: r.id }, { announceText: 'Resubmitted against the current revision' });
       break;
     }
     case 'reverse-request': {
       const r = appState.requests.get(el.dataset.request);
       if (!r || !r.original) break;
       appState.requests.delete(r.id);
-      submit({ kind: r.kind, target_id: r.target_id, expected_revision: ticketRevision(r.target_id), payload: r.original }, { announceText: 'Reversal queued as a new revision-checked edit' });
+      submit({ kind: r.kind, target_id: r.target_id, expected_revision: targetRevision(r), payload: r.original }, { announceText: 'Reversal queued as a new revision-checked edit' });
       break;
     }
     case 'cancel-handoff': {
@@ -416,6 +433,18 @@ function handleSubmit(form) {
     const retryOf = form.dataset.retryOf || null;
     closeDialog();
     submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: retryOf }, { announceText: 'Handoff request accepted; execution is tracked separately' });
+  } else if (kind === 'attach') {
+    const key = String(fd.get('key') ?? '').trim();
+    const bind = fd.get('bind') === 'on';
+    const match = form.dataset.mode === 'create' ? null : appState.snapshot.tickets.find((x) => x.key === key || (x.aliases ?? []).includes(key));
+    const payload = match ? { ticket_id: match.id, bind } : { key, title: String(fd.get('title') ?? '').trim(), bind };
+    closeDialog();
+    submit({ kind: 'attach-unbound', target_id: form.dataset.session, expected_revision: revision, payload }, { announceText: match ? `Attaching to ${match.key}; undo within 10 seconds` : `Creating ${key} and attaching; undo within 10 seconds` });
+  } else if (kind === 'link-external') {
+    const key = String(fd.get('key') ?? '').trim();
+    const url = String(fd.get('url') ?? '').trim();
+    closeDialog();
+    submit({ kind: 'link-external', target_id: ticketId, expected_revision: revision, payload: url ? { key, url } : { key } }, { announceText: `Linking to ${key}; undo within 10 seconds` });
   } else if (kind === 'export') {
     const d = appState.dialog;
     api.exportRun({ ...(d.params ?? exportParams(form)) }).then((res) => { announce(`Snapshot saved to ${res.path}`); appState.dialog = { ...d, saved: res.path, error: null }; closeDialog(); appState.error = null; alert(`Saved read-only snapshot to ${res.path}. Share the file yourself; it will not update.`); }).catch((err) => { appState.dialog = { ...d, error: err.message }; render(); });

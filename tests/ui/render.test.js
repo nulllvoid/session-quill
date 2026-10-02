@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { freshness, relativeTime, formatAbsolute } from '../../ui/lib/time.js';
 import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip } from '../../ui/components.js';
 import { sanitizeSnapshot } from '../../src/export/sanitize.js';
-import { renderPickNext } from '../../ui/views/picknext.js';
+import { renderPickNext, renderInbox } from '../../ui/views/picknext.js';
+import { renderAttachDialog, renderLinkExternalDialog } from '../../ui/views/dialogs.js';
 import { renderBoard } from '../../ui/views/board.js';
 import { renderTree } from '../../ui/views/tree.js';
 import { renderSessions } from '../../ui/views/sessions.js';
@@ -225,4 +226,60 @@ test('exports strip external links by default and keep them only when links are 
   assert.deepEqual(Object.keys(plain.tickets[0].external).sort(), ['error', 'key', 'system', 'validated_at', 'validation']);
   assert.equal(JSON.stringify(plain).includes('secret/plan.md'), false, 'unlinked work never leaves the machine');
   assert.equal(sanitizeSnapshot(snap, { includeLinks: true }).tickets[0].external.url, 'https://example.atlassian.net/browse/PMLA-1');
+});
+
+function inboxSnapshot(extra = {}) {
+  const snap = snapshot();
+  snap.meta = { ...snap.meta, key_example: 'PMLA-123' };
+  snap.sessions.push({ ...snap.sessions[0], id: 'sess-u', host_session_id: 'host-u', title: 'Fix <b>retry</b>', current_ticket_id: null, ticket_ids: [], bindings: [], last_checkpoint_preview: 'Made the retry deterministic', unbound_work: { revision: 3, files: [{ repo_id: null, relative_path: 'src/<a>.js', first_seen: NOW, last_seen: NOW }, ...Array.from({ length: 6 }, (_, i) => ({ repo_id: null, relative_path: `src/f${i}.js`, first_seen: NOW, last_seen: NOW }))], commits: [{ sha: 'abc1234def', message: 'feat: retry', at: NOW }], first_at: NOW, last_at: NOW, dismissed_at: null, ...extra } });
+  return snap;
+}
+
+test('the inbox lists unlinked work with files, commits, the last checkpoint and three actions, and escapes session and file text', () => {
+  const html = renderPickNext(inboxSnapshot(), noFilters, { now: NOW, pending: [] });
+  assert.match(html, /Unlinked work <span class="count">1<\/span>/);
+  assert.match(html, /Fix &lt;b&gt;retry&lt;\/b&gt;/);
+  assert.match(html, /src\/&lt;a&gt;\.js/);
+  assert.match(html, /and 2 more/);
+  assert.match(html, /abc1234/);
+  assert.match(html, /Made the retry deterministic/);
+  for (const action of ['data-action="attach-unbound" data-session="sess-u" data-mode="attach"', 'data-action="attach-unbound" data-session="sess-u" data-mode="create"', 'data-action="dismiss-unbound" data-session="sess-u" data-revision="3"']) assert.ok(html.includes(action), action);
+  assert.ok(html.indexOf('Unlinked work') < html.indexOf('Ranked candidates'), 'the inbox comes first');
+});
+
+test('the inbox hides dismissed or empty work and read-only snapshots, and shows pending requests instead of actions', () => {
+  assert.doesNotMatch(renderPickNext(inboxSnapshot({ dismissed_at: NOW }), noFilters, { now: NOW, pending: [] }), /Unlinked work/);
+  assert.doesNotMatch(renderPickNext(inboxSnapshot({ files: [], commits: [] }), noFilters, { now: NOW, pending: [] }), /Unlinked work/);
+  const ro = inboxSnapshot();
+  ro.capabilities = { read: true };
+  assert.doesNotMatch(renderPickNext(ro, noFilters, { now: NOW, pending: [] }), /Unlinked work/);
+  const pending = [{ id: 'r1', kind: 'attach-unbound', target_id: 'sess-u', state: 'pending', not_before: '2026-10-02T12:00:08Z', payload: { key: 'PMLA-9' } }];
+  const html = renderInbox(inboxSnapshot(), { now: NOW, pending });
+  assert.match(html, /applies in 8 s/);
+  assert.match(html, /data-action="cancel-request" data-request="r1"/);
+  assert.doesNotMatch(html, /data-action="dismiss-unbound"/);
+});
+
+test('the attach dialog suggests open tickets or takes a new key; the link dialog takes a key and an optional https link', () => {
+  const snap = inboxSnapshot();
+  const session = snap.sessions.at(-1);
+  const attach = renderAttachDialog(session, snap, { mode: 'attach' });
+  assert.match(attach, /data-form="attach" data-session="sess-u" data-revision="3" data-mode="attach"/);
+  assert.match(attach, /<datalist id="attach-tickets">/);
+  assert.match(attach, /<option value="LOCAL-ticket-1-abcdef01">/);
+  assert.doesNotMatch(attach, /<option value="LOCAL-ticket-4-abcdef04">/, 'done tickets are not suggested');
+  assert.match(attach, /name="bind" checked/);
+  const create = renderAttachDialog(session, snap, { mode: 'create' });
+  assert.ok(create.includes('name="key" required pattern="[A-Za-z][A-Za-z0-9_]*-[0-9]+" placeholder="PMLA-123"'));
+  assert.match(create, /name="title"/);
+  const link = renderLinkExternalDialog(snap.tickets[0], snap);
+  assert.match(link, /data-form="link-external" data-ticket="[^"]+" data-revision="1"/);
+  assert.ok(link.includes('name="url" type="url" pattern="https://.*"'));
+});
+
+test('empty states point at mentioning a key, and the sessions table flags unlinked work', () => {
+  const empty = { ...snapshot(), tickets: [], picknext: [], blocked: [], meta: { ...snapshot().meta, key_example: 'PMLA-123' } };
+  assert.match(renderPickNext(empty, noFilters, { now: NOW, pending: [] }), /Mention a ticket key such as <code>PMLA-123<\/code>/);
+  assert.match(renderBoard(empty, noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} }), /Mention a ticket key such as <code>PMLA-123<\/code>/);
+  assert.match(renderSessions(inboxSnapshot(), noFilters, { now: NOW }), /Unlinked work · 7 files/);
 });

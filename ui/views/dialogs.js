@@ -1,4 +1,38 @@
-import { esc, attr, keyEl, STATUS_LABELS, icon, normalizeTicket } from '../components.js';
+import { esc, attr, keyEl, STATUS_LABELS, icon, normalizeTicket, normalizeSnapshot, countLabel } from '../components.js';
+
+// Inbox dialog (ADR 0006): attach to an open ticket, or create a ticket from its tracker key.
+export function renderAttachDialog(session, rawSnapshot, { mode = 'attach' } = {}) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const w = session.unbound_work ?? { revision: 0, files: [], commits: [] };
+  const example = snapshot.meta.key_example ?? 'PROJ-123';
+  const what = `${countLabel((w.files ?? []).length, 'file')}${(w.commits ?? []).length ? `, ${countLabel(w.commits.length, 'commit')}` : ''}`;
+  const candidates = snapshot.tickets.filter((t) => t.status !== 'done').sort((a, b) => (a.last_activity < b.last_activity ? 1 : -1)).slice(0, 200);
+  const bound = !!session.current_ticket_id;
+  return `<form class="dialog-form" data-form="attach" data-session="${attr(session.id)}" data-revision="${attr(w.revision)}" data-mode="${attr(mode)}">
+<h2 id="dialog-title">${icon('link')}${mode === 'create' ? 'Create a ticket from its key' : 'Attach unlinked work'}</h2>
+<p class="muted small">${esc(what)} from session ${esc(session.title || session.host_session_id)}.</p>
+${mode === 'create'
+    ? `<label class="label" for="attach-key">Ticket key</label><input id="attach-key" name="key" required pattern="[A-Za-z][A-Za-z0-9_]*-[0-9]+" placeholder="${attr(example)}" autocomplete="off">
+<label class="label" for="attach-title">Title (optional)</label><input id="attach-title" name="title" maxlength="200" placeholder="${attr(session.title || '')}">`
+    : `<label class="label" for="attach-key">Ticket</label><input id="attach-key" name="key" required list="attach-tickets" placeholder="Key or title" autocomplete="off"><datalist id="attach-tickets">${candidates.map((t) => `<option value="${attr(t.key)}">${esc(t.title)}</option>`).join('')}</datalist>
+<p class="small muted">Pick an open ticket, or type a new key such as ${esc(example)} to create it.</p>`}
+<label class="check"><input type="checkbox" name="bind" ${bound ? 'disabled' : 'checked'}> Also link this session's later work${bound ? ' (already linked to another ticket)' : ''}</label>
+<p class="small muted">Applies after a 10-second undo window. Nothing is posted to your tracker.</p>
+<div class="dialog-actions"><button type="submit" class="btn primary">${mode === 'create' ? 'Create and attach' : 'Attach'}</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
+</form>`;
+}
+
+export function renderLinkExternalDialog(rawTicket, rawSnapshot) {
+  const ticket = normalizeTicket(rawTicket);
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  return `<form class="dialog-form" data-form="link-external" data-ticket="${attr(ticket.id)}" data-revision="${attr(ticket.revision)}">
+<h2 id="dialog-title">${icon('link')}Link ${keyEl(ticket.key)} to a tracker ticket</h2>
+<label class="label" for="link-key">Ticket key</label><input id="link-key" name="key" required pattern="[A-Za-z][A-Za-z0-9_]*-[0-9]+" placeholder="${attr(snapshot.meta.key_example ?? 'PROJ-123')}" autocomplete="off">
+<label class="label" for="link-url">Link (optional)</label><input id="link-url" name="url" type="url" pattern="https://.*" placeholder="Built from your tracker settings when empty">
+<p class="small muted">The current key stays as an alias. Applies after a 10-second undo window.</p>
+<div class="dialog-actions"><button type="submit" class="btn primary">Link</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
+</form>`;
+}
 
 export function renderStatusDialog(rawTicket, status) {
   const ticket = normalizeTicket(rawTicket);
