@@ -9,6 +9,8 @@ import { sessionKey } from '../core/state.js';
 import { matchApprovalPhrase } from '../core/approval.js';
 import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } from '../gate/decide.js';
 import { readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim } from './binding-snapshot.js';
+import { scopeFor } from './scope.js';
+import { keyExample } from '../core/external-keys.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
 import { ensureDir } from '../lib/atomic-fs.js';
 import { nowIso } from '../lib/time.js';
@@ -78,16 +80,17 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
   }
   const identity = readRuntimeIdentity(env);
   const { session_id, agent_id } = identityOf(input);
-  // Every tool outside the dedicated read set is "covered": the gate fails closed for it.
-  const covered = eventName === 'PreToolUse' && !!input.tool_name && !READ_TOOLS.has(input.tool_name) && !(identity && Array.isArray(identity.allow_tools) && identity.allow_tools.includes(input.tool_name));
+  // Every tool outside the dedicated read set is "covered".
+  const toolCovered = eventName === 'PreToolUse' && !!input.tool_name && !READ_TOOLS.has(input.tool_name) && !(identity && Array.isArray(identity.allow_tools) && identity.allow_tools.includes(input.tool_name));
 
   if (!identity) {
     result.stderr += 'Session Quill: not initialized; run `quill init` to enable capture and the ticket gate.\n';
     return result;
   }
+  const scope = scopeFor(identity, input.cwd);
   if (!session_id) {
     result.stderr += 'Session Quill: hook input has no session_id; identity unresolved (no cwd fallback).\n';
-    if (covered) result.stdout = denyOutput(`${DENIAL_REASON} (host provided no session identity)`);
+    if (toolCovered && scope.gate_mode !== 'nudge') result.stdout = denyOutput(`${DENIAL_REASON} (host provided no session identity)`);
     return result;
   }
 
@@ -103,6 +106,9 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
     snapshot = { ticket_id: handoff.ticket_id, ticket_key: handoff.ticket_key, ticket_title: null, binding_revision: snapshot ? snapshot.binding_revision ?? 0 : 0, gate_enabled: true, handoff_id: handoff.id };
   }
   const gateEnabled = identity.gate_enabled !== false && !(snapshot && snapshot.gate_enabled === false);
+  const mode = gateEnabled ? scope.gate_mode : 'off';
+  // Capture failures fail closed for covered tools except in nudge mode, which never blocks.
+  const covered = toolCovered && scope.gate_mode !== 'nudge';
 
   switch (eventName) {
     case 'SessionStart': {
@@ -147,16 +153,17 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
           try { writePlanClaim(key, target, env); } catch { /* best effort */ }
         }
       }
-      const gate = decideGate({ tool_name, tool_input: input.tool_input ?? {}, binding: snapshot ?? { ticket_id: null, binding_revision: 0 }, workerHealthy: hb.healthy, gateEnabled, planPath, hostPlanDir: planDir, allowTools: identity.allow_tools ?? [] });
+      const gate = decideGate({ tool_name, tool_input: input.tool_input ?? {}, binding: snapshot ?? { ticket_id: null, binding_revision: 0 }, workerHealthy: hb.healthy, gateEnabled, planPath, hostPlanDir: planDir, allowTools: identity.allow_tools ?? [], mode });
       const denied = gate.decision === 'deny';
+      const reason = denied && scope.tracker ? `${gate.reason} Mentioning a ticket key such as ${keyExample(scope.tracker)} in a prompt also links the session.` : gate.reason;
       const ev = makeEvent({
         ...base, kind: 'pre-tool', tool_call_id,
         ticket_id: snapshot && snapshot.ticket_id ? snapshot.ticket_id : null,
         binding_revision: snapshot ? snapshot.binding_revision ?? null : null,
-        payload: { tool_name, denied, gate_reason: gate.reason && !denied ? gate.reason : null, write_target: summarizeTarget(tool_name, input.tool_input), gate_enabled: gateEnabled },
+        payload: { tool_name, denied, gate_reason: gate.reason && !denied ? gate.reason : null, write_target: summarizeTarget(tool_name, input.tool_input), gate_enabled: gateEnabled, gate_mode: mode },
         source_identity: tool_call_id ? `pre-tool:${key}:${tool_call_id}` : undefined,
       });
-      if (denied) result.stdout = denyOutput(gate.reason);
+      if (denied) result.stdout = denyOutput(reason);
       persist(ev, env, result, { covered: covered && !denied && gate.reason !== 'read-tool' && !/^read-only shell/.test(gate.reason ?? '') && gate.reason !== 'quill-cli' && gate.reason !== 'plan-file-exception' });
       return result;
     }

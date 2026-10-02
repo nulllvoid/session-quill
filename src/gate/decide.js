@@ -124,10 +124,12 @@ function writeTargets(tool_name, tool_input) {
   return [tool_input.file_path].filter(Boolean);
 }
 
-export function decideGate({ tool_name, tool_input = {}, binding, workerHealthy = true, gateEnabled = true, planPath = null, hostPlanDir = null, allowTools = [] }) {
-  if (gateEnabled === false) return { decision: 'none', reason: 'gate-off' };
+export function decideGate({ tool_name, tool_input = {}, binding, workerHealthy = true, gateEnabled = true, planPath = null, hostPlanDir = null, allowTools = [], mode = 'strict' }) {
+  if (gateEnabled === false || mode === 'off') return { decision: 'none', reason: 'gate-off' };
   if (READ_TOOLS.has(tool_name)) return { decision: 'none', reason: 'read-tool' };
   if (Array.isArray(allowTools) && allowTools.includes(tool_name)) return { decision: 'none', reason: 'registered-non-mutating' };
+  // Nudge never blocks a tool call; unlinked work is raised once at Stop instead (ADR 0005).
+  if (mode === 'nudge') return { decision: 'none', reason: binding && binding.ticket_id ? 'bound' : 'nudge-unbound' };
 
   const shell = SHELL_TOOLS[tool_name];
   if (shell) {

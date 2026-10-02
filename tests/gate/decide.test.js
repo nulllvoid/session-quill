@@ -105,3 +105,16 @@ test('a symlink inside the plan dir pointing elsewhere is denied', (t) => {
   const r = decideGate({ ...base, hostPlanDir: planDir, planPath: link, tool_name: 'Write', tool_input: { file_path: link }, binding: unbound });
   assert.equal(r.decision, 'deny');
 });
+
+test('gate modes: off and nudge never deny; strict keeps the full matrix; unknown modes are strict', () => {
+  for (const tool_name of ['Edit', 'Write', 'Bash', 'mcp__jira__create_issue', 'SomeNewTool']) {
+    const tool_input = tool_name === 'Bash' ? { command: 'npm test' } : { file_path: 'C:/repo/a.js' };
+    assert.equal(decideGate({ ...base, mode: 'nudge', tool_name, tool_input, binding: unbound }).decision, 'none', tool_name);
+    assert.equal(decideGate({ ...base, mode: 'nudge', workerHealthy: false, tool_name, tool_input, binding: unbound }).decision, 'none', `${tool_name} unhealthy`);
+    assert.equal(decideGate({ ...base, mode: 'off', tool_name, tool_input, binding: unbound }).decision, 'none');
+    assert.equal(decideGate({ ...base, mode: 'strict', tool_name, tool_input, binding: unbound }).decision, 'deny');
+  }
+  assert.equal(decideGate({ ...base, mode: 'nudge', tool_name: 'Edit', tool_input: {}, binding: unbound }).reason, 'nudge-unbound');
+  assert.equal(decideGate({ ...base, mode: 'nudge', tool_name: 'Edit', tool_input: {}, binding: bound }).reason, 'bound');
+  assert.equal(decideGate({ ...base, mode: 'bogus', tool_name: 'Edit', tool_input: {}, binding: unbound }).decision, 'deny');
+});
