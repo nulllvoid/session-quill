@@ -174,6 +174,8 @@ export class Worker {
         continue;
       }
       if (this.journal.hasEvent(ev.event_id) || this.journal.hasSource(ev.source_identity)) {
+        // Duplicate delivery has one effect; CLI producers still get an acknowledgement.
+        this.ack({ ...ev, sequence: null }, { duplicate: true });
         removeIngress(entry.name, this.env);
         continue;
       }

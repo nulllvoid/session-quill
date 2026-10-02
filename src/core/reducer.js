@@ -2,8 +2,9 @@
 // duplicate event IDs or source identities have exactly one effect (TRD §Durability).
 import { deterministicId } from '../lib/ids.js';
 import {
-  sessionKey, newTicket, newSession, refreshDerived, bumpRevision, projectName, repoFor, TICKET_STATUSES, CATEGORIES, PRIORITIES,
+  sessionKey, newTicket, newSession, refreshDerived, bumpRevision, projectName, repoFor, TICKET_STATUSES, CATEGORIES, PRIORITIES, PR_STATES,
 } from './state.js';
+import { isIsoZ } from '../lib/time.js';
 import { validateKey, validateParent } from './keys.js';
 import { applyStatusChange, deriveStatusFromEvidence, recordDeployment } from './transitions.js';
 import { heuristicApprovalEligible } from './approval.js';
@@ -150,6 +151,21 @@ function createTicket(state, ev, t, source, result) {
     for (const alias of t.aliases) if (!state.keyIndex.has(alias)) { ticket.aliases.push(alias); state.keyIndex.set(alias, ticket.id); }
   }
   if (Array.isArray(t.validation_issues)) ticket.validation_issues = [...t.validation_issues];
+  // Imported evidence (migration): PR records, deployment obligations and historical activity.
+  if (Array.isArray(t.prs)) {
+    ticket.prs = t.prs.filter((p) => p && typeof p.url === 'string').map((p) => ({
+      id: p.id ?? deterministicId(`${ev.event_id}:pr:${p.url}`), provider: p.provider ?? 'unknown', url: p.url, state: PR_STATES.includes(p.state) ? p.state : 'unknown',
+      opened_at: p.opened_at ?? null, merged_at: p.merged_at ?? null, base_branch: p.base_branch ?? null, head_branch: p.head_branch ?? null, observed_at: p.observed_at ?? null, error: p.error ?? null, evidence_id: p.evidence_id ?? null,
+    }));
+  }
+  if (Array.isArray(t.deployments)) {
+    ticket.deployments = t.deployments.filter((d) => d && d.pr_id && d.environment).map((d) => ({
+      id: d.id ?? deterministicId(`${ev.event_id}:dep:${d.pr_id}:${d.environment}`), pr_id: d.pr_id, environment: d.environment, state: ['pending', 'deployed', 'waived'].includes(d.state) ? d.state : 'pending',
+      merged_at: d.merged_at ?? ev.occurred_at, deployed_at: d.deployed_at ?? null, evidence: d.evidence ?? null, waiver_reason: d.waiver_reason ?? null, source_event_id: ev.event_id,
+    }));
+  }
+  if (typeof t.last_activity === 'string' && isIsoZ(t.last_activity)) ticket.last_activity = t.last_activity;
+  if (typeof t.created_at === 'string' && isIsoZ(t.created_at)) ticket.created_at = t.created_at;
   state.tickets.set(ticket.id, ticket);
   state.keyIndex.set(ticket.key, ticket.id);
   if (ticket.parent_id) {
@@ -158,7 +174,10 @@ function createTicket(state, ev, t, source, result) {
   }
   ticket.timeline.push(timelineEntry(ev, 'status', `Created (${source})`));
   ticket.revision = 0;
+  const importedActivity = ticket.last_activity;
   touch(state, ticket, ev, result);
+  // Imports carry historical activity; the import itself is not new work.
+  if (source === 'migration' && importedActivity && importedActivity < ticket.last_activity) ticket.last_activity = importedActivity;
   return {};
 }
 

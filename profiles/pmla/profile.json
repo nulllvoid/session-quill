@@ -1,0 +1,42 @@
+{
+  "name": "pmla",
+  "description": "PMLA Delivery Tracker markdown notes (YAML frontmatter + Summary/Timeline/Notes sections). No private paths or credentials ship with this profile.",
+  "glob_extensions": [".md"],
+  "fields": {
+    "title": "title",
+    "status": "status",
+    "jira": "jira",
+    "pr": "pr",
+    "pr_opened_at": "pr_opened_at",
+    "merged_at": "merged_at",
+    "deployed_at": "deployed_at",
+    "deploy_skipped": "deploy_skipped",
+    "deploy_skip_reason": "deploy_skip_reason",
+    "in_progress": "in_progress",
+    "priority": "priority",
+    "category": "category",
+    "next_action": "next_action",
+    "blocker": "blocker",
+    "parent": "parent",
+    "due": "due",
+    "last_activity": "last_activity",
+    "created": "created"
+  },
+  "status_map": {
+    "open": "todo-or-active",
+    "pr_raised": "review",
+    "merged": "deploy-pending",
+    "deployed": "done",
+    "stale": "active",
+    "todo": "todo",
+    "active": "active",
+    "review": "review",
+    "blocked": "blocked",
+    "done": "done"
+  },
+  "environments": ["production"],
+  "default_category": "research",
+  "default_priority": "P2",
+  "authored_sections": { "summary": "Summary", "notes": "Notes", "timeline": "Timeline" },
+  "provider_hint": "bitbucket"
+}
