@@ -27,6 +27,8 @@ const ICONS = {
   sun: '<circle cx="8" cy="8" r="3"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>',
   play: '<path d="M4.5 3v10l8-5Z"/>',
   machine: '<rect x="2" y="3" width="12" height="8" rx="1"/><path d="M5.5 13.5h5"/>',
+  copy: '<rect x="5.5" y="5.5" width="8.5" height="8.5" rx="1.5"/><path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9a1.5 1.5 0 0 0 1.5 1.5h2"/>',
+  inbox: '<path d="M2 9.5 4 3h8l2 6.5V13H2Z"/><path d="M2 9.5h3.5l1 1.5h3l1-1.5H14"/>',
   link: '<path d="M6.5 9.5a3 3 0 0 0 4.2 0l2-2a3 3 0 0 0-4.2-4.2l-1 1"/><path d="M9.5 6.5a3 3 0 0 0-4.2 0l-2 2a3 3 0 0 0 4.2 4.2l1-1"/>',
   rocket: '<path d="M8 1.5c2.5 1.5 4 4.5 4 8l-1.5 1.5h-5L4 9.5c0-3.5 1.5-6.5 4-8Z"/><circle cx="8" cy="7" r="1.2"/><path d="M5.5 11 4.5 14M10.5 11l1 3"/>',
   user: '<circle cx="8" cy="5.5" r="2.5"/><path d="M3 14c.5-3 2.5-4.5 5-4.5s4.5 1.5 5 4.5"/>',
@@ -104,6 +106,58 @@ export function keyEl(key) {
   return `<code class="key" data-copy="${attr(key)}" title="Click to copy">${esc(key)}</code>`;
 }
 
+export const SYSTEM_LABELS = { jira: 'Jira', linear: 'Linear', github: 'GitHub', custom: 'Tracker' };
+
+// The ticket's tracker link, from `external` or the legacy `jira` field; only https URLs count.
+export function externalLink(ticket) {
+  const ext = ticket && ticket.external ? ticket.external : (ticket && ticket.jira ? { system: 'jira', ...ticket.jira } : null);
+  if (!ext || typeof ext.key !== 'string') return null;
+  const url = typeof ext.url === 'string' && /^https:\/\/[^\s"'<>`]+$/.test(ext.url) ? ext.url : null;
+  return { system: ext.system ?? 'custom', key: ext.key, url, validation: ext.validation ?? 'pending' };
+}
+
+// A key that names an external ticket opens it in a new tab; the copy button copies the key.
+export function ticketKey(ticket) {
+  const link = externalLink(ticket);
+  if (!link || !link.url || link.key !== ticket.key) return keyEl(ticket.key);
+  const where = SYSTEM_LABELS[link.system] ?? 'tracker';
+  return `<span class="key-group"><a class="key key-link" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer" title="${attr(`Open ${ticket.key} in ${where} (new tab)`)}">${esc(ticket.key)}</a><button type="button" class="copy-key" data-copy="${attr(ticket.key)}" aria-label="${attr(`Copy ${ticket.key}`)}" title="Copy key">${icon('copy')}</button></span>`;
+}
+
+export function externalChip(ticket) {
+  const link = externalLink(ticket);
+  if (!link) return '';
+  const label = `${SYSTEM_LABELS[link.system] ?? 'Tracker'} ${link.key} · ${link.validation}`;
+  return link.url
+    ? ` <a class="chip external" data-validation="${attr(link.validation)}" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(label)}</a>`
+    : ` <span class="chip external" data-validation="${attr(link.validation)}">${icon('link')}${esc(label)}</span>`;
+}
+
+export function hasUnlinkedWork(session) {
+  const w = session && session.unbound_work;
+  return !!(w && !w.dismissed_at && ((w.files ?? []).length || (w.commits ?? []).length));
+}
+
+export function requestFeedback(req, { now }) {
+  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link' }[req.kind] ?? req.kind;
+  let body = '';
+  if (req.state === 'sending') body = 'Sending to the worker…';
+  else if (req.state === 'pending') {
+    const left = Math.max(0, Math.ceil((parseMs(req.not_before) - parseMs(now)) / 1000));
+    body = `Queued; applies in ${left} s. <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(req.id)}">${icon('undo')}Undo</button>`;
+  } else if (req.state === 'applying') body = 'Applying…';
+  else if (req.state === 'applied') body = 'Applied.';
+  else if (req.state === 'conflict') {
+    const current = req.result && req.result.current ? req.result.current : {};
+    const proposed = req.payload ?? {};
+    body = `<strong>Conflict:</strong> the ticket changed to revision ${esc(req.error ? req.error.current_revision : '?')} first. Current: <code>${esc(JSON.stringify(current[req.kind === 'set-status' ? 'status' : 'next_action'] ?? current))}</code>; proposed: <code>${esc(JSON.stringify(proposed.status ?? proposed.next_action ?? proposed))}</code>. <button type="button" class="btn small" data-action="resubmit-request" data-request="${attr(req.id)}">Resubmit against new revision</button> <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Discard</button>`;
+  } else if (req.state === 'failed') body = `<strong>Failed:</strong> ${esc(req.error ? req.error.message : 'unknown error')}${req.error && req.error.retryable ? ` <button type="button" class="btn small" data-action="retry-request" data-request="${attr(req.id)}">Retry</button>` : ''} <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Dismiss</button>`;
+  else if (req.state === 'cancelled') body = 'Cancelled.';
+  else if (req.state === 'already-applied') body = 'Cancellation lost the race: the edit was already applied. <button type="button" class="btn small" data-action="reverse-request" data-request="${attr(req.id)}">Revert with a new revision-checked edit</button>';
+  const proposedValue = req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? null);
+  return `<div class="request-feedback" data-state="${attr(req.state)}" role="group" aria-label="${attr(`Pending ${label} change`)}">${requestChip(req.state)} <span class="label">${esc(label)}</span>${proposedValue ? ` → <span class="proposed">${esc(proposedValue)}</span>` : ''} <span class="feedback-body">${body}</span></div>`;
+}
+
 export function repoName(snapshot, repoId) {
   if (!repoId) return null;
   const r = (snapshot.repos ?? []).find((x) => x.id === repoId);
@@ -115,7 +169,7 @@ export function ticketById(snapshot, id) {
 }
 
 const TICKET_ARRAYS = ['aliases', 'children_ids', 'session_ids', 'tags', 'files_touched', 'plans', 'conclusions', 'timeline', 'prs', 'deployments', 'handoff_ids', 'validation_issues'];
-const TICKET_DEFAULTS = { next_action: '', blocker: null, due: null, stale: false, files_touched_count: 0, plans_count: 0, children_done_count: 0, revision: 0, status: 'todo', priority: 'P3', category: 'research', summary: '', user_notes: '', project_name: '', parent_id: null, jira: null, status_source: 'manual', title: '', key: '' };
+const TICKET_DEFAULTS = { next_action: '', blocker: null, due: null, stale: false, files_touched_count: 0, plans_count: 0, children_done_count: 0, revision: 0, status: 'todo', priority: 'P3', category: 'research', summary: '', user_notes: '', project_name: '', parent_id: null, jira: null, external: null, status_source: 'manual', title: '', key: '' };
 const normalized = new WeakMap();
 
 export function normalizeTicket(t) {
@@ -178,7 +232,7 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   return `<article class="card card-${attr(variant)}${selected ? ' selected' : ''}${entry && entry.rank === 1 ? ' top' : ''}" data-ticket="${attr(ticket.id)}" tabindex="0" role="button" aria-label="${attr(`${ticket.key} ${ticket.title}`)}" aria-pressed="${selected ? 'true' : 'false'}">
   <header class="card-head">
     ${entry ? `<span class="rank" aria-label="Rank ${attr(entry.rank)}">${esc(entry.rank)}</span>` : ''}
-    ${keyEl(ticket.key)}
+    ${ticketKey(ticket)}
     ${statusChip(ticket.status, { stale: ticket.stale, staleAge: staleAgeLabel(ticket, now) })}
     ${priorityMark(ticket.priority)}
     ${entry ? scoreBadge(entry) : ''}

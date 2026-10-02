@@ -1,8 +1,8 @@
 // Privacy-preserving projection for shared/offline snapshots (TRD §Local dashboard; PRD NFR Privacy):
 // no local paths, credentials, content references, request state or mutation capabilities.
 
-export const DEFAULT_FIELDS = ['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'prs', 'deployments', 'children_ids', 'jira'];
-export const SELECTABLE_FIELDS = ['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'tags', 'prs', 'deployments', 'files_touched_count', 'plans_count', 'children_ids', 'summary', 'timeline', 'files_touched', 'conclusions', 'plans', 'aliases', 'jira'];
+export const DEFAULT_FIELDS = ['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'prs', 'deployments', 'children_ids', 'jira', 'external'];
+export const SELECTABLE_FIELDS = ['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'tags', 'prs', 'deployments', 'files_touched_count', 'plans_count', 'children_ids', 'summary', 'timeline', 'files_touched', 'conclusions', 'plans', 'aliases', 'jira', 'external'];
 const ALWAYS = ['schema_version', 'id', 'revision', 'created_at', 'updated_at', 'project_id', 'project_name', 'parent_id', 'children_done_count', 'validation_issues', 'session_ids', 'handoff_ids', 'repo_id', 'status_source'];
 
 // Any absolute path: Windows drive paths, UNC paths, `~/…`, and POSIX paths with at least one
@@ -62,6 +62,7 @@ function sanitizeTicket(t, o) {
     else if (f === 'plans') out.plans = (t.plans ?? []).map(({ content_ref, preview, ...p }) => (o.includeCheckpoints ? { ...p, preview } : p));
     else if (f === 'conclusions') out.conclusions = (t.conclusions ?? []).map(({ content_ref, preview, ...c }) => (o.includeCheckpoints ? { ...c, preview } : c));
     else if (f === 'jira') out.jira = t.jira ? (o.includeLinks ? { ...t.jira } : (({ url, ...j }) => j)(t.jira)) : null;
+    else if (f === 'external') out.external = t.external ? (o.includeLinks ? { ...t.external } : (({ url, ...x }) => x)(t.external)) : null;
     else if (f === 'files_touched') out.files_touched = (t.files_touched ?? []).map((x) => ({ repo_id: x.repo_id, relative_path: x.relative_path, first_seen: x.first_seen, last_seen: x.last_seen }));
     else out[f] = t[f];
   }

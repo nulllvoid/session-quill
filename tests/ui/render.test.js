@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshness, relativeTime, formatAbsolute } from '../../ui/lib/time.js';
-import { esc, statusChip, scoreBadge, ticketCard } from '../../ui/components.js';
+import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip } from '../../ui/components.js';
+import { sanitizeSnapshot } from '../../src/export/sanitize.js';
 import { renderPickNext } from '../../ui/views/picknext.js';
 import { renderBoard } from '../../ui/views/board.js';
 import { renderTree } from '../../ui/views/tree.js';
@@ -10,7 +11,7 @@ import { renderDeployments } from '../../ui/views/deployments.js';
 import { renderDetail } from '../../ui/views/detail.js';
 import { renderHandoffForm } from '../../ui/views/handoff-form.js';
 import { renderHeader } from '../../ui/views/header.js';
-import { snapshot, TID } from './fixtures.js';
+import { snapshot, TID, ticket } from './fixtures.js';
 
 const NOW = '2026-10-02T12:00:00Z';
 const noFilters = { project: '', category: '', tag: '', repo: '', machine: '', stale: false, q: '' };
@@ -186,4 +187,42 @@ test('renderHeader exposes freshness, worker, capture, provider error, receipt a
   assert.match(score, /100/);
   const card = ticketCard(s.tickets[0], s, { variant: 'board', now: NOW });
   assert.match(card, /tabindex="0"/);
+});
+
+test('external key chips open the tracker in a new tab and copy the key; only https links render', () => {
+  const linked = ticket(20, { key: 'PMLA-12', external: { system: 'jira', key: 'PMLA-12', url: 'https://example.atlassian.net/browse/PMLA-12', validation: 'pending', validated_at: null, error: null } });
+  const html = ticketKey(linked);
+  assert.match(html, /<a class="key key-link" href="https:\/\/example\.atlassian\.net\/browse\/PMLA-12" target="_blank" rel="noopener noreferrer"/);
+  assert.match(html, /data-copy="PMLA-12"/);
+  assert.match(html, /aria-label="Copy PMLA-12"/);
+  const hostile = ticket(21, { key: 'PMLA-13', external: { system: 'jira', key: 'PMLA-13', url: 'javascript:alert(1)', validation: 'pending' } });
+  assert.doesNotMatch(ticketKey(hostile), /<a /);
+  assert.doesNotMatch(externalChip(hostile), /href/);
+  assert.match(ticketKey(ticket(22)), /<code class="key"/, 'local keys stay plain copyable labels');
+  const legacy = ticket(23, { key: 'OPS-4', jira: { key: 'OPS-4', url: 'https://example.atlassian.net/browse/OPS-4', validation: 'valid' } });
+  assert.match(ticketKey(legacy), /key-link/);
+  assert.match(externalChip(linked), /Jira PMLA-12 · pending/);
+});
+
+test('cards and the detail header use key chips; local keys offer Link to external only to the owner', () => {
+  const snap = snapshot();
+  snap.tickets.push(ticket(24, { key: 'PMLA-24', status: 'active', external: { system: 'linear', key: 'PMLA-24', url: 'https://linear.app/acme/issue/PMLA-24', validation: 'pending' } }));
+  assert.match(renderBoard(snap, noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} }), /href="https:\/\/linear\.app\/acme\/issue\/PMLA-24"/);
+  const local = renderDetail(snap.tickets[0], snap, { now: NOW });
+  assert.match(local, /data-action="link-external" data-ticket="[^"]+"/);
+  const linked = renderDetail(snap.tickets.at(-1), snap, { now: NOW });
+  assert.doesNotMatch(linked, /data-action="link-external"/);
+  assert.match(linked, /Linear PMLA-24/);
+  const readOnly = { ...snapshot(), capabilities: { read: true } };
+  assert.doesNotMatch(renderDetail(readOnly.tickets[0], readOnly, { now: NOW }), /data-action="link-external"/);
+});
+
+test('exports strip external links by default and keep them only when links are included', () => {
+  const snap = snapshot();
+  snap.tickets[0].external = { system: 'jira', key: 'PMLA-1', url: 'https://example.atlassian.net/browse/PMLA-1', validation: 'pending', validated_at: null, error: null };
+  snap.sessions[0].unbound_work = { revision: 2, files: [{ repo_id: null, relative_path: 'secret/plan.md', first_seen: NOW, last_seen: NOW }], commits: [], first_at: NOW, last_at: NOW, dismissed_at: null };
+  const plain = sanitizeSnapshot(snap, {});
+  assert.deepEqual(Object.keys(plain.tickets[0].external).sort(), ['error', 'key', 'system', 'validated_at', 'validation']);
+  assert.equal(JSON.stringify(plain).includes('secret/plan.md'), false, 'unlinked work never leaves the machine');
+  assert.equal(sanitizeSnapshot(snap, { includeLinks: true }).tickets[0].external.url, 'https://example.atlassian.net/browse/PMLA-1');
 });

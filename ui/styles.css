@@ -253,6 +253,13 @@ textarea { resize: vertical; }
 .score { font-family: var(--mono); font-size: 12px; font-weight: 600; background: var(--accent-soft); color: var(--text); border: 1px solid var(--border); border-radius: 999px; padding: 1px 10px; margin-left: auto; }
 .score .cap { color: var(--text-muted); }
 .key { font-size: 12px; font-weight: 600; letter-spacing: -0.02em; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; cursor: copy; color: var(--text); }
+.key-group { display: inline-flex; align-items: center; gap: 2px; }
+.key-link { text-decoration: none; cursor: pointer; color: var(--accent); }
+.key-link:hover, .key-link:focus-visible { text-decoration: underline; }
+.copy-key { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text-muted); cursor: copy; padding: 0; }
+.copy-key:hover, .copy-key:focus-visible { border-color: var(--border); color: var(--text); }
+.copy-key .icon { width: 13px; height: 13px; }
+.chip.external { text-decoration: none; text-transform: none; }
 .count { font-family: var(--mono); font-weight: 500; color: var(--text-muted); font-size: 11px; margin-left: 6px; border: 1px solid var(--border); border-radius: 4px; padding: 0 6px; background: var(--surface-inset); }
 
 /* Cards */

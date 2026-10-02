@@ -1,25 +1,4 @@
-import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, handoffChip, requestChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket } from '../components.js';
-import { parseMs } from '../lib/time.js';
-
-function requestFeedback(req, { now }) {
-  const label = req.kind === 'set-next-action' ? 'next action' : req.kind === 'set-status' ? 'status' : req.kind === 'record-deployment' ? 'deployment' : req.kind;
-  let body = '';
-  if (req.state === 'sending') body = 'Sending to the worker…';
-  else if (req.state === 'pending') {
-    const left = Math.max(0, Math.ceil((parseMs(req.not_before) - parseMs(now)) / 1000));
-    body = `Queued; applies in ${left} s. <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(req.id)}">${icon('undo')}Undo</button>`;
-  } else if (req.state === 'applying') body = 'Applying…';
-  else if (req.state === 'applied') body = 'Applied.';
-  else if (req.state === 'conflict') {
-    const current = req.result && req.result.current ? req.result.current : {};
-    const proposed = req.payload ?? {};
-    body = `<strong>Conflict:</strong> the ticket changed to revision ${esc(req.error ? req.error.current_revision : '?')} first. Current: <code>${esc(JSON.stringify(current[req.kind === 'set-status' ? 'status' : 'next_action'] ?? current))}</code>; proposed: <code>${esc(JSON.stringify(proposed.status ?? proposed.next_action ?? proposed))}</code>. <button type="button" class="btn small" data-action="resubmit-request" data-request="${attr(req.id)}">Resubmit against new revision</button> <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Discard</button>`;
-  } else if (req.state === 'failed') body = `<strong>Failed:</strong> ${esc(req.error ? req.error.message : 'unknown error')}${req.error && req.error.retryable ? ` <button type="button" class="btn small" data-action="retry-request" data-request="${attr(req.id)}">Retry</button>` : ''} <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Dismiss</button>`;
-  else if (req.state === 'cancelled') body = 'Cancelled.';
-  else if (req.state === 'already-applied') body = 'Cancellation lost the race: the edit was already applied. <button type="button" class="btn small" data-action="reverse-request" data-request="${attr(req.id)}">Revert with a new revision-checked edit</button>';
-  const proposedValue = req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null));
-  return `<div class="request-feedback" data-state="${attr(req.state)}" role="group" aria-label="${attr(`Pending ${label} change`)}">${requestChip(req.state)} <span class="label">${esc(label)}</span>${proposedValue ? ` → <span class="proposed">${esc(proposedValue)}</span>` : ''} <span class="feedback-body">${body}</span></div>`;
-}
+import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, handoffChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip } from '../components.js';
 
 function timelineItem(e, { now, tz, generation }) {
   const kindLabel = { bind: 'Bound', write: 'Write', tool: 'Tool', commit: 'Commit', pr: 'PR', plan: 'Plan', conclusion: 'Conclusion', handoff: 'Handoff', status: 'Status', deployment: 'Deployment', 'capture-error': 'Capture error' }[e.kind] ?? e.kind;
@@ -52,7 +31,7 @@ export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], conten
   return `<article class="detail" data-ticket="${attr(t.id)}" aria-labelledby="detail-title">
 <header class="detail-head">
   <div class="detail-nav"><button type="button" class="btn icon-only" data-action="close-detail" aria-label="Close detail (Escape)">${icon('x')}</button><span class="detail-nav-keys" tabindex="0" data-action="detail-nav" aria-label="Record navigation: use Left and Right arrows while focused">${icon('chevron')}</span></div>
-  <div class="detail-keys">${keyEl(t.key)}${(t.aliases ?? []).map((a) => ` <span class="muted small">alias ${esc(a)}</span>`).join('')}${t.jira ? ` <span class="chip" data-validation="${attr(t.jira.validation)}">${icon('link')}Jira ${esc(t.jira.key)} · ${esc(t.jira.validation)}</span>` : ''}</div>
+  <div class="detail-keys">${ticketKey(t)}${(t.aliases ?? []).map((a) => ` <span class="muted small">alias ${esc(a)}</span>`).join('')}${externalChip(t)}${!readOnly && !t.external && !t.jira ? ` <button type="button" class="btn small ghost" data-action="link-external" data-ticket="${attr(t.id)}">${icon('link')}Link to external…</button>` : ''}</div>
   <h2 id="detail-title">${esc(t.title)}</h2>
   <div class="detail-chips">${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} ${categoryChip(t.category)} ${priorityMark(t.priority)} <span class="muted small">${esc(t.project_name)}${repoName(snapshot, t.repo_id) ? ` · ${esc(repoName(snapshot, t.repo_id))}` : ''}</span>${readOnly ? ' <span class="chip" data-readonly="true">Read-only snapshot</span>' : ''}</div>
   ${t.validation_issues && t.validation_issues.length ? `<p class="issues">${icon('alert')}Validation: ${t.validation_issues.map((i) => `<code>${esc(i)}</code>`).join(' ')}</p>` : ''}
