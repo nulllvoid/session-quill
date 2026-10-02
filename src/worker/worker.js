@@ -122,8 +122,28 @@ export class Worker {
     writeHeartbeat({ at: toIso(ms), pid: process.pid, store_id: this.storeMeta.store_id, generation: this.generationNumber }, this.env);
   }
 
+  // Small control markers written by the CLI: flush now, restore a conflicted note, stop.
+  processControl() {
+    const dir = path.join(stateDir(this.env), 'control');
+    if (removeIfExists(path.join(dir, 'flush.json'))) this.flushRequested = true;
+    for (const name of listFiles(path.join(dir, 'restore'), (f) => f.endsWith('.json'))) {
+      const ticketId = name.replace(/\.json$/, '');
+      const ticket = this.state.tickets.get(ticketId);
+      if (ticket) {
+        writeNote(this.ticketNotePath(ticket), ticket, { state: this.state, index: this.notesIndex, force: true });
+        this.markGenerationDirty();
+      }
+      removeIfExists(path.join(dir, 'restore', name));
+    }
+    if (fs.existsSync(path.join(dir, 'stop.json'))) {
+      removeIfExists(path.join(dir, 'stop.json'));
+      this.stopRequested = true;
+    }
+  }
+
   tick() {
     this.heartbeat();
+    this.processControl();
     this.ingestOnce();
     const nowMs = this.clock();
     if (this.flushRequested || (this.firstDirtyAt !== null && nowMs >= this.firstDirtyAt + NOTE_FLUSH_MS)) this.flushNotes();
@@ -173,8 +193,17 @@ export class Worker {
     return { event: record, result };
   }
 
+  // CLI producers wait for this acknowledgement: it exists only after the journal transaction.
+  ack(record, result) {
+    if (record.producer !== 'cli') return;
+    writeJsonAtomic(path.join(stateDir(this.env), 'acks', `${record.event_id}.json`), {
+      event_id: record.event_id, sequence: record.sequence, kind: record.kind, rejected: result.rejected ?? null, duplicate: result.duplicate === true, at: this.now(),
+    });
+  }
+
   applyRecord(record) {
     const result = applyEvent(this.state, record);
+    this.ack(record, result);
     if (result.duplicate) return result;
     for (const id of result.changed) {
       if (this.state.tickets.has(id)) this.dirtyTickets.add(id);
