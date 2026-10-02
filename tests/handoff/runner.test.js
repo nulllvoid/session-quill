@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { buildPrompt, allowedToolsFor, parseAgentResult } from '../../src/handoff/runner.js';
+import { buildPrompt, allowedToolsFor, childEnvFor, parseAgentResult } from '../../src/handoff/runner.js';
 import { recordResult } from '../../src/handoff/results.js';
 import { bootWorker, restartWorker, makeRepo, until, T1, T2 } from './helpers.js';
 import { runHook } from '../../src/hooks/adapter.js';
@@ -29,6 +29,33 @@ test('buildPrompt treats notes as data, states permissions and the output contra
   const withCommit = allowedToolsFor({ mode: 'attempt-fix', permissions: { ...fix.permissions, commit: true } });
   assert.equal(withCommit.disallowed.some((t) => /git commit/.test(t)), false);
   assert.ok(withCommit.disallowed.some((t) => /git push/.test(t)));
+});
+
+// Claude Code Bash rules match the command text with `*` standing for any text (verified against
+// Claude Code 2.1.288, see docs/TRD.md); this mirrors that to check the rule strings themselves.
+const bashRuleMatches = (rule, command) => {
+  const m = /^Bash\((.+)\)$/.exec(rule);
+  return Boolean(m) && new RegExp(`^${m[1].split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`).test(command);
+};
+
+test('runs with source access pass no raw git allow rules (Claude Code\'s read-only check vets git options) and deny git options that write files, run programs or read outside the checkout', () => {
+  const readOnly = { read_source: true, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
+  for (const t of [allowedToolsFor({ mode: 'analyse', permissions: readOnly }), allowedToolsFor({ mode: 'attempt-fix', permissions: fix.permissions })]) {
+    assert.deepEqual(t.allowed.filter((r) => /^Bash\(git (log|show|diff|status)/.test(r)), [], 'an allow rule would override the read-only option check');
+    const denied = (cmd) => t.disallowed.some((r) => bashRuleMatches(r, cmd));
+    for (const cmd of ['git log --output=/tmp/x -1', 'git log -1 "--output=/tmp/x"', 'git diff HEAD~1 --output /tmp/x', 'git show HEAD \\--output=../x', 'git log -1 -p --ext-diff', 'git show HEAD --textconv', 'git diff --no-index /etc/passwd f.txt']) assert.ok(denied(cmd), cmd);
+    for (const cmd of ['git log --oneline -5', 'git log --format="%h %s" -3', 'git show HEAD:src/a.js', 'git diff HEAD~1 -- f.txt', 'git status --porcelain']) assert.ok(!denied(cmd), cmd);
+  }
+  assert.ok(allowedToolsFor({ mode: 'attempt-fix', permissions: fix.permissions }).allowed.includes('Bash(git add*)'), 'non-read-only git rules stay allow rules');
+  const ticket = { key: 'K-1', title: 'T', status: 'active', timeline: [], plans: [], conclusions: [] };
+  assert.match(buildPrompt({ id: 'h1', mode: 'analyse', note: '', permissions: readOnly }, ticket, { notes: [] }), /git log.*--output/s, 'the agent is told which git forms are refused');
+});
+
+test('the agent environment cannot supply an external diff program or config overrides', () => {
+  const env = childEnvFor({ read_source: true }, { PATH: 'p', GIT_EXTERNAL_DIFF: 'sh -c pwn', GIT_CONFIG_PARAMETERS: "'diff.external'='pwn'", GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.external', GIT_CONFIG_VALUE_0: 'pwn', GIT_CONFIG: '/x' });
+  for (const k of ['GIT_EXTERNAL_DIFF', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_CONFIG']) assert.equal(env[k], undefined, k);
+  assert.equal(env.PATH, 'p');
+  assert.equal(childEnvFor({ read_source: true, push_branch: true }, { GIT_EXTERNAL_DIFF: 'x' }).GIT_EXTERNAL_DIFF, undefined, 'push permission does not bring the external diff back');
 });
 
 test('parseAgentResult extracts the structured block and tolerates garbage', () => {

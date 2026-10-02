@@ -61,7 +61,7 @@ test('A54 a recipe run gets no more than its frontmatter, runs with its tools an
     s.w.tick();
     const h = await until(() => { s.w.tick(); return [...s.w.state.handoffs.values()].find((x) => x.state === 'done'); });
     assert.equal(Date.parse(h.deadline_at) - Date.parse(h.started_at), 10 * 60_000);
-    assert.match(fs.readFileSync(h.log_path, 'utf8'), /--allowedTools Read Grep Glob Bash\(git log:\*\) Bash\(git show:\*\)/);
+    assert.match(fs.readFileSync(h.log_path, 'utf8'), /--allowedTools Read Grep Glob --disallowedTools /, 'git log and git show reach the runtime\'s read-only check, not an allow rule');
     fs.writeFileSync(path.join(dir, '.quill', 'agents', 'triage.md'), '---\nname: triage\ndescription: Triage\npermissions: { read_source: true }\n---\nTriage {{ticket.key}}');
     s.hext.pause();
     const t2 = s.w.state.tickets.get(T1);

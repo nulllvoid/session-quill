@@ -31,6 +31,8 @@ test('review I6: tools a recipe leaves out of its profile are denied, not merely
   const n = recipeTools(narrow, narrow.permissions);
   assert.ok(!n.disallowed.includes('Bash(git log*)'), 'a kept narrower rule keeps its prefix allowed');
   assert.ok(n.disallowed.includes('Bash(git show*)') && n.disallowed.includes('Grep'));
+  assert.deepEqual(n.allowed, ['Read'], 'a kept git read rule is not an allow rule, which would bypass Claude Code\'s read-only option check');
+  assert.ok(n.disallowed.includes('Bash(git log *--output*)') && t.disallowed.includes('Bash(git diff *--ext-diff*)'), 'narrowed recipes keep the git option denials');
 });
 
 test('review I3: ticket text rendered into a recipe is one line of data that cannot close the task block; placeholders need their declared input', () => {

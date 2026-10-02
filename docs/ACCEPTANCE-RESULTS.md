@@ -129,7 +129,7 @@ Unit coverage: `tests/schedule/cron.test.js` (DST gap, day OR rule, time zones),
 | ID | Status | Evidence |
 | --- | --- | --- |
 | A53 | Automated | `tests/acceptance/phase8.test.js` — repository standup overrides personal and built-in for repo demo only; snapshot without paths; invalid recipe refused with recipe-invalid over the HTTP API |
-| A54 | Automated | edit_source on deploy-check refused (permission-beyond-recipe); run capped at 10 min with the recipe's five tools; recipe appended to after queueing fails with recipe-changed |
+| A54 | Automated | edit_source on deploy-check refused (permission-beyond-recipe); run capped at 10 min with the recipe's tools (Read, Grep, Glob allowed; git log/show left to Claude Code's read-only check; git diff/status denied); recipe appended to after queueing fails with recipe-changed |
 | A55 | Automated | next action and deployment evidence suggestions; stale and back-to-back accepts conflict; resubmitted accept records the deployment; comment draft accepted with no ticket change |
 | A56 | Automated | agent job over the active scope queues two read-only runs, then zero with two already running; attempt-fix refused |
 
