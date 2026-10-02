@@ -3,6 +3,7 @@ import { bindingsDir, heartbeatPath, stateDir, configPath } from '../lib/paths.j
 import { readJsonIfExists, writeJsonAtomic, readTextIfExists } from '../lib/atomic-fs.js';
 import { ageMs } from '../lib/time.js';
 import { parseToml } from '../config/toml.js';
+import { resolveGateMode, resolveTracker } from '../config/config.js';
 
 export const HEARTBEAT_MAX_AGE_MS = 15_000;
 
@@ -81,6 +82,10 @@ export function readRuntimeIdentity(env = process.env) {
     gate_enabled: cfg.gate_enabled !== false,
     approval_phrases_enabled: cfg.approval_phrases_enabled === true,
     allow_tools: (cfg.gate && Array.isArray(cfg.gate.allow_tools)) ? cfg.gate.allow_tools : [],
+    gate_mode: resolveGateMode(cfg).mode,
+    tracker: (() => { try { return resolveTracker(cfg); } catch { return null; } })(),
+    default_project_id: cfg.default_project || null,
+    repos: [],
   };
 }
 

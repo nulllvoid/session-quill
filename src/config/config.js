@@ -4,6 +4,7 @@ import os from 'node:os';
 import { parseToml, stringifyToml } from './toml.js';
 import { configPath } from '../lib/paths.js';
 import { readTextIfExists, writeFileAtomic } from '../lib/atomic-fs.js';
+import { normalizeTracker } from '../core/external-keys.js';
 
 export const CATEGORIES = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
@@ -30,7 +31,7 @@ export function defaultUserConfig() {
     sync_interval_hours: 2,
     stale_days: 5,
     ui_port: 0,
-    gate: { allow_tools: [] },
+    gate: { allow_tools: [], mode: 'nudge' },
     projects: {},
     repos: {},
   };
@@ -97,6 +98,36 @@ export function resolveConfig({ cli = {}, session = {}, repo = {}, user = {} } =
     key_prefix: user.key_prefix ?? 'LOCAL',
     timezone: user.timezone ?? 'UTC',
   };
+}
+
+export const GATE_MODES = ['off', 'nudge', 'strict'];
+const GATE_RANK = { off: 0, nudge: 1, strict: 2 };
+
+// Effective gate mode (ADR 0005). The user picks off, nudge or strict (legacy gate_enabled = false
+// means off). A repository may only tighten it; an unrecognized value fails closed to strict.
+export function resolveGateMode(user = {}, repo = null) {
+  const warnings = [];
+  const read = (cfg, where) => {
+    const mode = cfg && cfg.gate && cfg.gate.mode;
+    if (mode === undefined || mode === null) return null;
+    if (!GATE_MODES.includes(mode)) {
+      warnings.push(`${where} gate.mode "${mode}" is not one of ${GATE_MODES.join(', ')}; using strict`);
+      return 'strict';
+    }
+    return mode;
+  };
+  let mode = user && user.gate_enabled === false ? 'off' : (read(user, 'user config') ?? 'nudge');
+  const repoMode = read(repo, '.quill.toml');
+  if (repoMode && GATE_RANK[repoMode] > GATE_RANK[mode]) mode = repoMode;
+  return { mode, warnings };
+}
+
+// Repository [tracker] values override user values field by field; the result is validated.
+export function resolveTracker(user = {}, repo = null) {
+  const u = user && user.tracker;
+  const r = repo && repo.tracker;
+  if (!u && !r) return null;
+  return normalizeTracker({ ...(u ?? {}), ...(r ?? {}) });
 }
 
 export function findRepoByPath(cfg, cwd) {
