@@ -151,7 +151,14 @@ export function newSession(state, { id, host_session_id, agent_id = null, parent
     gate_enabled: true,
     capture_health: { status: 'ok', reason: null, observed_at: started_at },
     events_since_checkpoint: 0,
+    unbound_work: null,
   };
+}
+
+// A session's unlinked work is shown in the inbox until it is attached or dismissed (ADR 0006).
+export function hasUnboundWork(session) {
+  const w = session && session.unbound_work;
+  return !!(w && !w.dismissed_at && ((w.files && w.files.length) || (w.commits && w.commits.length)));
 }
 
 export function refreshTags(ticket) {

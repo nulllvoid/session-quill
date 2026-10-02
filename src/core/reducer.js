@@ -262,6 +262,30 @@ function sweepDeferred(state, ev) {
   }
 }
 
+const UNBOUND_FILE_CAP = 500;
+const UNBOUND_COMMIT_CAP = 200;
+
+// Writes and commits captured while a session had no ticket stay on the session, unattributed,
+// until the owner attaches or dismisses them from the inbox (ADR 0006). The revision only moves
+// when this work changes, so inbox requests can be revision-checked against what the owner saw.
+function recordUnboundWork(session, ev, { writePaths, commit, repo_id }) {
+  let w = session.unbound_work;
+  if (!w || w.dismissed_at || (!w.files.length && !w.commits.length)) {
+    w = { revision: w ? w.revision : 0, files: [], commits: [], first_at: ev.occurred_at, last_at: ev.occurred_at, dismissed_at: null };
+    session.unbound_work = w;
+  }
+  for (const rel of writePaths) {
+    const existing = w.files.find((f) => f.repo_id === repo_id && f.relative_path === rel);
+    if (existing) existing.last_seen = ev.occurred_at;
+    else if (w.files.length < UNBOUND_FILE_CAP) w.files.push({ repo_id, relative_path: rel, first_seen: ev.occurred_at, last_seen: ev.occurred_at });
+  }
+  if (commit && !w.commits.some((c) => c.sha === commit.sha) && w.commits.length < UNBOUND_COMMIT_CAP) {
+    w.commits.push({ sha: commit.sha, message: typeof commit.message === 'string' ? commit.message.slice(0, 200) : '', at: ev.occurred_at });
+  }
+  if (ev.occurred_at > w.last_at) w.last_at = ev.occurred_at;
+  w.revision += 1;
+}
+
 function handlePostTool(state, ev, result) {
   const session = getOrCreateSession(state, ev);
   session.events_since_checkpoint += 1;
@@ -279,7 +303,15 @@ function handlePostTool(state, ev, result) {
     return;
   }
 
-  if (!ticket) return;
+  if (!ticket) {
+    const unboundPaths = WRITE_TOOLS.has(p.tool_name) && Array.isArray(p.write_paths) ? p.write_paths.filter((x) => typeof x === 'string' && x) : [];
+    const unboundCommit = p.commit && typeof p.commit.sha === 'string' && p.commit.sha ? p.commit : null;
+    if (unboundPaths.length || unboundCommit) {
+      recordUnboundWork(session, ev, { writePaths: unboundPaths, commit: unboundCommit, repo_id: p.repo_id ?? null });
+      session.successful_write_count += 1;
+    }
+    return;
+  }
   const writePaths = Array.isArray(p.write_paths) ? p.write_paths.filter((x) => typeof x === 'string' && x) : [];
   if (WRITE_TOOLS.has(p.tool_name) && writePaths.length) {
     for (const rel of writePaths) {
