@@ -82,7 +82,14 @@ test('subagent PreToolUse uses the agent identity, not the parent binding file',
 
 test('PostToolUse for Edit records write paths relative to cwd; git commit output yields commit metadata', () => {
   const env = setup({ bound: true });
-  run('post-tool-use-edit', env);
+  // Fixtures carry Windows-style paths; rebuild them for the current platform so the relative
+  // path computation is exercised the way the host would deliver it.
+  const repo = path.resolve(os.tmpdir(), 'repo');
+  const editInput = fixture('post-tool-use-edit');
+  editInput.cwd = repo;
+  editInput.tool_input.file_path = path.join(repo, 'src', 'a.js');
+  editInput.tool_response.filePath = editInput.tool_input.file_path;
+  runHook('PostToolUse', editInput, { env, now: NOW });
   run('post-tool-use-bash-commit', env);
   const edit = events(env).find((e) => e.payload.tool_name === 'Edit');
   const commit = events(env).find((e) => e.payload.tool_name === 'Bash');

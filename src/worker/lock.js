@@ -17,9 +17,11 @@ export function lockEndpoint(storeId, machineId, env = process.env) {
 function tryConnect(endpoint) {
   return new Promise((resolve) => {
     const socket = net.connect(endpoint);
-    const done = (alive) => { socket.destroy(); resolve(alive); };
-    socket.once('connect', () => done(true));
-    socket.once('error', () => done(false));
+    let settled = false;
+    const done = (alive) => { if (settled) return; settled = true; socket.destroy(); resolve(alive); };
+    socket.on('connect', () => done(true));
+    // Errors can arrive before connect (nobody listening) or after (reset while we tear down).
+    socket.on('error', () => done(false));
     setTimeout(() => done(false), 500).unref();
   });
 }
@@ -38,7 +40,9 @@ export async function acquireLock(storeId, machineId, env = process.env) {
     try { fs.unlinkSync(endpoint); } catch { /* no stale socket */ }
   }
   const server = net.createServer((socket) => {
-    // Owner probe: reply with a tiny banner and close.
+    // Owner probe: reply with a tiny banner and close. The prober destroys its end as soon as it
+    // connects, so this write can race a reset (ECONNRESET on Windows named pipes); swallow it.
+    socket.on('error', () => {});
     socket.end('session-quill-owner\n');
   });
   await new Promise((resolve, reject) => {
