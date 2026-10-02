@@ -32,17 +32,25 @@ function parseString(raw, line, lineNo) {
   return out;
 }
 
+// TOML literal strings ('...') carry no escapes, which keeps regular expressions readable.
+function parseLiteral(raw, line, lineNo) {
+  if (raw.length < 2 || !raw.endsWith("'")) throw unsupported(line, lineNo, 'expected a single-quoted literal string');
+  const inner = raw.slice(1, -1);
+  if (inner.includes("'")) throw unsupported(line, lineNo, 'unexpected quote inside literal string');
+  return inner;
+}
+
 function splitArray(inner, line, lineNo) {
   const items = [];
   let cur = '';
-  let inStr = false;
+  let quote = null;
   for (let i = 0; i < inner.length; i += 1) {
     const ch = inner[i];
-    if (inStr) {
+    if (quote) {
       cur += ch;
-      if (ch === '\\') { cur += inner[i + 1] ?? ''; i += 1; } else if (ch === '"') inStr = false;
-    } else if (ch === '"') {
-      inStr = true; cur += ch;
+      if (quote === '"' && ch === '\\') { cur += inner[i + 1] ?? ''; i += 1; } else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch; cur += ch;
     } else if (ch === ',') {
       if (cur.trim()) items.push(cur.trim());
       cur = '';
@@ -52,7 +60,7 @@ function splitArray(inner, line, lineNo) {
       cur += ch;
     }
   }
-  if (inStr) throw unsupported(line, lineNo, 'unterminated string in array');
+  if (quote) throw unsupported(line, lineNo, 'unterminated string in array');
   if (cur.trim()) items.push(cur.trim());
   return items;
 }
@@ -62,23 +70,25 @@ function parseValue(raw, line, lineNo) {
   if (raw === 'false') return false;
   if (/^-?\d+$/.test(raw)) return Number(raw);
   if (raw.startsWith('"')) return parseString(raw, line, lineNo);
+  if (raw.startsWith("'")) return parseLiteral(raw, line, lineNo);
   if (raw.startsWith('[') && raw.endsWith(']')) {
     return splitArray(raw.slice(1, -1), line, lineNo).map((item) => {
-      if (!item.startsWith('"')) throw unsupported(line, lineNo, 'only arrays of strings are supported');
-      return parseString(item, line, lineNo);
+      if (item.startsWith('"')) return parseString(item, line, lineNo);
+      if (item.startsWith("'")) return parseLiteral(item, line, lineNo);
+      throw unsupported(line, lineNo, 'only arrays of strings are supported');
     });
   }
   throw unsupported(line, lineNo, 'unsupported value');
 }
 
 function stripComment(line) {
-  let inStr = false;
+  let quote = null;
   for (let i = 0; i < line.length; i += 1) {
     const ch = line[i];
-    if (inStr) {
-      if (ch === '\\') i += 1;
-      else if (ch === '"') inStr = false;
-    } else if (ch === '"') inStr = true;
+    if (quote) {
+      if (quote === '"' && ch === '\\') i += 1;
+      else if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
     else if (ch === '#') return line.slice(0, i);
   }
   return line;

@@ -49,3 +49,12 @@ test('stringifyToml preserves authored comments when given the previous text', (
   assert.match(text, /stale_days = 7/);
   assert.equal(parseToml(text).stale_days, 7);
 });
+
+test('parseToml accepts single-quoted literal strings without escape processing', () => {
+  const cfg = parseToml("[tracker]\nkey_pattern = '\\b([A-Z][A-Z0-9]+-\\d+)\\b'  # regex\nprefixes = ['PMLA', \"PC\"]\nnote = 'a # not a comment'\n");
+  assert.equal(cfg.tracker.key_pattern, '\\b([A-Z][A-Z0-9]+-\\d+)\\b');
+  assert.deepEqual(cfg.tracker.prefixes, ['PMLA', 'PC']);
+  assert.equal(cfg.tracker.note, 'a # not a comment');
+  assert.throws(() => parseToml("x = 'it's'"), /literal string/);
+  assert.throws(() => parseToml("x = ['open]"), /unterminated/);
+});
