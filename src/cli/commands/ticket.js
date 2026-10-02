@@ -1,7 +1,8 @@
 import { loadContext, sessionFromFlags, cliEvent, submitAndWait, latestSnapshot, findTicketByKey, effectiveDefaults, commandName } from '../context.js';
 import { allocateKey, slugify, validateKey } from '../../core/keys.js';
 import { createState } from '../../core/state.js';
-import { CATEGORIES, PRIORITIES } from '../../config/config.js';
+import { CATEGORIES, PRIORITIES, loadRepoConfig, resolveTracker } from '../../config/config.js';
+import { renderUrl, isSafeExternalUrl, TRACKER_SYSTEMS } from '../../core/external-keys.js';
 import { uuid, shortId } from '../../lib/ids.js';
 import { isDate } from '../../lib/time.js';
 import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
@@ -108,22 +109,30 @@ async function gate(ctx, io, flags, enable) {
 }
 
 async function relink(ctx, io, args, flags) {
+  const usage = 'usage: ticket relink <KEY> --external <EXT-KEY> [--system jira|linear|github|custom] [--url <https url>] (--jira <KEY> is an alias)';
   const [key] = args;
-  if (!key) throw new TrackerError('key-required', 'usage: ticket relink <KEY> --jira <JIRA-KEY> [--url <url>]');
+  if (!key) throw new TrackerError('key-required', usage);
   validateKey(key);
   const ticket = findTicketByKey(ctx, key);
   if (!ticket) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
-  const jiraKey = flags.jira;
-  if (!jiraKey || !/^[A-Z][A-Z0-9_]+-\d+$/.test(jiraKey)) throw new TrackerError('jira-invalid', 'a Jira key like PROJ-123 is required (--jira)');
-  const url = flags.url ?? null;
-  if (url && !/^https:\/\/[^\s/]+\/browse\/[A-Z][A-Z0-9_]+-\d+$/.test(url)) throw new TrackerError('jira-url-invalid', 'Jira URL must look like https://host/browse/PROJ-123');
+  const extKey = flags.external ?? flags.jira;
+  if (typeof extKey !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(extKey)) throw new TrackerError('external-invalid', `an external key like PROJ-123 is required (--external; --jira is an alias). ${usage}`);
+  validateKey(extKey);
+  let tracker = null;
+  try { tracker = resolveTracker(ctx.config, loadRepoConfig(process.cwd())); } catch { tracker = null; }
+  const system = typeof flags.system === 'string' ? flags.system : (flags.jira ? 'jira' : tracker ? tracker.system : 'custom');
+  if (!TRACKER_SYSTEMS.includes(system)) throw new TrackerError('system-invalid', `--system must be one of ${TRACKER_SYSTEMS.join(', ')}`);
+  if (flags.url !== undefined && !isSafeExternalUrl(flags.url)) throw new TrackerError('external-url-invalid', 'the external link must be an https:// URL without spaces or quotes');
+  const url = flags.url ?? (tracker && tracker.system === system ? renderUrl(extKey, tracker) : null);
   // Remote validation requires a configured provider; without one the link stays locally bound and pending.
-  const jira = { key: jiraKey, url, validation: 'pending', validated_at: null, error: 'no Jira provider configured; remote validation pending' };
+  const pending = { validation: 'pending', validated_at: null, error: 'no tracker provider configured; remote validation pending' };
+  const payload = { ticket_id: ticket.id, new_key: extKey, external: { system, key: extKey, url, ...pending } };
+  if (system === 'jira') payload.jira = { key: extKey, url, ...pending };
   const session = flags.session ? sessionFromFlags(flags, ctx.env) : null;
-  const ack = await submitAndWait(ctx, cliEvent(ctx, { kind: 'relink', payload: { ticket_id: ticket.id, new_key: jiraKey, jira }, session, ticket_id: ticket.id }), { timeoutMs: timeout(flags) });
-  if (ack.rejected === 'key-collision') throw new TrackerError('key-collision', `key collision: ${jiraKey} already identifies another ticket (alias or key)`);
+  const ack = await submitAndWait(ctx, cliEvent(ctx, { kind: 'relink', payload, session, ticket_id: ticket.id }), { timeoutMs: timeout(flags) });
+  if (ack.rejected === 'key-collision') throw new TrackerError('key-collision', `key collision: ${extKey} already identifies another ticket (alias or key)`);
   if (ack.rejected) throw new TrackerError(ack.rejected, `relink rejected: ${ack.rejected}`);
-  io.println(`Relinked ${key} → ${jiraKey} (alias ${key} kept; Jira validation ${jira.validation}: ${jira.error}).`);
+  io.println(`Relinked ${key} → ${extKey} (alias ${key} kept; ${system} link ${url ?? 'not configured'}; validation pending: ${pending.error}).`);
   return 0;
 }
 

@@ -28,7 +28,7 @@ Usage: quill <command> [options]
   ticket create "<title>" [--category c] [--priority P2] [--parent KEY] [--project id] [--due YYYY-MM-DD] [--bind] --session <id>
   ticket bind <KEY> --session <id>          ticket show --session <id> [--json]
   ticket off --session <id>                 ticket on --session <id>
-  ticket relink <KEY> --jira <J-KEY> [--url <url>] --session <id>
+  ticket relink <KEY> --external <EXT-KEY> [--system s] [--url <url>] --session <id>   (--jira is an alias)
   ticket children <KEY>                     ticket list [--status s] [--json]
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>
   status [--json] [--session <id>] | status --statusline

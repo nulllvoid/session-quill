@@ -4,6 +4,40 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeHome, startWorker, cli } from './helpers.js';
 import { readJsonIfExists } from '../../src/lib/atomic-fs.js';
+import { saveUserConfig } from '../../src/config/config.js';
+
+test('relink --external renders the tracker link; --jira stays an alias; bad keys and links are refused', async () => {
+  const fx = makeHome();
+  fx.config.tracker = { system: 'linear', domain: 'https://linear.app/acme' };
+  saveUserConfig(fx.config, fx.env);
+  const w = await startWorker(fx);
+  try {
+    const a = await cli(['ticket', 'create', 'Linear work', '--session', 'sess-E'], fx.env);
+    const akey = /(LOCAL-linear-work-[0-9a-f]{8})/.exec(a.out)[1];
+    const r = await cli(['ticket', 'relink', akey, '--external', 'ENG-12', '--session', 'sess-E'], fx.env);
+    assert.equal(r.code, 0, r.err);
+    assert.match(r.out, /ENG-12/);
+    assert.match(r.out, /linear/);
+    const rows = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out);
+    const eng = rows.find((t) => t.key === 'ENG-12');
+    assert.equal(eng.external.url, 'https://linear.app/acme/issue/ENG-12');
+    assert.equal(eng.jira, null);
+    const b = await cli(['ticket', 'create', 'Jira work', '--session', 'sess-E'], fx.env);
+    const bkey = /(LOCAL-jira-work-[0-9a-f]{8})/.exec(b.out)[1];
+    const bad = await cli(['ticket', 'relink', bkey, '--external', 'eng 12', '--session', 'sess-E'], fx.env);
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.err, /external key/);
+    const badUrl = await cli(['ticket', 'relink', bkey, '--external', 'PMLA-9', '--url', 'http://x.example/PMLA-9', '--session', 'sess-E'], fx.env);
+    assert.notEqual(badUrl.code, 0);
+    assert.match(badUrl.err, /https/);
+    const j = await cli(['ticket', 'relink', bkey, '--jira', 'PMLA-9', '--session', 'sess-E'], fx.env);
+    assert.equal(j.code, 0, j.err);
+    const pm = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out).find((t) => t.key === 'PMLA-9');
+    assert.deepEqual([pm.external.system, pm.jira.key], ['jira', 'PMLA-9']);
+  } finally {
+    await w.stop();
+  }
+});
 
 test('ticket create --bind allocates a key, waits for the worker and publishes the binding snapshot', async () => {
   const fx = makeHome();

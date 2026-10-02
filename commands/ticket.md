@@ -1,6 +1,6 @@
 ---
 description: Create, bind, show, relink or gate-toggle the ticket for this session
-argument-hint: create "<title>" [--category c] [--priority P2] [--parent KEY] [--bind] | bind <KEY> | show | off | on | relink <KEY> --jira <J-KEY> | list | children <KEY>
+argument-hint: create "<title>" [--category c] [--priority P2] [--parent KEY] [--bind] | bind <KEY> | show | off | on | relink <KEY> --external <EXT-KEY> | list | children <KEY>
 allowed-tools: Bash(node *)
 ---
 
@@ -16,6 +16,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quill.js" ticket $ARGUMENTS --session <session i
 3. Report the result. After `create --bind` or `bind`, state the key the session is now bound to. After `off`, remind the user that the gate is off for this session and audited; after `on`, that enforcement is restored.
 
 Notes:
+- Mentioning a configured ticket key (for example `PROJ-123`) in a prompt links the session automatically; these commands remain for manual control.
 - `create` inherits project and category defaults from the repository's `.quill.toml`; pass `--category` or `--priority` to override.
 - Bindings never fall back to the working directory. Rebinding affects future tool calls only.
 - Recorded approval or binding is never permission to commit, push or deploy.
