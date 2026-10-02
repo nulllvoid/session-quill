@@ -1,6 +1,12 @@
 # Session Quill
 
+[![CI](https://github.com/nulllvoid/session-quill/actions/workflows/ci.yml/badge.svg)](https://github.com/nulllvoid/session-quill/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Node >= 22](https://img.shields.io/badge/node-%3E%3D22-brightgreen)
+
 A Claude Code plugin that binds development sessions to tickets, keeps a durable local record of what each session did, and gives you a loopback dashboard that answers "what should I pick next?", "where was I?" and "what still needs deployment?".
+
+![Pick next view of the Session Quill dashboard](docs/images/dashboard-pick-next.jpg)
 
 - **Ticket gate.** With the plugin loaded, supported write tools (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`), unknown shell commands and unregistered tools are denied until the session is bound to a ticket. Dedicated reads and a small tested read-only shell subset pass through. The gate is a workflow aid, not a sandbox: `/session-quill:ticket off` disables it per session, audibly.
 - **Durable capture.** Hooks persist events to local ingress before acknowledging; one worker per store journals them, rebuilds generated state, and writes markdown notes (plain folder or Obsidian vault) within 30 seconds. Your own Summary and Notes sections are preserved byte-for-byte.
@@ -8,7 +14,15 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Sharing.** Read-only standalone HTML snapshots with an export time; no credentials, request code or local paths.
 - **Handoffs.** Analyse, analyse with follow-ups, or attempt a fix in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions and a 20-minute cap.
 
-Design documents live under [docs/](docs/README.md). Acceptance evidence is recorded in [docs/ACCEPTANCE-RESULTS.md](docs/ACCEPTANCE-RESULTS.md).
+## Documentation
+
+| For | Read |
+| --- | --- |
+| Using the plugin | This README, then `node bin/quill.js help` |
+| How it works inside | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| What it must do (spec) | [docs/README.md](docs/README.md): PRD, TRD, data contract, UI spec, decisions |
+| What has been verified | [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) and [docs/ACCEPTANCE-RESULTS.md](docs/ACCEPTANCE-RESULTS.md) |
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md), [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), [SECURITY.md](SECURITY.md), [CHANGELOG.md](CHANGELOG.md) |
 
 ## Prerequisites
 
@@ -92,8 +106,13 @@ Reports Node, Git and Claude versions, store ownership (copies on other machines
 ## Development
 
 ```bash
-npm test                 # unit and integration suites (node:test)
-npm run test:acceptance  # scenario suite mapped to docs/ACCEPTANCE.md
+npm test                   # unit, integration, acceptance and scaled performance suites (node:test)
+npm run test:acceptance    # only the scenario suite mapped to docs/ACCEPTANCE.md
+node scripts/dev-seed.mjs  # dashboard on a throwaway store with sample data
 ```
+
+![Board view with the docked ticket detail](docs/images/dashboard-board-detail.jpg)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a map of the code.
 
 Session Quill is released under the [MIT License](LICENSE). Source: [github.com/nulllvoid/session-quill](https://github.com/nulllvoid/session-quill).
