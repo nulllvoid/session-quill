@@ -8,11 +8,13 @@ import { putBlob } from '../core/blobs.js';
 import { sessionKey } from '../core/state.js';
 import { matchApprovalPhrase } from '../core/approval.js';
 import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } from '../gate/decide.js';
-import { readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim } from './binding-snapshot.js';
+import { readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
 import { scopeFor } from './scope.js';
-import { keyExample } from '../core/external-keys.js';
+import { planAutoBind } from './autobind.js';
+import { keyExample, renderUrl, externalTicketId, branchTitle } from '../core/external-keys.js';
+import { currentBranch } from '../lib/git-head.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
-import { ensureDir } from '../lib/atomic-fs.js';
+import { ensureDir, removeIfExists } from '../lib/atomic-fs.js';
 import { nowIso } from '../lib/time.js';
 import {
   sanitizeTitle, writePathsFor, commitFromBash, prFromBash, planFromExitPlanMode, extractConclusions, preview,
@@ -63,12 +65,49 @@ function persist(ev, env, result, { covered = false } = {}) {
   }
 }
 
-function bindingContext(snapshot, session_id) {
+function bindingContext(snapshot, session_id, mode, tracker) {
   if (snapshot && snapshot.ticket_id) {
-    return `Session Quill session: ${session_id}. Bound to ${snapshot.ticket_key}${snapshot.ticket_title ? ` (${snapshot.ticket_title})` : ''}, binding revision ${snapshot.binding_revision}. Supported writes are permitted. Use /session-quill:ticket show for details.`;
+    const title = snapshot.ticket_title && snapshot.ticket_title !== snapshot.ticket_key ? ` (${snapshot.ticket_title})` : '';
+    return `Session Quill session: ${session_id}. Bound to ${snapshot.ticket_key}${title}, binding revision ${snapshot.binding_revision}. Supported writes are permitted. Use /session-quill:ticket show for details.`;
   }
-  const gateNote = snapshot && snapshot.gate_enabled === false ? 'Ticket gate is OFF for this session (audited).' : 'Ticket gate is ON: supported write tools are denied until bound.';
-  return `Session Quill session: ${session_id}. This session is unbound. ${gateNote} Run /session-quill:ticket create "<title>" or /session-quill:ticket bind <KEY>; pass --session ${session_id} to the quill CLI.`;
+  const gateNote = mode === 'off'
+    ? 'Ticket gate is OFF for this session (audited).'
+    : mode === 'nudge'
+      ? 'Writes are not blocked (gate mode nudge); unlinked work is raised once at the end of a turn.'
+      : 'Ticket gate is ON: supported write tools are denied until bound.';
+  const how = tracker ? `Mention a ticket key (for example ${keyExample(tracker)}) in a prompt to link this session, or run` : 'Run';
+  return `Session Quill session: ${session_id}. This session is unbound. ${gateNote} ${how} /session-quill:ticket create "<title>" or /session-quill:ticket bind <KEY>; pass --session ${session_id} to the quill CLI.`;
+}
+
+// Writes the provisional snapshot before the bind event so the worker's confirmation always lands
+// after it; if the event cannot be persisted, the previous snapshot is restored (ADR 0005).
+function autoBind({ plan, source, titleHint, base, key, snapshot, scope, identity, env, result, occurred_at }) {
+  const tracker = scope.tracker;
+  const ticket_id = externalTicketId(identity.store_id, plan.key);
+  const ev = makeEvent({
+    ...base, kind: 'bind', ticket_id: plan.ensure_only ? null : ticket_id,
+    payload: { external: { system: tracker.system, key: plan.key, url: renderUrl(plan.key, tracker) }, source, title_hint: titleHint || null, project_id: scope.project_id, repo_id: scope.repo_id, ensure_only: plan.ensure_only },
+    source_identity: `bind:${key}:${source}:${plan.key}:${occurred_at}`,
+  });
+  if (!plan.ensure_only) {
+    try {
+      writeBindingSnapshot(key, {
+        session_id: snapshot ? snapshot.session_id ?? null : null, ticket_id, ticket_key: plan.key, ticket_title: titleHint || plan.key, ticket_aliases: [],
+        project_id: scope.project_id, binding_revision: (snapshot ? snapshot.binding_revision ?? 0 : 0) + 1, gate_enabled: !(snapshot && snapshot.gate_enabled === false),
+        has_title: !!(snapshot && snapshot.has_title), provisional: true, provisional_event_id: ev.event_id, provisional_at: occurred_at,
+      }, env);
+    } catch (err) {
+      result.stderr += `Session Quill: provisional binding not written (${err.message})\n`;
+    }
+  }
+  if (persist(ev, env, result)) return true;
+  if (!plan.ensure_only) {
+    try {
+      if (snapshot) writeBindingSnapshot(key, snapshot, env);
+      else removeIfExists(bindingSnapshotPath(key, env));
+    } catch { /* nothing more to restore */ }
+  }
+  return false;
 }
 
 export function runHook(eventName, input, { env = process.env, now } = {}) {
@@ -120,7 +159,13 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
         result.stdout = contextOutput('SessionStart', `Session Quill session: ${session_id}. This is handoff ${handoff.id} for ticket ${handoff.ticket_key ?? handoff.ticket_id}; tool activity is attributed to that ticket. Permissions are limited to what the handoff request granted.`);
         return result;
       }
-      result.stdout = contextOutput('SessionStart', bindingContext(snapshot, session_id));
+      let current = snapshot;
+      if (!(current && current.ticket_id) && scope.tracker) {
+        const branch = currentBranch(input.cwd);
+        const plan = branch ? planAutoBind({ source: 'branch', text: branch, snapshot: current, tracker: scope.tracker }) : null;
+        if (plan && autoBind({ plan, source: 'branch', titleHint: branchTitle(branch, plan.key), base, key, snapshot: current, scope, identity, env, result, occurred_at })) current = readBindingSnapshot(key, env);
+      }
+      result.stdout = contextOutput('SessionStart', bindingContext(current, session_id, mode, scope.tracker));
       return result;
     }
     case 'UserPromptSubmit': {
@@ -134,6 +179,18 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
         length: prompt.length,
       } });
       persist(ev, env, result);
+      const context = [];
+      // A session started before `quill init` (or whose SessionStart was missed) learns its id here.
+      if (!snapshot) context.push(bindingContext(null, session_id, mode, scope.tracker));
+      if (!handoff) {
+        const plan = planAutoBind({ source: 'prompt', text: prompt, snapshot, tracker: scope.tracker });
+        if (plan && autoBind({ plan, source: 'prompt', titleHint: sanitizeTitle(prompt), base, key, snapshot, scope, identity, env, result, occurred_at }) && !plan.ensure_only) {
+          const was = snapshot && snapshot.ticket_id ? ` (previously ${snapshot.ticket_key})` : '';
+          context.length = 0;
+          context.push(`Session Quill session: ${session_id}. Linked to ${plan.key}${was} because the prompt mentions it; captured work is attributed to it from now on.`);
+        }
+      }
+      if (context.length) result.stdout = contextOutput('UserPromptSubmit', context.join(' '));
       return result;
     }
     case 'PreToolUse': {
