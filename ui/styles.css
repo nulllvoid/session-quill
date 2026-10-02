@@ -411,3 +411,10 @@ table.sessions th { font-family: var(--mono); font-size: 11px; text-transform: u
 .inbox-item { border-top: 1px solid var(--border); padding-top: 8px; }
 .inbox-item p { margin: 4px 0; overflow-wrap: anywhere; }
 .inbox-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+
+/* Schedules panel (ADR 0007) */
+.schedules-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.schedules-table th, .schedules-table td { text-align: left; vertical-align: top; padding: 6px 8px; border-top: 1px solid var(--border); }
+.schedules-table tr.runs td { border-top: none; padding-top: 0; }
+.chip[data-outcome="failed"], .chip[data-outcome="interrupted"] { color: var(--critical); }
+.chip[data-outcome="ok"] { color: var(--good); }

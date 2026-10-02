@@ -94,6 +94,7 @@ export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters
   <label class="search">${icon('search')}<input type="search" id="search" data-filter="q" placeholder="Search tickets, keys, tags…" value="${attr(filters.q ?? '')}" aria-label="Search tickets"><kbd aria-hidden="true">/</kbd></label>
   <span class="endpoint" title="${attr(isStatic ? 'Read-only exported snapshot' : 'Owner session on loopback')}"><span class="dot ${isStatic ? 'muted' : online ? 'good' : 'critical'}" aria-hidden="true"></span>${isStatic ? 'snapshot' : esc(endpoint ?? '127.0.0.1')} <strong>[${isStatic ? 'Viewer' : 'Owner'}]</strong></span>
   <div class="topbar-actions">
+    ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small" data-action="schedules">${icon('clock')}Schedules</button>` : ''}
     ${caps.export ? `<button type="button" class="btn small" data-action="export">${icon('download')}Export</button>` : ''}
     <button type="button" class="btn small icon-only" data-action="theme" aria-label="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" title="Theme">${icon(theme === 'dark' ? 'sun' : 'moon')}</button>
     <button type="button" class="btn small icon-only" data-action="help" aria-label="Keyboard shortcuts" title="Help (?)">${icon('help')}</button>

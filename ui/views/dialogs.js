@@ -1,4 +1,25 @@
-import { esc, attr, keyEl, STATUS_LABELS, icon, normalizeTicket, normalizeSnapshot, countLabel } from '../components.js';
+import { esc, attr, keyEl, STATUS_LABELS, icon, normalizeTicket, normalizeSnapshot, countLabel, timeEl } from '../components.js';
+
+const ACTIVE_REQUEST = new Set(['sending', 'pending', 'applying']);
+
+// Schedules panel (ADR 0007): what runs on its own, when it runs next, and how the last runs went.
+export function renderSchedulesDialog(rawSnapshot, { now, pending = [] } = {}) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const tz = snapshot.meta.timezone;
+  const canRun = !!(snapshot.capabilities && snapshot.capabilities.refresh);
+  const rows = snapshot.schedules.map((s) => {
+    const when = s.cron ? `cron ${s.cron}` : `every ${s.every}`;
+    const queued = pending.some((r) => r.kind === 'run-job' && r.payload && r.payload.schedule === s.name && ACTIVE_REQUEST.has(r.state));
+    const outcome = s.running ? 'running' : (s.last_outcome ?? 'never run');
+    const action = !canRun ? '' : queued ? '<span class="muted small">Queued…</span>' : `<button type="button" class="btn small" data-action="run-job" data-schedule="${attr(s.name)}"${s.running ? ' disabled' : ''}>${icon('play')}Run now</button>`;
+    const runs = (s.runs ?? []).length ? `<tr class="runs"><td colspan="5"><details><summary class="small">Recent runs (${esc(s.runs.length)})</summary><ul class="small">${s.runs.map((r) => `<li>${timeEl(r.started_at, now, tz)} · ${esc(r.trigger)} · <strong>${esc(r.outcome)}</strong>${r.summary ? ` — ${esc(r.summary)}` : ''}${r.error ? ` — <span class="critical">${esc(r.error)}</span>` : ''}</li>`).join('')}</ul></details></td></tr>` : '';
+    return `<tr data-schedule="${attr(s.name)}"><th scope="row">${esc(s.name)}<div class="small muted">${esc(s.job)}${s.enabled ? '' : ' · disabled'}</div></th><td><code>${esc(when)}</code></td><td>${s.enabled && s.next_due ? timeEl(s.next_due, now, tz) : '<span class="muted">—</span>'}</td><td><span class="chip" data-outcome="${attr(outcome)}">${esc(outcome)}</span> ${s.last_started_at ? timeEl(s.last_started_at, now, tz) : ''}${s.last_summary ? `<div class="small">${esc(s.last_summary)}</div>` : ''}${s.last_error ? `<div class="small critical">${esc(s.last_error)}</div>` : ''}</td><td>${action}</td></tr>${runs}`;
+  }).join('');
+  return `<div class="dialog-form schedules-dialog"><h2 id="dialog-title">${icon('clock')}Schedules</h2>
+<p class="small muted">Jobs the worker runs on its own, in the store time zone (${esc(tz)}). A run missed while the computer was off runs once when the worker starts. Change them under <code>[[schedule]]</code> in your config.</p>
+${snapshot.schedules.length ? `<div class="table-wrap"><table class="schedules-table"><thead><tr><th scope="col">Schedule</th><th scope="col">When</th><th scope="col">Next run</th><th scope="col">Last run</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">No schedules are configured.</p>'}
+<div class="dialog-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div></div>`;
+}
 
 // Inbox dialog (ADR 0006): attach to an open ticket, or create a ticket from its tracker key.
 export function renderAttachDialog(session, rawSnapshot, { mode = 'attach' } = {}) {

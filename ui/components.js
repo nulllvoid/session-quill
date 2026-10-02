@@ -139,7 +139,7 @@ export function hasUnlinkedWork(session) {
 }
 
 export function requestFeedback(req, { now }) {
-  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link' }[req.kind] ?? req.kind;
+  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run' }[req.kind] ?? req.kind;
   let body = '';
   if (req.state === 'sending') body = 'Sending to the worker…';
   else if (req.state === 'pending') {
@@ -190,6 +190,7 @@ export function normalizeSnapshot(snapshot) {
     checkpoints: snapshot.checkpoints ?? [],
     handoffs: (snapshot.handoffs ?? []).map((h) => ({ children_ids: [], changed_files: [], test_results: [], uncertain_effects: [], permissions: {}, ...h })),
     requests: snapshot.requests ?? [],
+    schedules: snapshot.schedules ?? [],
     picknext: snapshot.picknext ?? [],
     blocked: snapshot.blocked ?? [],
     deployments_outstanding: snapshot.deployments_outstanding ?? [],

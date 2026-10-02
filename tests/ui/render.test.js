@@ -4,7 +4,7 @@ import { freshness, relativeTime, formatAbsolute } from '../../ui/lib/time.js';
 import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip } from '../../ui/components.js';
 import { sanitizeSnapshot } from '../../src/export/sanitize.js';
 import { renderPickNext, renderInbox } from '../../ui/views/picknext.js';
-import { renderAttachDialog, renderLinkExternalDialog } from '../../ui/views/dialogs.js';
+import { renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog } from '../../ui/views/dialogs.js';
 import { renderBoard } from '../../ui/views/board.js';
 import { renderTree } from '../../ui/views/tree.js';
 import { renderSessions } from '../../ui/views/sessions.js';
@@ -289,4 +289,40 @@ test('review: finished requests from an earlier batch never hide the actions for
   const html = renderInbox(inboxSnapshot(), { now: NOW, pending: done });
   assert.match(html, /data-action="attach-unbound" data-session="sess-u" data-mode="attach"/);
   assert.doesNotMatch(html, /Applied\./);
+});
+
+function scheduleSnapshot() {
+  const snap = snapshot();
+  snap.schedules = [
+    { name: 'reconcile', job: 'reconcile', cron: null, every: '2h', enabled: true, running: false, next_due: '2026-10-02T13:30:00Z', last_started_at: '2026-10-02T11:30:00Z', last_finished_at: '2026-10-02T11:30:04Z', last_outcome: 'ok', last_error: null, last_summary: '3 PR checks', runs: [{ run_id: 'r1', trigger: 'schedule', started_at: '2026-10-02T11:30:00Z', finished_at: '2026-10-02T11:30:04Z', outcome: 'ok', summary: '3 PR checks', error: null }] },
+    { name: 'evening', job: 'reconcile', cron: '30 19 * * 1-5', every: null, enabled: true, running: true, next_due: '2026-10-05T14:00:00Z', last_started_at: '2026-10-02T11:59:00Z', last_finished_at: null, last_outcome: 'failed', last_error: 'gh: <offline>', last_summary: null, runs: [] },
+    { name: 'paused', job: 'reconcile', cron: null, every: '1d', enabled: false, running: false, next_due: null, last_started_at: null, last_finished_at: null, last_outcome: null, last_error: null, last_summary: null, runs: [] },
+  ];
+  return snap;
+}
+
+test('the Schedules dialog shows when, next run, last result, history and Run now; it escapes errors', () => {
+  const html = renderSchedulesDialog(scheduleSnapshot(), { now: NOW, pending: [] });
+  assert.match(html, /<code>every 2h<\/code>/);
+  assert.match(html, /<code>cron 30 19 \* \* 1-5<\/code>/);
+  assert.match(html, /3 PR checks/);
+  assert.match(html, /gh: &lt;offline&gt;/);
+  assert.match(html, /Recent runs \(1\)/);
+  assert.match(html, /data-action="run-job" data-schedule="reconcile"/);
+  assert.match(html, /data-action="run-job" data-schedule="evening" disabled/, 'a running schedule cannot be started again');
+  assert.match(html, /paused<div class="small muted">reconcile · disabled/);
+  assert.match(html, /never run/);
+  const queued = renderSchedulesDialog(scheduleSnapshot(), { now: NOW, pending: [{ id: 'q', kind: 'run-job', state: 'pending', payload: { schedule: 'reconcile' } }] });
+  assert.doesNotMatch(queued, /data-action="run-job" data-schedule="reconcile"/);
+  const ro = { ...scheduleSnapshot(), capabilities: { read: true } };
+  assert.doesNotMatch(renderSchedulesDialog(ro, { now: NOW, pending: [] }), /data-action="run-job"/);
+});
+
+test('the header offers Schedules only when the worker reports schedules and the page is not an export', () => {
+  const opts = { now: NOW, online: true, refresh: null, theme: 'dark', filters: noFilters, view: 'picknext', endpoint: '127.0.0.1:1', receipt: null };
+  assert.match(renderHeader(scheduleSnapshot(), opts), /data-action="schedules"/);
+  assert.doesNotMatch(renderHeader(snapshot(), opts), /data-action="schedules"/);
+  const exported = scheduleSnapshot();
+  exported.meta = { ...exported.meta, exported_at: NOW };
+  assert.doesNotMatch(renderHeader(exported, opts), /data-action="schedules"/);
 });

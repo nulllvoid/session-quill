@@ -8,7 +8,7 @@ import { renderSessions } from './views/sessions.js';
 import { renderDeployments } from './views/deployments.js';
 import { renderDetail } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
-import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog } from './views/dialogs.js';
+import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 
 const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments'];
@@ -167,9 +167,12 @@ function renderDialog() {
     if (!sess) { appState.dialog = null; return renderDialog(); }
     html = renderAttachDialog(sess, s, { mode: d.mode });
   } else if (d.type === 'link-external') html = renderLinkExternalDialog(ticketById(s, d.ticket), s);
-  if (host.dataset.key !== JSON.stringify(d)) {
+  else if (d.type === 'schedules') html = renderSchedulesDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
+  // The Schedules panel follows live state, so it re-renders when a generation or a run request changes.
+  const key = d.type === 'schedules' ? `${JSON.stringify(d)}:${s.generation_id}:${[...appState.requests.values()].filter((r) => r.kind === 'run-job').map((r) => r.state).join(',')}` : JSON.stringify(d);
+  if (host.dataset.key !== key) {
     host.innerHTML = `<div class="dialog-inner" role="document">${html}${d.error ? `<p class="critical small" role="alert">${esc(d.error)}</p>` : ''}</div>`;
-    host.dataset.key = JSON.stringify(d);
+    host.dataset.key = key;
     if (!host.open) host.showModal();
     const first = host.querySelector('textarea, input:not([type=hidden]):not([disabled]), select, button');
     if (first) first.focus();
@@ -298,6 +301,8 @@ function handleAction(el) {
     case 'attach-unbound': appState.dialog = { type: 'attach', session: el.dataset.session, mode: el.dataset.mode === 'create' ? 'create' : 'attach' }; render(); break;
     case 'dismiss-unbound': submit({ kind: 'dismiss-unbound', target_id: el.dataset.session, expected_revision: Number(el.dataset.revision), payload: {} }, { announceText: 'Dismissal queued; undo within 10 seconds' }); break;
     case 'link-external': appState.dialog = { type: 'link-external', ticket: el.dataset.ticket }; render(); break;
+    case 'schedules': appState.dialog = { type: 'schedules' }; render(); break;
+    case 'run-job': submit({ kind: 'run-job', target_id: null, expected_revision: null, payload: { schedule: el.dataset.schedule } }, { announceText: `Running ${el.dataset.schedule} now` }); break;
     case 'waive-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'waive', deploymentId: el.dataset.deployment ?? null }; render(); break;
     case 'toggle-column': if (appState.boardExpanded.has('done')) appState.boardExpanded.delete('done'); else appState.boardExpanded.add('done'); render(); break;
     case 'column-page': appState.boardPages[el.dataset.column] = Number(el.dataset.page); render(); break;
