@@ -257,6 +257,10 @@ Pin tested Node and Claude Code version ranges during phase 0; refuse unsupporte
 
 PMLA mapping: open maps to active only with explicit in-progress evidence, otherwise todo; PR raised to review; merged to deploy-pending; deployed to done. Legacy stale maps to active plus derived stale unless prior status evidence exists. Legacy deploy skipped becomes a waiver with imported provenance and a reason; missing reason requires review. Preserve all existing files until verification succeeds.
 
+Profiles: `--profile <name|path.json>` loads a bundled profile or a JSON file with the same shape. Each `fields` entry is one frontmatter name or a list of candidates where the first present wins (the bundled profile reads `jira`/`key`, `next_action`/`next`, `priority`/`pri`). A `repo` field whose value matches a registered repository id (compared as slugs) sets `repo_id`; unmatched values are listed in the dry run as `repo-unregistered`. `ignore_globs` (default `templates/**`) skips files by path relative to the source. The dry run warns when no note yields a tracker key, which usually means the field names don't match.
+
+Duplicate keys: when several notes resolve to one key, the note whose filename stem equals the key is kept, otherwise the most recently active one. The others import as its children with derived keys (`KEY.1`, `KEY.2`) and no tracker link, and the dry run lists them as `duplicate-key`. The import summary counts only applied events, names each rejected note with its reason, and exits non-zero when any note was rejected.
+
 Pause old hooks/agents before enabling the new writer; snapshot settings and switch atomically to avoid double capture. Verify ticket counts, links, checkpoints and deployment obligations. Rollback restores original settings and untouched source notes; newer quill events are preserved/exported for reconciliation, not discarded.
 
 Keep the old PMLA dashboard read-only until at least one week of verified operation, then retire only through an explicit operator action. Follow the [PRD phase gates](PRD.md#release-plan) and [acceptance scenarios](ACCEPTANCE.md); no one-session implementation estimate is asserted.

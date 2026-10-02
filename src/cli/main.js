@@ -47,7 +47,7 @@ Usage: quill <command> [options]
   agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
   publish list [--json]                     publish [<name>] [--confirm]
-  migrate --source <dir> [--profile pmla] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>
+  migrate --source <dir> [--profile <name|path.json>] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>
   hook <EventName>                          (reads host JSON on stdin)
 `;
 

@@ -41,7 +41,15 @@ function providerOf(url) {
 
 export function mapRecord(record, profile, { fallbackTime = null } = {}) {
   const fm = record.frontmatter ?? {};
-  const f = (name) => fm[profile.fields[name] ?? name];
+  // A profile field is one frontmatter name or a list of candidates; the first one present wins.
+  const f = (name) => {
+    const spec = profile.fields[name] ?? name;
+    for (const key of Array.isArray(spec) ? spec : [spec]) {
+      const v = fm[key];
+      if (v !== undefined && v !== null && v !== '') return v;
+    }
+    return undefined;
+  };
   const issues = [];
   const title = typeof f('title') === 'string' && f('title').trim() ? f('title').trim() : null;
   if (!title) issues.push('title-missing');
@@ -112,6 +120,8 @@ export function mapRecord(record, profile, { fallbackTime = null } = {}) {
     last_activity: lastActivity,
     created_at: createdAt,
     parent_key: parentRaw,
+    repo_value: typeof f('repo') === 'string' && f('repo').trim() ? f('repo').trim() : null,
+    repo_id: null,
     issues,
   };
 }

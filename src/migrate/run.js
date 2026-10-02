@@ -16,20 +16,20 @@ export function migrationsDir(env) {
   return path.join(quillHome(env), 'migrations');
 }
 
-function ticketPayload(t, projectId, projectName) {
+function ticketPayload(t, projectId, projectName, profileName) {
   const m = t.mapped;
   return {
     id: m.id, key: m.key, title: m.title, project_id: projectId, project_name: projectName, category: m.category, priority: m.priority,
-    parent_id: null, repo_id: null, due: m.due, jira: m.jira, status: m.status, blocker: m.blocker, next_action: m.next_action,
+    parent_id: null, repo_id: m.repo_id ?? null, due: m.due, jira: m.jira, status: m.status, blocker: m.blocker, next_action: m.next_action,
     summary: t.authored.summary ?? '', user_notes: t.authored.notes ?? '', aliases: [], validation_issues: [...new Set(t.issues)],
     prs: m.prs, deployments: m.deployments, last_activity: m.last_activity, created_at: m.created_at,
-    source: { profile: 'pmla', path: t.rel, status: m.source_status },
+    source: { profile: profileName ?? 'pmla', path: t.rel, status: m.source_status },
   };
 }
 
 export async function runMigration(ctx, { sourceDir, profile, projectId, dryRun = false, backupDir = null, log = () => {} }) {
   const prefix = ctx.config.key_prefix ?? 'LOCAL';
-  const inv = inventory(sourceDir, profile, { project_id: projectId, key_prefix: prefix });
+  const inv = inventory(sourceDir, profile, { project_id: projectId, key_prefix: prefix, repos: ctx.config.repos ?? {} });
   if (dryRun) return { dryRun: true, inventory: inv };
   const projectName = (ctx.config.projects[projectId] ?? {}).name ?? projectId;
   const j = new Journal(journalPath(ctx.env));
@@ -62,7 +62,7 @@ export async function runMigration(ctx, { sourceDir, profile, projectId, dryRun 
   };
   const base = { store_id: ctx.storeMeta.store_id, machine_id: ctx.machineId, producer: 'cli', occurred_at: nowIso() };
   for (const t of inv.tickets) {
-    const ev = makeEvent({ ...base, kind: 'migration', payload: { ticket: ticketPayload(t, projectId, projectName) }, ticket_id: t.mapped.id, source_identity: `pmla:${t.rel}` });
+    const ev = makeEvent({ ...base, kind: 'migration', payload: { ticket: ticketPayload(t, projectId, projectName, profile.name) }, ticket_id: t.mapped.id, source_identity: `pmla:${t.rel}` });
     const r = await submit(ev);
     events.push({ path: t.rel, id: t.mapped.id, key: t.mapped.key, event_id: r.event_id, ack: r.ack ? (r.ack.duplicate ? 'duplicate' : r.ack.rejected ?? 'applied') : 'persisted' });
   }
@@ -79,7 +79,7 @@ export async function runMigration(ctx, { sourceDir, profile, projectId, dryRun 
   const manifest = {
     schema_version: 1, profile: profile.name, source: inv.source, project_id: projectId, created_at: nowIso(),
     journal_sequence_at_start: info.lastSequence, backup: { dir: bk.dir, manifest: bk.manifest, entries: bk.entries },
-    tickets: events, ambiguous: inv.ambiguous.map((a) => ({ path: a.rel, issues: a.issues })), ignored: inv.ignored, worker_confirmed: healthy,
+    tickets: events, ambiguous: inv.ambiguous.map((a) => ({ path: a.rel, issues: a.issues })), duplicates: inv.duplicates, unregistered_repos: inv.unregistered_repos, ignored: inv.ignored, worker_confirmed: healthy,
     notes: 'Original source files were not modified. Pause legacy PMLA hooks before enabling the quill gate; the settings snapshot in the backup restores them on rollback.',
   };
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));

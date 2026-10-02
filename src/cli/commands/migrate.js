@@ -18,7 +18,7 @@ async function confirm(question) {
 
 function printInventory(io, inv) {
   io.println(`source: ${inv.source}`);
-  io.println(`${inv.counts.total} ticket(s) mapped, ${inv.counts.ambiguous} ambiguous, ${inv.counts.ignored} file(s) ignored (no frontmatter)`);
+  io.println(`${inv.counts.total} ticket(s) mapped, ${inv.counts.ambiguous} ambiguous, ${inv.counts.duplicates ?? 0} duplicate key(s), ${inv.counts.ignored} file(s) ignored (no frontmatter or matched ignore_globs)`);
   io.println(`by status: ${Object.entries(inv.counts.by_status).map(([s, n]) => `${s}=${n}`).join(', ') || 'none'}`);
   for (const t of inv.tickets) {
     io.println(`  ${t.mapped.key.padEnd(40)} ${t.mapped.status.padEnd(15)} ${t.mapped.title}${t.mapped.parent_key ? `  (parent ${t.mapped.parent_key})` : ''}${t.mapped.deployments.length ? `  deployments: ${t.mapped.deployments.map((d) => d.state).join('/')}` : ''}${t.issues.length ? `  issues: ${t.issues.join(', ')}` : ''}`);
@@ -27,7 +27,28 @@ function printInventory(io, inv) {
     io.println('ambiguous records (imported with validation issues; review after import):');
     for (const a of inv.ambiguous) io.println(`  ${a.rel}: ${a.issues.join(', ')}`);
   }
+  if ((inv.duplicates ?? []).length) {
+    io.println('duplicate keys (the first note is kept; the others import as its children):');
+    for (const d of inv.duplicates) io.println(`  duplicate-key: ${d.key} <- ${d.kept} (kept), ${d.children.map((c) => c.rel).join(', ')}`);
+  }
+  for (const r of inv.unregistered_repos ?? []) io.println(`  repo-unregistered: ${r.value} (${r.count} note${r.count === 1 ? '' : 's'}); register it with quill repo add <path> --id <id> before importing`);
+  for (const w of inv.warnings ?? []) io.println(`! ${w}`);
   for (const f of inv.ignored) io.println(`  ignored: ${f}`);
+}
+
+// Only applied events count as imported; a rejected note is reported by path and fails the run (issue #2).
+function printOutcome(io, r) {
+  const rows = r.manifest.tickets;
+  if (!r.workerConfirmed) {
+    io.println(`queued ${rows.length} ticket(s) as migration events (persisted in ingress; the worker applies them when running)`);
+    return 0;
+  }
+  const applied = rows.filter((t) => t.ack === 'applied');
+  const already = rows.filter((t) => t.ack === 'duplicate');
+  const rejected = rows.filter((t) => !['applied', 'duplicate', 'persisted'].includes(t.ack));
+  io.println(`imported ${applied.length} ticket(s)${rejected.length ? `, rejected ${rejected.length}` : ''}${already.length ? `, ${already.length} already imported` : ''} (worker confirmed)`);
+  for (const t of rejected) io.println(`  rejected ${t.path} (${t.key}): ${t.ack}`);
+  return rejected.length ? 1 : 0;
 }
 
 export async function run({ args, flags, io, env }) {
@@ -42,7 +63,7 @@ export async function run({ args, flags, io, env }) {
     io.println('Re-enable the legacy hooks from the restored settings yourself; the quill worker keeps running until you stop it.');
     return 0;
   }
-  if (!flags.source) throw new TrackerError('usage', 'usage: migrate --source <dir> [--profile pmla] [--project <id>] [--dry-run] [--backup <dir>] [--yes]');
+  if (!flags.source) throw new TrackerError('usage', 'usage: migrate --source <dir> [--profile <name|path.json>] [--project <id>] [--dry-run] [--backup <dir>] [--yes]');
   const profile = loadProfile(flags.profile ?? 'pmla');
   const projectId = flags.project ?? ctx.config.default_project ?? Object.keys(ctx.config.projects)[0];
   if (!projectId) throw new TrackerError('project-required', 'pass --project <id> (configure projects with quill init)');
@@ -59,8 +80,8 @@ export async function run({ args, flags, io, env }) {
   const ok = flags.yes === true || (await confirm('Proceed with import?'));
   if (!ok) { io.error('import not performed (re-run with --yes to accept the preview)'); return 1; }
   const r = await runMigration(ctx, { sourceDir: String(flags.source), profile, projectId, dryRun: false, backupDir: flags.backup ? path.resolve(String(flags.backup)) : null, log: (m) => io.println(m) });
-  io.println(`imported ${r.inventory.counts.total} ticket(s) as migration events${r.workerConfirmed ? ' (worker confirmed)' : ' (persisted in ingress; the worker applies them when running)'}`);
+  const code = printOutcome(io, r);
   io.println(`manifest: ${r.manifestPath}`);
   io.println('Verify counts, links, checkpoints and deployment obligations in the dashboard; keep the legacy dashboard read-only for at least a week before retiring it.');
-  return 0;
+  return code;
 }
