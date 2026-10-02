@@ -7,3 +7,4 @@
 .superpowers/
 Thumbs.db
 node_modules/
+test-results.tap

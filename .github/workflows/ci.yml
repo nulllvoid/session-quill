@@ -27,7 +27,10 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global user.name "CI"
       - name: Run the test suite
-        run: npm test
+        run: npm run test:ci
+      - name: Publish failing tests as annotations
+        if: failure()
+        run: node scripts/ci-annotate.mjs test-results.tap
       - name: Validate plugin layout (manifest parses, hooks reference existing files)
         run: node -e "JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json','utf8')); JSON.parse(require('fs').readFileSync('hooks/hooks.json','utf8')); console.log('plugin files parse')"
 
