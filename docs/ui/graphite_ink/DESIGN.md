@@ -9,5 +9,6 @@ The dashboard's visual system since the 2026-10 redesign. It replaces [Terminal 
 - **One radius scale.** Large containers 16px, cards 12px, controls 8px, chips and keys 6px.
 - **Type.** Geist and Geist Mono variable fonts, vendored in `ui/fonts/` under the SIL OFL (`ui/fonts/OFL.txt`), since the CSP allows only same-origin fonts and the dashboard works offline. Exported snapshots fall back to the system stack. Mono is reserved for keys, identifiers, endpoints and numbers. Labels use sentence case, not mono capitals.
 - **Compact chrome.** A floating top bar (search, endpoint, actions), then one status line (health, receipt, refresh), then the filters. The brand and the workspace details live in the sidebar.
+- **No dashes in UI copy.** Separators are colons, parentheses or sentences; an empty cell shows a muted hyphen labelled "none" for screen readers.
 - **Board cards drop the status chip.** The column already names the status, so a card shows only the stale flag.
 - **Motion is feedback only.** Cards rise in once on first paint (`body[data-ready]` stops polls from replaying it), the detail panel and dialogs slide in, and buttons press in. Everything runs on `--ease`/`--ease-press` and switches off under `prefers-reduced-motion`.

@@ -53,7 +53,7 @@ export function attr(value) {
 }
 
 export function timeEl(iso, now, timeZone = 'UTC', { absolute = false } = {}) {
-  if (!iso) return '<span class="muted">—</span>';
+  if (!iso) return '<span class="muted" aria-label="none">-</span>';
   const abs = formatAbsolute(iso, timeZone);
   const rel = relativeTime(iso, now);
   if (absolute) return `<time datetime="${attr(iso)}">${esc(abs)} <span class="muted">(${esc(rel)})</span></time>`;
@@ -94,7 +94,7 @@ export function sessionChip(state) {
 }
 
 export function handoffChip(handoff) {
-  const reason = handoff.error && handoff.error.message ? ` — ${esc(handoff.error.message)}` : '';
+  const reason = handoff.error && handoff.error.message ? `: ${esc(handoff.error.message)}` : '';
   return `<span class="chip handoff" data-state="${attr(handoff.state)}">${esc(HANDOFF_LABELS[handoff.state] ?? handoff.state)}</span>${reason ? `<span class="muted small">${reason}</span>` : ''}`;
 }
 

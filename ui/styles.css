@@ -271,6 +271,10 @@ textarea { resize: vertical; }
 .btn kbd { font-size: 11px; border: 1px solid var(--hairline-strong); border-radius: 4px; padding: 0 5px; color: var(--text-muted); }
 .link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-align: left; min-height: 24px; font: inherit; text-underline-offset: 3px; }
 .link:hover { text-decoration: underline; }
+/* Ticket-opening links read as titles; the accent stays for real hyperlinks and toggles. */
+.link[data-open] { color: var(--text); font-weight: 500; }
+.link[data-open]:hover { color: var(--accent); }
+.handoff-form .label { font-size: 12.5px; }
 
 /* Chips: one shape (6px), sentence case, colour carries status but the label always names it */
 .chip { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-sm); height: 22px; padding: 0 8px; font-size: 12px; font-weight: 500; border: 0; background: var(--status-todo-bg); color: var(--status-todo); vertical-align: middle; white-space: nowrap; }
@@ -364,6 +368,8 @@ textarea { resize: vertical; }
 .blocked-list ul { margin: 10px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .blocked-list li { padding: 8px 12px; border-radius: var(--radius-ctl); background: var(--surface); box-shadow: inset 0 0 0 1px var(--hairline); font-size: 13.5px; }
 .blocker-text { color: var(--critical); }
+.blocked-list .blocker-text { display: block; font-size: 13px; margin-top: 2px; }
+.blocked-list .link { display: inline-flex; align-items: baseline; gap: 8px; color: var(--text); font-weight: 500; }
 
 /* Board */
 .view-board[data-layout="columns"] .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, 1fr); gap: 14px; overflow-x: auto; align-items: start; padding-bottom: 8px; }
@@ -387,7 +393,9 @@ textarea { resize: vertical; }
 
 /* Tree */
 .tree, .tree-children { list-style: none; margin: 0; padding: 0; }
-.tree > .tree-node { background: var(--surface); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 10px; box-shadow: inset 0 0 0 1px var(--hairline); max-width: 1000px; }
+.tree { max-width: 1000px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: inset 0 0 0 1px var(--hairline); }
+.tree > .tree-node { padding: 8px 16px; border-top: 1px solid var(--hairline); }
+.tree > .tree-node:first-child { border-top: 0; }
 .tree-children { margin-left: 10px; border-left: 1px solid var(--hairline-strong); padding-left: 16px; margin-top: 4px; }
 .tree-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; }
 .tree-row .tree-open { color: var(--text); font-weight: 600; }
@@ -452,14 +460,14 @@ table.sessions th { font-size: 12px; color: var(--text-faint); font-weight: 500;
 @keyframes dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.985); } to { opacity: 1; transform: none; } }
 .dialog::backdrop { background: rgba(8, 8, 6, 0.55); backdrop-filter: blur(3px); }
 .dialog-inner { padding: 20px 22px; }
-.dialog-form { display: flex; flex-direction: column; gap: 14px; }
-.dialog-form h2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; letter-spacing: -0.02em; }
-.dialog-form fieldset { border: 0; border-radius: var(--radius); padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--hairline); }
-.dialog-form legend { font-size: 12px; font-weight: 500; color: var(--text-faint); padding: 0; float: left; width: 100%; margin-bottom: 2px; }
-.dialog-form label { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
-.dialog-form input[type="checkbox"], .dialog-form input[type="radio"] { accent-color: var(--accent-fill); width: 15px; height: 15px; }
-.dialog-form label.indent { margin-left: 24px; }
-.dialog-form label input[type="text"], .dialog-form label input[type="datetime-local"] { flex: 1; min-width: 160px; }
+.dialog-form, .handoff-form { display: flex; flex-direction: column; gap: 14px; }
+.dialog-form h2, .handoff-form h2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; letter-spacing: -0.02em; }
+.dialog-form fieldset, .handoff-form fieldset { border: 0; border-radius: var(--radius); padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-inset); box-shadow: inset 0 0 0 1px var(--hairline); }
+.dialog-form legend, .handoff-form legend { font-size: 12px; font-weight: 500; color: var(--text-faint); padding: 0 4px; }
+.dialog-form label, .handoff-form label { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+.dialog-form input[type="checkbox"], .handoff-form input[type="checkbox"], .dialog-form input[type="radio"], .handoff-form input[type="radio"] { accent-color: var(--accent-fill); width: 15px; height: 15px; }
+.dialog-form label.indent, .handoff-form label.indent { margin-left: 24px; }
+.dialog-form label input[type="text"], .handoff-form label input[type="text"], .dialog-form label input[type="datetime-local"], .handoff-form label input[type="datetime-local"] { flex: 1; min-width: 160px; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-top: 4px; }
 .obligations { display: flex; flex-direction: column; gap: 8px; }
 .obligation { border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 6px; background: var(--surface); box-shadow: inset 0 0 0 1px var(--hairline); }
@@ -574,3 +582,4 @@ table.sessions th { font-size: 12px; color: var(--text-faint); font-weight: 500;
 .skeleton span { display: block; height: 132px; border-radius: var(--radius); background: linear-gradient(90deg, var(--surface) 0%, var(--surface-raised) 50%, var(--surface) 100%); background-size: 200% 100%; box-shadow: inset 0 0 0 1px var(--hairline); animation: shimmer 1.4s var(--ease) infinite; }
 .skeleton span:first-child { height: 188px; }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.tree + p { margin-top: 12px; color: var(--text-faint); font-size: 12.5px; }

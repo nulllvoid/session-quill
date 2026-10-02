@@ -400,7 +400,7 @@ test('the Agents panel lists the recipes for the ticket repository with permissi
   assert.match(html, /Confirm &lt;prod&gt;/);
   assert.match(html, /data-action="accept-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
   assert.match(html, /data-action="dismiss-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
-  assert.match(html, /production: deployed — tag v1\.2/);
+  assert.match(html, /production: deployed \(tag v1\.2\)/);
   assert.match(html, /data-copy="Deployed to prod"/);
   assert.match(html, /Add alert[\s\S]{0,120}Accepted/);
   assert.doesNotMatch(html, /data-suggestion="s4"/);

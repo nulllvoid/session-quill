@@ -45,10 +45,10 @@ export function renderHealth(snapshot, { now, online }) {
   parts.push(`<span class="health-item" data-freshness="${attr(f)}" title="${attr(meta.last_sync ? `Last sync ${meta.last_sync}` : 'No reconciliation has completed')}"><span class="dot" aria-hidden="true"></span>Sync: ${meta.last_sync ? timeEl(meta.last_sync, now, tz) : 'never'} <strong>(${esc(FRESH_LABELS[f])})</strong></span>`);
   if (meta.next_sync_due && !meta.exported_at) parts.push(`<span class="health-item">Next ${esc(relativeTime(meta.next_sync_due, now))}</span>`);
   if (!meta.exported_at) {
-    parts.push(`<span class="health-item" data-connection="${online ? 'online' : 'offline'}"><span class="dot" aria-hidden="true"></span>Worker: ${online ? 'connected' : '<strong>Offline</strong> — last generation shown, submissions disabled'}</span>`);
+    parts.push(`<span class="health-item" data-connection="${online ? 'online' : 'offline'}"><span class="dot" aria-hidden="true"></span>Worker: ${online ? 'connected' : '<strong>Offline</strong>. Last generation shown, submissions disabled'}</span>`);
   }
   const ch = meta.capture_health ?? { status: 'ok' };
-  parts.push(`<span class="health-item" data-health="${attr(ch.status)}"><span class="dot" aria-hidden="true"></span>Capture: ${esc(ch.status)}${ch.reason ? ` — ${esc(ch.reason)}` : ''}${meta.oldest_pending_event_at ? ` · backlog since ${timeEl(meta.oldest_pending_event_at, now, tz)}` : ''}</span>`);
+  parts.push(`<span class="health-item" data-health="${attr(ch.status)}"><span class="dot" aria-hidden="true"></span>Capture: ${esc(ch.status)}${ch.reason ? ` (${esc(ch.reason)})` : ''}${meta.oldest_pending_event_at ? ` · backlog since ${timeEl(meta.oldest_pending_event_at, now, tz)}` : ''}</span>`);
   for (const p of meta.provider_health ?? []) {
     if (p.error) parts.push(`<span class="health-item" data-health="error"><span class="dot" aria-hidden="true"></span>${esc(p.provider)}: ${esc(p.error)}${p.last_success_at ? ` (last ok ${timeEl(p.last_success_at, now, tz)})` : ''}</span>`);
     else parts.push(`<span class="health-item" data-health="ok"><span class="dot" aria-hidden="true"></span>${esc(p.provider)}: ok</span>`);

@@ -31,8 +31,8 @@ export function renderSessions(rawSnapshot, filters, { now, page = 0, selected =
   <td>${esc(s.machine_name)}</td>
   <td>${timeEl(s.started_at, now, tz)}</td>
   <td>${esc(s.successful_write_count)} <span class="small muted">/ ${esc(s.change_coverage)}</span></td>
-  <td class="preview">${s.last_checkpoint_preview ? `<span title="${attr(s.last_checkpoint_preview.slice(0, 300))}">${esc(s.last_checkpoint_preview.slice(0, 80))}${s.last_checkpoint_preview.length > 80 ? '…' : ''}</span>` : '<span class="muted">—</span>'}</td>
-  <td>${flags.join(' ') || '<span class="muted">—</span>'}</td>
+  <td class="preview">${s.last_checkpoint_preview ? `<span title="${attr(s.last_checkpoint_preview.slice(0, 300))}">${esc(s.last_checkpoint_preview.slice(0, 80))}${s.last_checkpoint_preview.length > 80 ? '…' : ''}</span>` : '<span class="muted" aria-label="none">-</span>'}</td>
+  <td>${flags.join(' ') || '<span class="muted" aria-label="none">-</span>'}</td>
 </tr>`;
   }).join('');
   const machines = [...new Set(snapshot.sessions.map((s) => s.machine_name))];

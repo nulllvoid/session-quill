@@ -44,7 +44,7 @@ export function renderPickNext(rawSnapshot, filters, { now, pending = [] }) {
 <div class="picknext-grid">${entries.map(({ entry, ticket }) => ticketCard(ticket, snapshot, { variant: 'picknext', now, showHandoff: true, entry })).join('')}</div>`;
   }
   const blockedHtml = blocked.length
-    ? `<section class="blocked-list" aria-labelledby="blocked-heading"><h2 id="blocked-heading">${icon('alert')}Blocked <span class="count" aria-label="${esc(blocked.length)} blocked">${esc(blocked.length)}</span></h2><ul>${blocked.map(({ b, ticket }) => `<li><button type="button" class="link" data-open="${esc(ticket.id)}">${keyEl(ticket.key)} ${esc(ticket.title)}</button> — <span class="blocker-text">${esc(b.blocker)}</span></li>`).join('')}</ul></section>`
+    ? `<section class="blocked-list" aria-labelledby="blocked-heading"><h2 id="blocked-heading">${icon('alert')}Blocked <span class="count" aria-label="${esc(blocked.length)} blocked">${esc(blocked.length)}</span></h2><ul>${blocked.map(({ b, ticket }) => `<li><button type="button" class="link" data-open="${esc(ticket.id)}">${keyEl(ticket.key)} ${esc(ticket.title)}</button><span class="blocker-text">${esc(b.blocker)}</span></li>`).join('')}</ul></section>`
     : '';
   return `<section class="view view-picknext" aria-labelledby="tab-picknext"><h2 class="sr-only">Pick next</h2>${renderInbox(snapshot, { now, pending })}${main}${blockedHtml}</section>`;
 }

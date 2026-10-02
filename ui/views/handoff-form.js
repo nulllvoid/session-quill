@@ -13,9 +13,9 @@ export function renderHandoffForm(rawTicket, rawSnapshot, { retryOf = null, prer
 <p class="muted small">${esc(ticket.title)}. Permissions are explicit per request; approval text never grants them.</p>
 ${issues.length ? `<ul class="issues">${issues.map((i) => `<li>${icon('alert')}${esc(i)}</li>`).join('')}</ul>` : ''}
 <fieldset><legend>Mode</legend>
-  <label><input type="radio" name="mode" value="analyse"> Analyse — summarize and recommend; no children</label>
-  <label><input type="radio" name="mode" value="analyse-followups" checked> Analyse with follow-ups — may create child tickets and suggest a next action</label>
-  <label><input type="radio" name="mode" value="attempt-fix" ${repo ? '' : 'disabled'}> Attempt fix — isolated worktree; requires source read and edit</label>
+  <label><input type="radio" name="mode" value="analyse"> Analyse: summarize and recommend; no children</label>
+  <label><input type="radio" name="mode" value="analyse-followups" checked> Analyse with follow-ups: may create child tickets and suggest a next action</label>
+  <label><input type="radio" name="mode" value="attempt-fix" ${repo ? '' : 'disabled'}> Attempt fix: isolated worktree; requires source read and edit</label>
 </fieldset>
 <label class="label" for="handoff-note">Note <span class="muted">(max 280)</span></label>
 <textarea id="handoff-note" name="note" maxlength="280" rows="2" placeholder="What should the agent focus on?"></textarea>
