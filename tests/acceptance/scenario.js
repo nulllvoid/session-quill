@@ -21,7 +21,8 @@ export const T2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 export const FAKE_CLAUDE = path.resolve('tests/fixtures/fake-claude.js');
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos = {}, providers = null, withServer = false, withHandoff = false, handoffOpts = {} } = {}) {
+// Scenarios A01–A41 describe the strict gate; phase 6 passes gateMode explicitly (ADR 0005).
+export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos = {}, providers = null, withServer = false, withHandoff = false, handoffOpts = {}, gateMode = 'strict' } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-acc-'));
   const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
@@ -29,6 +30,7 @@ export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos =
   writeStoreMeta(storePath, meta);
   fs.writeFileSync(path.join(home, 'machine.json'), JSON.stringify({ machine_id: MACHINE, machine_name: 'acc' }));
   const config = { ...defaultUserConfig(), store_path: storePath, default_project: 'demo', projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: ['production'], provider: 'github' }, ...repos } };
+  config.gate = { ...config.gate, mode: gateMode };
   const env = { QUILL_HOME: home };
   saveUserConfig(config, env);
   let nowMs = startMs;

@@ -8,23 +8,31 @@ import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.j
 import { createState, sessionKey } from '../core/state.js';
 import { applyEvent } from '../core/reducer.js';
 import { safeKeyFileName } from '../core/keys.js';
-import { journalPath, stateDir, requestsDir } from '../lib/paths.js';
+import { journalPath, stateDir, requestsDir, configPath } from '../lib/paths.js';
 import { ensureDir, writeJsonAtomic, readJsonIfExists, listFiles, removeIfExists } from '../lib/atomic-fs.js';
 import { toIso, SECOND } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
 import { storeLayout } from '../config/store.js';
+import { loadUserConfig } from '../config/config.js';
+import { buildRuntimeIdentity, identityStamp } from '../config/runtime.js';
 import { acquireLock } from './lock.js';
-import { writeBindingSnapshot, writeHeartbeat, writeRuntimeIdentity, snapshotFileName } from '../hooks/binding-snapshot.js';
+import { writeBindingSnapshot, readBindingSnapshot, writeHeartbeat, writeRuntimeIdentity, snapshotFileName } from '../hooks/binding-snapshot.js';
 import { renderSessionNote, renderHandoffNote, writeNote, writeGeneratedNote } from './notes.js';
 import { publishGeneration, buildSnapshot } from './projections.js';
 import { captureHealth } from './health.js';
 
 export const NOTE_FLUSH_MS = 30 * SECOND;
 export const HEARTBEAT_MS = 5 * SECOND;
+export const IDENTITY_CHECK_MS = 10 * SECOND;
+export const PROVISIONAL_MAX_MS = 30 * SECOND;
 
 export class Worker {
-  constructor({ config, storeMeta, env = process.env, clock = Date.now, derive = null, log = () => {} }) {
+  constructor({ config, storeMeta, env = process.env, clock = Date.now, derive = null, log = () => {}, identityCheckMs = IDENTITY_CHECK_MS }) {
     this.config = config;
+    this.identityCheckMs = identityCheckMs;
+    this.identityStampValue = null;
+    this.lastIdentityCheckMs = 0;
+    this.identityWarnings = new Set();
     this.storeMeta = storeMeta;
     this.env = env;
     this.clock = clock;
@@ -84,11 +92,7 @@ export class Worker {
     ensureDir(this.layout.sessions);
     ensureDir(this.layout.handoffs);
     ensureDir(requestsDir(this.env));
-    writeRuntimeIdentity({
-      store_id: this.storeMeta.store_id, machine_id: this.storeMeta.owner_machine_id, store_path: this.config.store_path,
-      gate_enabled: this.config.gate_enabled !== false, approval_phrases_enabled: this.config.approval_phrases_enabled === true,
-      allow_tools: (this.config.gate && this.config.gate.allow_tools) || [],
-    }, this.env);
+    this.publishIdentity();
     for (const e of this.replayErrors ?? []) this.recordHealthError({ kind: 'apply-error', phase: 'replay', ...e });
     this.replayErrors = [];
     this.publishAllBindings();
@@ -125,6 +129,35 @@ export class Worker {
     writeHeartbeat({ at: toIso(ms), pid: process.pid, store_id: this.storeMeta.store_id, generation: this.generationNumber }, this.env);
   }
 
+  publishIdentity() {
+    const { identity, warnings } = buildRuntimeIdentity({ storeMeta: this.storeMeta, config: this.config });
+    writeRuntimeIdentity(identity, this.env);
+    for (const w of warnings) {
+      if (this.identityWarnings.has(w)) continue;
+      this.identityWarnings.add(w);
+      this.log(`config: ${w}`);
+      this.recordHealthError({ kind: 'config-invalid', error: w });
+    }
+    this.identityStampValue = identityStamp(this.config, this.env);
+  }
+
+  // Gate mode and tracker edits in config.toml or a registered .quill.toml apply without a restart.
+  refreshIdentity() {
+    const ms = this.clock();
+    if (ms - this.lastIdentityCheckMs < this.identityCheckMs) return;
+    this.lastIdentityCheckMs = ms;
+    if (identityStamp(this.config, this.env) === this.identityStampValue) return;
+    try {
+      if (fs.existsSync(configPath(this.env))) {
+        const fresh = loadUserConfig(this.env);
+        this.config = { ...this.config, gate_enabled: fresh.gate_enabled, gate: fresh.gate, tracker: fresh.tracker };
+      }
+    } catch (err) {
+      this.recordHealthError({ kind: 'config-invalid', error: `config.toml: ${err.message}` });
+    }
+    this.publishIdentity();
+  }
+
   // Small control markers written by the CLI: flush now, restore a conflicted note, stop.
   processControl() {
     const dir = path.join(stateDir(this.env), 'control');
@@ -146,6 +179,7 @@ export class Worker {
 
   tick() {
     this.heartbeat();
+    this.refreshIdentity();
     this.processControl();
     this.ingestOnce();
     const nowMs = this.clock();
@@ -258,12 +292,20 @@ export class Worker {
   publishBinding(key) {
     const session = this.state.sessions.get(key);
     if (!session) return;
+    // A hook's provisional binding (ADR 0005) stands until its bind event is applied, so an
+    // unrelated republish cannot undo a binding the user just made; stale ones are replaced.
+    const existing = readBindingSnapshot(key, this.env);
+    if (existing && existing.provisional === true && existing.provisional_event_id && !this.state.appliedEvents.has(existing.provisional_event_id)) {
+      const age = Math.abs(this.clock() - Date.parse(existing.provisional_at ?? ''));
+      if (age < PROVISIONAL_MAX_MS) return;
+    }
     const ticket = session.current_ticket_id ? this.state.tickets.get(session.current_ticket_id) : null;
     writeBindingSnapshot(key, {
       session_id: session.id,
       ticket_id: ticket ? ticket.id : null,
       ticket_key: ticket ? ticket.key : null,
       ticket_title: ticket ? ticket.title : null,
+      ticket_aliases: ticket ? [...ticket.aliases] : [],
       project_id: session.project_ids[session.project_ids.length - 1] ?? null,
       binding_revision: session.current_binding_revision,
       gate_enabled: session.gate_enabled,
