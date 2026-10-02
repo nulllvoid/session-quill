@@ -9,6 +9,7 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 ![Pick next view of the Session Quill dashboard](docs/images/dashboard-pick-next.jpg)
 
 - **Zero-command tracking.** Mention a ticket key such as `PROJ-123` in a prompt, or start on a branch like `feat/PROJ-123-...`, and the session is linked to that ticket. Any tracker works through a URL template; no tracker host is built in.
+- **Unlinked work inbox.** Files and commits from a session with no ticket wait on Pick next. Attach them to a ticket, create the ticket from its key, or dismiss them; each action has a 10-second undo. Tracker keys open their ticket in a new tab and copy with one click.
 - **Ticket gate modes.** `nudge` (default) never blocks and asks once at the end of a turn about unlinked work. `strict` denies supported write tools, unknown shell commands and unregistered tools until the session is bound, while dedicated reads and a tested read-only shell subset pass through. `off` only captures. The gate is a workflow aid, not a sandbox: `/session-quill:ticket off` disables it per session, audibly.
 - **Durable capture.** Hooks persist events to local ingress before acknowledging; one worker per store journals them, rebuilds generated state, and writes markdown notes (plain folder or Obsidian vault) within 30 seconds. Your own Summary and Notes sections are preserved byte-for-byte.
 - **Dashboard.** Pick next, Board, Tree, Sessions and Deployments views with revision-checked edits, a 10-second undo window, explicit conflicts, deterministic reconciliation every two hours and a Refresh that runs immediately.
@@ -85,7 +86,7 @@ A repository can make the gate stricter than your own setting but never looser, 
 
 1. Start Claude Code in the repository with the plugin loaded. The SessionStart hook injects `Session Quill session: <id>` and whether the session is bound. On a branch such as `feat/PROJ-123-retry-flake`, the session is already linked to `PROJ-123`.
 2. Mention the ticket in your prompt, for example "PROJ-123: make the retry test deterministic". The session is linked before Claude's first tool call, and the ticket is created under that key if the store has none. Without a `[tracker]` table, run `/session-quill:ticket create "Preserve session checkpoints" --bind` instead.
-3. Work. Successful writes, commits, PR creation, approved plans (`ExitPlanMode`) and end-of-turn checkpoints are captured and attributed to the ticket.
+3. Work. Successful writes, commits, PR creation, approved plans (`ExitPlanMode`) and end-of-turn checkpoints are captured and attributed to the ticket. Anything changed before the session was linked appears under "Unlinked work" on the dashboard's Pick next view, where you attach it to a ticket or dismiss it.
 4. Promote the latest checkpoint as an approved plan with `/session-quill:approve`. Approval is recorded provenance, never permission to commit, push or deploy.
 5. Open the dashboard: `quill ui`. The command prints a one-use owner link (loopback only, 10-minute validity) and opens your browser.
 

@@ -54,7 +54,7 @@ Use [DATA-CONTRACT](DATA-CONTRACT.md) directly; do not create a second list of i
 | Screen | Content | Required states |
 | --- | --- | --- |
 | Header | Name, global project filter, last sync/next scheduled run, connection and capture health, Refresh, theme toggle | Never synced; fresh; ageing; stale; capture gap; provider error; offline; refresh queued/running/failed |
-| Pick next | Up to five ranked cards with reason, raw-score explanation, displayed score, next action and age; separate blocked list with blocker text | Fewer than five; no eligible work; everything blocked; unknown provider evidence |
+| Pick next | Owner-only "Unlinked work" inbox first (sessions with files or commits but no ticket: files, commits, last checkpoint; Attach to…, Create from key, Dismiss as no-ticket, each with the undo window); then up to five ranked cards with reason, raw-score explanation, displayed score, next action and age; separate blocked list with blocker text | No unlinked work (inbox hidden); fewer than five; no eligible work; everything blocked; unknown provider evidence; attach conflict after new work |
 | Board | Six columns: todo, active, review, deploy-pending, blocked, done; stale badge/filter overlays active cards; done collapsed by default | Empty columns; 40+ cards paged; zero filter results; loading/error |
 | Tree | Parents, direct-child completion counts, nested children, unresolved imported links | Empty; orphan; cycles rejected with issue; depth > 3 navigable through detail |
 | Sessions | Ticket history/current binding, machine, state, started, successful writes, coverage, checkpoint preview, unpromoted indicator, gate-off indicator | Live/idle/ended/extinct; unbound; rebind; unresolved attribution; capture gap |
@@ -70,6 +70,7 @@ Full checkpoint content is available from a preview; truncation never implies th
 | Component | Variants and behavior |
 | --- | --- |
 | Ticket card | Board, Pick next, compact; key/category, title, status/stale badge, metadata; Handoff only on Pick next and detail |
+| Key chip | A key that names an external ticket links to its https tracker URL in a new tab, with a copy button; other keys are copyable labels. Detail offers "Link to external…" to the owner for keys without a link (ADR 0006) |
 | Status chip | Six labelled statuses; independent stale badge with age |
 | Category chip | Six outlined neutral labels with a consistent line icon |
 | Priority mark | P0–P3; P0/P1 bold; no color dependency |

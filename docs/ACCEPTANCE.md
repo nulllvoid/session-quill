@@ -81,6 +81,9 @@ All Must scenarios must pass, with exceptions explicitly removed from the advert
 | A43 | FR-3 | A session started on a branch containing a key is linked at SessionStart; a later prompt with another key switches it forward only, leaving earlier writes on the first ticket |
 | A44 | FR-1, FR-5 | Nudge mode never blocks unlinked writes, asks once at Stop (never while the stop hook is already active), and the user's reply with a key links the session for later work without reassigning earlier work |
 | A45 | FR-1 | Strict mode keeps the original deny matrix, its denial explains that mentioning a key links the session, and mentioning one lets the very next call through |
+| A46 | FR-3, FR-9 | Work captured without a ticket appears in the owner's inbox; "create from key" attaches it to a new ticket with the rendered tracker link after the undo window and links the session (ADR 0006) |
+| A47 | FR-9 | An attach queued before more work arrived becomes a conflict and attaches nothing; dismiss removes the item; unauthenticated callers can do neither |
+| A48 | FR-8, FR-9 | "Link to external" turns a local key into a tracker key with a working https link and keeps the old key as an alias |
 
 ## Review resolution traceability
 

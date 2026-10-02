@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 351 tests, 350 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, ADR 0005) |
+| Test command | `npm test` → 372 tests, 371 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking and the unlinked work inbox, ADRs 0005–0006) |
 
 ### Platform matrix (GitHub Actions, commit `bcd989e`)
 
@@ -109,6 +109,11 @@ Hook timings are in-process (`runHook`) and exclude Node process start-up (~40�
 | A43 | Automated | branch key linked at SessionStart; a later prompt key switches forward only |
 | A44 | Automated | nudge never blocks; asks once at Stop and never while the stop hook is active; the reply links later work only |
 | A45 | Automated | strict deny matrix kept with a key hint; mentioning a key lets the next call through |
+| A46 | Automated | over the authenticated HTTP API: unlinked work in the snapshot; create-from-key applies after 10 s; ticket has the files and link; session linked |
+| A47 | Automated | attach conflicts after new work; dismiss applies; a POST without the owner cookie is refused |
+| A48 | Automated | link-external relinks with a rendered https link; old key kept as alias |
+
+Inbox and key chips were also checked in the built-in browser against the dev seed (`node scripts/dev-seed.mjs`): create-from-key queued with an undo countdown, applied after the window and emptied the inbox; tracker keys render as new-tab links with copy buttons; local keys offer "Link to external…". At 375 px the page is wider than the screen because of the header and sidebar, which predates this step.
 
 Unit coverage: `tests/core/external-keys.test.js` (validation, bounded scans, non-ticket tokens, URL templates), `tests/hooks/autobind.test.js`, `tests/hooks/nudge.test.js`, `tests/hooks/gate-modes.test.js`, `tests/worker/identity.test.js`, `tests/core/external-bind.test.js`. **Pending manual:** the Stop `decision: "block"` nudge and `UserPromptSubmit` context against a live Claude Code host (the same host gap as A04/A06).
 

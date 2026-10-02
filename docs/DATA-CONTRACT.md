@@ -117,7 +117,9 @@ Every manual status decision records the current evidence sequence as manual_sta
 
 ## Session and checkpoints
 
-Session fields: machine_id, machine_name, host_session_id, agent_id (nullable), parent_session_id (nullable), project_ids[], ticket_ids[], current_ticket_id (nullable), current_binding_revision, bindings[], cwd (local-only), started_at, ended_at (nullable), last_event_at, state, successful_write_count, change_coverage, last_checkpoint_id (nullable), last_checkpoint_preview, unpromoted, gate_enabled, capture_health.
+Session fields: machine_id, machine_name, host_session_id, agent_id (nullable), parent_session_id (nullable), project_ids[], ticket_ids[], current_ticket_id (nullable), current_binding_revision, bindings[], cwd (local-only), started_at, ended_at (nullable), last_event_at, state, successful_write_count, change_coverage, last_checkpoint_id (nullable), last_checkpoint_preview, unpromoted, gate_enabled, capture_health, unbound_work (nullable).
+
+unbound_work (ADR 0006): revision, files[] (repo_id, relative_path, first_seen, last_seen; at most 500), commits[] (sha, message, at; at most 200), first_at, last_at, dismissed_at (nullable). Work a session captured while it had no ticket. The revision changes only when this work changes. Local-only: exports never include it.
 
 bindings entries: revision, ticket_id (nullable), project_id, bound_at, unbound_at (nullable), source_event_id.
 checkpoint entries live in a separate local collection: id, session_id, ticket_id (nullable), binding_revision, recorded_at, content_ref, preview, complete, approved_at (nullable), approval_provenance (nullable).
@@ -139,7 +141,9 @@ PreToolUse stores attribution before execution. A PostToolUse result refers to t
 ## Mutation request
 
 Fields: id, store_id, actor_id, kind, target_id (nullable), expected_revision (nullable), payload, created_at, not_before, state, applied_revision (nullable), error (nullable), result (nullable), retry_of (nullable).
-kind: set-next-action, set-status, record-deployment, handoff, refresh.
+kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external.
+
+- attach-unbound and dismiss-unbound target a session id; expected_revision is the session's unbound_work.revision. attach-unbound takes exactly one of ticket_id or key (a tracker key like PROJ-123, with optional title) plus bind (default true: link the session from then on if it is still unlinked). link-external targets a ticket with its revision and takes key plus optional system and https url; a key owned by another ticket is refused. All three have the 10 s undo window (ADR 0006).
 error: code, message, retryable, current_revision (nullable).
 
 - Ticket edits require expected_revision. A mismatch becomes conflict and returns the current value/revision; never last-write-wins.
