@@ -75,6 +75,25 @@ test('editing a registered .quill.toml republishes the identity without a restar
   } finally { await w.stop(); }
 });
 
+test('review: a repository registered while the worker runs reaches the identity without a restart', async () => {
+  const f = fixture();
+  const w = new Worker({ config: f.config, storeMeta: f.meta, env: f.env, clock: f.clock, identityCheckMs: 0 });
+  await w.start();
+  try {
+    const second = fs.mkdtempSync(path.join(os.tmpdir(), 'st-identrepo2-'));
+    fs.writeFileSync(path.join(second, '.quill.toml'), 'project_id = "web"\n[gate]\nmode = "strict"\n');
+    const updated = { ...f.config, projects: { ...f.config.projects, web: { name: 'Web', repo_id: 'web' } }, repos: { ...f.config.repos, web: { project_id: 'web', display_name: 'web', canonical_path: second, default_branch: 'main', deployment_environments: ['production'] } } };
+    saveUserConfig(updated, f.env);
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(path.join(f.home, 'config.toml'), later, later);
+    w.tick();
+    const web = readRuntimeIdentity(f.env).repos.find((r) => r.repo_id === 'web');
+    assert.ok(web, 'the new repository is published');
+    assert.equal(web.gate_mode, 'strict');
+    assert.equal(w.state.meta.projects.web.name, 'Web');
+  } finally { await w.stop(); }
+});
+
 test('a fresh provisional snapshot survives an unrelated publish until its bind event is applied', async () => {
   const f = fixture();
   const w = new Worker({ config: f.config, storeMeta: f.meta, env: f.env, clock: f.clock });

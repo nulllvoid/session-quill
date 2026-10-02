@@ -99,6 +99,35 @@ test('a .quill.toml [tracker] table with a literal-string pattern loads end to e
   assert.equal(resolveGateMode({}, cfg).mode, 'strict');
 });
 
+test('review: a repository can only narrow the user prefix allowlist, never widen or replace it', () => {
+  const user = { tracker: { system: 'jira', prefixes: ['PROJ', 'OPS'] } };
+  assert.deepEqual(resolveTracker(user, { tracker: { prefixes: [] } }).prefixes, ['PROJ', 'OPS'], 'an empty repo list does not mean "any key"');
+  assert.deepEqual(resolveTracker(user, { tracker: { prefixes: ['PROJ', 'EVIL'] } }).prefixes, ['PROJ']);
+  const disjoint = [];
+  const t = resolveTracker(user, { tracker: { prefixes: ['EVIL'] } }, { warnings: disjoint });
+  assert.deepEqual(t.sources, [], 'no shared prefix disables auto-binding');
+  assert.match(disjoint[0], /prefixes/);
+  const loose = resolveTracker(user, { tracker: { key_pattern: '\\b([a-z]+)\\b' } });
+  assert.deepEqual(loose.prefixes, ['PROJ', 'OPS']);
+  assert.deepEqual(resolveTracker({}, { tracker: { prefixes: ['WEB'] } }).prefixes, ['WEB'], 'without a user allowlist the team config applies');
+});
+
+test('review: strict scopes auto-bind only with a prefix allowlist; an unparsable .quill.toml makes its repository strict', () => {
+  const open = fs.mkdtempSync(path.join(os.tmpdir(), 'st-repo-'));
+  const broken = fs.mkdtempSync(path.join(os.tmpdir(), 'st-repo-'));
+  fs.writeFileSync(path.join(open, '.quill.toml'), '[gate]\nmode = "strict"\n[tracker]\nsystem = "jira"\n');
+  fs.writeFileSync(path.join(broken, '.quill.toml'), '[gate\nmode = "strict"\n');
+  const config = { ...defaultUserConfig(), store_path: '/q', projects: { demo: {} }, repos: { open: { project_id: 'demo', canonical_path: open }, broken: { project_id: 'demo', canonical_path: broken } } };
+  const { identity, warnings } = buildRuntimeIdentity({ storeMeta: { store_id: 'S', owner_machine_id: 'M' }, config });
+  const o = identity.repos.find((r) => r.repo_id === 'open');
+  assert.equal(o.gate_mode, 'strict');
+  assert.deepEqual(o.tracker.sources, [], 'links still render, but nothing auto-binds');
+  const b = identity.repos.find((r) => r.repo_id === 'broken');
+  assert.deepEqual([b.gate_mode, b.tracker], ['strict', null]);
+  assert.match(warnings.join('\n'), /open: .*strict.*prefixes/);
+  assert.match(warnings.join('\n'), /broken .quill.toml/);
+});
+
 test('buildRuntimeIdentity resolves per-repository scopes and reports invalid config without failing', () => {
   const good = fs.mkdtempSync(path.join(os.tmpdir(), 'st-repo-'));
   const bad = fs.mkdtempSync(path.join(os.tmpdir(), 'st-repo-'));

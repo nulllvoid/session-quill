@@ -79,7 +79,7 @@ on_new_key   = "switch"                        # switch | add | ignore
 mode = "nudge"                                 # off | nudge | strict
 ```
 
-A repository can make the gate stricter than your own setting but never looser. The worker picks up edits to either file within about 10 seconds. `gate_enabled = false` still works and means `mode = "off"`.
+A repository can make the gate stricter than your own setting but never looser, and it can narrow your `prefixes` list but never widen it. In `strict` mode a mention only links the session when `prefixes` is set. A `.quill.toml` that cannot be parsed makes its repository strict until it is fixed. Patterns match within whitespace-free words of up to 100 characters. The worker picks up edits to either file within about 10 seconds. `gate_enabled = false` still works and means `mode = "off"`.
 
 ## First tracked session
 

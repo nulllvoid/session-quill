@@ -12,7 +12,7 @@ Scenarios are defined in [ACCEPTANCE.md](ACCEPTANCE.md). "Automated" means a sce
 | Git | 2.55.0.windows.3 |
 | Claude Code | 2.1.284 (`claude plugin validate .` → Validation passed) |
 | Hook contract | Verified against code.claude.com/docs/en/hooks on 2026-10-02 (field names, PreToolUse decision JSON, exit codes) |
-| Test command | `npm test` → 345 tests, 344 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, ADR 0005) |
+| Test command | `npm test` → 351 tests, 350 passed, 1 skipped (symlink creation not permitted on this account), 0 failed (after zero-command tracking, ADR 0005) |
 
 ### Platform matrix (GitHub Actions, commit `bcd989e`)
 

@@ -11,14 +11,64 @@ export const ON_NEW_KEY = ['switch', 'add', 'ignore'];
 export const DEFAULT_KEY_PATTERN = '\\b([A-Z][A-Z0-9]+-\\d+)\\b';
 export const MAX_SCAN_CHARS = 4000;
 export const MAX_KEYS = 10;
+// Keys never contain whitespace, so patterns run per whitespace-separated token; tokens longer
+// than this are skipped, which bounds even polynomial backtracking on long uppercase runs.
+export const MAX_TOKEN_CHARS = 100;
 // Without a prefix allowlist these uppercase-dash-number tokens are never treated as ticket keys.
-export const NON_TICKET_PREFIXES = new Set(['UTF', 'SHA', 'ISO', 'RFC', 'GPT', 'HTTP', 'TLS', 'SSL', 'AES', 'RSA', 'MD', 'PEP', 'ES', 'ECMA', 'IPV', 'WIN', 'COVID', 'CVE', 'CWE', 'ARM', 'UTC', 'GMT', 'CP', 'AV', 'PR', 'TS', 'IE']);
+export const NON_TICKET_PREFIXES = new Set([
+  'UTF', 'SHA', 'ISO', 'RFC', 'GPT', 'HTTP', 'TLS', 'SSL', 'AES', 'RSA', 'MD', 'PEP', 'ES', 'ECMA', 'IPV', 'WIN', 'COVID', 'CVE', 'CWE', 'ARM', 'UTC', 'GMT', 'CP', 'AV', 'PR', 'TS', 'IE',
+  'X86', 'BASE', 'LATIN', 'LLAMA', 'IEEE', 'MPEG', 'ERC', 'BIP', 'EIP', 'USB', 'DDR', 'WPA', 'PCIE', 'LTE', 'GPL', 'LGPL', 'AGPL', 'CC', 'OAUTH', 'TCP', 'UDP', 'SMB', 'HDMI', 'BT',
+]);
 const DEFAULT_TEMPLATES = { jira: '{domain}/browse/{key}', linear: '{domain}/issue/{key}', github: '{domain}/{repo}/issues/{number}', custom: '' };
 const KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const PREFIX_RE = /^[A-Z][A-Z0-9_]*$/;
 const DOMAIN_RE = /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?(?:\/[A-Za-z0-9._~/-]*)?$/;
-// A group containing a quantifier that is itself quantified, e.g. (a+)+: catastrophic backtracking.
-const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]/;
+const REPEAT_RE = /^(?:[+*]|\{\d*,?\d*\})/;
+
+// Catastrophic backtracking needs a repeated group whose body can match in more than one way. This
+// rejects every repeated group that contains a quantifier, an alternation or another group, at any
+// nesting depth: (a+)+, ((a+))+, (a|aa)+, (?:x*){2,}. Character classes and escapes are skipped.
+export function repeatsComplexGroup(pattern) {
+  const stack = [];
+  const top = () => stack[stack.length - 1];
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === '\\') { i += 2; continue; }
+    if (ch === '[') {
+      i += 1;
+      if (pattern[i] === '^') i += 1;
+      if (pattern[i] === ']') i += 1;
+      while (i < pattern.length && pattern[i] !== ']') i += pattern[i] === '\\' ? 2 : 1;
+      i += 1;
+      continue;
+    }
+    if (ch === '(') {
+      if (top()) top().complex = true;
+      stack.push({ complex: false });
+      i += 1;
+      if (pattern[i] === '?') {
+        const next = pattern[i + 1];
+        if (next === '<' && pattern[i + 2] !== '=' && pattern[i + 2] !== '!') {
+          while (i < pattern.length && pattern[i] !== '>') i += 1;
+          i += 1;
+        } else {
+          i += next === '<' ? 3 : 2;
+        }
+      }
+      continue;
+    }
+    if (ch === ')') {
+      const group = stack.pop();
+      i += 1;
+      if (group && group.complex && REPEAT_RE.test(pattern.slice(i))) return true;
+      continue;
+    }
+    if ((ch === '|' || ch === '+' || ch === '*' || (ch === '{' && REPEAT_RE.test(pattern.slice(i)))) && top()) top().complex = true;
+    i += 1;
+  }
+  return false;
+}
 
 function invalid(message) {
   return new TrackerError('config-invalid', message);
@@ -37,7 +87,7 @@ export function normalizeTracker(raw) {
   if (!TRACKER_SYSTEMS.includes(system)) throw invalid(`tracker.system must be one of ${TRACKER_SYSTEMS.join(', ')}`);
   const key_pattern = raw.key_pattern ?? DEFAULT_KEY_PATTERN;
   if (typeof key_pattern !== 'string' || !key_pattern || key_pattern.length > 200) throw invalid('tracker.key_pattern must be a non-empty regular expression of at most 200 characters');
-  if (NESTED_QUANTIFIER.test(key_pattern)) throw invalid('tracker.key_pattern must not repeat a group that itself repeats (catastrophic backtracking risk)');
+  if (repeatsComplexGroup(key_pattern)) throw invalid('tracker.key_pattern must not repeat a group that contains a quantifier, alternation or another group (catastrophic backtracking risk)');
   try {
     new RegExp(key_pattern, 'g');
   } catch (err) {
@@ -76,12 +126,16 @@ export function findKeys(text, tracker, { uppercase = false } = {}) {
   const scan = uppercase ? head.toUpperCase() : head;
   const re = new RegExp(tracker.key_pattern, 'g');
   const keys = [];
-  for (let m = re.exec(scan); m !== null; m = re.exec(scan)) {
-    if (m[0] === '') { re.lastIndex += 1; continue; }
-    let key = String(m[1] ?? m[0]).trim();
-    if (tracker.prefixes.length) key = key.toUpperCase();
-    if (acceptKey(key, tracker) && !keys.includes(key)) keys.push(key);
-    if (keys.length >= MAX_KEYS) break;
+  for (const token of scan.split(/\s+/)) {
+    if (!token || token.length > MAX_TOKEN_CHARS) continue;
+    re.lastIndex = 0;
+    for (let m = re.exec(token); m !== null; m = re.exec(token)) {
+      if (m[0] === '') { re.lastIndex += 1; continue; }
+      let key = String(m[1] ?? m[0]).trim();
+      if (tracker.prefixes.length) key = key.toUpperCase();
+      if (acceptKey(key, tracker) && !keys.includes(key)) keys.push(key);
+      if (keys.length >= MAX_KEYS) return keys;
+    }
   }
   return keys;
 }

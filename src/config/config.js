@@ -122,12 +122,29 @@ export function resolveGateMode(user = {}, repo = null) {
   return { mode, warnings };
 }
 
-// Repository [tracker] values override user values field by field; the result is validated.
-export function resolveTracker(user = {}, repo = null) {
+// Repository [tracker] values override user values field by field; the result is validated. When
+// the user has a prefix allowlist, a repository may only narrow it: an empty or missing repo list
+// keeps the user's, and a list with no shared prefix disables auto-binding instead of widening it.
+export function resolveTracker(user = {}, repo = null, { warnings = [] } = {}) {
   const u = user && user.tracker;
   const r = repo && repo.tracker;
   if (!u && !r) return null;
-  return normalizeTracker({ ...(u ?? {}), ...(r ?? {}) });
+  const merged = normalizeTracker({ ...(u ?? {}), ...(r ?? {}) });
+  const userPrefixes = u ? normalizeTracker(u).prefixes : [];
+  if (userPrefixes.length) {
+    const repoPrefixes = r && Array.isArray(r.prefixes) ? merged.prefixes : [];
+    if (!repoPrefixes.length) {
+      merged.prefixes = userPrefixes;
+    } else {
+      merged.prefixes = repoPrefixes.filter((p) => userPrefixes.includes(p));
+      if (!merged.prefixes.length) {
+        merged.prefixes = userPrefixes;
+        merged.sources = [];
+        warnings.push('.quill.toml tracker.prefixes share no prefix with the user allowlist; auto-binding disabled');
+      }
+    }
+  }
+  return merged;
 }
 
 export function findRepoByPath(cfg, cwd) {

@@ -6,13 +6,21 @@ import path from 'node:path';
 import { loadRepoConfig, resolveGateMode, resolveTracker } from './config.js';
 import { configPath } from '../lib/paths.js';
 
+// In strict mode an auto-binding unlocks writes, so it requires a prefix allowlist; without one the
+// tracker still renders links but nothing binds automatically.
+function strictGuard(tracker, mode, where, warnings) {
+  if (!tracker || mode !== 'strict' || tracker.prefixes.length || !tracker.sources.length) return tracker;
+  warnings.push(`${where}: strict gate mode auto-binds only with tracker.prefixes; auto-binding disabled`);
+  return { ...tracker, sources: [] };
+}
+
 export function buildRuntimeIdentity({ storeMeta, config }) {
   const warnings = [];
   const user = resolveGateMode(config, null);
   warnings.push(...user.warnings);
   let tracker = null;
   try {
-    tracker = resolveTracker(config, null);
+    tracker = strictGuard(resolveTracker(config, null), user.mode, 'user config', warnings);
   } catch (err) {
     warnings.push(`user config: ${err.message}`);
   }
@@ -20,18 +28,25 @@ export function buildRuntimeIdentity({ storeMeta, config }) {
   for (const [repo_id, r] of Object.entries(config.repos ?? {})) {
     if (!r || !r.canonical_path) continue;
     let repoCfg = null;
+    let broken = false;
     try {
       repoCfg = loadRepoConfig(r.canonical_path);
     } catch (err) {
-      warnings.push(`${repo_id} .quill.toml: ${err.message}`);
+      // An unreadable repository config fails closed: strict, and no tracker until it is fixed.
+      broken = true;
+      warnings.push(`${repo_id} .quill.toml: ${err.message}; treating the repository as strict`);
     }
-    const gate = resolveGateMode(config, repoCfg);
+    const gate = broken ? { mode: 'strict', warnings: [] } : resolveGateMode(config, repoCfg);
     warnings.push(...gate.warnings.map((w) => `${repo_id}: ${w}`));
     let repoTracker = null;
-    try {
-      repoTracker = resolveTracker(config, repoCfg);
-    } catch (err) {
-      warnings.push(`${repo_id}: ${err.message}`);
+    if (!broken) {
+      try {
+        const local = [];
+        repoTracker = strictGuard(resolveTracker(config, repoCfg, { warnings: local }), gate.mode, repo_id, warnings);
+        warnings.push(...local.map((w) => `${repo_id}: ${w}`));
+      } catch (err) {
+        warnings.push(`${repo_id}: ${err.message}`);
+      }
     }
     repos.push({ repo_id, path: path.resolve(r.canonical_path), project_id: (repoCfg && repoCfg.project_id) || r.project_id || null, gate_mode: gate.mode, tracker: repoTracker });
   }

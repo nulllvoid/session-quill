@@ -150,7 +150,13 @@ export class Worker {
     try {
       if (fs.existsSync(configPath(this.env))) {
         const fresh = loadUserConfig(this.env);
-        this.config = { ...this.config, gate_enabled: fresh.gate_enabled, gate: fresh.gate, tracker: fresh.tracker };
+        // Repositories registered by `quill init` while the worker runs must reach the identity too.
+        this.config = {
+          ...this.config, gate_enabled: fresh.gate_enabled, gate: fresh.gate, tracker: fresh.tracker,
+          repos: { ...this.config.repos, ...fresh.repos }, projects: { ...this.config.projects, ...fresh.projects }, default_project: fresh.default_project || this.config.default_project,
+        };
+        this.state.meta.repos = this.config.repos;
+        this.state.meta.projects = this.config.projects;
       }
     } catch (err) {
       this.recordHealthError({ kind: 'config-invalid', error: `config.toml: ${err.message}` });

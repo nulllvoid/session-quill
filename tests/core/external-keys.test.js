@@ -53,6 +53,30 @@ test('renderUrl fills the template and refuses unsafe or incomplete links', () =
   assert.equal(isSafeExternalUrl('http://x.example/a'), false);
 });
 
+test('review: repeated groups containing quantifiers, groups or alternation are rejected however they are nested', () => {
+  for (const pattern of ['\\b(([A-Z0-9]+))+-\\d+\\b', '\\b((?:[A-Z]|[A-Z0-9])+-\\d+)\\b', '((a+))+b', '(a|aa)+', '(\\w+\\s?)+', '(?:a*){2,}', '([A-Z]{1,3})*x']) {
+    assert.throws(() => normalizeTracker({ key_pattern: pattern }), /backtracking/, pattern);
+  }
+  for (const pattern of ['\\b([A-Z][A-Z0-9]+-\\d+)\\b', '\\b(GH-\\d+)\\b', '\\b((?:PROJ|OPS)-\\d+)\\b', '#(\\d+)', '\\b([A-Z]{2,10}-\\d{1,6})\\b', '[(+]x(ab)?']) {
+    assert.doesNotThrow(() => normalizeTracker({ key_pattern: pattern }), pattern);
+  }
+});
+
+test('review: polynomial patterns stay bounded because scans run per short whitespace-separated token', () => {
+  const cubic = normalizeTracker({ key_pattern: '\\b([A-Z]+[A-Z]+[A-Z]+-\\d+)\\b' });
+  for (const text of ['A'.repeat(4000), `${'A'.repeat(99)} `.repeat(40)]) {
+    const started = process.hrtime.bigint();
+    assert.deepEqual(findKeys(text, cubic), []);
+    assert.ok(Number(process.hrtime.bigint() - started) / 1e6 < 500, `${text.length} chars`);
+  }
+  assert.deepEqual(findKeys(`${'A'.repeat(3000)} PMLA-1`, jira), ['PMLA-1'], 'an over-long token is skipped, later keys still count');
+});
+
+test('review: standard and version tokens are not ticket keys without a prefix allowlist', () => {
+  const any = normalizeTracker({});
+  assert.deepEqual(findKeys('IEEE-754 X86-64 BASE-64 LATIN-1 LLAMA-3 MPEG-4 ERC-20 BIP-32 USB-3 DDR-4 WPA-2 but ENG-7', any), ['ENG-7']);
+});
+
 test('externalTicketId is deterministic per store and key; keyExample uses the first prefix', () => {
   assert.equal(externalTicketId('s1', 'PMLA-1'), externalTicketId('s1', 'PMLA-1'));
   assert.notEqual(externalTicketId('s1', 'PMLA-1'), externalTicketId('s2', 'PMLA-1'));
