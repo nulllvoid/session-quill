@@ -143,7 +143,7 @@ PreToolUse stores attribution before execution. A PostToolUse result refers to t
 Fields: id, store_id, actor_id, kind, target_id (nullable), expected_revision (nullable), payload, created_at, not_before, state, applied_revision (nullable), error (nullable), result (nullable), retry_of (nullable).
 kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external, run-job.
 
-- run-job (ADR 0007) has no target and payload { schedule }; it names a configured schedule, has no undo delay and is applied by the scheduler like refresh.
+- run-job (ADR 0007) has no target and payload { schedule }; it names a configured schedule, has no undo delay and is applied by the scheduler like refresh. A refresh or run-job left applying by a crash fails with code `interrupted` (retryable) on the next start.
 
 - attach-unbound and dismiss-unbound target a session id; expected_revision is the session's unbound_work.revision. attach-unbound takes exactly one of ticket_id or key (a tracker key like PROJ-123, with optional title) plus bind (default true: link the session from then on if it is still unlinked). link-external targets a ticket with its revision and takes key plus optional system and https url; a key owned by another ticket is refused. All three have the 10 s undo window (ADR 0006).
 error: code, message, retryable, current_revision (nullable).

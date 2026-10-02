@@ -145,3 +145,28 @@ test('invalid schedules are reported as health warnings; editing [[schedule]] ap
     assert.deepEqual(w.scheduleInfo().map((s) => s.name), ['reconcile', 'evening']);
   } finally { await w.stop(); }
 });
+
+test('review: a crash mid-run fails its Run now request as interrupted and reruns the schedule once on restart', async () => {
+  const f = fixture({ start: '2026-10-02T19:29:00Z', schedule: [{ name: 'evening', job: 'reconcile', cron: '30 19 * * *' }] });
+  const stuck = fakeJobs();
+  stuck.hold();
+  const first = await boot(f, stuck);
+  f.set('2026-10-02T19:30:00Z');
+  const req = submitRequest(first.w, { id: randomUUID(), kind: 'run-job', target_id: null, expected_revision: null, payload: { schedule: 'evening' } }).request;
+  first.w.tick();
+  assert.equal(first.w.state.requests.get(req.id).state, 'applying');
+  await first.w.stop();
+  f.set('2026-10-02T19:31:00Z');
+  const fake = fakeJobs();
+  const second = await boot(f, fake);
+  try {
+    const r = second.w.state.requests.get(req.id);
+    assert.deepEqual([r.state, r.error.code, r.error.retryable], ['failed', 'interrupted', true]);
+    await second.tick();
+    await second.tick();
+    assert.equal(fake.calls.length, 1, 'one rerun, not one per tick');
+    const rec = second.w.state.schedules.get('evening');
+    assert.deepEqual([rec.runs[0].trigger, rec.last_outcome], ['catch-up', 'ok']);
+    assert.equal(second.w.scheduleInfo()[0].next_due, '2026-10-03T19:30:00Z');
+  } finally { await second.w.stop(); }
+});

@@ -16,6 +16,8 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
   let baselineMs = null;
   const running = new Map();
   const nextCache = new Map();
+  // Schedules whose latest run was interrupted by a stop or crash: each reruns once, as a catch-up.
+  const rerun = new Set();
 
   const tz = (worker) => worker.state.meta.timezone || 'UTC';
 
@@ -40,6 +42,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
   // 0 means due now (an interval schedule that has never run).
   function nextDueMs(worker, s) {
     if (!s.enabled) return null;
+    if (rerun.has(s.name)) return 0;
     const ref = lastRef(worker, s);
     if (s.interval_ms) return ref === null ? 0 : ref + s.interval_ms;
     const base = ref ?? baselineMs;
@@ -58,6 +61,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
 
   function start(worker, s, trigger, requests) {
     const run_id = uuid();
+    rerun.delete(s.name);
     for (const r of requests) worker.emit('request-tx', { request_id: r.id, outcome: 'applying' }, { source_identity: `request-tx:${r.id}:applying` });
     worker.emit('schedule-run', { schedule: s.name, job: s.job, run_id, phase: 'started', trigger }, { source_identity: `schedule-run:${run_id}:started` });
     const reason = trigger === 'refresh' ? 'refresh' : trigger === 'manual' ? 'manual' : 'scheduled';
@@ -113,6 +117,12 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
         if (rec.running_run_id) {
           worker.emit('schedule-run', { schedule: rec.name, job: rec.job, run_id: rec.running_run_id, phase: 'finished', outcome: 'interrupted', error: 'the worker stopped before this run finished' }, { source_identity: `schedule-run:${rec.running_run_id}:interrupted` });
         }
+        if (rec.last_outcome === 'interrupted') rerun.add(rec.name);
+      }
+      // Refresh and Run now requests that were joined to the interrupted run never got a result.
+      for (const r of [...worker.state.requests.values()]) {
+        if ((r.kind !== 'refresh' && r.kind !== 'run-job') || r.state !== 'applying') continue;
+        worker.emit('request-tx', { request_id: r.id, outcome: 'failed', error: { code: 'interrupted', message: 'the worker stopped before this run finished; run it again', retryable: true, current_revision: null } }, { source_identity: `request-tx:${r.id}:interrupted` });
       }
     },
     tick(worker) {
@@ -137,7 +147,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
         if (!s.enabled || running.has(s.job)) continue;
         const next = nextDueMs(worker, s);
         if (next === null || nowMs < next) continue;
-        start(worker, s, next !== 0 && nowMs - next > CATCH_UP_SLACK_MS ? 'catch-up' : 'schedule', []);
+        start(worker, s, rerun.has(s.name) || (next !== 0 && nowMs - next > CATCH_UP_SLACK_MS) ? 'catch-up' : 'schedule', []);
       }
     },
     async onStop() {

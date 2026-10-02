@@ -8,7 +8,7 @@ import { renderSessions } from './views/sessions.js';
 import { renderDeployments } from './views/deployments.js';
 import { renderDetail } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
-import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog } from './views/dialogs.js';
+import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 
 const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments'];
@@ -168,14 +168,25 @@ function renderDialog() {
     html = renderAttachDialog(sess, s, { mode: d.mode });
   } else if (d.type === 'link-external') html = renderLinkExternalDialog(ticketById(s, d.ticket), s);
   else if (d.type === 'schedules') html = renderSchedulesDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
-  // The Schedules panel follows live state, so it re-renders when a generation or a run request changes.
-  const key = d.type === 'schedules' ? `${JSON.stringify(d)}:${s.generation_id}:${[...appState.requests.values()].filter((r) => r.kind === 'run-job').map((r) => r.state).join(',')}` : JSON.stringify(d);
+  // The Schedules panel follows live state: it re-renders only when what it shows changes, and keeps
+  // focus and any open run history across that re-render.
+  const key = d.type === 'schedules' ? `${JSON.stringify(d)}:${schedulesDialogKey(s, appState.requests.values())}` : JSON.stringify(d);
   if (host.dataset.key !== key) {
+    const live = host.open && d.type === 'schedules' && host.dataset.key && host.dataset.key.startsWith(JSON.stringify(d));
+    const active = live && host.contains(document.activeElement) ? document.activeElement : null;
+    const focusRow = active && active.closest('[data-schedule]') ? active.closest('[data-schedule]').dataset.schedule : null;
+    const focusAction = active ? (active.dataset.action ?? (active.tagName === 'SUMMARY' ? 'summary' : null)) : null;
+    const openRuns = live ? [...host.querySelectorAll('details[data-schedule][open]')].map((el) => el.dataset.schedule) : [];
     host.innerHTML = `<div class="dialog-inner" role="document">${html}${d.error ? `<p class="critical small" role="alert">${esc(d.error)}</p>` : ''}</div>`;
     host.dataset.key = key;
     if (!host.open) host.showModal();
-    const first = host.querySelector('textarea, input:not([type=hidden]):not([disabled]), select, button');
-    if (first) first.focus();
+    for (const name of openRuns) { const el = host.querySelector(`details[data-schedule="${CSS.escape(name)}"]`); if (el) el.open = true; }
+    const row = focusRow ? `[data-schedule="${CSS.escape(focusRow)}"]` : '';
+    const sel = focusAction === 'summary' ? `details${row} > summary` : focusAction ? `${row ? `${row}[data-action="${CSS.escape(focusAction)}"], ${row} [data-action="${CSS.escape(focusAction)}"]` : `[data-action="${CSS.escape(focusAction)}"]`}` : null;
+    const restored = sel ? [...host.querySelectorAll(sel)].find((el) => !el.disabled) : null;
+    const target = restored ?? (active && focusRow ? host.querySelector(`details[data-schedule="${CSS.escape(focusRow)}"] > summary`) ?? host.querySelector('[data-action="close-dialog"]') : null)
+      ?? host.querySelector('textarea, input:not([type=hidden]):not([disabled]), select, button:not([disabled])');
+    if (target) target.focus();
   }
 }
 

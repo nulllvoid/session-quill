@@ -6,12 +6,26 @@ import fs from 'node:fs';
 const esc = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
 const escProp = (s) => esc(s).replace(/:/g, '%3A').replace(/,/g, '%2C');
 
+// node:test's TAP reporter escapes backslashes and '#' in names and diagnostics.
+const untap = (s) => String(s).replace(/\\([\\#])/g, '$1');
+
 export function annotationsFromTap(text) {
   const lines = text.split(/\r?\n/);
   const out = [];
+  // '#' diagnostics since the previous test line: a file that crashes while loading prints its
+  // error here and reports only 'test failed' in its YAML block.
+  let diagnostics = [];
   for (let i = 0; i < lines.length; i += 1) {
+    if (/^\s*(not )?ok \d+/.test(lines[i]) === false) {
+      const d = /^\s*# ?(.*)$/.exec(lines[i]);
+      if (d && !/^Subtest: /.test(d[1])) diagnostics.push(untap(d[1]));
+      continue;
+    }
+    const before = diagnostics;
+    diagnostics = [];
     const m = /^(\s*)not ok \d+ - (.*)$/.exec(lines[i]);
     if (!m) continue;
+    if (/(^|[^\\]) # (TODO|SKIP)\b/i.test(m[2])) continue;
     const indent = m[1].length;
     const yaml = [];
     if (lines[i + 1] && lines[i + 1].trim() === '---') {
@@ -37,8 +51,9 @@ export function annotationsFromTap(text) {
         message = body.join('\n').trim();
       }
     }
-    const location = (field('location') ?? '').replace(/\\\\/g, '\\');
-    out.push(`::error title=${escProp(m[2])}::${esc(`${message || 'test failed'}${location ? `\n    at ${location}` : ''}`)}`);
+    if ((message === '' || message === 'test failed') && before.length) message = before.join('\n').trim();
+    const location = untap(field('location') ?? '');
+    out.push(`::error title=${escProp(untap(m[2]))}::${esc(`${message || 'test failed'}${location ? `\n    at ${location}` : ''}`)}`);
   }
   return out;
 }

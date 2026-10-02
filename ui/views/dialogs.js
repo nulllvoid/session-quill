@@ -3,6 +3,15 @@ import { esc, attr, keyEl, STATUS_LABELS, icon, normalizeTicket, normalizeSnapsh
 const ACTIVE_REQUEST = new Set(['sending', 'pending', 'applying']);
 
 // Schedules panel (ADR 0007): what runs on its own, when it runs next, and how the last runs went.
+// The Schedules panel follows live state; this key changes only when what it shows changes, so a
+// poll with a new generation does not rebuild it (which would move focus and close open history).
+export function schedulesDialogKey(rawSnapshot, requests = []) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const rows = snapshot.schedules.map((s) => [s.name, s.enabled, s.running, s.next_due, s.last_started_at, s.last_finished_at, s.last_outcome, (s.runs ?? []).map((r) => `${r.run_id}:${r.outcome}`).join(',')]);
+  const runs = [...requests].filter((r) => r.kind === 'run-job').map((r) => `${r.id}:${r.state}`);
+  return JSON.stringify([!!(snapshot.capabilities && snapshot.capabilities.refresh), snapshot.meta.timezone, rows, runs]);
+}
+
 export function renderSchedulesDialog(rawSnapshot, { now, pending = [] } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const tz = snapshot.meta.timezone;
@@ -12,7 +21,7 @@ export function renderSchedulesDialog(rawSnapshot, { now, pending = [] } = {}) {
     const queued = pending.some((r) => r.kind === 'run-job' && r.payload && r.payload.schedule === s.name && ACTIVE_REQUEST.has(r.state));
     const outcome = s.running ? 'running' : (s.last_outcome ?? 'never run');
     const action = !canRun ? '' : queued ? '<span class="muted small">Queued…</span>' : `<button type="button" class="btn small" data-action="run-job" data-schedule="${attr(s.name)}"${s.running ? ' disabled' : ''}>${icon('play')}Run now</button>`;
-    const runs = (s.runs ?? []).length ? `<tr class="runs"><td colspan="5"><details><summary class="small">Recent runs (${esc(s.runs.length)})</summary><ul class="small">${s.runs.map((r) => `<li>${timeEl(r.started_at, now, tz)} · ${esc(r.trigger)} · <strong>${esc(r.outcome)}</strong>${r.summary ? ` — ${esc(r.summary)}` : ''}${r.error ? ` — <span class="critical">${esc(r.error)}</span>` : ''}</li>`).join('')}</ul></details></td></tr>` : '';
+    const runs = (s.runs ?? []).length ? `<tr class="runs"><td colspan="5"><details data-schedule="${attr(s.name)}"><summary class="small">Recent runs (${esc(s.runs.length)})</summary><ul class="small">${s.runs.map((r) => `<li>${timeEl(r.started_at, now, tz)} · ${esc(r.trigger)} · <strong>${esc(r.outcome)}</strong>${r.summary ? ` — ${esc(r.summary)}` : ''}${r.error ? ` — <span class="critical">${esc(r.error)}</span>` : ''}</li>`).join('')}</ul></details></td></tr>` : '';
     return `<tr data-schedule="${attr(s.name)}"><th scope="row">${esc(s.name)}<div class="small muted">${esc(s.job)}${s.enabled ? '' : ' · disabled'}</div></th><td><code>${esc(when)}</code></td><td>${s.enabled && s.next_due ? timeEl(s.next_due, now, tz) : '<span class="muted">—</span>'}</td><td><span class="chip" data-outcome="${attr(outcome)}">${esc(outcome)}</span> ${s.last_started_at ? timeEl(s.last_started_at, now, tz) : ''}${s.last_summary ? `<div class="small">${esc(s.last_summary)}</div>` : ''}${s.last_error ? `<div class="small critical">${esc(s.last_error)}</div>` : ''}</td><td>${action}</td></tr>${runs}`;
   }).join('');
   return `<div class="dialog-form schedules-dialog"><h2 id="dialog-title">${icon('clock')}Schedules</h2>

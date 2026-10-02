@@ -4,7 +4,7 @@ import { freshness, relativeTime, formatAbsolute } from '../../ui/lib/time.js';
 import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip } from '../../ui/components.js';
 import { sanitizeSnapshot } from '../../src/export/sanitize.js';
 import { renderPickNext, renderInbox } from '../../ui/views/picknext.js';
-import { renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog } from '../../ui/views/dialogs.js';
+import { renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey } from '../../ui/views/dialogs.js';
 import { renderBoard } from '../../ui/views/board.js';
 import { renderTree } from '../../ui/views/tree.js';
 import { renderSessions } from '../../ui/views/sessions.js';
@@ -325,4 +325,18 @@ test('the header offers Schedules only when the worker reports schedules and the
   const exported = scheduleSnapshot();
   exported.meta = { ...exported.meta, exported_at: NOW };
   assert.doesNotMatch(renderHeader(exported, opts), /data-action="schedules"/);
+});
+
+test('review: the Schedules dialog key ignores new generations and changes only when schedule or Run now state changes', () => {
+  const a = scheduleSnapshot();
+  const b = { ...scheduleSnapshot(), generation_id: 'gen-next' };
+  assert.equal(schedulesDialogKey(a, []), schedulesDialogKey(b, []), 'a poll with nothing new keeps focus and open history');
+  const finished = scheduleSnapshot();
+  finished.schedules[1] = { ...finished.schedules[1], running: false, last_outcome: 'ok' };
+  assert.notEqual(schedulesDialogKey(a, []), schedulesDialogKey(finished, []));
+  const req = { id: 'q', kind: 'run-job', state: 'pending', payload: { schedule: 'reconcile' } };
+  assert.notEqual(schedulesDialogKey(a, []), schedulesDialogKey(a, [req]));
+  assert.notEqual(schedulesDialogKey(a, [req]), schedulesDialogKey(a, [{ ...req, state: 'applied' }]));
+  assert.equal(schedulesDialogKey(a, []), schedulesDialogKey(a, [{ id: 'x', kind: 'edit', state: 'pending' }]), 'unrelated requests do not re-render');
+  assert.match(renderSchedulesDialog(a, { now: NOW, pending: [] }), /<details data-schedule="reconcile">/, 'history can be reopened after a re-render');
 });
