@@ -120,3 +120,40 @@ export function renderHelpDialog() {
   const rows = [['/', 'Focus search'], ['1 – 6', 'Switch view'], ['Enter / Space', 'Open the focused card'], ['h', 'Handoff on a focused eligible card'], ['Escape', 'Close detail or dialog, restore focus'], ['Left / Right', 'Previous / next record while the detail navigation control is focused'], ['?', 'This help']];
   return `<div class="dialog-form"><h2 id="dialog-title">Keyboard shortcuts</h2><table class="shortcuts">${rows.map(([k, d]) => `<tr><th scope="row"><kbd>${esc(k)}</kbd></th><td>${esc(d)}</td></tr>`).join('')}</table><p class="muted small">Shortcuts never run inside inputs or while a dialog owns focus.</p><div class="dialog-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div></div>`;
 }
+
+// Publish (ADR 0010): each publisher with what it sends and where. A live claude.ai page is labelled
+// Live; a file is a Copy or a Note. The first publish to a destination asks for confirmation.
+export function publishDialogKey(rawSnapshot, requests = []) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const rows = (snapshot.publishers ?? []).map((p) => [p.name, p.confirmed, p.running, p.url, p.last_published_at, p.last_outcome, p.last_error, (p.runs ?? []).map((r) => r.run_id).join(',')]);
+  const reqs = [...requests].filter((r) => r.kind === 'publish').map((r) => `${r.id}:${r.state}`);
+  return JSON.stringify([!!(snapshot.capabilities && snapshot.capabilities.refresh), rows, reqs]);
+}
+
+export function renderPublishDialog(rawSnapshot, { now, pending = [] } = {}) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const tz = snapshot.meta.timezone;
+  const canRun = !!(snapshot.capabilities && snapshot.capabilities.refresh);
+  const items = (snapshot.publishers ?? []).map((p) => {
+    const queued = pending.some((r) => r.kind === 'publish' && ACTIVE_REQUEST.has(r.state) && r.payload && (r.payload.publisher === p.name || r.payload.publisher === null));
+    const safeUrl = p.url && /^https:\/\/claude\.ai\//.test(p.url) ? p.url : null;
+    const where = `${safeUrl ? `<a href="${attr(safeUrl)}" target="_blank" rel="noopener noreferrer">${esc(safeUrl)}</a>` : `<code>${esc(p.destination_label)}</code>`}${p.last_url && p.last_url !== p.url ? ` <span class="muted">(last published to ${esc(p.last_url)})</span>` : ''}`;
+    const scope = `${esc((p.fields ?? []).join(', '))} of tickets in ${p.projects && p.projects.length ? esc(p.projects.join(', ')) : 'every project'}${p.include_links ? ', with links' : ''}`;
+    const last = p.last_outcome === 'failed' ? `<div class="small critical">${esc(p.last_error ?? 'failed')}</div>`
+      : p.last_published_at ? `<div class="small">Last published ${timeEl(p.last_published_at, now, tz)}${p.last_summary ? ` — ${esc(p.last_summary)}` : ''}</div>` : '<div class="small muted">Not published yet.</div>';
+    // A live page published from a Claude Code session (executor "session"): the dashboard records
+    // the confirmation, and the session runs the publish.
+    const viaSession = p.kind === 'artifact' && p.executor === 'session';
+    const command = `/session-quill:publish ${p.name}`;
+    const action = !canRun ? '' : queued || p.running ? '<span class="muted small">Publishing…</span>'
+      : viaSession && p.confirmed ? `<p class="small">Publish from a Claude Code session: <code>${esc(command)}</code> <button type="button" class="btn small ghost" data-copy="${attr(command)}" data-copy-label="the publish command">${icon('copy')}Copy</button></p>`
+      : `<button type="button" class="btn small${p.confirmed ? '' : ' primary'}" data-action="publish" data-publisher="${attr(p.name)}" data-confirm="${p.confirmed ? 'false' : 'true'}">${icon('download')}${p.confirmed ? 'Publish now' : viaSession ? 'Confirm destination' : 'Confirm and publish'}</button>`;
+    const confirmNote = p.confirmed ? '' : `<p class="small warning-text">${icon('alert')}Nothing has been sent to this destination yet. Confirming sends ${scope} there${p.kind === 'artifact' ? ', and everyone you share the page with can see it' : ''}.</p>`;
+    return `<li class="publisher" data-publisher="${attr(p.name)}"><div class="publisher-head"><span class="chip small" data-kind="${attr(p.kind)}">${esc(p.label)}</span> <strong>${esc(p.title ?? p.name)}</strong> <span class="small muted">${esc(p.name)}${p.after_reconcile ? ' · after each reconciliation' : ''}</span></div>
+<div class="small">${where}</div><div class="small muted">Sends ${scope}.</div>${last}${confirmNote}${action}</li>`;
+  }).join('');
+  return `<div class="dialog-form publish-dialog"><h2 id="dialog-title">${icon('download')}Publish</h2>
+<p class="small muted">A <strong>Live</strong> page is a claude.ai artifact that updates on each publish; a <strong>Copy</strong> or <strong>Note</strong> is a file. Every publisher sends only its fields and projects, through the same filter as exports. Configure them under <code>[[publish]]</code>.</p>
+${items ? `<ul class="publishers">${items}</ul>` : '<p class="muted">No publishers are configured.</p>'}
+<div class="dialog-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div></div>`;
+}

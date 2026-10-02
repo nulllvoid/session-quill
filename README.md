@@ -99,7 +99,7 @@ job  = "reconcile"
 cron = "30 19 * * 1-5"       # minute hour day-of-month month day-of-week, in the store's time zone
 ```
 
-A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. `reconcile` is the job available today; `agent` runs a recipe and `digest` writes a daily summary (see below); `publish` and `tracker-sync` are accepted and skipped until they ship.
+A run missed while the computer was off runs once when the worker starts. Open **Schedules** in the dashboard header for next and last runs and **Run now**. `reconcile` is the job available today; `agent` runs a recipe, `digest` writes a daily summary, `publish` runs publishers and `tracker-sync` reads your tracker (see below).
 
 ## Environments, Today and the daily digest
 
@@ -121,6 +121,38 @@ to   = ["vault-daily"]           # the store's daily/YYYY-MM-DD.md; or ["file"] 
 ```
 
 The digest lives between `<!-- quill:digest:start -->` and `<!-- quill:digest:end -->`; your own text in the note is never touched, and if you edit the digest section Quill stops updating it until you empty it again.
+
+## Publishing
+
+Share a current view of your tickets with `[[publish]]` entries in `~/.claude/quill/config.toml`:
+
+```toml
+[[publish]]
+name     = "team"
+kind     = "artifact"          # a live claude.ai page; or "markdown" (a roll-up note) or "html" (a read-only copy, with path = "...")
+projects = ["my-project"]
+fields   = ["key", "title", "status", "next", "pr", "deployments", "updated"]
+```
+
+Only those fields of those projects are sent, through the same filter as exports (no local paths, links only with `include_links = true`). The first publish to a destination waits for you to confirm it, from **Publish** in the dashboard header or with `quill publish team --confirm`. A live artifact is published from a Claude Code session, which has the Artifact tools: run `/session-quill:publish team`. Later publishes update each row in place and keep anything someone edited on the page. Add `on = ["reconcile"]` to republish a note or copy after every reconciliation. With `two_way = true`, people you let edit the page can change a ticket's status or next action there; the next publish turns each change into an edit that applies unless the ticket changed since, and comments that name a ticket appear on its timeline.
+
+## Tracker sync
+
+To see what your tracker says about each linked ticket (status, assignee, fix version), name the token variable in `[tracker]` and schedule a sync. Quill only reads; it never writes to the tracker and never changes its own status from it.
+
+```toml
+[tracker]
+system         = "jira"
+domain         = "https://example.atlassian.net"
+sync_token_env = "JIRA_TOKEN"        # an API token; for Jira Cloud also set sync_username_env = "JIRA_EMAIL"
+
+[[schedule]]
+name = "tracker-sync"
+job  = "tracker-sync"
+every = "6h"
+```
+
+GitHub (`GITHUB_TOKEN`, with `repo = "owner/name"`) and Linear (`LINEAR_API_KEY`) work the same way. The token is sent only to the tracker in your own config, never to one a repository names.
 
 ## Bitbucket pull requests
 

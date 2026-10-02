@@ -132,11 +132,11 @@ test('an unfinished run is marked interrupted on the next start; a failing job r
 });
 
 test('invalid schedules are reported as health warnings; editing [[schedule]] applies without a restart', async () => {
-  const f = fixture({ schedule: [{ name: 'reconcile', job: 'reconcile', every: '2h' }, { name: 'publish', job: 'publish', cron: '30 19 * * *' }] });
+  const f = fixture({ schedule: [{ name: 'reconcile', job: 'reconcile', every: '2h' }, { name: 'sweep', job: 'stale-sweep', cron: '30 19 * * *' }] });
   const fake = fakeJobs();
   const { w } = await boot(f, fake, { identityCheckMs: 0 });
   try {
-    assert.match(fs.readFileSync(path.join(f.home, 'state', 'health-errors.jsonl'), 'utf8'), /publish.*later release/);
+    assert.match(fs.readFileSync(path.join(f.home, 'state', 'health-errors.jsonl'), 'utf8'), /sweep.*later release/);
     assert.deepEqual(w.scheduleInfo().map((s) => s.name), ['reconcile']);
     saveUserConfig({ ...f.config, schedule: [{ name: 'reconcile', job: 'reconcile', every: '2h' }, { name: 'evening', job: 'reconcile', cron: '0 19 * * *' }] }, f.env);
     const later = new Date(Date.now() + 5000);

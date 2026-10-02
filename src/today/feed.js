@@ -1,7 +1,7 @@
 // The Today feed (ADR 0009): a day-by-day view of what happened, grouped by ticket, built from
 // ticket timelines and sessions. The digest job writes the same data as markdown.
 export const TODAY_DAYS = 7;
-export const TODAY_KINDS = ['commit', 'pr', 'deployment', 'status', 'write', 'plan', 'conclusion', 'handoff', 'bind'];
+export const TODAY_KINDS = ['commit', 'pr', 'deployment', 'status', 'write', 'plan', 'conclusion', 'handoff', 'comment', 'bind'];
 const ITEMS_PER_TICKET = 12;
 const DAY_MS = 86_400_000;
 

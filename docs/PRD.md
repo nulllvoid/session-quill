@@ -79,7 +79,7 @@ The documents use `/ticket` and `/approve` as shorthand. Installed plugin comman
 | FR-7 | Records follow DATA-CONTRACT; replay preserves user-authored content and does not repeat effects | Must |
 | FR-8 | Support markdown/Obsidian; Jira links remain locally bindable with remote validation pending when offline | Must |
 | FR-9 | Reconcile links, age all open records, poll configured PR providers, derive staleness and rank deterministically | Must |
-| FR-10 | Provide five local views and detail panel, separate capture/sync/provider health and explicit unavailable/never-synced states | Must |
+| FR-10 | Provide six local views and detail panel, separate capture/sync/provider health and explicit unavailable/never-synced states | Must |
 | FR-11 | Mutations use durable revision-checked requests with cancellation, conflict, failure and retry outcomes | Must |
 | FR-12 | Handoffs enforce explicit permissions, one run per ticket, isolated fixes, a 20 min execution cap and preserved partial results | Must |
 | FR-13 | Install plugin, initialize configuration/worker, validate runtime and expose diagnostics | Must |

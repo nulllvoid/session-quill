@@ -14,9 +14,9 @@ import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion'];
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish'];
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
-const SCHEDULER_KINDS = new Set(['refresh', 'run-job']);
+const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
 const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
@@ -87,7 +87,7 @@ function findSuggestion(state, ticket, payload) {
   return { h, sug };
 }
 
-export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null } = {}) {
+export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
   const payload = body.payload ?? {};
@@ -153,6 +153,13 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'refresh':
       normalized = {};
       break;
+    case 'publish': {
+      const name = payload.publisher ?? null;
+      if (name !== null && (typeof name !== 'string' || !name)) throw new TrackerError('request-invalid', 'publish payload.publisher must be a publisher name or null for all');
+      if (name !== null && publisherNames && !publisherNames.includes(name)) throw new TrackerError('publisher-unknown', `no publisher named ${name}`);
+      normalized = { publisher: name, confirm: payload.confirm === true };
+      break;
+    }
     case 'run-job': {
       if (typeof payload.schedule !== 'string' || !payload.schedule) throw new TrackerError('request-invalid', 'run-job needs payload.schedule');
       if (scheduleNames && !scheduleNames.includes(payload.schedule)) throw new TrackerError('schedule-unknown', `no schedule named ${payload.schedule}`);
@@ -215,7 +222,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
     if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
     throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
   }
-  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker) });
+  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null });
   request.actor_id = actor;
   const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
   if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
@@ -278,6 +285,8 @@ function evaluateSessionRequest(worker, req) {
   return { outcome: 'applied', mutation: { type: 'unbound-attach', session_id: session.id, ticket_id: ticketId, create, bind: req.payload.bind !== false }, result: { ticket_id: ticketId, created: !!create }, session: who };
 }
 
+const REVALIDATED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
+
 export function evaluateRequest(worker, req) {
   if (SESSION_KINDS.has(req.kind)) return evaluateSessionRequest(worker, req);
   const { state } = worker;
@@ -285,6 +294,16 @@ export function evaluateRequest(worker, req) {
   if (req.kind !== 'refresh' && !ticket) return { outcome: 'failed', error: { code: 'target-unknown', message: 'ticket no longer exists', retryable: false, current_revision: null } };
   if (ticket && req.expected_revision !== null && ticket.revision !== req.expected_revision) {
     return { outcome: 'conflict', error: { code: 'revision-conflict', message: `ticket is at revision ${ticket.revision}, request expected ${req.expected_revision}`, retryable: false, current_revision: ticket.revision }, result: { current: currentValues(ticket) } };
+  }
+  if (REVALIDATED_KINDS.has(req.kind)) {
+    // Field edits from ingress (the CLI, page edits a session publish brings back) skipped submit
+    // validation, so they are validated here, against the ticket as it is now, before they apply.
+    try {
+      const checked = validateRequestBody({ id: req.id, kind: req.kind, target_id: ticket.id, expected_revision: ticket.revision, payload: req.payload }, state, worker.now());
+      req = { ...req, payload: checked.payload };
+    } catch (err) {
+      return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
+    }
   }
   switch (req.kind) {
     case 'set-next-action':

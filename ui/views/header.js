@@ -96,6 +96,7 @@ export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters
   <span class="endpoint" title="${attr(isStatic ? 'Read-only exported snapshot' : 'Owner session on loopback')}"><span class="dot ${isStatic ? 'muted' : online ? 'good' : 'critical'}" aria-hidden="true"></span>${isStatic ? 'snapshot' : esc(endpoint ?? '127.0.0.1')} <strong>[${isStatic ? 'Viewer' : 'Owner'}]</strong></span>
   <div class="topbar-actions">
     ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small" data-action="schedules">${icon('clock')}Schedules</button>` : ''}
+    ${(snapshot.publishers ?? []).length && !isStatic ? `<button type="button" class="btn small" data-action="publishers" data-publish-state="${snapshot.publishers.some((p) => p.last_outcome === 'failed' || !p.confirmed) ? 'attention' : 'ok'}">${icon('download')}Publish</button>` : ''}
     ${caps.export ? `<button type="button" class="btn small" data-action="export">${icon('download')}Export</button>` : ''}
     <button type="button" class="btn small icon-only" data-action="theme" aria-label="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" title="Theme">${icon(theme === 'dark' ? 'sun' : 'moon')}</button>
     <button type="button" class="btn small icon-only" data-action="help" aria-label="Keyboard shortcuts" title="Help (?)">${icon('help')}</button>

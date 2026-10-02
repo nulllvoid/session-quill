@@ -18,6 +18,7 @@ const COMMANDS = {
   export: () => import('./commands/export.js'),
   handoff: () => import('./commands/handoff.js'),
   agent: () => import('./commands/agent.js'),
+  publish: () => import('./commands/publish.js'),
   migrate: () => import('./commands/migrate.js'),
 };
 
@@ -42,6 +43,7 @@ Usage: quill <command> [options]
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
   agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
+  publish list [--json]                     publish [<name>] [--confirm]
   migrate --source <dir> [--profile pmla] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>
   hook <EventName>                          (reads host JSON on stdin)
 `;

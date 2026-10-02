@@ -2,8 +2,22 @@ import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, hando
 import { renderAgentsSection } from './agents.js';
 import { environmentLine } from './deployments.js';
 
+const TRACKER_NAMES = { jira: 'Jira', linear: 'Linear', github: 'GitHub', custom: 'Tracker' };
+
+// What tracker-sync last read for the ticket's tracker key (ADR 0011); display only.
+function trackerRemote(t, { now, tz }) {
+  const ext = t.external;
+  if (!ext) return '';
+  const name = TRACKER_NAMES[ext.system] ?? 'the tracker';
+  if (ext.validation === 'not-found') return `<p class="small warning-text tracker-remote">${icon('alert')}${esc(ext.key)} was not found in ${esc(name)}. Check the key, or link the ticket to the right one.</p>`;
+  const r = ext.remote;
+  if (!r) return '';
+  const parts = [r.status, r.assignee, r.fix_versions && r.fix_versions.length ? `fix ${r.fix_versions.join(', ')}` : null].filter(Boolean).map((x) => esc(x));
+  return `<p class="small tracker-remote"><span class="label">${esc(name)}</span> ${parts.join(' · ')}${r.title && r.title !== t.title ? ` <span class="muted">— “${esc(r.title)}”</span>` : ''} <span class="muted">read ${timeEl(r.fetched_at, now, tz)}</span></p>`;
+}
+
 function timelineItem(e, { now, tz, generation }) {
-  const kindLabel = { bind: 'Bound', write: 'Write', tool: 'Tool', commit: 'Commit', pr: 'PR', plan: 'Plan', conclusion: 'Conclusion', handoff: 'Handoff', status: 'Status', deployment: 'Deployment', 'capture-error': 'Capture error' }[e.kind] ?? e.kind;
+  const kindLabel = { bind: 'Bound', write: 'Write', tool: 'Tool', commit: 'Commit', pr: 'PR', plan: 'Plan', conclusion: 'Conclusion', handoff: 'Handoff', comment: 'Comment', status: 'Status', deployment: 'Deployment', 'capture-error': 'Capture error' }[e.kind] ?? e.kind;
   return `<li class="timeline-item" data-kind="${attr(e.kind)}"><span class="tl-kind">${esc(kindLabel)}</span> ${timeEl(e.at, now, tz)} <span class="tl-text">${esc(e.text)}</span>${e.coverage !== 'complete' ? ` <span class="chip warning small" title="Change coverage">${esc(e.coverage)}</span>` : ''}${e.content_ref ? ` <button type="button" class="link small" data-action="load-content" data-hash="${attr(e.content_ref)}" data-generation="${attr(generation)}">Full text</button>` : ''}</li>`;
 }
 
@@ -34,6 +48,7 @@ export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], conten
   <div class="detail-nav"><button type="button" class="btn icon-only" data-action="close-detail" aria-label="Close detail (Escape)">${icon('x')}</button><span class="detail-nav-keys" tabindex="0" data-action="detail-nav" aria-label="Record navigation: use Left and Right arrows while focused">${icon('chevron')}</span></div>
   <div class="detail-keys">${ticketKey(t)}${(t.aliases ?? []).map((a) => ` <span class="muted small">alias ${esc(a)}</span>`).join('')}${externalChip(t)}${!readOnly && !t.external && !t.jira ? ` <button type="button" class="btn small ghost" data-action="link-external" data-ticket="${attr(t.id)}">${icon('link')}Link to external…</button>` : ''}</div>
   <h2 id="detail-title">${esc(t.title)}</h2>
+  ${trackerRemote(t, { now, tz })}
   <div class="detail-chips">${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} ${categoryChip(t.category)} ${priorityMark(t.priority)} <span class="muted small">${esc(t.project_name)}${repoName(snapshot, t.repo_id) ? ` · ${esc(repoName(snapshot, t.repo_id))}` : ''}</span>${readOnly ? ' <span class="chip" data-readonly="true">Read-only snapshot</span>' : ''}</div>
   ${t.validation_issues && t.validation_issues.length ? `<p class="issues">${icon('alert')}Validation: ${t.validation_issues.map((i) => `<code>${esc(i)}</code>`).join(' ')}</p>` : ''}
 </header>

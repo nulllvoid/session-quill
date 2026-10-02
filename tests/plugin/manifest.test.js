@@ -40,7 +40,7 @@ test('hooks.json covers every supported hook event in exec form with node, synch
 });
 
 test('commands exist with frontmatter, use the plugin root path and never guess the namespace', () => {
-  for (const name of ['ticket', 'approve', 'status', 'handoff', 'ui', 'agent']) {
+  for (const name of ['ticket', 'approve', 'status', 'handoff', 'ui', 'agent', 'publish']) {
     const text = read(`commands/${name}.md`);
     assert.match(text, /^---\n[\s\S]*description:/, `${name} has frontmatter`);
     assert.match(text, /\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/quill\.js/, `${name} runs the bundled CLI`);

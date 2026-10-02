@@ -9,7 +9,7 @@ import { renderDeployments } from './views/deployments.js';
 import { renderToday } from './views/today.js';
 import { renderDetail } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
-import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey } from './views/dialogs.js';
+import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
 
@@ -175,12 +175,13 @@ function renderDialog() {
     const recipe = t ? effectiveRecipes(s, t.repo_id).find((r) => r.name === d.recipe && !r.error) : null;
     if (!recipe) { appState.dialog = null; return renderDialog(); }
     html = renderRecipeRunDialog(recipe, t, s, { retryOf: d.retryOf });
-  } else if (d.type === 'schedules') html = renderSchedulesDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
+  } else if (d.type === 'publishers') html = renderPublishDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
+  else if (d.type === 'schedules') html = renderSchedulesDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
   // The Schedules panel follows live state: it re-renders only when what it shows changes, and keeps
   // focus and any open run history across that re-render.
-  const key = d.type === 'schedules' ? `${JSON.stringify(d)}:${schedulesDialogKey(s, appState.requests.values())}` : JSON.stringify(d);
+  const key = d.type === 'schedules' ? `${JSON.stringify(d)}:${schedulesDialogKey(s, appState.requests.values())}` : d.type === 'publishers' ? `${JSON.stringify(d)}:${publishDialogKey(s, appState.requests.values())}` : JSON.stringify(d);
   if (host.dataset.key !== key) {
-    const live = host.open && d.type === 'schedules' && host.dataset.key && host.dataset.key.startsWith(JSON.stringify(d));
+    const live = host.open && (d.type === 'schedules' || d.type === 'publishers') && host.dataset.key && host.dataset.key.startsWith(JSON.stringify(d));
     const active = live && host.contains(document.activeElement) ? document.activeElement : null;
     const focusRow = active && active.closest('[data-schedule]') ? active.closest('[data-schedule]').dataset.schedule : null;
     const focusAction = active ? (active.dataset.action ?? (active.tagName === 'SUMMARY' ? 'summary' : null)) : null;
@@ -321,6 +322,12 @@ function handleAction(el) {
     case 'dismiss-unbound': submit({ kind: 'dismiss-unbound', target_id: el.dataset.session, expected_revision: Number(el.dataset.revision), payload: {} }, { announceText: 'Dismissal queued; undo within 10 seconds' }); break;
     case 'link-external': appState.dialog = { type: 'link-external', ticket: el.dataset.ticket }; render(); break;
     case 'schedules': appState.dialog = { type: 'schedules' }; render(); break;
+    case 'publishers': appState.dialog = { type: 'publishers' }; render(); break;
+    case 'publish': {
+      const confirm = el.dataset.confirm === 'true';
+      submit({ kind: 'publish', target_id: null, expected_revision: null, payload: { publisher: el.dataset.publisher || null, confirm } }, { announceText: confirm ? `Confirmed; publishing ${el.dataset.publisher}` : `Publishing ${el.dataset.publisher}` });
+      break;
+    }
     case 'run-job': submit({ kind: 'run-job', target_id: null, expected_revision: null, payload: { schedule: el.dataset.schedule } }, { announceText: `Running ${el.dataset.schedule} now` }); break;
     case 'waive-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'waive', deploymentId: el.dataset.deployment ?? null }; render(); break;
     case 'toggle-column': if (appState.boardExpanded.has('done')) appState.boardExpanded.delete('done'); else appState.boardExpanded.add('done'); render(); break;

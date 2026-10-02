@@ -46,6 +46,7 @@ export function createState(meta) {
     appliedEvents: new Set(),
     appliedSources: new Set(),
     schedules: new Map(),
+    publishers: new Map(),
     lastSequence: 0,
     lastSync: null,
     providerHealth: [],

@@ -112,6 +112,24 @@ All Must scenarios must pass, with exceptions explicitly removed from the advert
 | A59 | FR-10, FR-11 | A digest schedule writes the day into the store's daily note at its slot, keeps the owner's text around it, and fails visibly instead of overwriting an edited digest section |
 | A60 | FR-11 | Pick next gives reasons for a merged PR awaiting deployment and for days since last touch |
 
+## Phase 10 — Publishers (ADR 0010)
+
+| ID | Requirement | Scenario and expected outcome |
+| --- | --- | --- |
+| A61 | FR-15, FR-16 | Nothing is written to a new destination until the owner confirms it; after confirmation it publishes; changing the destination asks again |
+| A62 | FR-15, FR-16 | A roll-up note carries only the configured fields and projects, with local paths redacted and no links unless included |
+| A63 | FR-15, FR-16 | A live artifact keeps a field edited on the page while Quill's other changes are written, every update pinned to the version read, and a ticket leaving scope is marked, not deleted |
+| A64 | FR-15, FR-16 | With the default session executor the worker never publishes an artifact itself; a Claude Code session publishes it through --plan and --result and the worker records the URL and outcome |
+
+## Phase 11 — Tracker sync and two-way artifacts (ADR 0011)
+
+| ID | Requirement | Scenario and expected outcome |
+| --- | --- | --- |
+| A65 | FR-11, FR-16 | On a two-way artifact, a status edit becomes a revision-checked request that applies; an edit to a ticket changed since publishing conflicts and the next publish restores the ticket's value; a comment naming a ticket joins its timeline once |
+| A66 | FR-8, FR-16 | A tracker-sync schedule records remote status and assignee and validates keys (not found is marked) without changing ticket fields or revisions, using only GET requests |
+| A67 | FR-16 | Tracker tokens go only to the user config's tracker host; a repository's [tracker] cannot redirect them, and errors name the variable, never the token |
+| A68 | FR-16 | A one-way artifact turns no page edit into a request and reads no comments; the kept edit is reported |
+
 ## Review resolution traceability
 
 | Review issue | Resolved contract | Acceptance |

@@ -7,7 +7,14 @@ import { uuid } from '../lib/ids.js';
 import path from 'node:path';
 import { buildToday, localDate } from '../today/feed.js';
 import { renderDigest, writeDigest, writeDigestFile } from '../today/digest.js';
-import { stateDir } from '../lib/paths.js';
+import { stateDir, quillHome } from '../lib/paths.js';
+import { readJsonIfExists, writeJsonAtomic } from '../lib/atomic-fs.js';
+import { normalizePublishers, consentId, KIND_LABELS } from '../publish/config.js';
+import { rowsFor } from '../publish/content.js';
+import { publishMarkdown, publishHtml } from '../publish/writers.js';
+import { publishArtifact, editRequestId } from '../publish/artifact.js';
+import { createArtifactClient } from '../publish/artifact-client.js';
+import { createTrackerClient, syncSettings, syncable } from '../tracker/client.js';
 
 const NO_PERMISSIONS = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 
@@ -30,8 +37,116 @@ function previousDate(date) {
   return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
 }
 
-export function createJobs({ providers }) {
+// Two-way artifacts (ADR 0011): page edits become revision-checked requests with the normal undo
+// window; comments join their ticket's timeline. Invalid edits (an unknown status) are skipped.
+export function applyFeedback(worker, publisher, done) {
+  for (const e of done.edits ?? []) {
+    const body = e.field === 'status' ? { kind: 'set-status', payload: { status: e.value } } : { kind: 'set-next-action', payload: { next_action: String(e.value ?? '') } };
+    try {
+      submitRequest(worker, { id: editRequestId(publisher, e), target_id: e.ticket_id, expected_revision: e.expected_revision, ...body }, { actor: `artifact:${publisher}` });
+    } catch (err) {
+      worker.log(`publish ${publisher}: page edit of ${e.key} ${e.field} refused: ${err.message}`);
+    }
+  }
+  for (const c of done.comments ?? []) {
+    worker.emit('artifact-comment', { publisher, ...c }, { source_identity: `artifact-comment:${publisher}:${c.comment_id}` });
+  }
+}
+
+function defaultArtifactClient(publisher, worker) {
+  return createArtifactClient({ claudePath: worker.config.claude_path || 'claude', workRoot: path.join(quillHome(worker.env), 'publish', publisher.name, 'runs') });
+}
+
+export function createJobs({ providers, artifactClientFor = defaultArtifactClient, trackerFetch = globalThis.fetch }) {
   return {
+    // Reads title, status, assignee and fix versions of tracker-linked tickets (ADR 0011). Only the
+    // user config's [tracker] is used, so a repository can never point a token at another host.
+    // Remote data is recorded beside the ticket; the ticket's own fields are never changed.
+    async 'tracker-sync'(worker, { settings }) {
+      const tracker = worker.identity && worker.identity.tracker;
+      if (!tracker) throw new Error('tracker-sync needs a [tracker] table with system and domain in config.toml');
+      const client = createTrackerClient({ tracker, settings: syncSettings(worker.config.tracker), env: worker.env, fetchImpl: trackerFetch });
+      const tickets = [...worker.state.tickets.values()].filter((t) => syncable(t, tracker))
+        .sort((a, b) => ((a.external.validated_at ?? '') < (b.external.validated_at ?? '') ? -1 : (a.external.validated_at ?? '') > (b.external.validated_at ?? '') ? 1 : a.key < b.key ? -1 : 1))
+        .slice(0, settings.limit ?? 100);
+      const results = [];
+      let found = 0;
+      let missing = 0;
+      let errors = 0;
+      for (const t of tickets) {
+        try {
+          const remote = await client.fetchIssue(t.external.key);
+          results.push({ ticket_id: t.id, key: t.external.key, validation: 'valid', remote, error: null });
+          found += 1;
+        } catch (err) {
+          if (err.code === 'not-found') { results.push({ ticket_id: t.id, key: t.external.key, validation: 'not-found', remote: null, error: err.message }); missing += 1; }
+          else { results.push({ ticket_id: t.id, key: t.external.key, validation: null, remote: null, error: err.message }); errors += 1; }
+        }
+      }
+      if (results.length) worker.emit('tracker-sync', { system: tracker.system, synced_at: worker.now(), results });
+      worker.markGenerationDirty();
+      const parts = [found ? `${found} found` : null, missing ? `${missing} not found` : null, errors ? `${errors} error${errors === 1 ? '' : 's'}` : null].filter(Boolean);
+      if (results.length && errors === results.length) throw new Error(results[0].error);
+      return { summary: `checked ${results.length} tracker key${results.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}` };
+    },
+    // Runs publishers (ADR 0010). A destination the owner has not confirmed is never sent anything:
+    // the run records needs-confirmation until a publish request carries confirm.
+    async publish(worker, { run_id, settings, trigger }) {
+      const { publishers } = normalizePublishers(worker.config);
+      const names = settings.publishers ?? (settings.publisher ? [settings.publisher] : null);
+      const targets = names ? publishers.filter((p) => names.includes(p.name)) : publishers;
+      if (settings.publisher && !targets.length) throw new Error(`no publisher named ${settings.publisher}`);
+      if (!targets.length) return { summary: 'no publishers configured' };
+      const snapshot = worker.getSnapshot();
+      const indexPath = path.join(stateDir(worker.env), 'publish-index.json');
+      const results = [];
+      for (const p of targets) {
+        const destination = consentId(p);
+        const rec = worker.state.publishers.get(p.name);
+        const confirmed = !!(rec && rec.confirmed.includes(destination));
+        const base = { publisher: p.name, run_id, destination, trigger: trigger ?? 'manual', confirmed: !!settings.confirm };
+        if (!confirmed && !settings.confirm) {
+          const summary = `waiting for confirmation of the first publish to ${p.kind === 'artifact' ? (p.url ?? 'a new claude.ai artifact') : path.basename(p.path)}`;
+          worker.emit('publish-run', { ...base, outcome: 'needs-confirmation', summary }, { source_identity: `publish-run:${run_id}:${p.name}` });
+          results.push({ name: p.name, ok: true, summary });
+          continue;
+        }
+        const now = worker.now();
+        try {
+          let out;
+          if (p.kind === 'markdown') out = publishMarkdown(p, rowsFor(snapshot, p, { exportedAt: now }), { indexPath, now });
+          else if (p.kind === 'html') out = publishHtml(p, snapshot, { now });
+          else if (p.executor !== 'cli') {
+            // The Artifact tools exist in Claude Code sessions, not in the worker: say what to run.
+            worker.emit('publish-run', { ...base, outcome: 'needs-session', summary: `run /session-quill:publish ${p.name} in a Claude Code session to publish` }, { source_identity: `publish-run:${run_id}:${p.name}` });
+            results.push({ name: p.name, ok: true, summary: `run /session-quill:publish ${p.name} in a Claude Code session to publish` });
+            continue;
+          } else {
+            const sidecar = path.join(quillHome(worker.env), 'publish', p.name, 'state.json');
+            const prior = readJsonIfExists(sidecar);
+            try {
+              out = await publishArtifact(p, rowsFor(snapshot, p, { exportedAt: now }), { client: artifactClientFor(p, worker), prior: prior && (!p.url || prior.url === p.url) ? prior : null, now });
+            } catch (err) {
+              // A page that was created before the failure is kept, so the next publish updates it.
+              if (err.url && !(prior && prior.url === err.url)) writeJsonAtomic(sidecar, { url: err.url, page_hash: null, rows: {}, seen_comments: [] });
+              throw err;
+            }
+            // Edits and comments are journaled before the state that acknowledges them is saved; their
+            // ids are derived from the edits, so a retry after a crash in between makes no duplicates.
+            applyFeedback(worker, p.name, out);
+            writeJsonAtomic(sidecar, out.state);
+          }
+          worker.emit('publish-run', { ...base, outcome: 'ok', summary: out.summary, url: out.url ?? null }, { source_identity: `publish-run:${run_id}:${p.name}` });
+          results.push({ name: p.name, ok: true, summary: out.summary });
+        } catch (err) {
+          worker.log(`publish ${p.name} failed: ${err.stack ?? err.message}`);
+          worker.emit('publish-run', { ...base, outcome: 'failed', error: err.message, url: err.url ?? null }, { source_identity: `publish-run:${run_id}:${p.name}` });
+          results.push({ name: p.name, ok: false, error: err.message });
+        }
+      }
+      if (results.every((r) => !r.ok)) throw new Error(results.map((r) => `${r.name}: ${r.error}`).join('; '));
+      return { summary: results.map((r) => `${r.name} (${KIND_LABELS[targets.find((t) => t.name === r.name).kind].toLowerCase()}): ${r.ok ? r.summary : `failed: ${r.error}`}`).join('; ') };
+    },
     async reconcile(worker, { run_id, reason }) {
       const r = await runReconciliation(worker, { reason, providers, run_id });
       const errors = r.provider_health.filter((h) => h.error).length;
