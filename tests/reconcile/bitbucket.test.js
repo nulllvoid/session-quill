@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { execFileSync } from 'node:child_process';
 import { createBitbucketProvider, mapCloudPr, mapServerPr } from '../../src/reconcile/providers/bitbucket.js';
 import { defaultProviders } from '../../src/reconcile/providers/index.js';
 
@@ -67,4 +68,14 @@ test('Server/Data Center polling works against a loopback server, and defaultPro
     assert.deepEqual([pr.state, pr.merged_at], ['merged', '2026-10-01T10:30:00Z']);
     assert.deepEqual(seen, { url: '/rest/api/1.0/projects/PM/repos/app/pull-requests/12', auth: 'Bearer srv-token' });
   } finally { srv.close(); }
+});
+
+test('ci: the request timeout keeps the process alive until it fires (Node 22 exited with the promise pending)', () => {
+  const script = [
+    "import { createBitbucketProvider } from './src/reconcile/providers/bitbucket.js';",
+    "const slow = async (url, init) => new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'TimeoutError' }))));",
+    "createBitbucketProvider({ env: { BITBUCKET_TOKEN: 't' }, fetchImpl: slow, timeoutMs: 20 }).fetchPr('https://bitbucket.org/acme/app/pull-requests/7').then(() => console.log('resolved'), (e) => console.log('rejected: ' + e.message));",
+  ].join('\n');
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: new URL('../..', import.meta.url), encoding: 'utf8' });
+  assert.match(out, /rejected: Bitbucket request failed: timed out/);
 });

@@ -75,10 +75,17 @@ export function createBitbucketProvider({ baseUrl = null, tokenEnv = 'BITBUCKET_
       const user = usernameEnv ? env[usernameEnv] : null;
       const authorization = user ? `Basic ${Buffer.from(`${user}:${token}`).toString('base64')}` : `Bearer ${token}`;
       let res;
+      // A ref'd timer, not AbortSignal.timeout(): that one is unref'd, so with nothing else
+      // pending the process can exit before it fires and the request never settles.
+      const controller = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
       try {
-        res = await fetchImpl(target, { headers: { accept: 'application/json', authorization }, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+        res = await fetchImpl(target, { headers: { accept: 'application/json', authorization }, redirect: 'error', signal: controller.signal });
       } catch (err) {
-        throw fail(`Bitbucket request failed: ${err && err.name === 'TimeoutError' ? 'timed out' : 'network error'}`);
+        throw fail(`Bitbucket request failed: ${timedOut || (err && err.name === 'TimeoutError') ? 'timed out' : 'network error'}`);
+      } finally {
+        clearTimeout(timer);
       }
       if (!res.ok) throw fail(`Bitbucket returned HTTP ${res.status}${res.status === 401 || res.status === 403 ? ` (check ${tokenEnv})` : ''}`);
       const text = await res.text();
