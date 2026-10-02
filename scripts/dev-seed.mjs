@@ -36,6 +36,7 @@ const config = {
   projects: { 'session-quill': { name: 'Session Quill', repo_id: 'session-quill' }, legacy: { name: 'Legacy Delivery', repo_id: 'legacy' } },
   repos: { 'session-quill': { project_id: 'session-quill', display_name: 'session-quill', canonical_path: root, default_branch: 'main', deployment_environments: ['staging', 'production'], provider: 'github' }, legacy: { project_id: 'legacy', display_name: 'legacy-tracker', default_branch: 'main', deployment_environments: ['production'] } },
   tracker: { system: 'jira', domain: 'https://example.atlassian.net', prefixes: ['PROJ'] },
+  schedule: [{ name: 'reconcile', job: 'reconcile', every: '2h' }, { name: 'evening-sync', job: 'reconcile', cron: '30 19 * * 1-5' }],
 };
 saveUserConfig(config, env);
 const ctx = { env, config, storeMeta: meta };
