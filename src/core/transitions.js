@@ -25,9 +25,10 @@ export function outstandingObligations(ticket) {
   return ticket.deployments.filter((d) => d.state === 'pending');
 }
 
-function ensureObligations(ticket, { pr_id, merged_at, source_event_id }, repo) {
-  const environments = (repo && Array.isArray(repo.deployment_environments) && repo.deployment_environments.length)
-    ? repo.deployment_environments : ['production'];
+function ensureObligations(ticket, { pr_id, merged_at, source_event_id, environments: journaled = null }, repo) {
+  // Merge evidence journaled since ADR 0009 carries its environments; older events fall back to the repo.
+  const environments = Array.isArray(journaled) && journaled.length ? journaled
+    : (repo && Array.isArray(repo.deployment_environments) && repo.deployment_environments.length) ? repo.deployment_environments : ['production'];
   let created = 0;
   for (const environment of environments) {
     if (ticket.deployments.some((d) => d.pr_id === pr_id && d.environment === environment)) continue;
@@ -70,7 +71,7 @@ export function deriveStatusFromEvidence(ticket, evidence, repo) {
   return { changed: true };
 }
 
-export function recordDeployment(ticket, { pr_id, environment, deployed_at = null, evidence = null, waiver_reason = null, state }) {
+export function recordDeployment(ticket, { pr_id, environment, deployed_at = null, evidence = null, evidence_kind = null, waiver_reason = null, state }) {
   const obligation = ticket.deployments.find((d) => d.pr_id === pr_id && d.environment === environment);
   if (!obligation) throw new TrackerError('obligation-missing', `no deployment obligation for ${pr_id}/${environment}`);
   if (state === 'waived') {
@@ -82,6 +83,7 @@ export function recordDeployment(ticket, { pr_id, environment, deployed_at = nul
     obligation.state = 'deployed';
     obligation.deployed_at = deployed_at;
     obligation.evidence = evidence;
+    obligation.evidence_kind = evidence_kind ?? 'manual';
   } else {
     throw new TrackerError('deployment-state-invalid', `unknown deployment state ${state}`);
   }

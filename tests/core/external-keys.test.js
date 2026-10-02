@@ -6,7 +6,7 @@ const jira = normalizeTracker({ system: 'jira', domain: 'https://example.atlassi
 
 test('normalizeTracker fills defaults per system and validates every field', () => {
   assert.equal(normalizeTracker(undefined), null);
-  assert.deepEqual(jira, { system: 'jira', domain: 'https://example.atlassian.net', url_template: '{domain}/browse/{key}', key_pattern: '\\b([A-Z][A-Z0-9]+-\\d+)\\b', prefixes: ['PMLA', 'PC'], sources: ['prompt', 'branch'], on_new_key: 'switch', repo: '' });
+  assert.deepEqual(jira, { system: 'jira', domain: 'https://example.atlassian.net', url_template: '{domain}/browse/{key}', key_pattern: '\\b([A-Z][A-Z0-9]+-\\d+)\\b', prefixes: ['PMLA', 'PC'], sources: ['prompt', 'branch'], on_new_key: 'switch', repo: '', environments: [] });
   assert.equal(normalizeTracker({ system: 'linear', domain: 'https://linear.app/acme' }).url_template, '{domain}/issue/{key}');
   for (const bad of [{ system: 'trello' }, { key_pattern: '(' }, { key_pattern: '(a+)+$' }, { key_pattern: 'x'.repeat(201) }, { prefixes: ['pm la'] }, { sources: ['email'] }, { on_new_key: 'merge' }, { domain: 'http://insecure.example' }, { domain: 'javascript:alert(1)' }, { repo: 'a b' }]) {
     assert.throws(() => normalizeTracker(bad), (err) => err.code === 'config-invalid', JSON.stringify(bad));

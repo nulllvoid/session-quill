@@ -73,3 +73,15 @@ test('ranking shows at most five', () => {
   assert.equal(ranked.length, 5);
   assert.equal(ranked[0].raw_score, 25);
 });
+
+test('a fresh merge awaiting deployment earns 10 (20 once two days old); days untouched add one point a day until the ticket is stale', () => {
+  const by = { nowIso: NOW, timezone: TZ, byId: new Map() };
+  const fresh = scoreTicket(t({ status: 'deploy-pending', prs: [{ id: 'p1', state: 'merged', merged_at: '2026-10-02T00:00:00Z' }], deployments: [{ pr_id: 'p1', environment: 'stage', state: 'pending', merged_at: '2026-10-02T00:00:00Z' }] }), by);
+  assert.equal(fresh.raw_score, 10);
+  assert.match(fresh.reasons[0], /^Merged PR awaiting deployment: \+10/);
+  const quiet = scoreTicket(t({ last_activity: '2026-09-29T11:00:00Z' }), by);
+  assert.equal(quiet.raw_score, 3);
+  assert.deepEqual(quiet.reasons, ['Untouched for 3 days: +3']);
+  const stale = scoreTicket(t({ last_activity: '2026-09-20T00:00:00Z', stale: true }), by);
+  assert.equal(stale.raw_score, 10, 'stale replaces the per-day points');
+});

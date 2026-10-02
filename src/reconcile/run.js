@@ -38,7 +38,8 @@ async function pollProviders(worker, providers, now) {
         const result = await provider.fetchPr(pr.url);
         entry.last_success_at = now;
         entry.error = null;
-        updates.push({ ticket_id: ticket.id, pr_id: pr.id, url: pr.url, ...result, observed_at: result.observed_at ?? now, error: null, evidence_id: `${pr.url}:${result.state}:${result.merged_at ?? ''}` });
+        // The environments travel with the evidence so replay builds the same obligations (ADR 0009).
+        updates.push({ ticket_id: ticket.id, pr_id: pr.id, url: pr.url, ...result, observed_at: result.observed_at ?? now, error: null, evidence_id: `${pr.url}:${result.state}:${result.merged_at ?? ''}`, ...(result.state === 'merged' && worker.environmentsFor ? { environments: worker.environmentsFor(ticket.repo_id) } : {}) });
       } catch (err) {
         entry.error = err.message;
         updates.push({ ticket_id: ticket.id, pr_id: pr.id, url: pr.url, error: err.message });

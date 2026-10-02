@@ -64,7 +64,7 @@ export async function run({ flags, io, env }) {
   cfg.timezone = timezone;
   cfg.default_project = cfg.default_project || projectId;
   cfg.projects = { ...cfg.projects, [projectId]: { ...(cfg.projects[projectId] ?? {}), name: projectName, repo_id: repoId } };
-  cfg.repos = { ...cfg.repos, [repoId]: { ...(cfg.repos[repoId] ?? {}), project_id: projectId, display_name: path.basename(repoDir), canonical_path: repoDir, default_branch: (cfg.repos[repoId] ?? {}).default_branch ?? 'main', deployment_environments: (cfg.repos[repoId] ?? {}).deployment_environments ?? ['production'] } };
+  cfg.repos = { ...cfg.repos, [repoId]: { ...(cfg.repos[repoId] ?? {}), project_id: projectId, display_name: path.basename(repoDir), canonical_path: repoDir, default_branch: (cfg.repos[repoId] ?? {}).default_branch ?? 'main', ...((cfg.repos[repoId] ?? {}).deployment_environments ? { deployment_environments: cfg.repos[repoId].deployment_environments } : {}) } };
   const cfgFile = saveUserConfig(cfg, env);
   io.println(`wrote user config ${cfgFile}`);
   if (fs.existsSync(repoDir)) {

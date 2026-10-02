@@ -1,11 +1,12 @@
 // [[schedule]] tables from user config (ADR 0007). Repository config cannot schedule jobs.
 import { parseCron, parseInterval, nextAfter } from './cron.js';
 
-export const JOBS = ['reconcile', 'agent'];
+export const JOBS = ['reconcile', 'agent', 'digest'];
+export const DIGEST_TARGETS = ['vault-daily', 'file'];
 export const AGENT_SCOPES = ['deploy-pending', 'active', 'review', 'blocked', 'open'];
 export const AGENT_LIMIT_MAX = 25;
 // Named by the zero-command proposal and accepted in config so later releases need no migration.
-export const PLANNED_JOBS = ['stale-sweep', 'digest', 'publish', 'tracker-sync'];
+export const PLANNED_JOBS = ['stale-sweep', 'publish', 'tracker-sync'];
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 export function defaultSchedules(config = {}) {
@@ -35,6 +36,14 @@ export function normalizeSchedules(config = {}, { timeZone = 'UTC', now = Date.n
       const limit = raw.limit ?? 10;
       if (!Number.isInteger(limit) || limit < 1 || limit > AGENT_LIMIT_MAX) { warnings.push(`${where}: limit must be a whole number from 1 to ${AGENT_LIMIT_MAX}`); return; }
       extra = { recipe: raw.recipe.trim(), scope, limit };
+    }
+    if (raw.job === 'digest') {
+      const to = raw.to ?? ['vault-daily'];
+      if (!Array.isArray(to) || !to.length || to.some((t) => !DIGEST_TARGETS.includes(t))) { warnings.push(`${where}: to may contain ${DIGEST_TARGETS.join(', ')}`); return; }
+      if (to.includes('file') && (typeof raw.path !== 'string' || !raw.path.trim())) { warnings.push(`${where}: a file digest needs path = "<file.md>"`); return; }
+      const day = raw.day ?? 'today';
+      if (!['today', 'yesterday'].includes(day)) { warnings.push(`${where}: day must be today or yesterday`); return; }
+      extra = { to: [...new Set(to)], path: to.includes('file') ? raw.path.trim() : null, day };
     }
     try {
       const enabled = raw.enabled !== false;

@@ -1,5 +1,6 @@
 import { applyLifecycle } from './lifecycle.js';
 import { rankPickNext, blockedList } from './picknext.js';
+import { buildToday } from '../today/feed.js';
 
 // Derived projections computed at publish time: lifecycle flags, pick-next, blocked list and
 // outstanding deployment obligations (oldest first).
@@ -19,6 +20,7 @@ export function derive(state, nowIso) {
     picknext: rankPickNext(tickets, { nowIso, timezone: state.meta.timezone }),
     blocked: blockedList(tickets),
     deployments_outstanding: outstanding,
+    today: buildToday(state, { nowIso }),
     notify: life.notify,
     lifecycle_changed: life,
   };

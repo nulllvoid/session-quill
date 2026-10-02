@@ -24,6 +24,7 @@ export function scoreTicket(ticket, { nowIso, timezone, byId }) {
   if (pendingMerged.length) {
     const oldest = pendingMerged.reduce((m, d) => (d.merged_at < m ? d.merged_at : m), pendingMerged[0].merged_at);
     if (ageMs(oldest, nowIso) >= 2 * DAY) { raw += 20; reasons.push(`Merged PR awaiting deployment for ${Math.floor(ageMs(oldest, nowIso) / DAY)} day(s): +20`); }
+    else { raw += 10; reasons.push('Merged PR awaiting deployment: +10'); }
   }
   const openPrs = (ticket.prs ?? []).filter((p) => p.state === 'open' || p.state === 'draft');
   if (ticket.status === 'review' && openPrs.length) {
@@ -45,6 +46,11 @@ export function scoreTicket(ticket, { nowIso, timezone, byId }) {
     if (doneSiblings > 0) { raw += 10; reasons.push('Parent has another child done: +10'); }
   }
   if (ticket.stale) { raw += 10; reasons.push('Stale (no activity for 5+ days): +10'); }
+  else if (ticket.last_activity) {
+    // Days since last touch (ADR 0009): one point a day from two days, until the stale flag takes over.
+    const idle = Math.floor(ageMs(ticket.last_activity, nowIso) / DAY);
+    if (idle >= 2) { const pts = Math.min(idle, 9); raw += pts; reasons.push(`Untouched for ${idle} days: +${pts}`); }
+  }
 
   return { ticket_id: ticket.id, raw_score: raw, score: Math.min(100, raw), reasons, limitations };
 }

@@ -57,7 +57,10 @@ function sanitizeTicket(t, o) {
   for (const f of o.fields) {
     if (!(f in t)) continue;
     if (f === 'prs') out.prs = (t.prs ?? []).map((p) => sanitizePr(p, o));
-    else if (f === 'deployments') out.deployments = (t.deployments ?? []).map(({ source_event_id, evidence, ...d }) => ({ ...d, evidence: o.includeLinks ? evidence : (evidence ? '[evidence omitted]' : null) }));
+    else if (f === 'deployments') {
+      out.deployments = (t.deployments ?? []).map(({ source_event_id, evidence, ...d }) => ({ ...d, evidence: o.includeLinks ? evidence : (evidence ? '[evidence omitted]' : null) }));
+      out.environments = (t.environments ?? []).map(({ evidence, ...e }) => ({ ...e, evidence: o.includeLinks ? evidence ?? null : (evidence ? '[evidence omitted]' : null) }));
+    }
     else if (f === 'timeline') out.timeline = (t.timeline ?? []).map(({ content_ref, event_id, ...e }) => e);
     else if (f === 'plans') out.plans = (t.plans ?? []).map(({ content_ref, preview, ...p }) => (o.includeCheckpoints ? { ...p, preview } : p));
     else if (f === 'conclusions') out.conclusions = (t.conclusions ?? []).map(({ content_ref, preview, ...c }) => (o.includeCheckpoints ? { ...c, preview } : c));

@@ -14,7 +14,7 @@ test('schedules are validated; planned jobs and broken entries are reported and 
     { name: 'reconcile', job: 'reconcile', every: '2h' },
     { name: 'evening', job: 'reconcile', cron: '30 19 * * 1-5' },
     { name: 'paused', job: 'reconcile', every: '1d', enabled: false },
-    { name: 'daily-digest', job: 'digest', cron: '30 19 * * 1-5' },
+    { name: 'nightly-publish', job: 'publish', cron: '30 19 * * 1-5' },
     { name: 'bad-cron', job: 'reconcile', cron: '61 * * * *' },
     { name: 'both', job: 'reconcile', cron: '* * * * *', every: '1h' },
     { name: 'evening', job: 'reconcile', every: '1h' },
@@ -25,5 +25,5 @@ test('schedules are validated; planned jobs and broken entries are reported and 
   assert.deepEqual(schedules.map((s) => [s.name, s.enabled]), [['reconcile', true], ['evening', true], ['paused', false]]);
   assert.equal(schedules[1].cron, '30 19 * * 1-5');
   const text = warnings.join('\n');
-  for (const expected of [/daily-digest.*later release/, /bad-cron.*minute/, /both.*exactly one/, /evening.*duplicate/, /lowercase/, /mystery.*unknown job/, /never.*never fires/]) assert.match(text, expected);
+  for (const expected of [/nightly-publish.*later release/, /bad-cron.*minute/, /both.*exactly one/, /evening.*duplicate/, /lowercase/, /mystery.*unknown job/, /never.*never fires/]) assert.match(text, expected);
 });

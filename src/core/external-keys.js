@@ -106,7 +106,9 @@ export function normalizeTracker(raw) {
   if (typeof url_template !== 'string' || url_template.length > 300) throw invalid('tracker.url_template must be a string of at most 300 characters');
   const repo = raw.repo ?? '';
   if (typeof repo !== 'string' || !/^[A-Za-z0-9._/-]*$/.test(repo)) throw invalid('tracker.repo must look like owner/name');
-  return { system, domain, url_template, key_pattern, prefixes, sources, on_new_key, repo };
+  const environments = stringList(raw.environments, 'environments').map((e) => e.trim());
+  if (environments.length > 10 || environments.some((e) => !/^[a-z0-9][a-z0-9-]{0,31}$/.test(e)) || new Set(environments).size !== environments.length) throw invalid('tracker.environments must be up to 10 distinct lowercase names such as stage and prod');
+  return { system, domain, url_template, key_pattern, prefixes, sources, on_new_key, repo, environments };
 }
 
 export function keyPrefix(key) {

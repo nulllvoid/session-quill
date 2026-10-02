@@ -58,7 +58,7 @@ export function suggestionMutation(state, ticket, h, sug, decision) {
         throw new TrackerError('evidence-ambiguous', `the evidence for ${item.environment} names no PR, and several PRs are pending there; record it per PR instead`);
       }
       for (const d of candidates) {
-        if (item.state === 'deployed') items.push({ pr_id: d.pr_id, environment: d.environment, state: 'deployed', deployed_at: item.deployed_at ?? sug.created_at, evidence: item.evidence ? String(item.evidence).slice(0, 500) : null });
+        if (item.state === 'deployed') items.push({ pr_id: d.pr_id, environment: d.environment, state: 'deployed', deployed_at: item.deployed_at ?? sug.created_at, evidence: item.evidence ? String(item.evidence).slice(0, 500) : null, evidence_kind: 'agent' });
         else if (item.state === 'n-a') items.push({ pr_id: d.pr_id, environment: d.environment, state: 'waived', waiver_reason: `not applicable: ${item.evidence ?? 'reported by the agent'}`.slice(0, 500) });
       }
     }

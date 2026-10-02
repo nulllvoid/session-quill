@@ -5,12 +5,16 @@ import path from 'node:path';
 import { projectionsDir } from '../lib/paths.js';
 import { ensureDir, writeJsonAtomic, readJsonIfExists } from '../lib/atomic-fs.js';
 import { addMs, HOUR } from '../lib/time.js';
+import { environmentStatus } from '../deploy/environments.js';
 
 export const SNAPSHOT_TIMELINE_LIMIT = 20;
 
-export function ticketSummary(ticket) {
+export function ticketSummary(ticket, { environmentsFor = null } = {}) {
   const { timeline, ...rest } = ticket;
-  return { ...rest, timeline: timeline.slice(-SNAPSHOT_TIMELINE_LIMIT), timeline_total: timeline.length };
+  const out = { ...rest, timeline: timeline.slice(-SNAPSHOT_TIMELINE_LIMIT), timeline_total: timeline.length };
+  // Per-environment status (ADR 0009) for the configured environments of the ticket's repository.
+  out.environments = environmentStatus(ticket, environmentsFor ? environmentsFor(ticket.repo_id) : []);
+  return out;
 }
 
 export function buildMeta(state, { now, capture, worker_seen_at, active_sync_request_id = null, key_example = 'PROJ-123', next_sync_due }) {
@@ -46,7 +50,7 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
   };
 }
 
-export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [] }) {
+export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null }) {
   const dayAgo = addMs(generated_at, -24 * HOUR);
   const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo);
   return {
@@ -54,7 +58,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     generation_id,
     generated_at,
     capabilities: capabilities ?? { read: true, edit_tickets: true, handoff: true, refresh: true, cancel_requests: true, export: true },
-    tickets: [...state.tickets.values()].map(ticketSummary),
+    tickets: [...state.tickets.values()].map((t) => ticketSummary(t, { environmentsFor })),
     sessions: [...state.sessions.values()],
     checkpoints: [...state.checkpoints.values()],
     handoffs: [...state.handoffs.values()],
@@ -64,6 +68,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     picknext: derived.picknext ?? [],
     blocked: derived.blocked ?? [],
     deployments_outstanding: derived.deployments_outstanding ?? [],
+    today: derived.today ?? null,
     meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id, key_example, next_sync_due }),
     repos: Object.entries(state.meta.repos).map(([id, r]) => ({ id, project_id: r.project_id ?? null, display_name: r.display_name ?? id, default_branch: r.default_branch ?? 'main', deployment_environments: r.deployment_environments ?? ['production'] })),
     unresolved: state.unresolved.slice(-200),

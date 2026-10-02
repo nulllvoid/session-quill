@@ -4,6 +4,10 @@ import { catalogFor } from '../agents/recipes.js';
 import { submitRequest } from '../server/requests.js';
 import { repoFor } from '../core/state.js';
 import { uuid } from '../lib/ids.js';
+import path from 'node:path';
+import { buildToday } from '../today/feed.js';
+import { renderDigest, writeDigest, writeDigestFile } from '../today/digest.js';
+import { stateDir } from '../lib/paths.js';
 
 const NO_PERMISSIONS = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 
@@ -21,6 +25,11 @@ function schedulableRecipe(catalog, name, repoId) {
   return recipe;
 }
 
+function previousDate(date) {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
+}
+
 export function createJobs({ providers }) {
   return {
     async reconcile(worker, { run_id, reason }) {
@@ -28,6 +37,24 @@ export function createJobs({ providers }) {
       const errors = r.provider_health.filter((h) => h.error).length;
       const checks = r.pr_updates.length;
       return { summary: `${checks} PR check${checks === 1 ? '' : 's'}${errors ? `, ${errors} provider error${errors === 1 ? '' : 's'}` : ''}`, last_sync: r.last_sync };
+    },
+    // Writes one store-local day of the Today feed as markdown (ADR 0009): into the store's daily
+    // note, a file, or both. Never overwrites a digest section someone edited.
+    async digest(worker, { settings }) {
+      const feed = buildToday(worker.state, { nowIso: worker.now(), days: 2 });
+      const date = settings.day === 'yesterday' ? previousDate(feed.generated_for) : feed.generated_for;
+      const day = feed.days.find((d) => d.date === date) ?? { date, tickets: [], sessions: 0 };
+      const pendingDeployments = [];
+      for (const t of worker.state.tickets.values()) for (const d of t.deployments ?? []) if (d.state === 'pending') pendingDeployments.push({ ticket_key: t.key, environment: d.environment });
+      pendingDeployments.sort((a, b) => (a.ticket_key < b.ticket_key ? -1 : a.ticket_key > b.ticket_key ? 1 : a.environment < b.environment ? -1 : 1));
+      const markdown = renderDigest(day, { pendingDeployments });
+      const indexPath = path.join(stateDir(worker.env), 'digest-index.json');
+      const written = [];
+      if (settings.to.includes('vault-daily')) written.push(writeDigest({ dir: path.join(worker.config.store_path, 'daily'), date, markdown, indexPath }).path);
+      if (settings.to.includes('file')) written.push(writeDigestFile({ file: path.resolve(settings.path), markdown, indexPath }).path);
+      const n = written.length;
+      const tickets = day.tickets.length;
+      return { summary: `wrote ${n} digest${n === 1 ? '' : 's'} for ${date} (${tickets} ticket${tickets === 1 ? '' : 's'})` };
     },
     // Queues a recipe run for each ticket in scope (ADR 0008). Scheduled runs never get more than
     // read access, so nothing unattended can edit, commit, push or open a PR.

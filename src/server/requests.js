@@ -10,6 +10,7 @@ import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
 import { scopeFor } from '../hooks/scope.js';
 import { catalogFor } from '../agents/recipes.js';
+import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
 
 export const EDIT_DELAY_MS = 10_000;
@@ -56,7 +57,9 @@ function normalizeDeploymentItems(items, ticket, { requireChoice } = {}) {
     }
     if (requireChoice === 'waive') throw new TrackerError('waiver-reason-required', 'a waived deployment requires a reason');
     if (!item.deployed_at || !isIsoZ(item.deployed_at)) throw new TrackerError('deployed-at-required', 'mark deployed requires deployed_at (RFC 3339 UTC)');
-    return { pr_id: item.pr_id, environment: item.environment, state: 'deployed', deployed_at: item.deployed_at, evidence: item.evidence ? String(item.evidence).slice(0, 500) : null };
+    const kind = item.evidence_kind ?? 'manual';
+    if (!EVIDENCE_KINDS.includes(kind)) throw new TrackerError('request-invalid', `evidence_kind must be one of ${EVIDENCE_KINDS.join(', ')}`);
+    return { pr_id: item.pr_id, environment: item.environment, state: 'deployed', deployed_at: item.deployed_at, evidence: item.evidence ? String(item.evidence).slice(0, 500) : null, evidence_kind: kind };
   });
 }
 

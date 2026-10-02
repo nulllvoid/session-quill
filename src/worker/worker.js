@@ -21,6 +21,7 @@ import { writeBindingSnapshot, readBindingSnapshot, writeHeartbeat, writeRuntime
 import { renderSessionNote, renderHandoffNote, writeNote, writeGeneratedNote } from './notes.js';
 import { publishGeneration, buildSnapshot } from './projections.js';
 import { captureHealth } from './health.js';
+import { effectiveEnvironments } from '../deploy/environments.js';
 
 export const NOTE_FLUSH_MS = 30 * SECOND;
 export const HEARTBEAT_MS = 5 * SECOND;
@@ -128,6 +129,15 @@ export class Worker {
     if (!force && ms - this.lastHeartbeatMs < HEARTBEAT_MS) return;
     this.lastHeartbeatMs = ms;
     writeHeartbeat({ at: toIso(ms), pid: process.pid, store_id: this.storeMeta.store_id, generation: this.generationNumber }, this.env);
+  }
+
+  // Effective deployment environments for a repository (ADR 0009): its own list, else the tracker's
+  // (repository .quill.toml first, then user config), else production.
+  environmentsFor(repoId) {
+    const repo = repoId ? (this.config.repos ?? {})[repoId] : null;
+    const scope = this.identity && repoId ? (this.identity.repos ?? []).find((r) => r.repo_id === repoId) : null;
+    const tracker = (scope && scope.tracker) || (this.identity && this.identity.tracker) || null;
+    return effectiveEnvironments(repo, tracker);
   }
 
   publishIdentity() {
@@ -386,6 +396,7 @@ export class Worker {
       derived: this.derived(), capture, worker_seen_at: now, active_sync_request_id: active ? active.id : null, key_example: keyExample(tracker),
       schedules: schedules ?? [], next_sync_due: schedules ? (reconcile ? reconcile.next_due : null) : undefined,
       recipes: this.recipeInfo ? this.recipeInfo() : [],
+      environmentsFor: (repoId) => this.environmentsFor(repoId),
     };
   }
 
