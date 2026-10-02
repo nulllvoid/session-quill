@@ -154,7 +154,7 @@ export class Worker {
         const fresh = loadUserConfig(this.env);
         // Repositories registered by `quill init` while the worker runs must reach the identity too.
         this.config = {
-          ...this.config, gate_enabled: fresh.gate_enabled, gate: fresh.gate, tracker: fresh.tracker,
+          ...this.config, gate_enabled: fresh.gate_enabled, gate: fresh.gate, tracker: fresh.tracker, schedule: fresh.schedule,
           repos: { ...this.config.repos, ...fresh.repos }, projects: { ...this.config.projects, ...fresh.projects }, default_project: fresh.default_project || this.config.default_project,
         };
         this.state.meta.repos = this.config.repos;
@@ -380,7 +380,12 @@ export class Worker {
     const capture = captureHealth(this.env, { now, journalInfo: this.journalInfo ?? {} });
     const active = [...this.state.requests.values()].find((r) => r.kind === 'refresh' && ['pending', 'applying'].includes(r.state));
     const tracker = this.identity ? (this.identity.tracker ?? (this.identity.repos ?? []).map((r) => r.tracker).find(Boolean) ?? null) : null;
-    return { derived: this.derived(), capture, worker_seen_at: now, active_sync_request_id: active ? active.id : null, key_example: keyExample(tracker) };
+    const schedules = this.scheduleInfo ? this.scheduleInfo() : null;
+    const reconcile = schedules ? schedules.find((s) => s.job === 'reconcile' && s.enabled) : null;
+    return {
+      derived: this.derived(), capture, worker_seen_at: now, active_sync_request_id: active ? active.id : null, key_example: keyExample(tracker),
+      schedules: schedules ?? [], next_sync_due: schedules ? (reconcile ? reconcile.next_due : null) : undefined,
+    };
   }
 
   publishGeneration() {

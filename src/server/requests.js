@@ -11,7 +11,9 @@ import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from 
 import { scopeFor } from '../hooks/scope.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external'];
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job'];
+// Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
+const SCHEDULER_KINDS = new Set(['refresh', 'run-job']);
 const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
@@ -56,7 +58,7 @@ function normalizeDeploymentItems(items, ticket, { requireChoice } = {}) {
   });
 }
 
-export function validateRequestBody(body, state, nowIso) {
+export function validateRequestBody(body, state, nowIso, { scheduleNames = null } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
   const payload = body.payload ?? {};
@@ -116,6 +118,12 @@ export function validateRequestBody(body, state, nowIso) {
     case 'refresh':
       normalized = {};
       break;
+    case 'run-job': {
+      if (typeof payload.schedule !== 'string' || !payload.schedule) throw new TrackerError('request-invalid', 'run-job needs payload.schedule');
+      if (scheduleNames && !scheduleNames.includes(payload.schedule)) throw new TrackerError('schedule-unknown', `no schedule named ${payload.schedule}`);
+      normalized = { schedule: payload.schedule };
+      break;
+    }
     case 'attach-unbound': {
       const hasTicket = typeof payload.ticket_id === 'string' && payload.ticket_id !== '';
       const hasKey = typeof payload.key === 'string' && payload.key.trim() !== '';
@@ -172,7 +180,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
     if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
     throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
   }
-  const request = validateRequestBody(body, worker.state, now);
+  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null });
   request.actor_id = actor;
   const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
   if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
@@ -299,7 +307,7 @@ function finish(worker, req, evaluation) {
 export function applyDueRequests(worker, nowIso) {
   let applied = 0;
   for (const req of [...worker.state.requests.values()]) {
-    if (req.state !== 'pending' || req.kind === 'refresh') continue;
+    if (req.state !== 'pending' || SCHEDULER_KINDS.has(req.kind)) continue;
     if (req.not_before > nowIso) continue;
     worker.emit('request-tx', { request_id: req.id, outcome: 'applying' }, { source_identity: `request-tx:${req.id}:applying` });
     finish(worker, req, evaluateRequest(worker, req));
@@ -311,7 +319,7 @@ export function applyDueRequests(worker, nowIso) {
 // After a crash an `applying` request has no terminal transaction: re-evaluate it safely.
 export function recoverApplying(worker) {
   for (const req of [...worker.state.requests.values()]) {
-    if (req.state !== 'applying' || req.kind === 'refresh') continue;
+    if (req.state !== 'applying' || SCHEDULER_KINDS.has(req.kind)) continue;
     finish(worker, req, evaluateRequest(worker, req));
   }
 }
