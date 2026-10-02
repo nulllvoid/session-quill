@@ -385,6 +385,7 @@ export class Worker {
     return {
       derived: this.derived(), capture, worker_seen_at: now, active_sync_request_id: active ? active.id : null, key_example: keyExample(tracker),
       schedules: schedules ?? [], next_sync_due: schedules ? (reconcile ? reconcile.next_due : null) : undefined,
+      recipes: this.recipeInfo ? this.recipeInfo() : [],
     };
   }
 

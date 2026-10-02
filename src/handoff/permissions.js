@@ -11,14 +11,21 @@ export function isProtectedBranch(branch, repo) {
   return protectedNames.has(branch) || /^release\//.test(branch);
 }
 
-export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured } = {}) {
-  const mode = payload.mode ?? 'analyse-followups';
+// With a recipe (ADR 0008) the mode comes from the recipe and its frontmatter permissions are a
+// ceiling: a request may ask for less, never more.
+export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null } = {}) {
+  if (recipe && payload.mode !== undefined && payload.mode !== null && payload.recipe !== undefined && payload.mode !== recipe.mode) throw new TrackerError('mode-mismatch', `recipe ${recipe.name} runs in mode ${recipe.mode}`);
+  const mode = recipe ? recipe.mode : payload.mode ?? 'analyse-followups';
   if (!MODES.includes(mode)) throw new TrackerError('mode-invalid', `handoff mode must be one of ${MODES.join(', ')}`);
   const note = typeof payload.note === 'string' ? payload.note.trim() : '';
   if (note.length > NOTE_MAX) throw new TrackerError('note-too-long', `handoff note exceeds ${NOTE_MAX} characters`);
   const raw = payload.permissions ?? {};
   const permissions = {};
   for (const k of PERMISSION_KEYS) permissions[k] = raw[k] === true;
+  if (recipe) {
+    const beyond = PERMISSION_KEYS.filter((k) => permissions[k] && !(recipe.permissions && recipe.permissions[k]));
+    if (beyond.length) throw new TrackerError('permission-beyond-recipe', `recipe ${recipe.name} does not allow ${beyond.join(', ')}`);
+  }
   const branch = typeof payload.branch === 'string' && payload.branch.trim() ? payload.branch.trim() : (typeof raw.branch === 'string' && raw.branch.trim() ? raw.branch.trim() : null);
   const hasProvider = providerConfigured ?? !!(repo && repo.provider);
 
@@ -36,5 +43,8 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   if (permissions.open_draft_pr && !permissions.push_branch) throw new TrackerError('permission-dependency', 'open_draft_pr requires push_branch');
   if (permissions.open_draft_pr && !hasProvider) throw new TrackerError('provider-required', 'open_draft_pr requires a configured PR provider for the repository');
   if ((permissions.read_source || permissions.edit_source) && !repo) throw new TrackerError('repo-required', 'source access requires a registered repository on the owner machine');
+  if (recipe) {
+    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, branch: permissions.push_branch ? branch : null };
+  }
   return { mode, note, permissions, branch: permissions.push_branch ? branch : null };
 }

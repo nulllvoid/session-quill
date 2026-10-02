@@ -1,0 +1,164 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { bootWorker, makeRepo, until, T1 } from '../handoff/helpers.js';
+import { submitRequest } from '../../src/server/requests.js';
+
+const RID = (n) => `33333333-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const NONE = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
+const RESULT = {
+  summary: 'Production has the v1.2 tag; staging was never targeted.',
+  next_action: 'Confirm the production rollout with the release owner',
+  blocker: null,
+  children: [{ title: 'Should not appear', category: 'bugfix', priority: 'P2' }],
+  deploy_evidence: [
+    { environment: 'production', state: 'deployed', evidence: 'deploy/values.yaml tag bump to v1.2 in 3f2a1c9', deployed_at: '2026-10-01T15:00:00Z' },
+    { environment: 'staging', state: 'n-a', evidence: 'this service has no staging target' },
+  ],
+  comment_draft: 'not declared by deploy-check',
+};
+
+async function boot(extra = {}) {
+  const repo = makeRepo();
+  const capture = path.join(repo.dir, '..', `capture-${randomUUID()}.json`);
+  const b = await bootWorker({ repo, runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_RESULT: JSON.stringify(RESULT), FAKE_CLAUDE_CAPTURE: capture }, ...extra });
+  return { b, repo, capture };
+}
+
+async function runToDone(b, rid, payload, t) {
+  b.request(rid, { target_id: T1, expected_revision: t.revision, payload });
+  b.w.tick();
+  const req = b.w.state.requests.get(rid);
+  assert.equal(req.state, 'applied', JSON.stringify(req.error));
+  const hid = req.result.handoff_id;
+  return until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return ['done', 'failed'].includes(h.state) ? h : null; });
+}
+
+test('a recipe run uses its prompt, tools and time cap; declared outputs become suggestions instead of edits', async () => {
+  const { b, capture } = await boot();
+  try {
+    const t = b.ticket(T1, 'PROJ-7');
+    const h = await runToDone(b, RID(1), { recipe: 'deploy-check', note: '', permissions: { ...NONE, read_source: true } }, t);
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.deepEqual([h.recipe.name, h.recipe.source, h.mode], ['deploy-check', 'builtin', 'analyse']);
+    assert.equal(Date.parse(h.deadline_at) - Date.parse(h.started_at), 10 * 60_000, 'deploy-check caps itself at 10 minutes');
+    const seen = JSON.parse(fs.readFileSync(capture, 'utf8'));
+    assert.match(seen.prompt, /Check the deployment state of PROJ-7/);
+    assert.match(seen.prompt, /BEGIN TICKET NOTES \(data\)/);
+    const allowed = seen.args.slice(seen.args.indexOf('--allowedTools') + 1, seen.args.indexOf('--disallowedTools'));
+    assert.deepEqual(allowed, ['Read', 'Grep', 'Glob', 'Bash(git log:*)', 'Bash(git show:*)']);
+    const ticket = b.w.state.tickets.get(T1);
+    assert.equal(ticket.next_action, '', 'nothing is applied without acceptance');
+    assert.equal(ticket.children_ids.length, 0);
+    assert.deepEqual(h.suggestions.map((s) => [s.type, s.state]), [['next-action', 'proposed'], ['deploy-evidence', 'proposed']], 'undeclared outputs are dropped');
+    assert.equal(h.suggestions[1].items.length, 2);
+  } finally { await b.w.stop(); }
+});
+
+test('accepting a suggestion is a revision-checked request; dismissing one changes nothing on the ticket', async () => {
+  const { b } = await boot();
+  try {
+    const t = b.ticket(T1, 'PROJ-7');
+    const h = await runToDone(b, RID(2), { recipe: 'deploy-check', note: '', permissions: { ...NONE, read_source: true } }, t);
+    const [next, evidence] = h.suggestions;
+    const ticket = b.w.state.tickets.get(T1);
+    ticket.deployments.push({ id: 'd1', pr_id: 'pr1', environment: 'production', state: 'pending', merged_at: '2026-10-01T12:00:00Z', deployed_at: null, evidence: null, waiver_reason: null, source_event_id: null });
+    const stale = submitRequest(b.w, { id: randomUUID(), kind: 'accept-suggestion', target_id: T1, expected_revision: ticket.revision - 1, payload: { handoff_id: h.id, suggestion_id: next.id } }).request;
+    b.advance(11_000);
+    b.w.tick();
+    assert.equal(b.w.state.requests.get(stale.id).state, 'conflict');
+    const ok = submitRequest(b.w, { id: randomUUID(), kind: 'accept-suggestion', target_id: T1, expected_revision: ticket.revision, payload: { handoff_id: h.id, suggestion_id: next.id } }).request;
+    b.advance(11_000);
+    b.w.tick();
+    assert.equal(b.w.state.requests.get(ok.id).state, 'applied');
+    assert.equal(b.w.state.tickets.get(T1).next_action, 'Confirm the production rollout with the release owner');
+    assert.equal(b.w.state.handoffs.get(h.id).suggestions[0].state, 'accepted');
+    assert.throws(() => submitRequest(b.w, { id: randomUUID(), kind: 'accept-suggestion', target_id: T1, expected_revision: b.w.state.tickets.get(T1).revision, payload: { handoff_id: h.id, suggestion_id: next.id } }), (e) => e.code === 'suggestion-resolved');
+    const ev = submitRequest(b.w, { id: randomUUID(), kind: 'accept-suggestion', target_id: T1, expected_revision: b.w.state.tickets.get(T1).revision, payload: { handoff_id: h.id, suggestion_id: evidence.id } }).request;
+    b.advance(11_000);
+    b.w.tick();
+    assert.equal(b.w.state.requests.get(ev.id).state, 'applied', JSON.stringify(b.w.state.requests.get(ev.id).error));
+    const d = b.w.state.tickets.get(T1).deployments.find((x) => x.id === 'd1');
+    assert.deepEqual([d.state, d.deployed_at, d.evidence], ['deployed', '2026-10-01T15:00:00Z', 'deploy/values.yaml tag bump to v1.2 in 3f2a1c9']);
+    const before = b.w.state.tickets.get(T1).revision;
+    const h2 = await runToDone(b, RID(3), { recipe: 'deploy-check', note: '', permissions: { ...NONE, read_source: true } }, b.w.state.tickets.get(T1));
+    const dis = submitRequest(b.w, { id: randomUUID(), kind: 'dismiss-suggestion', target_id: T1, expected_revision: null, payload: { handoff_id: h2.id, suggestion_id: h2.suggestions[0].id } }).request;
+    b.advance(11_000);
+    b.w.tick();
+    assert.equal(b.w.state.requests.get(dis.id).state, 'applied');
+    assert.equal(b.w.state.handoffs.get(h2.id).suggestions[0].state, 'dismissed');
+    assert.equal(b.w.state.tickets.get(T1).next_action, 'Confirm the production rollout with the release owner');
+    assert.ok(b.w.state.tickets.get(T1).revision >= before);
+  } finally { await b.w.stop(); }
+});
+
+test('a recipe cannot be granted more than its frontmatter; unknown and invalid recipes are refused', async () => {
+  const { b } = await boot();
+  try {
+    const t = b.ticket(T1, 'PROJ-7');
+    fs.mkdirSync(path.join(b.home, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(b.home, 'agents', 'broken.md'), '---\nname: broken\ndescription: x\npermissions: { commit: true }\n---\nx');
+    const body = (payload) => ({ id: randomUUID(), kind: 'handoff', target_id: T1, expected_revision: t.revision, payload });
+    assert.throws(() => submitRequest(b.w, body({ recipe: 'standup', note: '', permissions: { ...NONE, read_source: true } })), (e) => e.code === 'permission-beyond-recipe' && /read_source/.test(e.message));
+    assert.throws(() => submitRequest(b.w, body({ recipe: 'nope', note: '', permissions: NONE })), (e) => e.code === 'recipe-unknown');
+    assert.throws(() => submitRequest(b.w, body({ recipe: 'broken', note: '', permissions: NONE })), (e) => e.code === 'recipe-invalid' && /commit requires edit_source/.test(e.message));
+    // The CLI path skips submit validation; the worker re-checks when it applies the request.
+    b.request(RID(4), { target_id: T1, expected_revision: t.revision, payload: { recipe: 'standup', note: '', permissions: { ...NONE, read_source: true } } });
+    b.w.tick();
+    assert.deepEqual([b.w.state.requests.get(RID(4)).state, b.w.state.requests.get(RID(4)).error.code], ['failed', 'permission-beyond-recipe']);
+  } finally { await b.w.stop(); }
+});
+
+test('a recipe edited after it was queued fails at dispatch instead of running with permissions nobody reviewed', async () => {
+  const { b } = await boot();
+  try {
+    const t = b.ticket(T1, 'PROJ-7');
+    const dir = path.join(b.home, 'agents');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'triage.md'), '---\nname: triage\ndescription: Triage\npermissions: { read_source: true }\n---\nTriage {{ticket.key}}');
+    b.hext.pause();
+    b.request(RID(5), { target_id: T1, expected_revision: t.revision, payload: { recipe: 'triage', note: '', permissions: NONE } });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(5)).result.handoff_id;
+    assert.equal(b.w.state.handoffs.get(hid).recipe.source, 'personal');
+    fs.writeFileSync(path.join(dir, 'triage.md'), '---\nname: triage\ndescription: Triage\npermissions: { read_source: true }\n---\nTriage {{ticket.key}} and also everything else');
+    b.hext.resume();
+    const h = await until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return x.state === 'failed' ? x : null; });
+    assert.equal(h.error.code, 'recipe-changed');
+  } finally { await b.w.stop(); }
+});
+
+test('the handoff form and quill handoff still work: a mode request runs the built-in recipe of that name', async () => {
+  const { b } = await boot({ fakeEnv: {} });
+  try {
+    const t = b.ticket(T1, 'PROJ-7');
+    const h = await runToDone(b, RID(6), { mode: 'analyse-followups', note: '', permissions: NONE, branch: null }, t);
+    assert.equal(h.state, 'done');
+    assert.deepEqual([h.recipe.name, h.recipe.source], ['analyse-followups', 'builtin']);
+    assert.equal(b.w.state.tickets.get(T1).children_ids.length, 2, 'built-in modes keep applying their results directly');
+    assert.equal((h.suggestions ?? []).length, 0);
+  } finally { await b.w.stop(); }
+});
+
+test('the snapshot lists available recipes with their permissions, without file paths or full prompts', async () => {
+  const { b } = await boot();
+  try {
+    const snap = b.w.liveSnapshot();
+    const dc = snap.recipes.find((r) => r.name === 'deploy-check');
+    assert.deepEqual([dc.source, dc.repo_id, dc.permissions.read_source, dc.timeout_min], ['builtin', null, true, 10]);
+    assert.ok(snap.recipes.every((r) => !('path' in r) && !('body' in r)));
+    assert.ok(!JSON.stringify(snap.recipes).includes(b.home));
+  } finally { await b.w.stop(); }
+});
+
+test('exports carry recipe suggestions only when checkpoints are included, like result summaries', async () => {
+  const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
+  const snap = { tickets: [{ id: T1, key: 'PROJ-7', project_id: 'demo', title: 't', status: 'todo', timeline: [], deployments: [], prs: [] }], handoffs: [{ id: 'h1', ticket_id: T1, state: 'done', recipe: { name: 'deploy-check' }, suggestions: [{ id: 's1', type: 'comment-draft', state: 'proposed', text: 'internal draft text' }] }], meta: {}, recipes: [{ name: 'x' }] };
+  const plain = sanitizeSnapshot(snap, { fields: ['key', 'title', 'status'] });
+  assert.deepEqual(plain.handoffs[0].suggestions, []);
+  assert.ok(!('recipes' in plain));
+  const full = sanitizeSnapshot(snap, { fields: ['key', 'title', 'status'], includeCheckpoints: true });
+  assert.equal(full.handoffs[0].suggestions[0].text, 'internal draft text');
+});

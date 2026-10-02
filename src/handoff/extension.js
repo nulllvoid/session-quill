@@ -7,6 +7,7 @@ import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
 import { buildPrompt, allowedToolsFor, parseAgentResult, spawnAgent, killTree } from './runner.js';
+import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
 import { recordResult, updateHandoff } from './results.js';
 import { handoffsDir, logsDir } from '../lib/paths.js';
 import { addMs, MINUTE } from '../lib/time.js';
@@ -86,8 +87,13 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const ticket = worker.state.tickets.get(h.ticket_id);
     if (!ticket) return fail(worker, h, 'ticket-missing', 'ticket no longer exists');
     const repoCfg = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
+    // The recipe must still be the one that was queued: an edited file could otherwise run with
+    // instructions or permissions nobody reviewed (ADR 0008).
+    const catalog = catalogFor(worker);
+    const recipe = h.recipe ? catalog.get(h.recipe.name, h.repo_id ?? null, { fresh: true }) : catalog.get(h.mode, null, { fresh: true });
+    if (h.recipe && (!recipe || recipe.error || recipe.hash !== h.recipe.hash)) return fail(worker, h, 'recipe-changed', `recipe ${h.recipe.name} changed or was removed after this run was queued; review it and queue a new run`);
     try {
-      validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch }, { repo: repoCfg });
+      validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null });
     } catch (err) {
       return fail(worker, h, err.code ?? 'permission-invalid', err.message);
     }
@@ -113,11 +119,14 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     }
     const logPath = path.join(logsDir(worker.env), 'handoffs', `${h.id}.log`);
     const started = worker.now();
-    const deadlineAt = addMs(started, deadlineMs);
+    const deadlineAt = addMs(started, Math.min(deadlineMs, h.deadline_ms ?? Infinity));
     updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath });
     const current = worker.state.handoffs.get(h.id);
-    const prompt = buildPrompt(current, ticket, { repo: repoCfg });
-    const tools = allowedToolsFor({ mode: h.mode, permissions: h.permissions });
+    const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
+    const environments = repoCfg ? repoCfg.deployment_environments ?? [] : [];
+    const render = (r) => renderRecipe(r, { ticket, url, note: h.note, prs: ticket.prs ?? [], deployments: ticket.deployments ?? [], environments });
+    const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render });
+    const tools = recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions });
     const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
     if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
     let run;
@@ -143,6 +152,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     resume() { paused = false; },
     runningIds: () => new Set(running.keys()),
     async onStart(worker) {
+      worker.recipeInfo = () => catalogFor(worker).list();
       for (const h of [...worker.state.handoffs.values()]) {
         if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
       }

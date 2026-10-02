@@ -71,7 +71,7 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
       let error = null;
       let result = {};
       try {
-        result = (await impl[s.job](worker, { run_id, reason, schedule: s.name })) ?? {};
+        result = (await impl[s.job](worker, { run_id, reason, schedule: s.name, settings: s })) ?? {};
         summary = result.summary ?? null;
       } catch (err) {
         outcome = 'failed';

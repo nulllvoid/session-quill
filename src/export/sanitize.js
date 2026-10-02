@@ -81,8 +81,10 @@ function sanitizeSession(s, o) {
 }
 
 function sanitizeHandoff(h, o) {
-  const { worktree_path, result_ref, pr_url, result_summary, changed_files, log_path, patch_path, ...rest } = h;
+  const { worktree_path, result_ref, pr_url, result_summary, changed_files, log_path, patch_path, suggestions, ...rest } = h;
   const out = { ...rest };
+  // Agent output, like the result summary, is shared only when checkpoints are included.
+  out.suggestions = o.includeCheckpoints ? (suggestions ?? []) : [];
   if (o.includeLinks) out.pr_url = pr_url ?? null;
   if (o.includeCheckpoints) out.result_summary = result_summary ?? null;
   out.changed_files = (changed_files ?? []).length;

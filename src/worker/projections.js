@@ -46,7 +46,7 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
   };
 }
 
-export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due }) {
+export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [] }) {
   const dayAgo = addMs(generated_at, -24 * HOUR);
   const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo);
   return {
@@ -60,6 +60,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     handoffs: [...state.handoffs.values()],
     requests,
     schedules,
+    recipes,
     picknext: derived.picknext ?? [],
     blocked: derived.blocked ?? [],
     deployments_outstanding: derived.deployments_outstanding ?? [],

@@ -9,16 +9,18 @@ import { validateHandoffRequest } from '../handoff/permissions.js';
 import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
 import { scopeFor } from '../hooks/scope.js';
+import { catalogFor } from '../agents/recipes.js';
+import { suggestionMutation } from '../agents/suggestions.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job'];
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion'];
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job']);
-const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external']);
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
-const REVISION_OPTIONAL = new Set(['handoff-cancel']);
-const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external']);
+const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion']);
+const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
 // Tracker keys are uppercase (PROJ-123). Requests normalize them, and lookups also match legacy
@@ -58,7 +60,26 @@ function normalizeDeploymentItems(items, ticket, { requireChoice } = {}) {
   });
 }
 
-export function validateRequestBody(body, state, nowIso, { scheduleNames = null } = {}) {
+// Resolves the recipe a handoff request names (or its legacy mode) for the ticket's repository.
+export function resolveRecipe(recipes, payload, repoId) {
+  const name = typeof payload.recipe === 'string' && payload.recipe ? payload.recipe : (typeof payload.recipe === 'object' && payload.recipe && payload.recipe.name) || payload.mode || 'analyse-followups';
+  const recipe = recipes ? recipes.get(name, repoId ?? null, { fresh: true }) : null;
+  if (!recipes) return null;
+  if (!recipe) throw new TrackerError('recipe-unknown', `no recipe named ${name}`);
+  if (recipe.error) throw new TrackerError('recipe-invalid', `recipe ${name} is invalid: ${recipe.error}`);
+  return recipe;
+}
+
+function findSuggestion(state, ticket, payload) {
+  const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
+  if (!h || h.ticket_id !== ticket.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
+  const sug = (h.suggestions ?? []).find((x) => x.id === payload.suggestion_id);
+  if (!sug) throw new TrackerError('suggestion-unknown', 'suggestion_id must name a suggestion of that handoff');
+  if (sug.state !== 'proposed') throw new TrackerError('suggestion-resolved', `this suggestion was already ${sug.state}`);
+  return { h, sug };
+}
+
+export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
   const payload = body.payload ?? {};
@@ -107,8 +128,14 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null 
       normalized = { items: normalizeDeploymentItems(payload.items, target) };
       break;
     case 'handoff':
-      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id) });
+      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, payload, target.repo_id) });
       break;
+    case 'accept-suggestion':
+    case 'dismiss-suggestion': {
+      const { h, sug } = findSuggestion(state, target, payload);
+      normalized = { handoff_id: h.id, suggestion_id: sug.id };
+      break;
+    }
     case 'handoff-cancel': {
       const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
       if (!h || h.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
@@ -180,7 +207,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
     if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
     throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
   }
-  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null });
+  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker) });
   request.actor_id = actor;
   const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
   if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
@@ -263,14 +290,28 @@ export function evaluateRequest(worker, req) {
     case 'record-deployment':
       return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { deployments: req.payload.items } } };
     case 'handoff': {
+      // Re-checked here because CLI requests arrive through ingress without submit validation, and
+      // the recipe file may have changed during the request's lifetime.
+      let recipe;
+      let checked;
+      try {
+        recipe = resolveRecipe(catalogFor(worker), req.payload, ticket.repo_id);
+        checked = validateHandoffRequest({ ...req.payload, recipe: req.payload.recipe ? req.payload.recipe.name ?? req.payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe });
+      } catch (err) {
+        return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
+      }
+      if (req.payload.recipe && req.payload.recipe.hash && req.payload.recipe.hash !== recipe.hash) {
+        return { outcome: 'failed', error: { code: 'recipe-changed', message: `recipe ${recipe.name} changed after the request was made; review it and queue it again`, retryable: true, current_revision: ticket.revision } };
+      }
       const existing = [...state.handoffs.values()].find((h) => h.ticket_id === ticket.id && ['queued', 'running'].includes(h.state));
       if (existing) return { outcome: 'failed', error: { code: 'handoff-reserved', message: `handoff ${existing.id} is already ${existing.state} for this ticket`, retryable: true, current_revision: ticket.revision }, result: { existing_handoff_id: existing.id } };
       const handoff = {
         schema_version: 1, store_id: state.meta.store_id, id: uuid(), revision: 1, created_at: worker.now(), updated_at: worker.now(),
-        ticket_id: ticket.id, request_id: req.id, mode: req.payload.mode, note: req.payload.note, permissions: req.payload.permissions,
-        base_ticket_revision: ticket.revision, repo_id: ticket.repo_id ?? null, base_commit: null, branch: req.payload.branch ?? null, state: 'queued',
+        ticket_id: ticket.id, request_id: req.id, mode: checked.mode, note: checked.note, permissions: checked.permissions,
+        base_ticket_revision: ticket.revision, repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
         requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,
         children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
+        recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
       };
       return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
     }
@@ -279,6 +320,15 @@ export function evaluateRequest(worker, req) {
       if (!h) return { outcome: 'failed', error: { code: 'handoff-unknown', message: 'handoff no longer exists', retryable: false, current_revision: ticket.revision } };
       if (!['queued', 'running'].includes(h.state)) return { outcome: 'failed', error: { code: 'handoff-terminal', message: `handoff is already ${h.state}`, retryable: false, current_revision: ticket.revision }, result: { state: h.state } };
       return { outcome: 'applied', mutation: { type: 'handoff-cancel', handoff_id: h.id }, result: { handoff_id: h.id, was: h.state } };
+    }
+    case 'accept-suggestion':
+    case 'dismiss-suggestion': {
+      let found;
+      try { found = findSuggestion(state, ticket, req.payload); } catch (err) {
+        return { outcome: 'failed', error: { code: err.code, message: err.message, retryable: false, current_revision: ticket.revision } };
+      }
+      const mutation = suggestionMutation(state, ticket, found.h, found.sug, req.kind === 'accept-suggestion' ? 'accepted' : 'dismissed');
+      return { outcome: 'applied', mutation, result: { handoff_id: found.h.id, suggestion_id: found.sug.id, state: mutation.state } };
     }
     case 'link-external': {
       const owner = keyOwner(state, req.payload.key);

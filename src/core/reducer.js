@@ -534,6 +534,8 @@ function handleRequestTx(state, ev, result) {
       if (ticket && !relinkTicket(state, ticket, ev, m, result).rejected) req.applied_revision = ticket.revision;
     } else if (m.type === 'refresh') {
       // no state mutation; the worker runs reconciliation as an effect
+    } else if (m.type === 'suggestion') {
+      applySuggestion(state, ev, m, req, result);
     }
   }
   req.state = p.outcome;
@@ -544,6 +546,28 @@ function handleRequestTx(state, ev, result) {
   req.revision += 1;
   result.requestsChanged.add(req.id);
   return {};
+}
+
+// Accepting or dismissing a recipe suggestion (ADR 0008). The ticket change was computed when the
+// request applied; a suggestion resolves once, so redelivery changes nothing.
+function applySuggestion(state, ev, m, req, result) {
+  const h = state.handoffs.get(m.handoff_id);
+  const sug = h ? (h.suggestions ?? []).find((s) => s.id === m.suggestion_id) : null;
+  const ticket = state.tickets.get(m.ticket_id);
+  if (!sug || sug.state !== 'proposed' || !ticket) return;
+  sug.state = m.state;
+  sug.resolved_at = ev.occurred_at;
+  sug.request_id = req.id;
+  h.revision = (h.revision ?? 1) + 1;
+  h.updated_at = ev.occurred_at;
+  result.handoffsChanged.add(h.id);
+  if (m.state !== 'accepted') return;
+  if (m.fields) applyTicketFields(state, ticket, m.fields, ev, 'manual', result);
+  if (m.child && !state.tickets.has(m.child.id)) {
+    const r = createTicket(state, ev, { ...m.child, project_id: ticket.project_id, project_name: ticket.project_name, parent_id: ticket.id, repo_id: ticket.repo_id }, 'manual', result);
+    if (!r.rejected) { sug.child_id = m.child.id; h.children_ids = [...(h.children_ids ?? []), m.child.id]; }
+  }
+  req.applied_revision = ticket.revision;
 }
 
 function handleHandoffTx(state, ev, result) {

@@ -3,6 +3,8 @@
 //   FAKE_CLAUDE_SLEEP_MS  — how long to run before answering (default 50)
 //   FAKE_CLAUDE_MODE      — 'ok' (default) | 'crash' | 'garbage'
 //   FAKE_CLAUDE_EDIT      — path of a file to modify inside the cwd before answering
+//   FAKE_CLAUDE_RESULT    — JSON to answer with instead of the default structured result
+//   FAKE_CLAUDE_CAPTURE   — file to write { prompt, args } to
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -11,6 +13,7 @@ const sleep = Number(process.env.FAKE_CLAUDE_SLEEP_MS ?? 50);
 const mode = process.env.FAKE_CLAUDE_MODE ?? 'ok';
 const promptIdx = args.indexOf('-p');
 const prompt = promptIdx >= 0 ? args[promptIdx + 1] : '';
+if (process.env.FAKE_CLAUDE_CAPTURE) fs.writeFileSync(process.env.FAKE_CLAUDE_CAPTURE, JSON.stringify({ prompt, args: args.filter((a) => a !== prompt) }));
 process.stderr.write(`fake-claude cwd=${process.cwd()} args=${args.filter((a) => a !== prompt).join(' ')}\n`);
 
 setTimeout(() => {
@@ -20,7 +23,7 @@ setTimeout(() => {
   }
   if (mode === 'crash') process.exit(3);
   if (mode === 'garbage') { process.stdout.write('not json at all'); process.exit(0); }
-  const structured = {
+  const structured = process.env.FAKE_CLAUDE_RESULT ? JSON.parse(process.env.FAKE_CLAUDE_RESULT) : {
     summary: 'Analysed the ticket notes. The retry flake comes from a shared timer.',
     next_action: 'Use fake timers in the retry tests',
     blocker: null,

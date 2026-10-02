@@ -1,9 +1,11 @@
 // [[schedule]] tables from user config (ADR 0007). Repository config cannot schedule jobs.
 import { parseCron, parseInterval, nextAfter } from './cron.js';
 
-export const JOBS = ['reconcile'];
+export const JOBS = ['reconcile', 'agent'];
+export const AGENT_SCOPES = ['deploy-pending', 'active', 'review', 'blocked', 'open'];
+export const AGENT_LIMIT_MAX = 25;
 // Named by the zero-command proposal and accepted in config so later releases need no migration.
-export const PLANNED_JOBS = ['stale-sweep', 'digest', 'publish', 'agent', 'tracker-sync'];
+export const PLANNED_JOBS = ['stale-sweep', 'digest', 'publish', 'tracker-sync'];
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 export function defaultSchedules(config = {}) {
@@ -25,14 +27,23 @@ export function normalizeSchedules(config = {}, { timeZone = 'UTC', now = Date.n
     if (PLANNED_JOBS.includes(raw.job)) { warnings.push(`${where}: job "${raw.job}" arrives in a later release; skipped`); return; }
     if (!JOBS.includes(raw.job)) { warnings.push(`${where}: unknown job "${raw.job}"; available jobs: ${JOBS.join(', ')}`); return; }
     if ((raw.cron === undefined) === (raw.every === undefined)) { warnings.push(`${where}: set exactly one of cron or every`); return; }
+    let extra = {};
+    if (raw.job === 'agent') {
+      if (typeof raw.recipe !== 'string' || !raw.recipe.trim()) { warnings.push(`${where}: an agent schedule needs recipe = "<name>"`); return; }
+      const scope = raw.scope ?? 'open';
+      if (!AGENT_SCOPES.includes(scope)) { warnings.push(`${where}: scope must be one of ${AGENT_SCOPES.join(', ')}`); return; }
+      const limit = raw.limit ?? 10;
+      if (!Number.isInteger(limit) || limit < 1 || limit > AGENT_LIMIT_MAX) { warnings.push(`${where}: limit must be a whole number from 1 to ${AGENT_LIMIT_MAX}`); return; }
+      extra = { recipe: raw.recipe.trim(), scope, limit };
+    }
     try {
       const enabled = raw.enabled !== false;
       if (raw.cron !== undefined) {
         const spec = parseCron(raw.cron);
         if (nextAfter(spec, now, timeZone) === null) throw new Error('this cron expression never fires');
-        schedules.push({ name: raw.name, job: raw.job, cron: spec.expr, every: null, spec, interval_ms: null, enabled });
+        schedules.push({ name: raw.name, job: raw.job, cron: spec.expr, every: null, spec, interval_ms: null, enabled, ...extra });
       } else {
-        schedules.push({ name: raw.name, job: raw.job, cron: null, every: String(raw.every).trim(), spec: null, interval_ms: parseInterval(raw.every), enabled });
+        schedules.push({ name: raw.name, job: raw.job, cron: null, every: String(raw.every).trim(), spec: null, interval_ms: parseInterval(raw.every), enabled, ...extra });
       }
       names.add(raw.name);
     } catch (err) {
