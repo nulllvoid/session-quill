@@ -228,6 +228,19 @@ test('ticket-update applies supported fields with revision increments and manual
   assert.equal(state.lastSync, '2026-10-03T08:30:00Z');
 });
 
+test('ticket-update links a ticket to a registered repository, clears it with null and rejects unknown ids', () => {
+  const state = newState({ repos: { demo: { project_id: 'demo' }, other: { project_id: 'demo' } } });
+  const t = createTicket(state);
+  ev(state, 'ticket-update', { ticket_id: T1, fields: { repo_id: 'other' }, source: 'manual' });
+  assert.equal(t.repo_id, 'other');
+  ev(state, 'ticket-update', { ticket_id: T1, fields: { repo_id: null }, source: 'manual' });
+  assert.equal(t.repo_id, null);
+  const r = ev(state, 'ticket-update', { ticket_id: T1, fields: { repo_id: 'missing', title: 'Renamed' }, source: 'manual' });
+  assert.equal(r.rejected, 'repo-unknown');
+  assert.equal(t.repo_id, null);
+  assert.equal(t.title, 'Demo ticket');
+});
+
 test('children_ids is derived from parent links and children_done_count counts done children', () => {
   const state = newState();
   createTicket(state);
