@@ -82,6 +82,7 @@ Full checkpoint content is available from a preview; truncation never implies th
 | Health indicator | Separate sync age, worker connection, capture backlog/gaps and provider health |
 | Filter bar | Project, category, tag, repo, machine, stale, search; removable tokens and clear |
 | Handoff form | Mode, note, source and action permissions, required prerequisites, Queue |
+| Publish dialog | Each publisher with its label (Live, Copy, Note), title, destination (artifact link or file name), what it sends (fields and projects), last result or error, and Publish now; a destination never confirmed shows what confirming sends and Confirm and publish (Confirm destination for a session-run artifact); a confirmed session-run artifact shows the command to run with Copy |
 | Recipe run dialog | Recipe description, source and mode; only the permissions the recipe allows, with source access pre-selected and side effects unticked; note; time cap and whether results apply directly or arrive as suggestions; Queue run |
 | Suggestion | Type label and content (escaped); Accept (Mark used for a comment draft) and Dismiss while proposed; Accepting…/Dismissing… while the request is pending; Accepted or Dismissed afterwards; Copy for a comment draft, which is never posted |
 | Request feedback | Sending, pending, applying, applied, conflict, failed, cancelled; undo only while allowed |

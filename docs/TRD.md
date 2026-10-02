@@ -212,6 +212,10 @@ Recipes ([ADR 0008](decisions/0008-agent-recipes.md)): the three modes are now b
 
 Only analyse-followups creates children by default. Suggested next_action updates use the parent's recorded revision and become conflicts if it changed. A blocker is a suggestion; the agent cannot silently overwrite a newer owner status. A draft PR creates no deploy-pending child. Deployment obligations appear only when merge evidence arrives.
 
+## Publishing
+
+Publishers ([ADR 0010](decisions/0010-publishers.md)) are `[[publish]]` entries in user config: `markdown` (a roll-up table per status in a marked section of a note), `html` (the standalone export written to a path) and `artifact` (a live claude.ai page). Content always goes through the export sanitizer with the publisher's fields and projects. Nothing is sent to a destination until the owner confirms it; a changed path or URL is a new destination. The artifact page renders rows from its own db; publishes after the first read each row with its version and write only fields nobody else changed, pinned to that version. Quill computes every write; a Claude Code session (`/session-quill:publish`, the default) or a headless runtime with the Artifact tools executes the plan. Publishes run on demand, after reconciliation (`on = ["reconcile"]`) or as a `publish` schedule job.
+
 ## Configuration and packaging
 
 Ship plugin manifest, hook config, namespaced commands, CLI, local worker, UI assets, templates, optional handoff agent and PMLA profile. Core uses Node built-ins; validate the restricted TOML/YAML subsets written by quill, preserve unknown authored text, and reject unsupported syntax rather than lossy parsing.

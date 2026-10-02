@@ -42,6 +42,7 @@ Everything flows through the journal. Hooks and the CLI only ever *write events*
 | `src/server/*` | Loopback API, bootstrap auth and CSRF, request validation and the request state machine. | `createServer`, `submitRequest`, `applyDueRequests` |
 | `src/handoff/*` | Reservation rules, worktrees, agent spawn/kill, result recording, permission validation. | `createExtension`, `validateHandoffRequest` |
 | `src/deploy/environments.js`, `src/today/*` | Effective environments, per-environment status, the Today feed and the daily digest writer (ADR 0009). | `effectiveEnvironments`, `environmentStatus`, `buildToday`, `writeDigest` |
+| `src/publish/*` | Publisher config, sanitized rows, markdown and html writers, the artifact page, row planning with pinned writes, and the plan executor (ADR 0010). | `normalizePublishers`, `rowsFor`, `beginArtifactPublish`, `continueArtifactPublish` |
 | `src/agents/*` | Recipe frontmatter parsing, discovery and precedence (repo, personal, built-in in `recipes/`), prompt rendering, and suggestions from typed outputs (ADR 0008). | `createRecipeCatalog`, `catalogFor`, `buildSuggestions`, `suggestionMutation` |
 | `src/export/*` | Sanitization and the single-file static build. | `sanitizeSnapshot`, `buildStaticHtml` |
 | `src/migrate/*` | Inventory, PMLA mapping, backup, run and rollback. | `runMigration`, `rollback` |

@@ -112,6 +112,15 @@ All Must scenarios must pass, with exceptions explicitly removed from the advert
 | A59 | FR-10, FR-11 | A digest schedule writes the day into the store's daily note at its slot, keeps the owner's text around it, and fails visibly instead of overwriting an edited digest section |
 | A60 | FR-11 | Pick next gives reasons for a merged PR awaiting deployment and for days since last touch |
 
+## Phase 10 — Publishers (ADR 0010)
+
+| ID | Requirement | Scenario and expected outcome |
+| --- | --- | --- |
+| A61 | FR-15, FR-16 | Nothing is written to a new destination until the owner confirms it; after confirmation it publishes; changing the destination asks again |
+| A62 | FR-15, FR-16 | A roll-up note carries only the configured fields and projects, with local paths redacted and no links unless included |
+| A63 | FR-15, FR-16 | A live artifact keeps a field edited on the page while Quill's other changes are written, every update pinned to the version read, and a ticket leaving scope is marked, not deleted |
+| A64 | FR-15, FR-16 | With the default session executor the worker never publishes an artifact itself; a Claude Code session publishes it through --plan and --result and the worker records the URL and outcome |
+
 ## Review resolution traceability
 
 | Review issue | Resolved contract | Acceptance |

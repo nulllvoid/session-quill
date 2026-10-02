@@ -142,12 +142,14 @@ PreToolUse stores attribution before execution. A PostToolUse result refers to t
 ## Mutation request
 
 Fields: id, store_id, actor_id, kind, target_id (nullable), expected_revision (nullable), payload, created_at, not_before, state, applied_revision (nullable), error (nullable), result (nullable), retry_of (nullable).
-kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external, run-job, accept-suggestion, dismiss-suggestion.
+kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external, run-job, accept-suggestion, dismiss-suggestion, publish.
 
 - run-job (ADR 0007) has no target and payload { schedule }; it names a configured schedule, has no undo delay and is applied by the scheduler like refresh. A refresh or run-job left applying by a crash fails with code `interrupted` (retryable) on the next start.
 
 - handoff (ADR 0008) payload: recipe (name; optional, defaults to mode), mode, note, permissions, branch. With a recipe, permissions must be within its frontmatter; the applied request records recipe { name, source, hash }, and dispatch fails with `recipe-changed` if the file no longer has that hash.
 - accept-suggestion and dismiss-suggestion target a ticket and take payload { handoff_id, suggestion_id }; accept requires expected_revision, dismiss does not. Both have the 10 s undo window. A suggestion resolves once.
+
+- publish (ADR 0010) has no target and payload { publisher (a name, or null for all), confirm }. It has no undo delay and is applied by the scheduler; confirm records consent to the publisher's current destination.
 
 - attach-unbound and dismiss-unbound target a session id; expected_revision is the session's unbound_work.revision. attach-unbound takes exactly one of ticket_id or key (a tracker key like PROJ-123, with optional title) plus bind (default true: link the session from then on if it is still unlinked). link-external targets a ticket with its revision and takes key plus optional system and https url; a key owned by another ticket is refused. All three have the 10 s undo window (ADR 0006).
 error: code, message, retryable, current_revision (nullable).
@@ -177,6 +179,16 @@ The snapshot carries `schedules[]` built from config and these records: name, jo
 The snapshot's `today` (ADR 0009): timezone, generated_for (the store-local date), days[] newest first, each with date, sessions (count started that day) and tickets[] (ticket_id, key, title, status, counts by timeline kind, items[] newest first and at most 12: at, kind, text, plus last_at). Kinds: commit, pr, deployment, status, write, plan, conclusion, handoff, bind; tool entries are excluded. Seven days. Exports never include it.
 
 Digest schedule fields: to (vault-daily and/or file), path (required for file), day (today or yesterday). The digest section is delimited by `<!-- quill:digest:start -->` and `<!-- quill:digest:end -->`; a section edited since the last write fails the run with digest-conflict.
+
+## Publisher
+
+Publisher record (ADR 0010), folded from `publish-run` events: name, url (artifact, nullable), confirmed[] (destinations the owner confirmed: `<kind>:<path>` or `artifact:<url or new>`), last_published_at, last_outcome (ok, failed, needs-confirmation, needs-session), last_error, last_summary, runs[] (newest first, at most 20: run_id, at, trigger (manual, schedule, after-reconcile, session), outcome, summary, error).
+
+`publish-run` payload: publisher, run_id, outcome, summary, error, url, destination, confirmed (true when this run carried the owner's confirmation), trigger.
+
+The snapshot's `publishers[]`: name, kind, label (Live, Copy, Note), executor, title, fields, projects, include_links, after_reconcile, destination_label (a file name or the artifact URL; never a local path), url, confirmed, running, the last_* fields and the newest 5 runs. Exports never include it.
+
+Artifact db layout: `tickets/<key>` (the publisher's fields plus `_quill` { in_scope, published_at }) and `meta/page` (title, fields, published_at, publisher, generator).
 
 ## Handoff
 
