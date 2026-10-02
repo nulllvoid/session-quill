@@ -4,7 +4,7 @@ import { freshness, relativeTime, formatAbsolute } from '../../ui/lib/time.js';
 import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip } from '../../ui/components.js';
 import { sanitizeSnapshot } from '../../src/export/sanitize.js';
 import { renderPickNext, renderInbox } from '../../ui/views/picknext.js';
-import { renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey } from '../../ui/views/dialogs.js';
+import { renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from '../../ui/views/dialogs.js';
 import { renderBoard } from '../../ui/views/board.js';
 import { renderTree } from '../../ui/views/tree.js';
 import { renderSessions } from '../../ui/views/sessions.js';
@@ -459,4 +459,45 @@ test('ticket detail shows the per-environment status line with evidence; the rec
   const dialog = renderDeploymentDialog(t, { mode: 'record' });
   assert.match(dialog, /<select name="evidence_kind_0"/);
   for (const k of ['tag', 'argocd', 'release', 'manual', 'merge']) assert.match(dialog, new RegExp(`<option value="${k}"`));
+});
+
+function publishSnapshot() {
+  const s = snapshot();
+  s.publishers = [
+    { name: 'team', kind: 'artifact', label: 'Live', title: 'Team <tracker>', fields: ['key', 'title', 'status'], projects: ['demo'], include_links: false, after_reconcile: true, destination_label: 'https://claude.ai/artifact/abc', url: 'https://claude.ai/artifact/abc', confirmed: true, running: false, last_published_at: '2026-10-02T11:00:00Z', last_outcome: 'ok', last_error: null, last_summary: 'updated 3 rows', runs: [{ run_id: 'r1', at: '2026-10-02T11:00:00Z', trigger: 'after-reconcile', outcome: 'ok', summary: 'updated 3 rows', error: null }] },
+    { name: 'rollup', kind: 'markdown', label: 'Note', title: 'Roll-up', fields: ['key', 'title'], projects: null, include_links: false, after_reconcile: false, destination_label: 'rollup.md', url: null, confirmed: false, running: false, last_published_at: null, last_outcome: 'needs-confirmation', last_error: null, last_summary: 'waiting for confirmation', runs: [] },
+    { name: 'copy', kind: 'html', label: 'Copy', title: 'copy', fields: ['key'], projects: null, include_links: false, after_reconcile: false, destination_label: 'copy.html', url: null, confirmed: true, running: false, last_published_at: null, last_outcome: 'failed', last_error: 'disk <full>', last_summary: null, runs: [] },
+  ];
+  return s;
+}
+
+test('the Publish dialog labels live pages and copies, shows what each sends, asks to confirm a new destination and escapes errors', () => {
+  const s = publishSnapshot();
+  const html = renderPublishDialog(s, { now: NOW, pending: [] });
+  assert.match(html, /Live[\s\S]*?Team &lt;tracker&gt;/);
+  assert.match(html, /<a href="https:\/\/claude\.ai\/artifact\/abc" target="_blank" rel="noopener noreferrer"/);
+  assert.match(html, /key, title, status of tickets in demo/);
+  assert.match(html, /data-action="publish" data-publisher="team" data-confirm="false"[^>]*>[\s\S]*?Publish now/);
+  assert.match(html, /data-action="publish" data-publisher="rollup" data-confirm="true"[^>]*>[\s\S]*?Confirm and publish/);
+  assert.match(html, /disk &lt;full&gt;/);
+  assert.match(html, /Copy/);
+  const queued = renderPublishDialog(s, { now: NOW, pending: [{ id: 'q', kind: 'publish', state: 'pending', payload: { publisher: 'team' } }] });
+  assert.doesNotMatch(queued, /data-publisher="team" data-confirm/);
+  assert.equal(publishDialogKey(s, []), publishDialogKey({ ...s, generation_id: 'other' }, []));
+  const opts = { now: NOW, online: true, refresh: null, theme: 'dark', filters: noFilters, view: 'picknext', endpoint: '127.0.0.1:1', receipt: null };
+  assert.match(renderHeader(s, opts), /data-action="publishers"[^>]*>[\s\S]*?Publish/);
+  assert.match(renderHeader(s, opts), /data-publish-state="attention"/, 'a failed or unconfirmed publisher marks the button');
+  assert.doesNotMatch(renderHeader({ ...s, meta: { ...s.meta, exported_at: NOW } }, opts), /data-action="publishers"/);
+  assert.doesNotMatch(renderPublishDialog({ ...s, capabilities: { read: true } }, { now: NOW, pending: [] }), /data-action="publish"/);
+});
+
+test('an artifact published from a Claude Code session shows the command to run instead of a publish button', () => {
+  const s = publishSnapshot();
+  s.publishers[0] = { ...s.publishers[0], executor: 'session' };
+  const html = renderPublishDialog(s, { now: NOW, pending: [] });
+  assert.match(html, /\/session-quill:publish team/);
+  assert.match(html, /data-copy="\/session-quill:publish team"/);
+  assert.doesNotMatch(html, /data-publisher="team" data-confirm="false"/);
+  s.publishers[0] = { ...s.publishers[0], confirmed: false };
+  assert.match(renderPublishDialog(s, { now: NOW, pending: [] }), /data-publisher="team" data-confirm="true"[^>]*>[\s\S]*?Confirm destination/);
 });
