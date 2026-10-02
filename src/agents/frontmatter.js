@@ -6,6 +6,12 @@ function fail(line, message) {
   throw new Error(`recipe frontmatter line ${line}: ${message}`);
 }
 
+// Keys that would reach Object.prototype machinery are never data.
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
+function checkKey(key, line) {
+  if (RESERVED.has(key)) fail(line, `reserved key "${key}"`);
+}
+
 // Reads one scalar starting at s[i]; returns [value, nextIndex]. `stops` ends a bare scalar.
 function readScalar(s, i, line, stops) {
   while (s[i] === ' ' || s[i] === '\t') i += 1;
@@ -77,6 +83,7 @@ function readValue(s, line) {
       if (s[i] === '}') { rest(s, i + 1, line); return out; }
       const m = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:/.exec(s.slice(i));
       if (!m) fail(line, 'expected key: value in a map');
+      checkKey(m[1], line);
       if (Object.hasOwn(out, m[1])) fail(line, `duplicate key "${m[1]}"`);
       const [v, j] = readScalar(s, i + m[0].length, line, ',}');
       out[m[1]] = v;
@@ -110,6 +117,7 @@ export function parseFrontmatter(text) {
     }
     const m = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:(.*)$/.exec(raw);
     if (!m) fail(line, 'expected key: value');
+    checkKey(m[1], line);
     if (Object.hasOwn(data, m[1])) fail(line, `duplicate key "${m[1]}"`);
     const value = m[2].trim();
     if (value === '' || value.startsWith('#')) { data[m[1]] = []; listKey = m[1]; continue; }

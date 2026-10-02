@@ -18,6 +18,9 @@ export const INPUTS = ['ticket', 'notes', 'prs', 'deployments'];
 export const OUTPUTS = ['summary', 'next_action', 'blocker', 'followups', 'deploy_evidence', 'comment_draft', 'test_results', 'changed_files'];
 export const PLACEHOLDERS = ['ticket.key', 'ticket.url', 'ticket.title', 'ticket.status', 'ticket.next_action', 'note', 'prs', 'deployments', 'environments'];
 export const MAX_TIMEOUT_MIN = 20;
+export const FRONTMATTER_KEYS = ['name', 'description', 'mode', 'permissions', 'tools', 'timeout_min', 'inputs', 'outputs'];
+// The input a placeholder reads from; a recipe must declare it (environments come from config).
+const PLACEHOLDER_INPUT = { 'ticket.key': 'ticket', 'ticket.url': 'ticket', 'ticket.title': 'ticket', 'ticket.status': 'ticket', 'ticket.next_action': 'ticket', note: 'ticket', prs: 'prs', deployments: 'deployments', environments: null };
 const NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
 const MAX_FILE_BYTES = 32 * 1024;
 const PLACEHOLDER_RE = /\{\{\s*([a-z_.]+)\s*\}\}/g;
@@ -58,6 +61,7 @@ export function normalizeRecipe({ name, text, source, path: filePath = null }) {
     if (!SOURCES.includes(source)) throw new Error(`unknown recipe source ${source}`);
     if (!NAME_RE.test(name)) throw new Error('recipe file names use lowercase letters, digits and dashes');
     const { data, body } = parseFrontmatter(text);
+    for (const key of Object.keys(data)) if (!FRONTMATTER_KEYS.includes(key)) throw new Error(`unknown frontmatter key "${key}"; use ${FRONTMATTER_KEYS.join(', ')}`);
     if (data.name !== name) throw new Error(`name "${data.name ?? ''}" must match the file name "${name}"`);
     if (typeof data.description !== 'string' || !data.description.trim()) throw new Error('description is required');
     const mode = data.mode ?? 'analyse';
@@ -74,7 +78,11 @@ export function normalizeRecipe({ name, text, source, path: filePath = null }) {
     const inputs = list(data.inputs, 'inputs', INPUTS, INPUTS);
     const outputs = list(data.outputs, 'outputs', OUTPUTS, ['summary', 'next_action']);
     if (!body.trim()) throw new Error('the prompt body is empty');
-    for (const m of body.matchAll(PLACEHOLDER_RE)) if (!PLACEHOLDERS.includes(m[1])) throw new Error(`unknown placeholder {{${m[1]}}}; use ${PLACEHOLDERS.map((p) => `{{${p}}}`).join(', ')}`);
+    for (const m of body.matchAll(PLACEHOLDER_RE)) {
+      if (!PLACEHOLDERS.includes(m[1])) throw new Error(`unknown placeholder {{${m[1]}}}; use ${PLACEHOLDERS.map((p) => `{{${p}}}`).join(', ')}`);
+      const needs = PLACEHOLDER_INPUT[m[1]];
+      if (needs && !inputs.includes(needs)) throw new Error(`placeholder {{${m[1]}}} needs input ${needs}`);
+    }
     return {
       ...base, description: data.description.trim().slice(0, 300), mode, permissions, tools, timeout_min: timeout, inputs, outputs, body: body.trim(),
       // Only Quill's own handoff modes keep applying results directly; every other recipe suggests.
@@ -144,21 +152,28 @@ export function recipeRef(recipe) {
   return { name: recipe.name, source: recipe.source, hash: recipe.hash };
 }
 
-function bullets(lines) {
-  return lines.length ? `\n${lines.map((l) => `- ${l}\n`).join('')}` : '(none)';
+// Placeholder values are ticket data inside the task text, so each becomes one plain line that
+// cannot open a code fence or imitate the prompt's section markers.
+export function dataLine(value, max = 300) {
+  return String(value ?? '').replace(/[\r\n\t]+/g, ' ').replace(/-{3,}/g, '-').replace(/`/g, "'").replace(/\s{2,}/g, ' ').trim().slice(0, max);
+}
+
+function joined(items) {
+  return items.length ? items.join('; ') : '(none)';
 }
 
 export function renderRecipe(recipe, { ticket = {}, url = null, note = '', prs = [], deployments = [], environments = [] } = {}) {
+  const prUrl = (id) => { const p = prs.find((x) => x.id === id); return p ? p.url : id; };
   const values = {
-    'ticket.key': ticket.key ?? '',
-    'ticket.url': url ?? 'no tracker link',
-    'ticket.title': ticket.title ?? '',
-    'ticket.status': ticket.status ?? '',
-    'ticket.next_action': ticket.next_action || '(none)',
-    note: note || '(none)',
-    prs: bullets(prs.map((p) => `${p.url} (${p.state === 'merged' && p.merged_at ? `merged ${p.merged_at}` : p.state})`)),
-    deployments: bullets(deployments.map((d) => `${d.environment}: ${d.state}${d.deployed_at ? ` ${d.deployed_at}` : ''}${d.pr_id ? ` (PR ${d.pr_id})` : ''}`)),
-    environments: environments.length ? environments.join(', ') : '(none configured)',
+    'ticket.key': dataLine(ticket.key, 120),
+    'ticket.url': url ? dataLine(url) : 'no tracker link',
+    'ticket.title': dataLine(ticket.title, 200),
+    'ticket.status': dataLine(ticket.status, 40),
+    'ticket.next_action': dataLine(ticket.next_action) || '(none)',
+    note: dataLine(note) || '(none)',
+    prs: joined(prs.map((p) => dataLine(`${p.url} (${p.state === 'merged' && p.merged_at ? `merged ${p.merged_at}` : p.state})`))),
+    deployments: joined(deployments.map((d) => dataLine(`${d.environment}: ${d.state}${d.deployed_at ? ` ${d.deployed_at}` : ''}${d.pr_id ? ` for PR ${prUrl(d.pr_id)}` : ''}`))),
+    environments: environments.length ? environments.map((e) => dataLine(e, 40)).join(', ') : '(none configured)',
   };
   return recipe.body.replace(PLACEHOLDER_RE, (_, name) => values[name] ?? '');
 }
@@ -193,6 +208,9 @@ export function createRecipeCatalog({ env = process.env, config = {}, clock = Da
     forRepo,
     get(name, repoId = null, opts = {}) {
       return forRepo(repoId, opts).effective.get(name) ?? null;
+    },
+    builtin(name) {
+      return forRepo(null).all.find((r) => r.source === 'builtin' && r.name === name) ?? null;
     },
     list() {
       const out = [...forRepo(null).effective.values()].map((r) => publicEntry(r, null));

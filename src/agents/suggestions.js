@@ -3,6 +3,7 @@
 // posted anywhere, accepting it only records that it was used.
 import { deterministicId } from '../lib/ids.js';
 import { CATEGORIES, PRIORITIES } from '../core/state.js';
+import { TrackerError } from '../lib/errors.js';
 
 export const SUGGESTION_TYPES = ['next-action', 'blocker', 'followup', 'deploy-evidence', 'comment-draft'];
 export const DEPLOY_STATES = ['deployed', 'pending', 'n-a'];
@@ -48,8 +49,15 @@ export function suggestionMutation(state, ticket, h, sug, decision) {
     };
   } else if (sug.type === 'deploy-evidence') {
     const items = [];
+    const prMatches = (d, pr) => d.pr_id === pr || (ticket.prs ?? []).some((p) => p.id === d.pr_id && p.url === pr);
     for (const item of sug.items ?? []) {
-      for (const d of ticket.deployments.filter((x) => x.environment === item.environment && x.state === 'pending')) {
+      let candidates = ticket.deployments.filter((x) => x.environment === item.environment && x.state === 'pending');
+      // Evidence is per PR: an item naming no PR may only settle an environment with one PR pending.
+      if (item.pr) candidates = candidates.filter((d) => prMatches(d, item.pr));
+      else if (new Set(candidates.map((d) => d.pr_id)).size > 1 && item.state !== 'pending') {
+        throw new TrackerError('evidence-ambiguous', `the evidence for ${item.environment} names no PR, and several PRs are pending there; record it per PR instead`);
+      }
+      for (const d of candidates) {
         if (item.state === 'deployed') items.push({ pr_id: d.pr_id, environment: d.environment, state: 'deployed', deployed_at: item.deployed_at ?? sug.created_at, evidence: item.evidence ? String(item.evidence).slice(0, 500) : null });
         else if (item.state === 'n-a') items.push({ pr_id: d.pr_id, environment: d.environment, state: 'waived', waiver_reason: `not applicable: ${item.evidence ?? 'reported by the agent'}`.slice(0, 500) });
       }

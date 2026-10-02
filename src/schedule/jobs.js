@@ -34,23 +34,30 @@ export function createJobs({ providers }) {
     async agent(worker, { schedule, settings }) {
       const { recipe: name, scope, limit } = settings;
       const catalog = catalogFor(worker);
-      const global = catalog.get(name, null, { fresh: true });
-      if (global) schedulableRecipe(catalog, name, null);
       const active = new Set([...worker.state.handoffs.values()].filter((h) => ['queued', 'running'].includes(h.state)).map((h) => h.ticket_id));
       const tickets = [...worker.state.tickets.values()].filter((t) => inAgentScope(t, scope))
         .sort((a, b) => (a.updated_at < b.updated_at ? -1 : a.updated_at > b.updated_at ? 1 : a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.key < b.key ? -1 : 1));
       let queued = 0;
       let busy = 0;
       let over = 0;
+      let unusable = 0;
+      let usable = 0;
+      let firstError = null;
       for (const t of tickets) {
+        // The effective recipe depends on the ticket's repository, so it is checked per ticket: one
+        // ticket without it is skipped and counted, never the end of the run.
+        let recipe;
+        try { recipe = schedulableRecipe(catalog, name, t.repo_id ?? null); } catch (err) { unusable += 1; firstError = firstError ?? err.message; continue; }
+        usable += 1;
         if (active.has(t.id)) { busy += 1; continue; }
         if (queued >= limit) { over += 1; continue; }
-        const recipe = schedulableRecipe(catalog, name, t.repo_id ?? null);
         const permissions = { ...NO_PERMISSIONS, read_source: !!(recipe.permissions.read_source && repoFor(worker.state, t.repo_id)) };
-        submitRequest(worker, { id: uuid(), kind: 'handoff', target_id: t.id, expected_revision: t.revision, payload: { recipe: name, note: `scheduled by ${schedule}`, permissions } }, { actor: `schedule:${schedule}` });
+        // suggest: nobody is present, so even the built-in modes leave suggestions instead of edits.
+        submitRequest(worker, { id: uuid(), kind: 'handoff', target_id: t.id, expected_revision: t.revision, payload: { recipe: name, note: `scheduled by ${schedule}`, permissions, suggest: true } }, { actor: `schedule:${schedule}` });
         queued += 1;
       }
-      const notes = [busy ? `${busy} already running` : null, over ? `${over} over the limit` : null].filter(Boolean);
+      if (!usable && unusable) throw new Error(`no ticket in scope has a usable recipe named ${name} (${firstError})`);
+      const notes = [busy ? `${busy} already running` : null, over ? `${over} over the limit` : null, unusable ? `${unusable} without a usable recipe` : null].filter(Boolean);
       return { summary: `queued ${queued} ${name} run${queued === 1 ? '' : 's'}${notes.length ? ` (${notes.join(', ')})` : ''}` };
     },
   };

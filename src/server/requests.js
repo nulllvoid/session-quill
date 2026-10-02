@@ -61,10 +61,15 @@ function normalizeDeploymentItems(items, ticket, { requireChoice } = {}) {
 }
 
 // Resolves the recipe a handoff request names (or its legacy mode) for the ticket's repository.
+// A request that names no recipe (the handoff form, `quill handoff --mode`) always means the
+// built-in recipe of that mode, whatever a repository or personal file of the same name says.
 export function resolveRecipe(recipes, payload, repoId) {
-  const name = typeof payload.recipe === 'string' && payload.recipe ? payload.recipe : (typeof payload.recipe === 'object' && payload.recipe && payload.recipe.name) || payload.mode || 'analyse-followups';
-  const recipe = recipes ? recipes.get(name, repoId ?? null, { fresh: true }) : null;
   if (!recipes) return null;
+  const ref = typeof payload.recipe === 'object' && payload.recipe ? payload.recipe : null;
+  const named = typeof payload.recipe === 'string' && payload.recipe ? payload.recipe : ref ? ref.name : null;
+  const name = named || payload.mode || 'analyse-followups';
+  const builtinOnly = !named || (ref && ref.source === 'builtin');
+  const recipe = builtinOnly ? recipes.builtin(name) : recipes.get(name, repoId ?? null, { fresh: true });
   if (!recipe) throw new TrackerError('recipe-unknown', `no recipe named ${name}`);
   if (recipe.error) throw new TrackerError('recipe-invalid', `recipe ${name} is invalid: ${recipe.error}`);
   return recipe;
@@ -311,7 +316,7 @@ export function evaluateRequest(worker, req) {
         base_ticket_revision: ticket.revision, repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
         requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,
         children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
-        recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
+        recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
       };
       return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
     }
@@ -327,7 +332,10 @@ export function evaluateRequest(worker, req) {
       try { found = findSuggestion(state, ticket, req.payload); } catch (err) {
         return { outcome: 'failed', error: { code: err.code, message: err.message, retryable: false, current_revision: ticket.revision } };
       }
-      const mutation = suggestionMutation(state, ticket, found.h, found.sug, req.kind === 'accept-suggestion' ? 'accepted' : 'dismissed');
+      let mutation;
+      try { mutation = suggestionMutation(state, ticket, found.h, found.sug, req.kind === 'accept-suggestion' ? 'accepted' : 'dismissed'); } catch (err) {
+        return { outcome: 'failed', error: { code: err.code ?? 'suggestion-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
+      }
       return { outcome: 'applied', mutation, result: { handoff_id: found.h.id, suggestion_id: found.sug.id, state: mutation.state } };
     }
     case 'link-external': {

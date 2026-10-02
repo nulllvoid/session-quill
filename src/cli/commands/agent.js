@@ -59,7 +59,8 @@ async function run(ctx, io, args, flags) {
   if (recipe.error) throw new TrackerError('recipe-invalid', `recipe ${name} is invalid: ${recipe.error}`);
   const repo = ticket.repo_id && ctx.config.repos[ticket.repo_id] ? { id: ticket.repo_id, ...ctx.config.repos[ticket.repo_id] } : null;
   // Source access the recipe allows is granted by default; anything with a side effect only by flag.
-  const readSource = flags['read-source'] !== false && flags['no-read-source'] !== true && recipe.permissions.read_source && !!repo;
+  const declined = flags['read-source'] === false || ['true', '1', 'yes'].includes(String(flags['no-read-source']).toLowerCase());
+  const readSource = !declined && recipe.permissions.read_source && !!repo;
   const permissions = {
     read_source: readSource,
     edit_source: recipe.mode === 'attempt-fix' && readSource,

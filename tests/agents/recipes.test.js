@@ -93,7 +93,7 @@ test('recipes: repo overrides personal overrides built-in; invalid files are lis
 test('recipes: rendering fills placeholders from ticket data as plain text', () => {
   const r = normalizeRecipe({ name: 'deploy-check', text: DEPLOY_CHECK, source: 'repo' });
   const out = renderRecipe(r, { ticket: { key: 'PROJ-7', title: 'T', status: 'deploy-pending', next_action: '' }, url: 'https://example.atlassian.net/browse/PROJ-7', prs: [{ url: 'https://github.com/a/b/pull/3', state: 'merged', merged_at: '2026-10-01T10:00:00Z' }], deployments: [] });
-  assert.match(out, /^For PROJ-7 \(https:\/\/example\.atlassian\.net\/browse\/PROJ-7\): for each merged PR \n- https:\/\/github\.com\/a\/b\/pull\/3 \(merged 2026-10-01T10:00:00Z\)\n, find/);
+  assert.match(out, /^For PROJ-7 \(https:\/\/example\.atlassian\.net\/browse\/PROJ-7\): for each merged PR https:\/\/github\.com\/a\/b\/pull\/3 \(merged 2026-10-01T10:00:00Z\), find/);
   assert.match(renderRecipe(r, { ticket: { key: 'K-1' }, url: null, prs: [], deployments: [] }), /K-1 \(no tracker link\)/);
 });
 

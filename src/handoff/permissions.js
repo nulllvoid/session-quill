@@ -44,7 +44,7 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   if (permissions.open_draft_pr && !hasProvider) throw new TrackerError('provider-required', 'open_draft_pr requires a configured PR provider for the repository');
   if ((permissions.read_source || permissions.edit_source) && !repo) throw new TrackerError('repo-required', 'source access requires a registered repository on the owner machine');
   if (recipe) {
-    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, branch: permissions.push_branch ? branch : null };
+    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}) };
   }
   return { mode, note, permissions, branch: permissions.push_branch ? branch : null };
 }

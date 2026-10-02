@@ -15,7 +15,7 @@ const OUTPUT_FIELDS = {
   next_action: '"next_action": "one concrete next step or null"',
   blocker: '"blocker": "text or null"',
   followups: '"children": [{"title": "...", "category": "feature|bugfix|vuln|infra|research|analysis", "priority": "P0|P1|P2|P3", "next_action": "..."}]',
-  deploy_evidence: '"deploy_evidence": [{"environment": "...", "state": "deployed|pending|n-a", "evidence": "commit, file or reason", "deployed_at": "RFC 3339 UTC time or null"}]',
+  deploy_evidence: '"deploy_evidence": [{"environment": "...", "pr": "the PR URL this evidence is for", "state": "deployed|pending|n-a", "evidence": "commit, file or reason", "deployed_at": "RFC 3339 UTC time or null"}]',
   comment_draft: '"comment_draft": "a tracker comment the owner may copy; it is never posted automatically"',
   test_results: '"test_results": ["..."]',
   changed_files: '"changed_files": ["relative/path"]',
@@ -101,7 +101,8 @@ function buildRecipePrompt(handoff, ticket, { notes, repo, recipe, render }) {
     for (const n of notes) data.push(`Note:\n${n}`);
   }
   if (inputs.has('prs')) data.push(section('Pull requests', (ticket.prs ?? []).map((x) => `- ${x.url} ${x.state}${x.merged_at ? ` merged ${x.merged_at}` : ''}`)));
-  if (inputs.has('deployments')) data.push(section('Deployment obligations', (ticket.deployments ?? []).map((d) => `- ${d.environment}: ${d.state}${d.deployed_at ? ` ${d.deployed_at}` : ''}`)));
+  const prUrl = (id) => { const p = (ticket.prs ?? []).find((x) => x.id === id); return p ? p.url : id; };
+  if (inputs.has('deployments')) data.push(section('Deployment obligations', (ticket.deployments ?? []).map((d) => `- ${d.environment}: ${d.state}${d.deployed_at ? ` ${d.deployed_at}` : ''} for PR ${prUrl(d.pr_id)}`)));
   const fields = ['summary', ...recipe.outputs.filter((o) => o !== 'summary')].map((o) => OUTPUT_FIELDS[o]).filter(Boolean);
   return [
     `You are the Session Quill agent running recipe "${recipe.name}" for ticket ${ticket.key} (run ${handoff.id}).`,
@@ -127,7 +128,19 @@ function buildRecipePrompt(handoff, ticket, { notes, repo, recipe, render }) {
 export function allowedToolsFor({ mode, permissions = {}, tools = null }) {
   const profile = profileTools({ mode, permissions });
   if (!Array.isArray(tools) || !permissions.read_source) return profile;
-  return { allowed: tools.filter((t) => toolPermitted(t, { mode, permissions })), disallowed: profile.disallowed };
+  const allowed = tools.filter((t) => toolPermitted(t, { mode, permissions }));
+  // Profile tools the recipe left out are denied outright, so narrowing holds even for tools the
+  // runtime would allow without asking. A Bash prefix stays undenied when a narrower rule under
+  // it is kept, because denying the prefix would also deny the kept rule.
+  const norm = (t) => t.replace(/:\*\)$/, '*)');
+  const kept = allowed.map(norm);
+  const bashInner = (t) => { const m = /^Bash\((.+?)\*?\)$/.exec(norm(t)); return m ? m[1].replace(/:$/, '').trim() : null; };
+  const dropped = profile.allowed.filter((p) => {
+    if (kept.includes(p)) return false;
+    const q = bashInner(p);
+    return !(q && allowed.some((t) => { const inner = bashInner(t); return inner && (inner === q || inner.startsWith(`${q} `)); }));
+  });
+  return { allowed, disallowed: [...profile.disallowed, ...dropped] };
 }
 
 function profileTools({ mode, permissions = {} }) {
@@ -173,7 +186,7 @@ export function parseAgentResult(stdout) {
       parsed.children = Array.isArray(obj.children) ? obj.children.filter((c) => c && typeof c.title === 'string' && c.title.trim()).slice(0, 5).map((c) => ({ title: c.title.trim().slice(0, 200), category: c.category, priority: c.priority, next_action: typeof c.next_action === 'string' ? c.next_action.slice(0, 2000) : '' })) : [];
       parsed.test_results = Array.isArray(obj.test_results) ? obj.test_results.filter((t) => typeof t === 'string').slice(0, 50) : [];
       parsed.changed_files = Array.isArray(obj.changed_files) ? obj.changed_files.filter((t) => typeof t === 'string').slice(0, 500) : [];
-      parsed.deploy_evidence = Array.isArray(obj.deploy_evidence) ? obj.deploy_evidence.filter((d) => d && typeof d.environment === 'string' && d.environment.trim() && ['deployed', 'pending', 'n-a'].includes(d.state)).slice(0, 20).map((d) => ({ environment: d.environment.trim().slice(0, 64), state: d.state, evidence: typeof d.evidence === 'string' ? d.evidence.slice(0, 500) : null, deployed_at: typeof d.deployed_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(d.deployed_at) ? d.deployed_at : null })) : [];
+      parsed.deploy_evidence = Array.isArray(obj.deploy_evidence) ? obj.deploy_evidence.filter((d) => d && typeof d.environment === 'string' && d.environment.trim() && ['deployed', 'pending', 'n-a'].includes(d.state)).slice(0, 20).map((d) => ({ environment: d.environment.trim().slice(0, 64), state: d.state, pr: typeof d.pr === 'string' && d.pr.trim() ? d.pr.trim().slice(0, 300) : null, evidence: typeof d.evidence === 'string' ? d.evidence.slice(0, 500) : null, deployed_at: typeof d.deployed_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(d.deployed_at) ? d.deployed_at : null })) : [];
       parsed.comment_draft = typeof obj.comment_draft === 'string' && obj.comment_draft.trim() ? obj.comment_draft.trim().slice(0, 4000) : null;
     } catch { /* keep raw */ }
   }
