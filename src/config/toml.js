@@ -102,7 +102,16 @@ export function parseToml(text) {
     const lineNo = idx + 1;
     const line = stripComment(rawLine).trim();
     if (!line) return;
-    if (line.startsWith('[[')) throw unsupported(rawLine, lineNo, 'array tables are not supported');
+    if (line.startsWith('[[')) {
+      if (!line.endsWith(']]')) throw unsupported(rawLine, lineNo, 'malformed array table header');
+      const name = line.slice(2, -2).trim();
+      if (!KEY_RE.test(name)) throw unsupported(rawLine, lineNo, 'array tables must have a simple top-level name');
+      if (root[name] === undefined) root[name] = [];
+      if (!Array.isArray(root[name]) || root[name].some((x) => !isTable(x))) throw unsupported(rawLine, lineNo, 'array table name collides with a value');
+      table = {};
+      root[name].push(table);
+      return;
+    }
     if (line.startsWith('[')) {
       if (!line.endsWith(']')) throw unsupported(rawLine, lineNo, 'malformed table header');
       const parts = line.slice(1, -1).split('.').map((p) => p.trim());
@@ -141,13 +150,28 @@ function isTable(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+const isTableArray = (v) => Array.isArray(v) && v.length > 0 && v.every(isTable);
+
 function emitTable(obj, prefix, out) {
-  const scalars = Object.entries(obj).filter(([, v]) => !isTable(v) && v !== undefined && v !== null);
+  const scalars = Object.entries(obj).filter(([, v]) => !isTable(v) && !isTableArray(v) && v !== undefined && v !== null);
   const tables = Object.entries(obj).filter(([, v]) => isTable(v));
+  const arrays = Object.entries(obj).filter(([, v]) => isTableArray(v));
   if (prefix.length) out.push(`[${prefix.join('.')}]`);
   for (const [k, v] of scalars) out.push(`${k} = ${formatValue(v)}`);
   if (prefix.length || scalars.length) out.push('');
   for (const [k, v] of tables) emitTable(v, [...prefix, k], out);
+  for (const [k, items] of arrays) {
+    if (prefix.length) throw new TrackerError('toml-unsupported', 'array tables are only supported at the top level');
+    for (const item of items) {
+      out.push(`[[${k}]]`);
+      for (const [ik, iv] of Object.entries(item)) {
+        if (iv === undefined || iv === null) continue;
+        if (isTable(iv) || isTableArray(iv)) throw new TrackerError('toml-unsupported', 'nested tables inside array tables are not supported');
+        out.push(`${ik} = ${formatValue(iv)}`);
+      }
+      out.push('');
+    }
+  }
 }
 
 export function stringifyToml(obj, { preserve } = {}) {

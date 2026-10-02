@@ -29,7 +29,7 @@ test('parseToml handles strings, numbers, booleans, arrays and nested tables', (
 
 test('parseToml rejects unsupported syntax with a diagnostic instead of lossy parsing', () => {
   assert.throws(() => parseToml('x = { inline = 1 }'), (e) => e.code === 'toml-unsupported');
-  assert.throws(() => parseToml('[[arr]]\nx = 1'), (e) => e.code === 'toml-unsupported');
+  assert.throws(() => parseToml('[[arr.nested]]\nx = 1'), (e) => e.code === 'toml-unsupported');
   assert.throws(() => parseToml('x = 1979-05-27'), (e) => e.code === 'toml-unsupported');
   assert.throws(() => parseToml('x = "unterminated'), (e) => e.code === 'toml-unsupported');
   assert.throws(() => parseToml('just words'), (e) => e.code === 'toml-unsupported');
@@ -57,4 +57,14 @@ test('parseToml accepts single-quoted literal strings without escape processing'
   assert.equal(cfg.tracker.note, 'a # not a comment');
   assert.throws(() => parseToml("x = 'it's'"), /literal string/);
   assert.throws(() => parseToml("x = ['open]"), /unterminated/);
+});
+
+test('top-level array tables parse in order and round-trip through stringifyToml', () => {
+  const text = 'store_path = "/q"\n\n[[schedule]]\nname = "reconcile"\nevery = "2h"\njob = "reconcile"\n\n[[schedule]]\nname = "evening"\ncron = "30 19 * * 1-5"\njob = "reconcile"\nenabled = false\n';
+  const cfg = parseToml(text);
+  assert.deepEqual(cfg.schedule, [{ name: 'reconcile', every: '2h', job: 'reconcile' }, { name: 'evening', cron: '30 19 * * 1-5', job: 'reconcile', enabled: false }]);
+  assert.deepEqual(parseToml(stringifyToml(cfg)), cfg);
+  assert.throws(() => parseToml('schedule = ["x"]\n[[schedule]]\nname = "a"\n'), /collides/);
+  assert.throws(() => parseToml('[[a.b]]\n'), /top-level/);
+  assert.throws(() => parseToml('[[schedule]\n'), /malformed/);
 });
