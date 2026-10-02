@@ -45,6 +45,7 @@ export function createState(meta) {
     checkpointsBySession: new Map(),
     appliedEvents: new Set(),
     appliedSources: new Set(),
+    schedules: new Map(),
     lastSequence: 0,
     lastSync: null,
     providerHealth: [],

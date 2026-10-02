@@ -222,6 +222,35 @@ function bindExternal(state, session, ev, result) {
   return {};
 }
 
+export const SCHEDULE_HISTORY = 20;
+
+// Every scheduled or manual job run is journaled, so the Schedules panel and replay agree (ADR 0007).
+function applyScheduleRun(state, ev) {
+  const p = ev.payload;
+  if (!p || typeof p.schedule !== 'string' || typeof p.run_id !== 'string' || !['started', 'finished'].includes(p.phase)) return { rejected: 'schedule-invalid' };
+  let rec = state.schedules.get(p.schedule);
+  if (!rec) {
+    rec = { name: p.schedule, job: p.job ?? null, last_started_at: null, last_finished_at: null, last_outcome: null, last_error: null, last_summary: null, running_run_id: null, runs: [] };
+    state.schedules.set(p.schedule, rec);
+  }
+  if (p.phase === 'started') {
+    rec.job = p.job ?? rec.job;
+    rec.last_started_at = ev.occurred_at;
+    rec.running_run_id = p.run_id;
+    rec.runs.unshift({ run_id: p.run_id, trigger: p.trigger ?? 'schedule', started_at: ev.occurred_at, finished_at: null, outcome: 'running', summary: null, error: null });
+    if (rec.runs.length > SCHEDULE_HISTORY) rec.runs.length = SCHEDULE_HISTORY;
+    return {};
+  }
+  const runRec = rec.runs.find((r) => r.run_id === p.run_id);
+  if (runRec) Object.assign(runRec, { finished_at: ev.occurred_at, outcome: p.outcome ?? 'ok', summary: p.summary ?? null, error: p.error ?? null });
+  rec.last_finished_at = ev.occurred_at;
+  rec.last_outcome = p.outcome ?? 'ok';
+  rec.last_error = p.error ?? null;
+  rec.last_summary = p.summary ?? null;
+  if (rec.running_run_id === p.run_id) rec.running_run_id = null;
+  return {};
+}
+
 // Shared by `ticket relink` and the dashboard's "Link to external" request.
 function relinkTicket(state, ticket, ev, p, result) {
   const newKey = p.new_key;
@@ -736,6 +765,9 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       break;
     case 'handoff-tx':
       Object.assign(result, handleHandoffTx(state, ev, result));
+      break;
+    case 'schedule-run':
+      Object.assign(result, applyScheduleRun(state, ev));
       break;
     case 'notify':
       state.notified.add(ev.payload.checkpoint_id);
