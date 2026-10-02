@@ -1,6 +1,7 @@
-import { esc, attr, keyEl, STATUS_LABELS, icon } from '../components.js';
+import { esc, attr, keyEl, STATUS_LABELS, icon, normalizeTicket } from '../components.js';
 
-export function renderStatusDialog(ticket, status) {
+export function renderStatusDialog(rawTicket, status) {
+  const ticket = normalizeTicket(rawTicket);
   const outstanding = ticket.deployments.filter((d) => d.state === 'pending');
   const needsBlocker = status === 'blocked';
   const needsChoice = status === 'done' && outstanding.length > 0;
@@ -20,7 +21,8 @@ ${needsChoice ? `<fieldset><legend>${icon('alert')}${esc(outstanding.length)} de
 </form>`;
 }
 
-export function renderDeploymentDialog(ticket, { mode = 'record', deploymentId = null } = {}) {
+export function renderDeploymentDialog(rawTicket, { mode = 'record', deploymentId = null } = {}) {
+  const ticket = normalizeTicket(rawTicket);
   const items = ticket.deployments.filter((d) => d.state === 'pending' && (!deploymentId || d.id === deploymentId));
   return `<form class="dialog-form" data-form="deployment" data-ticket="${attr(ticket.id)}" data-revision="${attr(ticket.revision)}">
 <h2 id="dialog-title">${icon('rocket')}${mode === 'waive' ? 'Waive' : 'Record'} deployment — ${keyEl(ticket.key)}</h2>

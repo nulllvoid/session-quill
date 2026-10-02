@@ -111,7 +111,40 @@ export function repoName(snapshot, repoId) {
 }
 
 export function ticketById(snapshot, id) {
-  return snapshot.tickets.find((t) => t.id === id) ?? null;
+  return (snapshot.tickets ?? []).find((t) => t.id === id) ?? null;
+}
+
+const TICKET_ARRAYS = ['aliases', 'children_ids', 'session_ids', 'tags', 'files_touched', 'plans', 'conclusions', 'timeline', 'prs', 'deployments', 'handoff_ids', 'validation_issues'];
+const TICKET_DEFAULTS = { next_action: '', blocker: null, due: null, stale: false, files_touched_count: 0, plans_count: 0, children_done_count: 0, revision: 0, status: 'todo', priority: 'P3', category: 'research', summary: '', user_notes: '', project_name: '', parent_id: null, jira: null, status_source: 'manual', title: '', key: '' };
+const normalized = new WeakMap();
+
+export function normalizeTicket(t) {
+  const out = { ...TICKET_DEFAULTS, ...t };
+  for (const k of TICKET_ARRAYS) if (!Array.isArray(out[k])) out[k] = [];
+  if (!('timeline_total' in out)) out.timeline_total = out.timeline.length;
+  return out;
+}
+
+// Exports may omit fields; every renderer works from a snapshot with defaults filled in.
+export function normalizeSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot;
+  if (normalized.has(snapshot)) return normalized.get(snapshot);
+  const out = {
+    ...snapshot,
+    tickets: (snapshot.tickets ?? []).map(normalizeTicket),
+    sessions: (snapshot.sessions ?? []).map((s) => ({ bindings: [], ticket_ids: [], project_ids: [], current_binding_revision: 0, successful_write_count: 0, change_coverage: 'unknown', state: 'idle', machine_name: '', ...s })),
+    checkpoints: snapshot.checkpoints ?? [],
+    handoffs: (snapshot.handoffs ?? []).map((h) => ({ children_ids: [], changed_files: [], test_results: [], uncertain_effects: [], permissions: {}, ...h })),
+    requests: snapshot.requests ?? [],
+    picknext: snapshot.picknext ?? [],
+    blocked: snapshot.blocked ?? [],
+    deployments_outstanding: snapshot.deployments_outstanding ?? [],
+    repos: snapshot.repos ?? [],
+    capabilities: snapshot.capabilities ?? { read: true },
+    meta: { timezone: 'UTC', provider_health: [], counts_by_status: {}, stale_ticket_count: 0, unresolved_event_count: 0, tracker_version: '', store_name: '', schema_version: 1, ...(snapshot.meta ?? {}) },
+  };
+  normalized.set(snapshot, out);
+  return out;
 }
 
 export function matchesFilters(ticket, filters, snapshot) {

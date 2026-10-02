@@ -1,4 +1,4 @@
-import { esc, attr, keyEl, statusChip, filterTickets, emptyState, icon } from '../components.js';
+import { esc, attr, keyEl, statusChip, filterTickets, emptyState, icon, normalizeSnapshot } from '../components.js';
 
 export const TREE_MAX_DEPTH = 3;
 
@@ -15,7 +15,8 @@ function treeNode(ticket, byParent, depth, snapshot) {
 </li>`;
 }
 
-export function renderTree(snapshot, filters, { root = null }) {
+export function renderTree(rawSnapshot, filters, { root = null }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   const visible = new Set(filterTickets(snapshot, filters).map((t) => t.id));
   const all = snapshot.tickets;
   const byId = new Map(all.map((t) => [t.id, t]));

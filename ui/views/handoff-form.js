@@ -1,6 +1,8 @@
-import { esc, attr, keyEl, icon } from '../components.js';
+import { esc, attr, keyEl, icon, normalizeSnapshot, normalizeTicket } from '../components.js';
 
-export function renderHandoffForm(ticket, snapshot, { retryOf = null, prerequisites = {} } = {}) {
+export function renderHandoffForm(rawTicket, rawSnapshot, { retryOf = null, prerequisites = {} } = {}) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const ticket = normalizeTicket(rawTicket);
   const repo = (snapshot.repos ?? []).find((r) => r.id === ticket.repo_id) ?? null;
   const providerConfigured = !!(repo && repo.provider);
   const issues = [];

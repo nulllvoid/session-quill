@@ -1,5 +1,5 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
-import { esc, attr, icon, ticketById, STATUS_LABELS } from './components.js';
+import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot } from './components.js';
 import { renderHeader, renderSidebar } from './views/header.js';
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
@@ -174,7 +174,7 @@ function renderDialog() {
 async function poll() {
   clearTimeout(pollTimer);
   try {
-    const snap = await api.getSnapshot();
+    const snap = normalizeSnapshot(await api.getSnapshot());
     const changed = !appState.snapshot || snap.generation_id !== appState.snapshot.generation_id;
     appState.snapshot = snap;
     appState.online = true;

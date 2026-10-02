@@ -1,4 +1,4 @@
-import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, handoffChip, requestChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER } from '../components.js';
+import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, handoffChip, requestChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket } from '../components.js';
 import { parseMs } from '../lib/time.js';
 
 function requestFeedback(req, { now }) {
@@ -26,10 +26,12 @@ function timelineItem(e, { now, tz, generation }) {
   return `<li class="timeline-item" data-kind="${attr(e.kind)}"><span class="tl-kind">${esc(kindLabel)}</span> ${timeEl(e.at, now, tz)} <span class="tl-text">${esc(e.text)}</span>${e.coverage !== 'complete' ? ` <span class="chip warning small" title="Change coverage">${esc(e.coverage)}</span>` : ''}${e.content_ref ? ` <button type="button" class="link small" data-action="load-content" data-hash="${attr(e.content_ref)}" data-generation="${attr(generation)}">Full text</button>` : ''}</li>`;
 }
 
-export function renderDetail(ticket, snapshot, { now, pending = [], content = {}, loadedTicket = null }) {
+export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, loadedTicket = null }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const ticket = normalizeTicket(rawTicket);
   const caps = snapshot.capabilities ?? {};
   const tz = snapshot.meta.timezone;
-  const t = loadedTicket && loadedTicket.id === ticket.id ? loadedTicket : ticket;
+  const t = loadedTicket && loadedTicket.id === ticket.id ? normalizeTicket(loadedTicket) : ticket;
   const parent = t.parent_id ? ticketById(snapshot, t.parent_id) : null;
   const children = (t.children_ids ?? []).map((id) => ticketById(snapshot, id)).filter(Boolean);
   const sessions = snapshot.sessions.filter((s) => (s.ticket_ids ?? []).includes(t.id));

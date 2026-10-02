@@ -145,6 +145,25 @@ test('renderHandoffForm defaults to analyse-followups with source off and shows 
   assert.match(html, /maxlength="280"/);
 });
 
+test('every view renders a field-restricted sanitized export without throwing', async () => {
+  const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
+  const s = sanitizeSnapshot(snapshot(), { exportedAt: NOW, fields: ['key', 'title', 'status'] });
+  const t = s.tickets[0];
+  assert.equal(t.tags, undefined, 'fixture really omits tags');
+  const outputs = [
+    renderPickNext(s, noFilters, { now: NOW }),
+    renderBoard(s, noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} }),
+    renderBoard(s, { ...noFilters, q: 'ticket' }, { now: NOW, layout: 'list', expanded: new Set(), pages: {} }),
+    renderTree(s, noFilters, { root: null }),
+    renderSessions(s, noFilters, { now: NOW, page: 0 }),
+    renderDeployments(s, noFilters, { now: NOW }),
+    renderDetail(t, s, { now: NOW, pending: [], content: {} }),
+    renderHeader(s, { now: NOW, online: false, refresh: null, theme: 'dark' }),
+  ];
+  for (const html of outputs) assert.ok(html.length > 50);
+  assert.match(outputs[6], /Read-only/);
+});
+
 test('renderHeader exposes freshness, worker, capture, provider error, receipt and refresh states; sidebar lists five views with shortcuts', async () => {
   const s = snapshot();
   const html = renderHeader(s, { now: NOW, online: true, refresh: null, theme: 'light', endpoint: '127.0.0.1:4321', receipt: { text: 'next action applied', tone: 'good' } });

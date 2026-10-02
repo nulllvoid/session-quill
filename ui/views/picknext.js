@@ -1,6 +1,7 @@
-import { esc, ticketCard, ticketById, emptyState, matchesFilters, keyEl, icon } from '../components.js';
+import { esc, ticketCard, ticketById, emptyState, matchesFilters, keyEl, icon, normalizeSnapshot } from '../components.js';
 
-export function renderPickNext(snapshot, filters, { now }) {
+export function renderPickNext(rawSnapshot, filters, { now }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   const entries = (snapshot.picknext ?? []).map((e) => ({ entry: e, ticket: ticketById(snapshot, e.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
   const blocked = (snapshot.blocked ?? []).map((b) => ({ b, ticket: ticketById(snapshot, b.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
   let main;

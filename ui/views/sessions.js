@@ -1,8 +1,9 @@
-import { esc, attr, keyEl, sessionChip, timeEl, ticketById, pager, icon, emptyState, countLabel } from '../components.js';
+import { esc, attr, keyEl, sessionChip, timeEl, ticketById, pager, icon, emptyState, countLabel, normalizeSnapshot } from '../components.js';
 
 export const SESSIONS_PAGE_SIZE = 50;
 
-export function renderSessions(snapshot, filters, { now, page = 0, selected = null }) {
+export function renderSessions(rawSnapshot, filters, { now, page = 0, selected = null }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   const tz = snapshot.meta.timezone;
   let sessions = [...snapshot.sessions];
   if (filters.machine) sessions = sessions.filter((s) => s.machine_name === filters.machine);

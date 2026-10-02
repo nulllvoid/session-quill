@@ -1,4 +1,4 @@
-import { esc, attr, icon, timeEl, STATUS_ORDER } from '../components.js';
+import { esc, attr, icon, timeEl, STATUS_ORDER, normalizeSnapshot } from '../components.js';
 import { freshness, relativeTime } from '../lib/time.js';
 
 const FRESH_LABELS = { 'never-synced': 'Never synced', fresh: 'Fresh', ageing: 'Ageing', stale: 'Stale' };
@@ -8,7 +8,8 @@ export function logoSvg() {
   return '<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" fill="none" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"/><path d="M7 11h18M7 16h11M7 21h15" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round"/><circle cx="23" cy="16" r="3" fill="var(--accent-fill)"/><path d="M21 16l1.5 1.5L25 14" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 }
 
-export function renderSidebar(snapshot, { view = 'picknext', endpoint = null, online = true } = {}) {
+export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null, online = true } = {}) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   const meta = snapshot ? snapshot.meta : null;
   const counts = snapshot ? {
     picknext: (snapshot.picknext ?? []).length,
@@ -84,7 +85,8 @@ export function renderReceipt(receipt, { online }) {
   return `<div class="receipt" data-tone="${attr(receipt.tone ?? 'neutral')}" title="${attr(receipt.at ?? '')}">${icon(receipt.tone === 'critical' ? 'alert' : 'check')}<span class="receipt-text">Receipt: ${esc(receipt.text)}</span><span class="live">${online ? 'LIVE' : 'OFFLINE'}</span></div>`;
 }
 
-export function renderHeader(snapshot, { now, online, refresh, theme, filters = {}, view = 'picknext', endpoint = null, receipt = null }) {
+export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters = {}, view = 'picknext', endpoint = null, receipt = null }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   const caps = snapshot.capabilities ?? {};
   const isStatic = !!snapshot.meta.exported_at;
   return `<div class="topbar">

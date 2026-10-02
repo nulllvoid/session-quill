@@ -1,4 +1,4 @@
-import { esc, attr, keyEl, statusChip, timeEl, ticketById, matchesFilters, emptyState, icon, countLabel } from '../components.js';
+import { esc, attr, keyEl, statusChip, timeEl, ticketById, matchesFilters, emptyState, icon, countLabel, normalizeSnapshot } from '../components.js';
 
 export function journeyStrip(ticket, pr, obligation, { now, tz }) {
   const steps = [
@@ -9,7 +9,8 @@ export function journeyStrip(ticket, pr, obligation, { now, tz }) {
   return `<ol class="journey" aria-label="Ticket journey">${steps.map(([label, at]) => `<li data-done="${at ? 'true' : 'false'}"><span class="journey-label">${esc(label)}</span>${at ? timeEl(at, now, tz) : '<span class="muted">pending</span>'}</li>`).join('')}</ol>`;
 }
 
-export function renderDeployments(snapshot, filters, { now, pending = [] }) {
+export function renderDeployments(rawSnapshot, filters, { now, pending = [] }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   const tz = snapshot.meta.timezone;
   const items = (snapshot.deployments_outstanding ?? []).map((o) => ({ o, ticket: ticketById(snapshot, o.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
   if (!items.length) return `<section class="view view-deployments" aria-labelledby="tab-deployments">${emptyState('Nothing awaiting deployment', 'Obligations appear when a PR with merge evidence lands for a configured environment. Draft or closed-unmerged PRs create none.')}</section>`;

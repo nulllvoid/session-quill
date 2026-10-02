@@ -1,8 +1,9 @@
-import { esc, attr, ticketCard, filterTickets, STATUS_ORDER, STATUS_LABELS, emptyState } from '../components.js';
+import { esc, attr, ticketCard, filterTickets, STATUS_ORDER, STATUS_LABELS, emptyState, normalizeSnapshot } from '../components.js';
 
 export const BOARD_PAGE_SIZE = 40;
 
-export function renderBoard(snapshot, filters, { now, layout = 'columns', expanded = new Set(), pages = {}, selected = null }) {
+export function renderBoard(rawSnapshot, filters, { now, layout = 'columns', expanded = new Set(), pages = {}, selected = null }) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
   const tickets = filterTickets(snapshot, filters);
   if (!tickets.length) {
     const any = snapshot.tickets.length;
