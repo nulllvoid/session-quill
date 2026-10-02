@@ -1,0 +1,43 @@
+// [[schedule]] tables from user config (ADR 0007). Repository config cannot schedule jobs.
+import { parseCron, parseInterval, nextAfter } from './cron.js';
+
+export const JOBS = ['reconcile'];
+// Named by the zero-command proposal and accepted in config so later releases need no migration.
+export const PLANNED_JOBS = ['stale-sweep', 'digest', 'publish', 'agent', 'tracker-sync'];
+const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+export function defaultSchedules(config = {}) {
+  const hours = Number.isInteger(config.sync_interval_hours) && config.sync_interval_hours > 0 ? config.sync_interval_hours : 2;
+  return [{ name: 'reconcile', job: 'reconcile', cron: null, every: `${hours}h`, spec: null, interval_ms: hours * 3_600_000, enabled: true }];
+}
+
+export function normalizeSchedules(config = {}, { timeZone = 'UTC', now = Date.now() } = {}) {
+  if (config.schedule === undefined) return { schedules: defaultSchedules(config), warnings: [] };
+  if (!Array.isArray(config.schedule)) return { schedules: defaultSchedules(config), warnings: ['[[schedule]] must be a list of tables; using the default reconcile schedule'] };
+  const schedules = [];
+  const warnings = [];
+  const names = new Set();
+  config.schedule.forEach((raw, i) => {
+    const where = `schedule ${raw && typeof raw.name === 'string' ? `"${raw.name}"` : `#${i + 1}`}`;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { warnings.push(`${where}: must be a table`); return; }
+    if (typeof raw.name !== 'string' || !NAME_RE.test(raw.name)) { warnings.push(`${where}: name must use lowercase letters, digits and dashes`); return; }
+    if (names.has(raw.name)) { warnings.push(`${where}: duplicate name; ignored`); return; }
+    if (PLANNED_JOBS.includes(raw.job)) { warnings.push(`${where}: job "${raw.job}" arrives in a later release; skipped`); return; }
+    if (!JOBS.includes(raw.job)) { warnings.push(`${where}: unknown job "${raw.job}"; available jobs: ${JOBS.join(', ')}`); return; }
+    if ((raw.cron === undefined) === (raw.every === undefined)) { warnings.push(`${where}: set exactly one of cron or every`); return; }
+    try {
+      const enabled = raw.enabled !== false;
+      if (raw.cron !== undefined) {
+        const spec = parseCron(raw.cron);
+        if (nextAfter(spec, now, timeZone) === null) throw new Error('this cron expression never fires');
+        schedules.push({ name: raw.name, job: raw.job, cron: spec.expr, every: null, spec, interval_ms: null, enabled });
+      } else {
+        schedules.push({ name: raw.name, job: raw.job, cron: null, every: String(raw.every).trim(), spec: null, interval_ms: parseInterval(raw.every), enabled });
+      }
+      names.add(raw.name);
+    } catch (err) {
+      warnings.push(`${where}: ${err.message}`);
+    }
+  });
+  return { schedules, warnings };
+}
