@@ -70,7 +70,7 @@ export function repoFor(state, repoId) {
 
 export function newTicket(state, {
   id = uuid(), key, title, project_id, project_name, category = 'research', priority = 'P2', parent_id = null,
-  repo_id = null, due = null, jira = null, created_at, status = 'todo', status_source = 'manual',
+  repo_id = null, due = null, jira = null, external = null, created_at, status = 'todo', status_source = 'manual',
 }) {
   return {
     schema_version: 1,
@@ -91,6 +91,7 @@ export function newTicket(state, {
     blocker: null,
     repo_id,
     jira,
+    external,
     next_action: '',
     summary: '',
     user_notes: '',

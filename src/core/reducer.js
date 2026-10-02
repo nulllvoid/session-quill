@@ -7,6 +7,7 @@ import {
 } from './state.js';
 import { isIsoZ } from '../lib/time.js';
 import { validateKey, validateParent } from './keys.js';
+import { externalTicketId } from './external-keys.js';
 import { applyStatusChange, deriveStatusFromEvidence, recordDeployment } from './transitions.js';
 import { heuristicApprovalEligible } from './approval.js';
 
@@ -145,7 +146,7 @@ function createTicket(state, ev, t, source, result) {
   const ticket = newTicket(state, {
     id: t.id, key: t.key, title: t.title, project_id: t.project_id, project_name: t.project_name ?? projectName(state, t.project_id),
     category: t.category ?? 'research', priority: t.priority ?? 'P2', parent_id: t.parent_id ?? null, repo_id: t.repo_id ?? null,
-    due: t.due ?? null, jira: t.jira ?? null, created_at: ev.occurred_at, status_source: source,
+    due: t.due ?? null, jira: t.jira ?? null, external: t.external ?? null, created_at: ev.occurred_at, status_source: source,
   });
   if (t.status && TICKET_STATUSES.includes(t.status) && t.status !== 'todo') {
     applyStatusChange(ticket, { status: t.status, source, seq: ev.sequence ?? 0, blocker: t.blocker });
@@ -179,12 +180,45 @@ function createTicket(state, ev, t, source, result) {
     const m = /\.(\d+)$/.exec(ticket.key);
     if (m) state.counters.childByParent.set(ticket.parent_id, Math.max(state.counters.childByParent.get(ticket.parent_id) ?? 0, Number(m[1])));
   }
-  ticket.timeline.push(timelineEntry(ev, 'status', `Created (${source})`));
+  ticket.timeline.push(timelineEntry(ev, 'status', `Created (${t.created_via ?? source})`));
   ticket.revision = 0;
   const importedActivity = ticket.last_activity;
   touch(state, ticket, ev, result);
   // Imports carry historical activity; the import itself is not new work.
   if (source === 'migration' && importedActivity && importedActivity < ticket.last_activity) ticket.last_activity = importedActivity;
+  return {};
+}
+
+// Zero-command binding (ADR 0005): a ticket key seen in a prompt or branch binds the session,
+// creating the ticket under that key (with a deterministic id) when the store has none.
+function bindExternal(state, session, ev, result) {
+  const p = ev.payload;
+  const ext = p.external;
+  if (!ext || typeof ext.key !== 'string') return { rejected: 'external-invalid' };
+  try { validateKey(ext.key); } catch { return { rejected: 'key-invalid' }; }
+  let ticketId = state.keyIndex.get(ext.key) ?? null;
+  if (!ticketId) {
+    const project_id = p.project_id ?? Object.keys(state.meta.projects)[0] ?? null;
+    if (!project_id) return { rejected: 'project-required' };
+    const external = { system: ext.system ?? 'custom', key: ext.key, url: ext.url ?? null, validation: 'pending', validated_at: null, error: ext.error ?? null };
+    const id = externalTicketId(state.meta.store_id, ext.key);
+    const title = (typeof p.title_hint === 'string' && p.title_hint.trim()) ? p.title_hint.trim().slice(0, 200) : ext.key;
+    const created = createTicket(state, ev, {
+      id, key: ext.key, title, project_id, category: 'research', priority: 'P2', repo_id: p.repo_id ?? null, external,
+      jira: external.system === 'jira' ? { key: ext.key, url: external.url, validation: 'pending', validated_at: null, error: external.error } : null,
+      created_via: `auto from ${p.source ?? 'prompt'}`,
+    }, 'evidence', result);
+    if (created.rejected) return created;
+    ticketId = id;
+  }
+  const ticket = state.tickets.get(ticketId);
+  if (p.ensure_only === true) {
+    ticket.timeline.push(timelineEntry(ev, 'status', `Mentioned in session ${session.host_session_id} (${p.source ?? 'prompt'})`));
+    touch(state, ticket, ev, result);
+    return {};
+  }
+  if (session.current_ticket_id === ticketId) return {};
+  bindSession(state, session, ev, { ticket_id: ticketId, project_id: ticket.project_id }, result);
   return {};
 }
 
@@ -454,7 +488,10 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       break;
     }
     case 'prompt': {
+      const seen = state.sessions.has(sessionKey(ev));
       const s = getOrCreateSession(state, ev);
+      // A session first seen through a prompt (started before `quill init`) gets a snapshot now.
+      if (!seen) result.bindingChanged.add(sessionKey(ev));
       if (!s.title && ev.payload.title_candidate) s.title = String(ev.payload.title_candidate).slice(0, 80);
       if (ev.payload.approval_candidate === true) {
         const cp = heuristicApprovalEligible(state, s, ev.occurred_at);
@@ -467,8 +504,11 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       const s = getOrCreateSession(state, ev);
       s.events_since_checkpoint += 1;
       if (ev.tool_call_id) {
-        const ticket_id = ev.ticket_id ?? s.current_ticket_id;
-        const binding_revision = ev.binding_revision ?? s.current_binding_revision;
+        // A provisional hook binding can name a ticket id the worker resolved differently (the key
+        // belonged to an existing ticket); the session's own confirmed binding is authoritative then.
+        const unknownTicket = !!ev.ticket_id && !state.tickets.has(ev.ticket_id);
+        const ticket_id = unknownTicket ? s.current_ticket_id : (ev.ticket_id ?? s.current_ticket_id);
+        const binding_revision = unknownTicket ? s.current_binding_revision : (ev.binding_revision ?? s.current_binding_revision);
         state.pendingToolCalls.set(`${sessionKey(ev)}:${ev.tool_call_id}`, { session_key: sessionKey(ev), ticket_id, binding_revision, tool_name: ev.payload.tool_name, sequence: ev.sequence, at: ev.occurred_at, denied: ev.payload.denied === true });
         replayDeferred(state, sessionKey(ev), ev.tool_call_id, result);
       }
@@ -516,6 +556,9 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     }
     case 'bind': {
       const s = getOrCreateSession(state, ev);
+      // Always republish: a rejected bind must replace any provisional snapshot the hook wrote.
+      result.bindingChanged.add(sessionKey(ev));
+      if (ev.payload.external) { Object.assign(result, bindExternal(state, s, ev, result)); break; }
       const ticket = ev.payload.ticket_id ? state.tickets.get(ev.payload.ticket_id) : null;
       if (ev.payload.ticket_id && !ticket) { result.rejected = 'ticket-unknown'; break; }
       bindSession(state, s, ev, { ticket_id: ev.payload.ticket_id ?? null, project_id: ev.payload.project_id ?? (ticket ? ticket.project_id : null) }, result);
@@ -569,7 +612,9 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
         state.keyIndex.set(newKey, ticket.id);
       }
       if (ev.payload.jira !== undefined) ticket.jira = ev.payload.jira;
-      ticket.timeline.push(timelineEntry(ev, 'status', `Relinked to ${ticket.key}${ticket.jira ? ` (Jira ${ticket.jira.key}, validation ${ticket.jira.validation})` : ''}`));
+      if (ev.payload.external !== undefined) ticket.external = ev.payload.external;
+      const link = ticket.external ? ` (${ticket.external.system} ${ticket.external.key}, validation ${ticket.external.validation})` : ticket.jira ? ` (Jira ${ticket.jira.key}, validation ${ticket.jira.validation})` : '';
+      ticket.timeline.push(timelineEntry(ev, 'status', `Relinked to ${ticket.key}${link}`));
       touch(state, ticket, ev, result);
       break;
     }
