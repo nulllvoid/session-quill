@@ -11,6 +11,7 @@ import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } f
 import { readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
 import { scopeFor } from './scope.js';
 import { planAutoBind } from './autobind.js';
+import { markUnboundWork, shouldNudge, markNudged, nudgeReason } from './nudge.js';
 import { keyExample, renderUrl, externalTicketId, branchTitle } from '../core/external-keys.js';
 import { currentBranch } from '../lib/git-head.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
@@ -245,6 +246,9 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
           }
         }
       }
+      if (mode === 'nudge' && !(snapshot && snapshot.ticket_id) && (payload.write_paths.length || payload.commit)) {
+        try { markUnboundWork(key, env, occurred_at); } catch { /* best effort; never blocks capture */ }
+      }
       const ev = makeEvent({ ...base, kind: 'post-tool', tool_call_id, payload, source_identity: tool_call_id ? `post-tool:${key}:${tool_call_id}` : undefined });
       persist(ev, env, result);
       return result;
@@ -268,10 +272,15 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
           result.stderr += `Session Quill: capture gap — checkpoint blob not stored (${err.message})\n`;
         }
       }
+      const nudge = eventName === 'Stop' && mode === 'nudge' && !(snapshot && snapshot.ticket_id) && input.stop_hook_active !== true && shouldNudge(key, env);
       const ev = makeEvent({ ...base, kind: eventName === 'Stop' ? 'stop' : 'subagent-stop', payload: {
-        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null,
+        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge,
       }, source_identity: `${eventName === 'Stop' ? 'stop' : 'subagent-stop'}:${key}:${content_ref ?? 'missing'}:${occurred_at}` });
       persist(ev, env, result);
+      if (nudge) {
+        try { markNudged(key, env, occurred_at); } catch { /* stop_hook_active still prevents a loop */ }
+        result.stdout = JSON.stringify({ decision: 'block', reason: nudgeReason(scope.tracker) });
+      }
       return result;
     }
     case 'SubagentStart': {
