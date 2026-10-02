@@ -283,3 +283,10 @@ test('empty states point at mentioning a key, and the sessions table flags unlin
   assert.match(renderBoard(empty, noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} }), /Mention a ticket key such as <code>PMLA-123<\/code>/);
   assert.match(renderSessions(inboxSnapshot(), noFilters, { now: NOW }), /Unlinked work · 7 files/);
 });
+
+test('review: finished requests from an earlier batch never hide the actions for new unlinked work', () => {
+  const done = [{ id: 'r-old', kind: 'dismiss-unbound', target_id: 'sess-u', state: 'applied', not_before: NOW, payload: {} }, { id: 'r-old2', kind: 'attach-unbound', target_id: 'sess-u', state: 'cancelled', not_before: NOW, payload: {} }];
+  const html = renderInbox(inboxSnapshot(), { now: NOW, pending: done });
+  assert.match(html, /data-action="attach-unbound" data-session="sess-u" data-mode="attach"/);
+  assert.doesNotMatch(html, /Applied\./);
+});

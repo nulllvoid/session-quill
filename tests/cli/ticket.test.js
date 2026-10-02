@@ -131,3 +131,18 @@ test('commands that change state fail clearly when no worker confirms them', asy
   assert.match(r.err, /worker/i);
   assert.match(r.err, /quill doctor|quill worker start/);
 });
+
+test('review: relink --external normalizes tracker keys to uppercase', async () => {
+  const fx = makeHome();
+  const w = await startWorker(fx);
+  try {
+    const a = await cli(['ticket', 'create', 'Case work', '--session', 'sess-F'], fx.env);
+    const akey = /(LOCAL-case-work-[0-9a-f]{8})/.exec(a.out)[1];
+    const r = await cli(['ticket', 'relink', akey, '--external', 'eng-13', '--session', 'sess-F'], fx.env);
+    assert.equal(r.code, 0, r.err);
+    const rows = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out);
+    assert.ok(rows.some((t) => t.key === 'ENG-13'));
+  } finally {
+    await w.stop();
+  }
+});

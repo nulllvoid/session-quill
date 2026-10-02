@@ -115,7 +115,8 @@ async function relink(ctx, io, args, flags) {
   validateKey(key);
   const ticket = findTicketByKey(ctx, key);
   if (!ticket) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
-  const extKey = flags.external ?? flags.jira;
+  const rawExt = flags.external ?? flags.jira;
+  const extKey = typeof rawExt === 'string' ? rawExt.trim().toUpperCase() : rawExt;
   if (typeof extKey !== 'string' || !/^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(extKey)) throw new TrackerError('external-invalid', `an external key like PROJ-123 is required (--external; --jira is an alias). ${usage}`);
   validateKey(extKey);
   let tracker = null;

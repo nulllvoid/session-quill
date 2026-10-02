@@ -274,6 +274,8 @@ function attachUnboundWork(state, ev, m, result) {
   const files = `${w.files.length} file${w.files.length === 1 ? '' : 's'}`;
   const commits = `${w.commits.length} commit${w.commits.length === 1 ? '' : 's'}`;
   ticket.timeline.push(timelineEntry(ev, 'write', `Attached unlinked work from session ${session.host_session_id}: ${files}, ${commits}`));
+  // Attached writes are the same evidence a linked session would have produced.
+  if (w.files.length) deriveStatusFromEvidence(ticket, { type: 'write', seq: ev.sequence ?? 0, evidence_id: ev.event_id }, repoFor(state, ticket.repo_id));
   for (const id of state.checkpointsBySession.get(session.id) ?? []) {
     const cp = state.checkpoints.get(id);
     if (cp && !cp.ticket_id) cp.ticket_id = ticket.id;

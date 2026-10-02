@@ -9,7 +9,8 @@ function inboxItem(s, snapshot, { now, pending }) {
   const tz = snapshot.meta.timezone;
   const files = w.files ?? [];
   const commits = w.commits ?? [];
-  const mine = pending.filter((r) => r.target_id === s.id);
+  // Only live requests replace the actions; finished ones from an earlier batch must not hide them.
+  const mine = pending.filter((r) => r.target_id === s.id && ['sending', 'pending', 'applying', 'conflict', 'failed'].includes(r.state));
   const preview = s.last_checkpoint_preview ?? '';
   return `<li class="inbox-item" data-session="${attr(s.id)}">
   <div class="inbox-head">${sessionChip(s.state)} <strong>${esc(s.title || s.host_session_id)}</strong> <span class="muted small">${esc(s.host_session_id)} · ${esc(s.machine_name)} · last change ${timeEl(w.last_at, now, tz)}</span></div>

@@ -114,3 +114,21 @@ test('link-external relinks a local ticket with a rendered link and refuses keys
     assert.deepEqual([after.key, after.aliases[0], after.external.system, after.external.url], ['PMLA-1', 'LOCAL-a-00000001', 'jira', 'https://example.atlassian.net/browse/PMLA-1']);
   } finally { await s.stop(); }
 });
+
+test('review: tracker keys are matched without regard to case, so a lowercase key never duplicates a ticket', async () => {
+  const s = await start();
+  try {
+    s.ticket(T1, 'PMLA-42');
+    const local = s.ticket(T2, 'LOCAL-b-00000002');
+    s.hook('SessionStart', { session_id: 'q5', cwd: s.repo, source: 'startup' });
+    unboundEdit(s, 'q5', 'qe', 'src/case.js');
+    await s.settle();
+    const sess = sessionOf(s, 'q5');
+    const { request } = submitRequest(s.w, body('attach-unbound', sess.id, sess.unbound_work.revision, { key: 'pmla-42' }));
+    assert.equal(request.payload.key, 'PMLA-42');
+    await applyAfterUndo(s);
+    assert.deepEqual(s.w.state.requests.get(request.id).result, { ticket_id: T1, created: false });
+    assert.equal([...s.w.state.tickets.values()].filter((t) => t.key.toUpperCase() === 'PMLA-42').length, 1);
+    assert.throws(() => submitRequest(s.w, body('link-external', T2, local.revision, { key: 'pmla-42' })), (e) => e.code === 'key-collision');
+  } finally { await s.stop(); }
+});

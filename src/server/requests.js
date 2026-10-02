@@ -18,6 +18,16 @@ const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
 const REVISION_OPTIONAL = new Set(['handoff-cancel']);
 const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+
+// Tracker keys are uppercase (PROJ-123). Requests normalize them, and lookups also match legacy
+// keys that differ only in case, so "proj-42" can never become a second ticket beside PROJ-42.
+function keyOwner(state, key) {
+  const exact = state.keyIndex.get(key);
+  if (exact) return exact;
+  const upper = key.toUpperCase();
+  for (const [k, id] of state.keyIndex) if (k.toUpperCase() === upper) return id;
+  return null;
+}
 const TERMINAL = new Set(['applied', 'conflict', 'failed', 'cancelled']);
 
 function stableStringify(value) {
@@ -115,7 +125,7 @@ export function validateRequestBody(body, state, nowIso) {
         if (!state.tickets.has(payload.ticket_id)) throw new TrackerError('target-unknown', `unknown ticket ${payload.ticket_id}`);
         normalized = { ticket_id: payload.ticket_id, bind };
       } else {
-        const key = payload.key.trim();
+        const key = payload.key.trim().toUpperCase();
         if (!EXTERNAL_KEY_RE.test(key)) throw new TrackerError('key-invalid', 'a ticket key like PROJ-123 is required');
         validateKey(key);
         normalized = { key, title: typeof payload.title === 'string' ? payload.title.trim().slice(0, 200) : '', bind };
@@ -126,13 +136,13 @@ export function validateRequestBody(body, state, nowIso) {
       normalized = {};
       break;
     case 'link-external': {
-      const key = typeof payload.key === 'string' ? payload.key.trim() : '';
+      const key = typeof payload.key === 'string' ? payload.key.trim().toUpperCase() : '';
       if (!EXTERNAL_KEY_RE.test(key)) throw new TrackerError('key-invalid', 'a ticket key like PROJ-123 is required');
       validateKey(key);
       if (payload.system !== undefined && payload.system !== null && !TRACKER_SYSTEMS.includes(payload.system)) throw new TrackerError('system-invalid', `system must be one of ${TRACKER_SYSTEMS.join(', ')}`);
       const url = typeof payload.url === 'string' && payload.url.trim() ? payload.url.trim() : null;
       if (url && !isSafeExternalUrl(url)) throw new TrackerError('external-url-invalid', 'the external link must be an https:// URL without spaces or quotes');
-      const owner = state.keyIndex.get(key);
+      const owner = keyOwner(state, key);
       if (owner && owner !== target.id) throw new TrackerError('key-collision', `${key} already identifies another ticket`);
       normalized = { key, system: payload.system ?? null, url };
       break;
@@ -206,7 +216,7 @@ function evaluateSessionRequest(worker, req) {
   if (ticketId && !state.tickets.has(ticketId)) return { outcome: 'failed', error: { code: 'target-unknown', message: 'that ticket no longer exists', retryable: false, current_revision: null } };
   if (!ticketId) {
     const key = req.payload.key;
-    ticketId = state.keyIndex.get(key) ?? null;
+    ticketId = keyOwner(state, key);
     if (!ticketId) {
       const scope = worker.identity ? scopeFor(worker.identity, session.cwd) : { project_id: null, repo_id: null, tracker: null };
       const tracker = trackerFor(worker, { cwd: session.cwd });
@@ -263,7 +273,7 @@ export function evaluateRequest(worker, req) {
       return { outcome: 'applied', mutation: { type: 'handoff-cancel', handoff_id: h.id }, result: { handoff_id: h.id, was: h.state } };
     }
     case 'link-external': {
-      const owner = state.keyIndex.get(req.payload.key);
+      const owner = keyOwner(state, req.payload.key);
       if (owner && owner !== ticket.id) return { outcome: 'failed', error: { code: 'key-collision', message: `${req.payload.key} already identifies another ticket`, retryable: false, current_revision: ticket.revision } };
       const tracker = trackerFor(worker, { repo_id: ticket.repo_id });
       const system = req.payload.system ?? (tracker ? tracker.system : 'custom');

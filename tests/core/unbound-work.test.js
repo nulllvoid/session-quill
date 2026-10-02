@@ -132,3 +132,12 @@ test('a relink mutation sets the key, keeps the old key as an alias and stores t
   assert.equal(t.external.url, 'https://example.atlassian.net/browse/PMLA-1');
   assert.equal(state.keyIndex.get('PMLA-1'), T1);
 });
+
+test('review: attaching writes to a to-do ticket makes it active, as the same writes would have', () => {
+  const state = newState();
+  const t = createTicket(state);
+  assert.equal(t.status, 'todo');
+  const s = unboundSession(state);
+  apply(state, { type: 'unbound-attach', session_id: s.id, ticket_id: T1, create: null, bind: false });
+  assert.equal(t.status, 'active');
+});

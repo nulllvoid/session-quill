@@ -436,7 +436,7 @@ function handleSubmit(form) {
   } else if (kind === 'attach') {
     const key = String(fd.get('key') ?? '').trim();
     const bind = fd.get('bind') === 'on';
-    const match = form.dataset.mode === 'create' ? null : appState.snapshot.tickets.find((x) => x.key === key || (x.aliases ?? []).includes(key));
+    const match = form.dataset.mode === 'create' ? null : appState.snapshot.tickets.find((x) => x.key.toUpperCase() === key.toUpperCase() || (x.aliases ?? []).some((al) => al.toUpperCase() === key.toUpperCase()));
     const payload = match ? { ticket_id: match.id, bind } : { key, title: String(fd.get('title') ?? '').trim(), bind };
     closeDialog();
     submit({ kind: 'attach-unbound', target_id: form.dataset.session, expected_revision: revision, payload }, { announceText: match ? `Attaching to ${match.key}; undo within 10 seconds` : `Creating ${key} and attaching; undo within 10 seconds` });
