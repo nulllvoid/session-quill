@@ -430,3 +430,15 @@ table.sessions th { font-family: var(--mono); font-size: 11px; text-transform: u
 .agents .suggestion pre.preview { white-space: pre-wrap; margin: 4px 0; }
 .chip[data-suggestion-state="accepted"] { color: var(--good); }
 .chip[data-suggestion-state="dismissed"] { color: var(--text-muted); }
+
+/* Deployments matrix and Today (ADR 0009) */
+.env-matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+.env-matrix th, .env-matrix td { text-align: left; vertical-align: top; padding: 6px 8px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.env-matrix thead th { color: var(--text-muted); font-weight: 600; }
+.env-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.env-status { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.today-day { margin-bottom: 20px; }
+.today-tickets, .today-items { list-style: none; margin: 0; padding: 0; }
+.today-ticket { padding: 8px 0; border-top: 1px solid var(--border); }
+.today-items { margin: 4px 0 0 16px; font-size: 13px; }
+.today-items li { padding: 2px 0; overflow-wrap: anywhere; }

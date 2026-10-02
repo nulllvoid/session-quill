@@ -6,13 +6,14 @@ import { renderBoard } from './views/board.js';
 import { renderTree } from './views/tree.js';
 import { renderSessions } from './views/sessions.js';
 import { renderDeployments } from './views/deployments.js';
+import { renderToday } from './views/today.js';
 import { renderDetail } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
 import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
 
-const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments'];
+const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today'];
 const POLL_VISIBLE_MS = 2000;
 const POLL_HIDDEN_MS = 30000;
 
@@ -104,6 +105,7 @@ function render() {
   else if (appState.view === 'tree') html = renderTree(s, appState.filters, { root: appState.treeRoot });
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
+  else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
   main.innerHTML = (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + html;
   main.scrollTop = scroll;
   document.body.dataset.layout = layoutMode();
@@ -435,7 +437,7 @@ function handleSubmit(form) {
         payload.deployments = [...form.querySelectorAll('.obligation')].map((row, i) => {
           const item = { pr_id: row.dataset.pr, environment: row.dataset.environment };
           if (choice === 'waive') item.waiver_reason = String(fd.get(`waiver_${i}`) ?? '').trim();
-          else { item.deployed_at = toLocalIso(fd.get(`deployed_at_${i}`)); item.evidence = String(fd.get(`evidence_${i}`) ?? '').trim() || null; }
+          else { item.deployed_at = toLocalIso(fd.get(`deployed_at_${i}`)); item.evidence = String(fd.get(`evidence_${i}`) ?? '').trim() || null; item.evidence_kind = String(fd.get(`evidence_kind_${i}`) ?? 'manual'); }
           return item;
         });
       }
@@ -449,7 +451,7 @@ function handleSubmit(form) {
       const item = { pr_id: cb.dataset.pr, environment: cb.dataset.environment };
       const waiver = fd.get(`waiver_${i}`);
       if (waiver !== null) item.waiver_reason = String(waiver).trim();
-      else { item.deployed_at = toLocalIso(fd.get(`deployed_at_${i}`)); item.evidence = String(fd.get(`evidence_${i}`) ?? '').trim() || null; }
+      else { item.deployed_at = toLocalIso(fd.get(`deployed_at_${i}`)); item.evidence = String(fd.get(`evidence_${i}`) ?? '').trim() || null; item.evidence_kind = String(fd.get(`evidence_kind_${i}`) ?? 'manual'); }
       return item;
     }).filter(Boolean);
     if (!items.length) { appState.dialog = { ...appState.dialog, error: 'Select at least one obligation.' }; render(); return; }
@@ -503,7 +505,7 @@ function onKey(e) {
     return;
   }
   if (e.key === '/') { e.preventDefault(); const s = $('#search'); if (s) s.focus(); return; }
-  if (/^[1-5]$/.test(e.key)) { appState.view = VIEWS[Number(e.key) - 1]; render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
+  if (/^[1-6]$/.test(e.key)) { appState.view = VIEWS[Number(e.key) - 1]; render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }

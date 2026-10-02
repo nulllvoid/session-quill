@@ -2,7 +2,7 @@ import { esc, attr, icon, timeEl, STATUS_ORDER, normalizeSnapshot } from '../com
 import { freshness, relativeTime } from '../lib/time.js';
 
 const FRESH_LABELS = { 'never-synced': 'Never synced', fresh: 'Fresh', ageing: 'Ageing', stale: 'Stale' };
-export const NAV_ITEMS = [['picknext', 'Pick next', 'ticket', '1'], ['board', 'Board', 'machine', '2'], ['tree', 'Tree', 'branch', '3'], ['sessions', 'Sessions', 'user', '4'], ['deployments', 'Deployments', 'rocket', '5']];
+export const NAV_ITEMS = [['picknext', 'Pick next', 'ticket', '1'], ['board', 'Board', 'machine', '2'], ['tree', 'Tree', 'branch', '3'], ['sessions', 'Sessions', 'user', '4'], ['deployments', 'Deployments', 'rocket', '5'], ['today', 'Today', 'clock', '6']];
 
 export function logoSvg() {
   return '<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" fill="none" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--surface)" stroke="var(--border)" stroke-width="1.5"/><path d="M7 11h18M7 16h11M7 21h15" stroke="var(--text-muted)" stroke-width="2" stroke-linecap="round"/><circle cx="23" cy="16" r="3" fill="var(--accent-fill)"/><path d="M21 16l1.5 1.5L25 14" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -17,6 +17,7 @@ export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null,
     tree: snapshot.tickets.filter((t) => !t.parent_id).length,
     sessions: snapshot.sessions.filter((s) => s.state === 'live' || s.state === 'idle').length,
     deployments: (snapshot.deployments_outstanding ?? []).length,
+    today: snapshot.today && snapshot.today.days.length && snapshot.today.days[0].date === snapshot.today.generated_for ? snapshot.today.days[0].tickets.length : 0,
   } : {};
   const isStatic = !!(meta && meta.exported_at);
   return `<div class="sidebar-head"><span class="eyebrow">${icon('machine')}Workspace</span><span class="pill">${isStatic ? 'SNAPSHOT' : 'LOCAL'}</span></div>

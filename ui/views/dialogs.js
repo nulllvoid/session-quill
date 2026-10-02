@@ -92,7 +92,7 @@ export function renderDeploymentDialog(rawTicket, { mode = 'record', deploymentI
 <h2 id="dialog-title">${icon('rocket')}${mode === 'waive' ? 'Waive' : 'Record'} deployment — ${keyEl(ticket.key)}</h2>
 <p class="muted small">Select each PR/environment obligation and provide ${mode === 'waive' ? 'a waiver reason' : 'a timestamp and evidence'}. Rows stay visible until the worker confirms.</p>
 <div class="obligations">${items.map((d, i) => `<div class="obligation"><label><input type="checkbox" name="select_${i}" value="${attr(d.id)}" data-pr="${attr(d.pr_id)}" data-environment="${attr(d.environment)}" ${items.length === 1 ? 'checked' : ''}> <strong>${esc(d.environment)}</strong> <span class="muted small">PR ${esc(d.pr_id.slice(0, 8))}, merged ${esc(d.merged_at)}</span></label>
-  ${mode === 'waive' ? `<label class="indent">Reason (required) <input type="text" name="waiver_${i}" maxlength="500" required></label>` : `<label class="indent">Deployed at <input type="datetime-local" name="deployed_at_${i}" required></label><label class="indent">Evidence <input type="text" name="evidence_${i}" maxlength="500" placeholder="release tag, link, note"></label>`}
+  ${mode === 'waive' ? `<label class="indent">Reason (required) <input type="text" name="waiver_${i}" maxlength="500" required></label>` : `<label class="indent">Deployed at <input type="datetime-local" name="deployed_at_${i}" required></label><label class="indent">Evidence type <select name="evidence_kind_${i}"><option value="tag">Values-file or manifest tag bump</option><option value="argocd">ArgoCD sync</option><option value="release">Release tag</option><option value="merge">The merge itself deploys</option><option value="manual" selected>Other (my note)</option></select></label><label class="indent">Evidence <input type="text" name="evidence_${i}" maxlength="500" placeholder="commit, file, sync id or link"></label>`}
 </div>`).join('')}</div>
 <div class="dialog-actions"><button type="submit" class="btn primary">${mode === 'waive' ? 'Waive selected' : 'Mark deployed'}</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;
@@ -117,6 +117,6 @@ export function renderExportDialog(snapshot, preview) {
 }
 
 export function renderHelpDialog() {
-  const rows = [['/', 'Focus search'], ['1 – 5', 'Switch view'], ['Enter / Space', 'Open the focused card'], ['h', 'Handoff on a focused eligible card'], ['Escape', 'Close detail or dialog, restore focus'], ['Left / Right', 'Previous / next record while the detail navigation control is focused'], ['?', 'This help']];
+  const rows = [['/', 'Focus search'], ['1 – 6', 'Switch view'], ['Enter / Space', 'Open the focused card'], ['h', 'Handoff on a focused eligible card'], ['Escape', 'Close detail or dialog, restore focus'], ['Left / Right', 'Previous / next record while the detail navigation control is focused'], ['?', 'This help']];
   return `<div class="dialog-form"><h2 id="dialog-title">Keyboard shortcuts</h2><table class="shortcuts">${rows.map(([k, d]) => `<tr><th scope="row"><kbd>${esc(k)}</kbd></th><td>${esc(d)}</td></tr>`).join('')}</table><p class="muted small">Shortcuts never run inside inputs or while a dialog owns focus.</p><div class="dialog-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div></div>`;
 }

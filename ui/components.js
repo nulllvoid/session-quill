@@ -190,7 +190,7 @@ export function normalizeSnapshot(snapshot) {
     checkpoints: snapshot.checkpoints ?? [],
     handoffs: (snapshot.handoffs ?? []).map((h) => ({ children_ids: [], changed_files: [], test_results: [], uncertain_effects: [], permissions: {}, ...h })),
     requests: snapshot.requests ?? [],
-    schedules: snapshot.schedules ?? [], recipes: snapshot.recipes ?? [],
+    schedules: snapshot.schedules ?? [], recipes: snapshot.recipes ?? [], today: snapshot.today ?? null,
     picknext: snapshot.picknext ?? [],
     blocked: snapshot.blocked ?? [],
     deployments_outstanding: snapshot.deployments_outstanding ?? [],

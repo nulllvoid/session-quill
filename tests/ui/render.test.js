@@ -9,6 +9,7 @@ import { renderBoard } from '../../ui/views/board.js';
 import { renderTree } from '../../ui/views/tree.js';
 import { renderSessions } from '../../ui/views/sessions.js';
 import { renderDeployments } from '../../ui/views/deployments.js';
+import { renderToday } from '../../ui/views/today.js';
 import { renderDetail } from '../../ui/views/detail.js';
 import { renderHandoffForm } from '../../ui/views/handoff-form.js';
 import { renderHeader } from '../../ui/views/header.js';
@@ -105,11 +106,28 @@ test('renderSessions shows state, binding, machine, writes, coverage, unpromoted
   assert.match(html, /Page 1 of 4/);
 });
 
-test('renderDeployments lists obligations oldest first with evidence dates and a journey strip; empty state', () => {
-  const html = renderDeployments(snapshot(), noFilters, { now: NOW });
-  assert.match(html, /production/);
+test('renderDeployments shows each ticket with outstanding work as a PR by environment matrix, oldest first; empty state', () => {
+  const s = snapshot();
+  const t = s.tickets.find((x) => x.id === TID(6));
+  t.deployments = [
+    { id: 'd6', pr_id: 'pr6', environment: 'production', state: 'pending', merged_at: '2026-09-29T08:00:00Z', deployed_at: null, evidence: null, waiver_reason: null },
+    { id: 'd6s', pr_id: 'pr6', environment: 'stage', state: 'deployed', merged_at: '2026-09-29T08:00:00Z', deployed_at: '2026-09-30T09:00:00Z', evidence: 'values <v1.4>', evidence_kind: 'tag', waiver_reason: null },
+    { id: 'd6d', pr_id: 'pr6', environment: 'dr', state: 'waived', merged_at: '2026-09-29T08:00:00Z', deployed_at: null, evidence: null, waiver_reason: 'not applicable: no DR' },
+  ];
+  t.environments = [
+    { environment: 'stage', state: 'done', pending: 0, deployed_at: '2026-09-30T09:00:00Z', evidence: 'values <v1.4>', evidence_kind: 'tag' },
+    { environment: 'production', state: 'pending', pending: 1 },
+    { environment: 'dr', state: 'n-a', pending: 0, waiver_reason: 'not applicable: no DR' },
+  ];
+  const html = renderDeployments(s, noFilters, { now: NOW });
+  assert.match(html, /<table class="env-matrix"/);
+  assert.match(html, /<th scope="col">stage<\/th><th scope="col">production<\/th><th scope="col">dr<\/th>/);
+  assert.match(html, /data-env-state="done"[\s\S]*?Tag bump[\s\S]*?values &lt;v1\.4&gt;/);
+  assert.match(html, /data-env-state="pending"[\s\S]*?data-action="record-deployment" data-ticket="[^"]+" data-deployment="d6"/);
+  assert.match(html, /data-env-state="n-a"[\s\S]*?not applicable: no DR/);
   assert.match(html, /2026-09-29/);
-  assert.match(html, /journey/);
+  const ro = renderDeployments({ ...s, capabilities: { read: true } }, noFilters, { now: NOW });
+  assert.doesNotMatch(ro, /data-action="record-deployment"/);
   assert.match(renderDeployments(snapshot({ deployments_outstanding: [] }), noFilters, { now: NOW }), /Nothing awaiting deployment/);
 });
 
@@ -182,7 +200,8 @@ test('renderHeader exposes freshness, worker, capture, provider error, receipt a
   assert.match(never, /Never synced/);
   const { renderSidebar } = await import('../../ui/views/header.js');
   const side = renderSidebar(s, { view: 'board', endpoint: '127.0.0.1:4321' });
-  for (const v of ['picknext', 'board', 'tree', 'sessions', 'deployments']) assert.match(side, new RegExp(`data-view="${v}"`));
+  for (const v of ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today']) assert.match(side, new RegExp(`data-view="${v}"`));
+  assert.match(side, /data-view="today"[^>]*aria-keyshortcuts="6"/);
   assert.match(side, /aria-keyshortcuts="2"/);
   assert.match(side, /aria-selected="true"[^>]*aria-controls="main" aria-keyshortcuts="2"/);
   const score = scoreBadge({ score: 100, raw_score: 115, reasons: [] });
@@ -407,4 +426,37 @@ test('the recipe run dialog shows what the run may do and pre-selects only sourc
   assert.doesNotMatch(standup, /type="checkbox"/);
   assert.match(standup, /Results arrive as suggestions you accept or dismiss/);
   assert.match(standup, /repository recipe/);
+});
+
+test('the Today view lists each day newest first with its tickets, activity counts and items; empty and export states', () => {
+  const s = snapshot();
+  const t1 = s.tickets[0];
+  s.today = { timezone: 'UTC', generated_for: '2026-10-02', days: [
+    { date: '2026-10-02', sessions: 2, tickets: [{ ticket_id: t1.id, key: t1.key, title: '<b>Today</b> work', status: 'active', counts: { commit: 2, pr: 1 }, items: [{ at: '2026-10-02T10:00:00Z', kind: 'commit', text: 'Commit <abc>' }], last_at: '2026-10-02T10:00:00Z' }] },
+    { date: '2026-09-30', sessions: 0, tickets: [{ ticket_id: t1.id, key: t1.key, title: 'Older', status: 'active', counts: { write: 1 }, items: [{ at: '2026-09-30T08:00:00Z', kind: 'write', text: 'Edit a.js' }], last_at: '2026-09-30T08:00:00Z' }] },
+  ] };
+  const html = renderToday(s, noFilters, { now: NOW });
+  assert.match(html, /<h2[^>]*>Today<\/h2>/);
+  assert.match(html, /2026-09-30/);
+  assert.match(html, /2 commits · 1 PR/);
+  assert.match(html, /2 sessions/);
+  assert.match(html, /Commit &lt;abc&gt;/);
+  assert.doesNotMatch(html, /<b>Today<\/b>/);
+  assert.match(html, new RegExp(`data-open="${t1.id}"`));
+  assert.ok(html.indexOf('2026-10-02') < html.indexOf('2026-09-30'));
+  assert.match(renderToday({ ...s, today: { timezone: 'UTC', generated_for: '2026-10-02', days: [] } }, noFilters, { now: NOW }), /Nothing tracked in the last 7 days/);
+  assert.match(renderToday({ ...s, today: null, meta: { ...s.meta, exported_at: NOW } }, noFilters, { now: NOW }), /not included in exports/i);
+});
+
+test('ticket detail shows the per-environment status line with evidence; the record dialog asks for the evidence kind', async () => {
+  const s = snapshot();
+  const t = s.tickets.find((x) => x.id === TID(6));
+  t.environments = [{ environment: 'stage', state: 'done', pending: 0, deployed_at: '2026-09-30T09:00:00Z', evidence: 'argo sync 41', evidence_kind: 'argocd' }, { environment: 'production', state: 'pending', pending: 1 }];
+  const html = renderDetail(t, s, { now: NOW, pending: [], content: {} });
+  assert.match(html, /class="env-status"[\s\S]*?stage[\s\S]*?ArgoCD sync[\s\S]*?production[\s\S]*?Pending/);
+  const { renderDeploymentDialog } = await import('../../ui/views/dialogs.js');
+  t.deployments = [{ id: 'd6', pr_id: 'pr6abcdef', environment: 'production', state: 'pending', merged_at: '2026-09-29T08:00:00Z' }];
+  const dialog = renderDeploymentDialog(t, { mode: 'record' });
+  assert.match(dialog, /<select name="evidence_kind_0"/);
+  for (const k of ['tag', 'argocd', 'release', 'manual', 'merge']) assert.match(dialog, new RegExp(`<option value="${k}"`));
 });
