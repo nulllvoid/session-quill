@@ -59,6 +59,16 @@ test('renderPickNext empty states', () => {
   assert.match(renderPickNext(allBlocked, noFilters, { now: NOW }), /Everything eligible is blocked/);
 });
 
+test('overview follows filters and a zero-result search offers a reset', () => {
+  const html = renderPickNext(snapshot(), { ...noFilters, q: 'does-not-match-any-ticket' }, { now: NOW });
+  assert.match(html, /No matching work/);
+  assert.match(html, /data-action="clear-filters"/);
+  assert.equal((html.match(/<strong>0<\/strong>/g) ?? []).length, 4);
+  const filtered = renderPickNext(snapshot(), { ...noFilters, q: 'Ticket 1' }, { now: NOW });
+  assert.match(filtered, /Open tickets<\/span><strong>1<\/strong>/);
+  assert.match(filtered, /Completed<\/span><strong>0<\/strong>/);
+});
+
 test('renderBoard groups six statuses in order, collapses done, shows counts, stale badge and escapes titles', () => {
   const html = renderBoard(snapshot(), noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} });
   const order = ['todo', 'active', 'review', 'deploy-pending', 'blocked', 'done'].map((s) => html.indexOf(`data-column="${s}"`));
@@ -264,7 +274,7 @@ test('the inbox lists unlinked work with files, commits, the last checkpoint and
   assert.match(html, /abc1234/);
   assert.match(html, /Made the retry deterministic/);
   for (const action of ['data-action="attach-unbound" data-session="sess-u" data-mode="attach"', 'data-action="attach-unbound" data-session="sess-u" data-mode="create"', 'data-action="dismiss-unbound" data-session="sess-u" data-revision="3"']) assert.ok(html.includes(action), action);
-  assert.ok(html.indexOf('Unlinked work') < html.indexOf('Ranked candidates'), 'the inbox comes first');
+  assert.ok(html.indexOf('Unlinked work') < html.indexOf('<h2>Up next</h2>'), 'the inbox precedes recommendations');
 });
 
 test('the inbox hides dismissed or empty work and read-only snapshots, and shows pending requests instead of actions', () => {

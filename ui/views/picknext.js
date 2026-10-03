@@ -35,16 +35,27 @@ export function renderPickNext(rawSnapshot, filters, { now, pending = [] }) {
   const entries = (snapshot.picknext ?? []).map((e) => ({ entry: e, ticket: ticketById(snapshot, e.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
   const blocked = (snapshot.blocked ?? []).map((b) => ({ b, ticket: ticketById(snapshot, b.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
   let main;
-  if (!entries.length && blocked.length) {
+  const filtered = Object.values(filters).some(Boolean);
+  if (!entries.length && !blocked.length && filtered) {
+    main = emptyState('No matching work', 'Try a different search or filter. <button type="button" class="link" data-action="clear-filters">Clear all filters</button>');
+  } else if (!entries.length && blocked.length) {
     main = emptyState('Everything eligible is blocked', `Clear a blocker below, or start new work. ${mentionHint(snapshot)}`);
   } else if (!entries.length) {
     main = emptyState('No eligible work', `Pick next fills as tickets in to do, active, review or deploy-pending appear. ${mentionHint(snapshot)}`);
   } else {
-    main = `<div class="section-head"><h2>Ranked candidates</h2><span class="section-count">${esc(entries.length)} candidate${entries.length === 1 ? '' : 's'} · ranked by raw score, display capped at 100 · blocked and done excluded</span></div>
+    main = `<div class="section-head"><h2>Up next</h2><span class="section-count" title="Ranked by raw score, display capped at 100; blocked and done excluded">${esc(entries.length)} candidate${entries.length === 1 ? '' : 's'} · ordered by priority score</span></div>
 <div class="picknext-grid">${entries.map(({ entry, ticket }) => ticketCard(ticket, snapshot, { variant: 'picknext', now, showHandoff: true, entry })).join('')}</div>`;
   }
   const blockedHtml = blocked.length
     ? `<section class="blocked-list" aria-labelledby="blocked-heading"><h2 id="blocked-heading">${icon('alert')}Blocked <span class="count" aria-label="${esc(blocked.length)} blocked">${esc(blocked.length)}</span></h2><ul>${blocked.map(({ b, ticket }) => `<li><button type="button" class="link" data-open="${esc(ticket.id)}">${keyEl(ticket.key)} ${esc(ticket.title)}</button><span class="blocker-text">${esc(b.blocker)}</span></li>`).join('')}</ul></section>`
     : '';
-  return `<section class="view view-picknext" aria-labelledby="tab-picknext"><h2 class="sr-only">Pick next</h2>${renderInbox(snapshot, { now, pending })}${main}${blockedHtml}</section>`;
+  const tickets = snapshot.tickets.filter((t) => matchesFilters(t, filters, snapshot));
+  const stats = [
+    ['Open tickets', tickets.filter((t) => t.status !== 'done').length, 'Still on your plate', 'ticket'],
+    ['In progress', tickets.filter((t) => t.status === 'active').length, 'Work taking shape', 'branch'],
+    ['Needs attention', tickets.filter((t) => t.status === 'blocked' || t.stale).length, 'Blocked or stale tickets', 'alert'],
+    ['Completed', tickets.filter((t) => t.status === 'done').length, 'Across matching tickets', 'check'],
+  ];
+  const overview = `<div class="work-overview" aria-label="Filtered ticket overview">${stats.map(([label, value, hint, glyph]) => `<div class="overview-stat"><span class="stat-label">${icon(glyph)}${label}</span><strong>${value}</strong><span class="stat-hint">${hint}</span></div>`).join('')}</div>`;
+  return `<section class="view view-picknext" aria-labelledby="tab-picknext"><h2 class="sr-only">Pick next</h2>${overview}${renderInbox(snapshot, { now, pending })}${main}${blockedHtml}</section>`;
 }

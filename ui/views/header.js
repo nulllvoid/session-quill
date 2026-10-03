@@ -4,6 +4,21 @@ import { freshness, relativeTime } from '../lib/time.js';
 const FRESH_LABELS = { 'never-synced': 'Never synced', fresh: 'Fresh', ageing: 'Ageing', stale: 'Stale' };
 export const NAV_ITEMS = [['picknext', 'Pick next', 'ticket', '1'], ['board', 'Board', 'machine', '2'], ['tree', 'Tree', 'branch', '3'], ['sessions', 'Sessions', 'user', '4'], ['deployments', 'Deployments', 'rocket', '5'], ['today', 'Today', 'clock', '6']];
 
+const VIEW_DESCRIPTIONS = {
+  picknext: ['Make room for focused work.', 'Your next move, with the context to make it count.'],
+  board: ['Your work, in motion.', 'Follow every ticket from the first idea to done.'],
+  tree: ['See how it connects.', 'Explore the relationships between tickets and their follow-ups.'],
+  sessions: ['Keep the context.', 'Review your coding sessions and pick up where you left off.'],
+  deployments: ['From merged to shipped.', 'Track releases and the work still waiting to reach an environment.'],
+  today: ['A record of your day.', 'Changes, checkpoints, and progress across your workspace.'],
+};
+
+export function renderPageHeading(view, snapshot) {
+  const [title, description] = VIEW_DESCRIPTIONS[view] ?? VIEW_DESCRIPTIONS.picknext;
+  const label = NAV_ITEMS.find(([id]) => id === view)?.[1] ?? 'Pick next';
+  return `<header class="page-heading"><p class="page-breadcrumb">Workspace <span aria-hidden="true">/</span> <strong>${esc(label)}</strong></p><h1>${esc(title)}</h1><p class="page-description">${esc(description)}</p><span class="workspace-label">${icon('branch')}${esc(snapshot.meta.store_name || 'Local workspace')}</span></header>`;
+}
+
 export function logoSvg() {
   return '<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" fill="none" aria-hidden="true"><rect width="32" height="32" rx="9" fill="var(--accent-fill)"/><path d="M22.5 7.5c-6 1-10.5 5.5-12 13l-1 4 3.2-2.6c6.8-1.4 10.3-6.2 9.8-14.4Z" fill="var(--accent-fg)"/><path d="M9.5 24.5l6-8" stroke="var(--accent-fill)" stroke-width="1.4" stroke-linecap="round"/></svg>';
 }
@@ -22,7 +37,7 @@ export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null,
   const isStatic = !!(meta && meta.exported_at);
   const conn = isStatic ? 'snapshot' : online ? 'online' : 'offline';
   return `<div class="sidebar-brand">${logoSvg()}<div class="brand-text"><span class="brand-name">Session Quill</span><span class="brand-sub">${isStatic ? 'Snapshot' : 'Local'}${meta ? ` · v${esc(meta.tracker_version)}` : ''}</span></div></div>
-<div class="nav" role="tablist" aria-label="Views">
+<span class="nav-caption">Your workspace</span><div class="nav" role="tablist" aria-label="Views">
   ${NAV_ITEMS.map(([id, label, ic, key]) => `<button type="button" role="tab" class="nav-item" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}">${icon(ic)}<span class="nav-label">${esc(label)}</span><span class="badge" aria-label="${attr(`${counts[id] ?? 0} items, shortcut ${key}`)}" title="Shortcut ${key}">${esc(counts[id] ?? key)}</span></button>`).join('')}
 </div>
 ${meta ? `<div class="sidebar-section"><span class="eyebrow">Workspace</span>
@@ -78,7 +93,7 @@ export function renderRefreshControl(snapshot, { online, refresh }) {
 }
 
 export function renderReceipt(receipt, { online }) {
-  if (!receipt) return `<div class="receipt" data-tone="neutral" title="Only acknowledged persisted requests count as queued">${icon('check')}<span class="receipt-text">Receipt: no persisted outcome yet</span><span class="live">${online ? 'LIVE' : 'OFFLINE'}</span></div>`;
+  if (!receipt) return '';
   return `<div class="receipt" data-tone="${attr(receipt.tone ?? 'neutral')}" title="${attr(receipt.at ?? '')}">${icon(receipt.tone === 'critical' ? 'alert' : 'check')}<span class="receipt-text">Receipt: ${esc(receipt.text)}</span><span class="live">${online ? 'LIVE' : 'OFFLINE'}</span></div>`;
 }
 

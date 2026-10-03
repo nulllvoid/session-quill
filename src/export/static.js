@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { sanitizeSnapshot } from './sanitize.js';
 
 const UI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ui');
-const MODULE_ORDER = ['lib/time.js', 'components.js', 'views/header.js', 'views/picknext.js', 'views/board.js', 'views/tree.js', 'views/sessions.js', 'views/deployments.js', 'views/detail.js', 'views/handoff-form.js', 'views/dialogs.js'];
+const MODULE_ORDER = ['lib/time.js', 'lib/motion.js', 'components.js', 'views/header.js', 'views/picknext.js', 'views/board.js', 'views/tree.js', 'views/sessions.js', 'views/deployments.js', 'views/detail.js', 'views/handoff-form.js', 'views/dialogs.js'];
 const LINE_SEP = String.fromCharCode(0x2028);
 const PARA_SEP = String.fromCharCode(0x2029);
 

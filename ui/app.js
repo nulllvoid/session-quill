@@ -1,6 +1,6 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
 import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot } from './components.js';
-import { renderHeader, renderSidebar } from './views/header.js';
+import { renderHeader, renderSidebar, renderPageHeading } from './views/header.js';
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
 import { renderTree } from './views/tree.js';
@@ -11,6 +11,7 @@ import { renderDetail } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
 import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
+import { createDashboardMotion } from './lib/motion.js';
 import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
 
 const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today'];
@@ -46,6 +47,17 @@ function setReceipt(text, tone = 'neutral') {
 let api;
 let pollTimer = null;
 let countdownTimer = null;
+let motion;
+let detailCloseVersion = 0;
+let renderedView = null;
+const renderedMarkup = new WeakMap();
+
+// Preserve DOM nodes (and focus, hover and active animations) on unchanged polls.
+function setMarkup(element, html) {
+  if (renderedMarkup.get(element) === html) return;
+  element.innerHTML = html;
+  renderedMarkup.set(element, html);
+}
 
 function $(sel) { return document.querySelector(sel); }
 function nowIso() { return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'); }
@@ -89,14 +101,19 @@ function render() {
   const s = appState.snapshot;
   const now = nowIso();
   const main = $('#main');
-  if (!s) { main.innerHTML = `<div class="skeleton" role="status" aria-label="Waiting for the first snapshot from the worker"><span></span><span></span><span></span></div>`; return; }
+  if (!s) {
+    setMarkup(main, !appState.online
+      ? `<section class="empty" role="alert"><h1>Unable to load your workspace</h1><p>${esc(appState.error || 'The worker is unavailable. Start it with quill worker start; this page will retry automatically.')}</p></section>`
+      : `<div class="skeleton" role="status" aria-label="Waiting for the first snapshot from the worker"><span></span><span></span><span></span></div>`);
+    return;
+  }
   const scroll = main.scrollTop;
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
-  $('#sidebar').innerHTML = renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online });
-  $('#header').innerHTML = renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt });
+  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online }));
+  setMarkup($('#header'), renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt }));
   if (searchFocused) { const sInput = $('#search'); if (sInput) { sInput.focus(); if (searchPos !== null) sInput.setSelectionRange(searchPos, searchPos); } }
-  $('#filters').innerHTML = renderFilterBar(s);
+  setMarkup($('#filters'), renderFilterBar(s));
   const pending = [...appState.requests.values()];
   const opts = { now, pending, selected: appState.selected };
   let html = '';
@@ -106,13 +123,18 @@ function render() {
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
-  main.innerHTML = (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + html;
-  main.scrollTop = scroll;
-  // The entry animation plays once; later polls replace the DOM without replaying it.
-  if (!document.body.dataset.ready) setTimeout(() => { document.body.dataset.ready = 'true'; }, 900);
+  setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
+  main.scrollTop = renderedView === appState.view ? scroll : 0;
+  renderedView = appState.view;
   document.body.dataset.layout = layoutMode();
   renderDetailPanel(now, pending);
   renderDialog();
+  motion?.update({
+    view: appState.view,
+    results: JSON.stringify([appState.filters, appState.sessionsPage, appState.boardPages, [...appState.boardExpanded], appState.treeRoot]),
+    detail: appState.selected,
+    receipt: appState.receipt ? JSON.stringify(appState.receipt) : null,
+  });
   writeHash();
 }
 
@@ -127,7 +149,7 @@ function renderFilterBar(s) {
   const repos = s.repos ?? [];
   const tags = [...new Set(s.tickets.flatMap((t) => t.tags.filter((x) => !x.startsWith('quill/'))))];
   const projects = [...new Map(s.tickets.map((t) => [t.project_id, t.project_name])).entries()];
-  return `<span class="eyebrow">Triage lens</span>
+  return `<span class="eyebrow">${icon('search')}Filter by</span>
   <label>Project <select data-filter="project" aria-label="Project filter (applies to every view)"><option value="">All</option>${projects.map(([id, name]) => `<option value="${attr(id)}" ${f.project === id ? 'selected' : ''}>${esc(name ?? id)}</option>`).join('')}</select></label>
   <label>Category <select data-filter="category"><option value="">All</option>${categories.map((c) => `<option value="${c}" ${f.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
   ${repos.length ? `<label>Repo <select data-filter="repo"><option value="">All</option>${repos.map((r) => `<option value="${attr(r.id)}" ${f.repo === r.id ? 'selected' : ''}>${esc(r.display_name)}</option>`).join('')}</select></label>` : ''}
@@ -143,7 +165,7 @@ function renderDetailPanel(now, pending) {
   const mode = layoutMode();
   panel.hidden = !ticket;
   document.body.dataset.detail = ticket ? 'open' : 'closed';
-  if (!ticket) { panel.innerHTML = ''; panel.removeAttribute('aria-modal'); return; }
+  if (!ticket) { setMarkup(panel, ''); panel.removeAttribute('aria-modal'); return; }
   const modal = mode !== 'desktop';
   panel.setAttribute('role', modal ? 'dialog' : 'complementary');
   if (modal) panel.setAttribute('aria-modal', 'true'); else panel.removeAttribute('aria-modal');
@@ -152,7 +174,7 @@ function renderDetailPanel(now, pending) {
   const selectionStart = active && panel.contains(active) && active.tagName === 'TEXTAREA' ? active.selectionStart : null;
   const editing = active && panel.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
   if (editing) return; // never clobber an in-progress edit on poll
-  panel.innerHTML = renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket });
+  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket }));
   if (activeId) { const el = panel.querySelector(`#${CSS.escape(activeId)}`) || panel.querySelector(`[data-action="${CSS.escape(activeId)}"]`); if (el) { el.focus(); if (selectionStart !== null && el.setSelectionRange) el.setSelectionRange(selectionStart, selectionStart); } }
 }
 
@@ -393,6 +415,8 @@ function exportParams(form) {
 }
 
 function openDetail(id, source) {
+  detailCloseVersion++;
+  motion?.cancelElement($('#detail'));
   appState.lastFocus = source ?? document.activeElement;
   appState.selected = id;
   appState.loadedTicket = null;
@@ -402,10 +426,15 @@ function openDetail(id, source) {
   if (first && layoutMode() !== 'desktop') first.focus();
 }
 
-function closeDetail() {
+async function closeDetail() {
+  const version = ++detailCloseVersion;
+  const selected = appState.selected;
+  await motion?.exit($('#detail'));
+  if (version !== detailCloseVersion || appState.selected !== selected) return;
   appState.selected = null;
   render();
-  if (appState.lastFocus && document.contains(appState.lastFocus)) appState.lastFocus.focus();
+  const source = appState.lastFocus && document.contains(appState.lastFocus) ? appState.lastFocus : $(`#main [data-ticket="${CSS.escape(selected ?? '')}"]`);
+  source?.focus({ preventScroll: true });
 }
 
 function closeDialog() {
@@ -575,13 +604,14 @@ function startCountdown() {
 
 export function startApp() {
   applyTheme();
+  motion = createDashboardMotion(document, window.matchMedia('(prefers-reduced-motion: reduce)'));
   readHash();
   const staticSnapshot = window.__SNAPSHOT__ ?? null;
   api = createApi({ staticSnapshot });
   document.addEventListener('click', onClick);
   document.addEventListener('keydown', onKey);
   document.addEventListener('change', onChange);
-  document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { appState.filters.q = e.target.value; const main = $('#main'); main.innerHTML = ''; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
+  document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { appState.filters.q = e.target.value; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
   document.addEventListener('submit', (e) => { const form = e.target.closest('form[data-form]'); if (form) { e.preventDefault(); handleSubmit(form); } });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
   window.addEventListener('online', () => poll());
