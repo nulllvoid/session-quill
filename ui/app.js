@@ -354,7 +354,7 @@ function handleAction(el) {
     }
     case 'run-job': submit({ kind: 'run-job', target_id: null, expected_revision: null, payload: { schedule: el.dataset.schedule } }, { announceText: `Running ${el.dataset.schedule} now` }); break;
     case 'waive-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'waive', deploymentId: el.dataset.deployment ?? null }; render(); break;
-    case 'toggle-column': if (appState.boardExpanded.has('done')) appState.boardExpanded.delete('done'); else appState.boardExpanded.add('done'); render(); break;
+    case 'toggle-column': { const c = el.dataset.column; if (appState.boardExpanded.has(c)) appState.boardExpanded.delete(c); else appState.boardExpanded.add(c); render(); break; }
     case 'column-page': appState.boardPages[el.dataset.column] = Number(el.dataset.page); render(); break;
     case 'toggle-stale': appState.filters.stale = !appState.filters.stale; render(); break;
     case 'sessions-page': appState.sessionsPage = Number(el.dataset.page); render(); break;

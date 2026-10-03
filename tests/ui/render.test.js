@@ -74,6 +74,11 @@ test('renderBoard groups six statuses in order, collapses done, shows counts, st
   const order = ['todo', 'active', 'review', 'deploy-pending', 'blocked', 'done'].map((s) => html.indexOf(`data-column="${s}"`));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.match(html, /data-column="done"[^>]*data-collapsed="true"/);
+  assert.match(html, /data-column="todo"[^>]*data-collapsed="false"/);
+  assert.equal((html.match(/data-action="toggle-column"/g) ?? []).length, 6);
+  const toggled = renderBoard(snapshot(), noFilters, { now: NOW, layout: 'columns', expanded: new Set(['todo', 'done']), pages: {} });
+  assert.match(toggled, /data-column="todo"[^>]*data-collapsed="true"/);
+  assert.match(toggled, /data-column="done"[^>]*data-collapsed="false"/);
   assert.match(html, /<span class="count" aria-label="1 ticket">1<\/span>/);
   assert.match(html, /Stale · /);
   assert.equal(html.includes('<script>alert(1)</script>'), false);
