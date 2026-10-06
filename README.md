@@ -6,7 +6,7 @@
 
 A Claude Code plugin that binds development sessions to tickets, keeps a durable local record of what each session did, and gives you a loopback dashboard that answers "what should I pick next?", "where was I?" and "what still needs deployment?".
 
-![Pick next view of the Session Quill dashboard](docs/images/dashboard-pick-next.jpg)
+![Pick next dashboard with workspace stats and unlinked session work](docs/images/dashboard-pick-next.jpg)
 
 - **Zero-command tracking.** Mention a ticket key such as `PROJ-123` in a prompt, or start on a branch like `feat/PROJ-123-...`, and the session is linked to that ticket. Any tracker works through a URL template; no tracker host is built in.
 - **Unlinked work inbox.** Files and commits from a session with no ticket wait on Pick next. Attach them to a ticket, create the ticket from its key, or dismiss them; each action has a 10-second undo. Tracker keys open their ticket in a new tab and copy with one click.
@@ -297,7 +297,7 @@ npm run test:acceptance    # only the scenario suite mapped to docs/ACCEPTANCE.m
 node scripts/dev-seed.mjs  # dashboard on a throwaway store with sample data
 ```
 
-![Board view with the docked ticket detail](docs/images/dashboard-board-detail.jpg)
+![Board view with a selected ticket, docked details, and next action](docs/images/dashboard-board-detail.jpg)
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a map of the code.
 
