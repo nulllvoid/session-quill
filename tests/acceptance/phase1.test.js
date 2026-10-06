@@ -241,8 +241,8 @@ test('A17 duplicate slugs and child allocations yield distinct keys; relink pres
   try {
     const a = await run(['ticket', 'create', 'Same title', '--session', 'k1']);
     const b = await run(['ticket', 'create', 'Same title', '--session', 'k1']);
-    const ka = /(LOCAL-same-title-[0-9a-f]{8})/.exec(a.out)[1];
-    const kb = /(LOCAL-same-title-[0-9a-f]{8})/.exec(b.out)[1];
+    const ka = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(a.out)[1];
+    const kb = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(b.out)[1];
     assert.notEqual(ka, kb);
     const c1 = await run(['ticket', 'create', 'Child', '--parent', ka, '--session', 'k1']);
     const c2 = await run(['ticket', 'create', 'Child', '--parent', ka, '--session', 'k1']);

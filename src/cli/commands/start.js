@@ -42,7 +42,7 @@ async function enable({ flags, io, env }) {
     if (!result.persisted) throw new TrackerError('capture-unavailable', 'Quill started, but could not save this session. Run quill doctor to check capture storage.');
   }
   io.println(`Quill is ready in ${path.basename(repo)}.${flags.session ? ' This session is now being captured.' : ' Your next Claude session will be captured automatically.'}`);
-  io.println('Keep working normally; no ticket or tracker connection is required.');
+  io.println('Keep working normally; Claude can reuse or create internal tickets for your tasks. No external tracker is required.');
   io.println('Open your dashboard with /session-quill:ui (or quill ui).');
   return 0;
 }

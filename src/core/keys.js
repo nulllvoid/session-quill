@@ -8,6 +8,21 @@ export function slugify(title) {
   return slug || 'ticket';
 }
 
+// Allocated by the single journal owner, never by concurrent hook processes.
+export function allocateInternalKey(state, { prefix, category, parent_id = null } = {}) {
+  if (parent_id) return allocateKey(state, { parent_id });
+  const family = prefix && prefix !== 'LOCAL' ? prefix : category === 'feature' ? 'FEAT' : category === 'bugfix' ? 'FIX' : 'DEV';
+  validateKey(`${family}-1`);
+  let next = 1;
+  for (const key of state.keyIndex.keys()) {
+    if (!key.startsWith(`${family}-`)) continue;
+    const suffix = key.slice(family.length + 1);
+    if (/^[0-9]+$/.test(suffix)) next = Math.max(next, Number(suffix) + 1);
+  }
+  if (!Number.isSafeInteger(next)) throw new TrackerError('key-exhausted', 'internal ticket number range exhausted');
+  return `${family}-${next}`;
+}
+
 // Local keys are `<prefix>-<slug>-<short-id>`; children use the parent key plus a serialized
 // counter (TRD §Binding and attribution). Keys are display aliases, never identities.
 export function allocateKey(state, { prefix = 'LOCAL', title, parent_id = null }) {

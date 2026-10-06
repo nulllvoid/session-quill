@@ -11,7 +11,7 @@ export const DENIAL_REASON = 'Session Quill: this session is not bound to a tick
 export const WORKER_UNAVAILABLE_REASON = 'Session Quill: quill worker unavailable or binding unreadable; covered writes are denied. Run `quill doctor` (or /session-quill:ticket off to disable the gate for this session).';
 
 const QUILL_SUBCOMMANDS = new Set(['ticket', 'approve', 'dismiss', 'status', 'init', 'start', 'ui', 'doctor']);
-const TICKET_VERBS = new Set(['create', 'bind', 'show', 'off', 'on', 'relink', 'children', 'list']);
+const TICKET_VERBS = new Set(['work', 'create', 'bind', 'show', 'off', 'on', 'relink', 'children', 'list']);
 const UNSAFE_OUTSIDE_QUOTES = /[|&;<>$`(){}\n\r*?[\]~!]/;
 
 function splitArgs(command) {

@@ -110,6 +110,28 @@ machine. Automatic launch attempts are rate-limited to avoid a crash loop.
 
 ## Link sessions to your tracker
 
+### Internal tasks, across sessions
+
+Tickets represent tasks, not sessions. A session can work on several tickets;
+one ticket can carry work from several sessions. Claude receives task-tracking
+instructions to reuse or create a ticket before substantive work, and to keep
+follow-ups, corrections, and retries on the same task. Starting a session alone
+does not create a ticket.
+
+Use `/session-quill:ticket work "Improve onboarding"` to reuse a uniquely matching
+open task in this project/repository or create it and switch to it. General tasks
+use `DEV-1`, features use `FEAT-1` (`--category feature`), and fixes use `FIX-1`
+(`--category bugfix`). Numbers are allocated by the worker, safely across parallel
+sessions. `create` always makes a separate task; `bind DEV-1` resumes a known task.
+If several tasks match a title, Quill asks you to select a key.
+
+Switching tickets affects future activity only. Existing keys and aliases remain
+valid, custom `key_prefix` settings are respected, and child keys such as
+`FEAT-1.1` remain supported. An external tracker is optional. Ending a session
+does not mark its tasks done.
+
+### External trackers
+
 Add a `[tracker]` table to the repository's `.quill.toml` (shared with your team) or to `~/.claude/quill/config.toml` (just you). Secrets never go in either file.
 
 ```toml

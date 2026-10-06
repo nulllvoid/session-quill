@@ -7,7 +7,7 @@ import {
 } from './state.js';
 import { isIsoZ } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
-import { validateKey, validateParent } from './keys.js';
+import { validateKey, validateParent, allocateInternalKey } from './keys.js';
 import { externalTicketId } from './external-keys.js';
 import { applyStatusChange, deriveStatusFromEvidence, recordDeployment } from './transitions.js';
 import { heuristicApprovalEligible } from './approval.js';
@@ -134,6 +134,7 @@ function applyTicketFields(state, ticket, fields, ev, source, result) {
 }
 
 function createTicket(state, ev, t, source, result) {
+  if (t?.allocate_internal_key) t = { ...t, key: allocateInternalKey(state, { prefix: t.key_prefix, category: t.category, parent_id: t.parent_id }) };
   if (!t || !t.id || !t.key || !t.title) return { rejected: 'ticket-invalid' };
   if (state.tickets.has(t.id)) return { rejected: 'ticket-exists' };
   try {
@@ -178,6 +179,7 @@ function createTicket(state, ev, t, source, result) {
   if (typeof t.last_activity === 'string' && isIsoZ(t.last_activity)) ticket.last_activity = t.last_activity;
   if (typeof t.created_at === 'string' && isIsoZ(t.created_at)) ticket.created_at = t.created_at;
   state.tickets.set(ticket.id, ticket);
+  if (t.allocate_internal_key) result.ticket = { id: ticket.id, key: ticket.key };
   indexChild(state, ticket);
   state.keyIndex.set(ticket.key, ticket.id);
   if (ticket.parent_id) {
@@ -803,6 +805,26 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'import': {
       const source = ev.kind === 'ticket-create' ? 'manual' : ev.kind;
       if (ev.payload.ticket) {
+        if (ev.kind === 'ticket-create' && ev.payload.reuse_task === true) {
+          if (!ev.session_id) { result.rejected = 'session-required'; break; }
+          const incoming = ev.payload.ticket;
+          const normalized = (title) => String(title ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+          const matches = [...state.tickets.values()].filter((t) => t.status !== 'done' &&
+            t.project_id === incoming.project_id && (t.repo_id ?? null) === (incoming.repo_id ?? null) &&
+            (t.parent_id ?? null) === (incoming.parent_id ?? null) && normalized(t.title) === normalized(incoming.title));
+          if (matches.length > 1) { result.rejected = 'task-ambiguous'; break; }
+          let ticket = matches[0];
+          if (!ticket) {
+            Object.assign(result, createTicket(state, ev, incoming, source, result));
+            if (result.rejected) break;
+            ticket = state.tickets.get(incoming.id);
+          }
+          const s = getOrCreateSession(state, ev);
+          if (s.current_ticket_id !== ticket.id) bindSession(state, s, ev, { ticket_id: ticket.id, project_id: ticket.project_id }, result);
+          result.ticket = Object.fromEntries(['id', 'key', 'title', 'category', 'priority', 'project_id', 'project_name', 'parent_id', 'repo_id', 'due', 'jira'].map((key) => [key, ticket[key]]));
+          result.ticket.reused = matches.length === 1;
+          break;
+        }
         Object.assign(result, createTicket(state, ev, ev.payload.ticket, source, result));
       } else if (ev.payload.ticket_id && ev.payload.fields) {
         const ticket = state.tickets.get(ev.payload.ticket_id);

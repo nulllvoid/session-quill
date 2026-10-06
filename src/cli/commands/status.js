@@ -52,7 +52,7 @@ export async function run({ flags, io, env }) {
     if (binding && binding.ticket_id) io.println(`Session ${session.session_id}: bound to ${binding.ticket_key} (revision ${binding.binding_revision}, gate ${binding.gate_enabled ? 'on' : 'OFF'})`);
     else {
       io.println(`Session ${session.session_id}: no ticket linked${binding && binding.gate_enabled === false ? ' (gate OFF)' : ''}`);
-      io.println('A ticket is optional. Captured file changes appear in the dashboard under Unlinked work.');
+      io.println('Choose the task before working: /session-quill:ticket work "<task title>" reuses or creates it; ticket bind <KEY> resumes a known task.');
     }
   }
   return 0;

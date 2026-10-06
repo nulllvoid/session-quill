@@ -5,6 +5,29 @@ import path from 'node:path';
 import { makeHome, startWorker, cli } from './helpers.js';
 import { readJsonIfExists } from '../../src/lib/atomic-fs.js';
 import { saveUserConfig } from '../../src/config/config.js';
+import { isTrackerCliCommand } from '../../src/gate/decide.js';
+
+test('parallel sessions can work on the same internal task, then switch independently', async () => {
+  const fx = makeHome();
+  const w = await startWorker(fx);
+  try {
+    assert.equal(isTrackerCliCommand('node "C:/plugin/bin/quill.js" ticket work "Fix login" --session one'), true);
+    const results = await Promise.all(['one', 'two'].map((session) => cli(['ticket', 'work', 'Fix login', '--category', 'bugfix', '--session', session], fx.env)));
+    for (const r of results) { assert.equal(r.code, 0, r.err); assert.match(r.out, /FIX-1/); }
+    let tickets = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out);
+    assert.equal(tickets.length, 1);
+    const next = await cli(['ticket', 'work', 'Add search', '--category', 'feature', '--session', 'one'], fx.env);
+    assert.equal(next.code, 0, next.err);
+    assert.match(next.out, /FEAT-1/);
+    const one = JSON.parse((await cli(['ticket', 'show', '--session', 'one', '--json'], fx.env)).out);
+    const two = JSON.parse((await cli(['ticket', 'show', '--session', 'two', '--json'], fx.env)).out);
+    assert.equal(one.binding.ticket_key, 'FEAT-1');
+    assert.equal(two.binding.ticket_key, 'FIX-1');
+    assert.equal((await cli(['ticket', 'work', 'Fix login', '--session', 'one'], fx.env)).code, 0);
+    tickets = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out);
+    assert.equal(tickets.length, 2);
+  } finally { await w.stop(); }
+});
 
 test('relink --external renders the tracker link; --jira stays an alias; bad keys and links are refused', async () => {
   const fx = makeHome();
@@ -13,7 +36,7 @@ test('relink --external renders the tracker link; --jira stays an alias; bad key
   const w = await startWorker(fx);
   try {
     const a = await cli(['ticket', 'create', 'Linear work', '--session', 'sess-E'], fx.env);
-    const akey = /(LOCAL-linear-work-[0-9a-f]{8})/.exec(a.out)[1];
+    const akey = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(a.out)[1];
     const r = await cli(['ticket', 'relink', akey, '--external', 'ENG-12', '--session', 'sess-E'], fx.env);
     assert.equal(r.code, 0, r.err);
     assert.match(r.out, /ENG-12/);
@@ -23,7 +46,7 @@ test('relink --external renders the tracker link; --jira stays an alias; bad key
     assert.equal(eng.external.url, 'https://linear.app/acme/issue/ENG-12');
     assert.equal(eng.jira, null);
     const b = await cli(['ticket', 'create', 'Jira work', '--session', 'sess-E'], fx.env);
-    const bkey = /(LOCAL-jira-work-[0-9a-f]{8})/.exec(b.out)[1];
+    const bkey = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(b.out)[1];
     const bad = await cli(['ticket', 'relink', bkey, '--external', 'eng 12', '--session', 'sess-E'], fx.env);
     assert.notEqual(bad.code, 0);
     assert.match(bad.err, /external key/);
@@ -45,7 +68,7 @@ test('ticket create --bind allocates a key, waits for the worker and publishes t
   try {
     const r = await cli(['ticket', 'create', 'Preserve session checkpoints', '--bind', '--session', 'sess-A', '--category', 'feature'], fx.env);
     assert.equal(r.code, 0, r.err);
-    const key = /(LOCAL-preserve-session-checkpoints-[0-9a-f]{8})/.exec(r.out)?.[1];
+    const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(r.out)?.[1];
     assert.ok(key, r.out);
     const snap = readJsonIfExists(path.join(fx.home, 'state', 'bindings', 'sess-A.json'));
     assert.equal(snap.ticket_key, key);
@@ -93,7 +116,7 @@ test('child tickets, relink with Jira pending validation, list and children', as
   const w = await startWorker(fx);
   try {
     const parent = await cli(['ticket', 'create', 'Parent work', '--session', 'sess-D'], fx.env);
-    const pkey = /(LOCAL-parent-work-[0-9a-f]{8})/.exec(parent.out)[1];
+    const pkey = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(parent.out)[1];
     const child = await cli(['ticket', 'create', 'Child one', '--parent', pkey, '--session', 'sess-D'], fx.env);
     assert.match(child.out, new RegExp(`${pkey}\\.1`));
     const relink = await cli(['ticket', 'relink', pkey, '--jira', 'PMLA-42', '--session', 'sess-D'], fx.env);
@@ -137,7 +160,7 @@ test('review: relink --external normalizes tracker keys to uppercase', async () 
   const w = await startWorker(fx);
   try {
     const a = await cli(['ticket', 'create', 'Case work', '--session', 'sess-F'], fx.env);
-    const akey = /(LOCAL-case-work-[0-9a-f]{8})/.exec(a.out)[1];
+    const akey = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(a.out)[1];
     const r = await cli(['ticket', 'relink', akey, '--external', 'eng-13', '--session', 'sess-F'], fx.env);
     assert.equal(r.code, 0, r.err);
     const rows = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out);
@@ -154,7 +177,7 @@ test('issue #4: ticket set edits title, status, next action, priority, due and r
   const w = await startWorker(fx);
   try {
     const a = await cli(['ticket', 'create', 'Imported work', '--session', 'sess-S'], fx.env);
-    const key = /(LOCAL-imported-work-[0-9a-f]{8})/.exec(a.out)[1];
+    const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(a.out)[1];
     const before = JSON.parse((await cli(['ticket', 'list', '--json'], fx.env)).out).find((t) => t.key === key);
     const r = await cli(['ticket', 'set', key, '--title', 'Fixed title', '--status', 'active', '--next', 'Write the test', '--priority', 'P1', '--due', '2026-11-01', '--repo', 'api'], fx.env);
     assert.equal(r.code, 0, r.err);
@@ -178,7 +201,7 @@ test('issue #4: ticket set validates locally before submitting', async () => {
   const w = await startWorker(fx);
   try {
     const a = await cli(['ticket', 'create', 'Validate me', '--session', 'sess-V'], fx.env);
-    const key = /(LOCAL-validate-me-[0-9a-f]{8})/.exec(a.out)[1];
+    const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(a.out)[1];
     const cases = [
       [[], /nothing to change/],
       [['--repo', 'nope'], /unknown repository nope/],

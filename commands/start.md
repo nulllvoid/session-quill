@@ -24,6 +24,8 @@ stopped worker. It does not connect a tracker, publish anything, or change gate 
 No repository file is written unless the user requests `--share-settings`.
 
 Report readiness only after success. Keep the response short: Quill is ready; keep
-working normally; `/session-quill:ui` opens the dashboard. A ticket is optional.
+working normally; `/session-quill:ui` opens the dashboard. Track distinct tasks with
+`ticket work` or bind an existing task key. Do not create a ticket for session setup
+itself. An external tracker is optional.
 On failure, explain the actual problem. You may run the bundled `doctor` command
 for diagnostics, but never bypass ownership checks or repeatedly retry a failed launch.

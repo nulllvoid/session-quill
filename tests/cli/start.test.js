@@ -53,7 +53,7 @@ test('dashboard bootstraps a fresh home and an explicit stop stays paused until 
   const status = await cli(['status', '--session', 'paused-session'], fx.env);
   assert.match(status.out, /paused by you/);
   assert.match(status.out, /session-quill:start/);
-  assert.match(status.out, /ticket is optional/);
+  assert.match(status.out, /Choose the task before working/);
   assert.equal((await cli(['ui', '--repo', fx.repo, '--session', 'paused-session', '--no-open'], fx.env)).code, 1);
   const hook = await cli(['hook', 'SessionStart'], fx.env, { stdin: JSON.stringify({ session_id: 'paused-session', cwd: fx.repo }) });
   assert.equal(hook.code, 0);

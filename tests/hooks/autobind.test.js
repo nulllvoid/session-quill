@@ -89,7 +89,10 @@ test('a session the worker has never seen gets its session id on the first promp
   const fx = setup();
   assert.match(context(hook(fx, 'UserPromptSubmit', { prompt: 'hello' })), /Session Quill session: s1\..*Mention a ticket key \(for example PMLA-123\)/);
   const bound = setup({ bound: 'PMLA-1' });
-  assert.equal(hook(bound, 'UserPromptSubmit', { prompt: 'hello' }).stdout, '');
+  const guidance = context(hook(bound, 'UserPromptSubmit', { prompt: 'hello' }));
+  assert.match(guidance, /tickets represent tasks/);
+  assert.match(guidance, /follow-up questions, corrections, retries, and approvals on the same task/);
+  assert.match(guidance, /ticket work/);
 });
 
 test('if the bind event cannot be persisted the provisional snapshot is rolled back', () => {

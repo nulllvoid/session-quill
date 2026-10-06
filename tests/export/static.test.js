@@ -96,7 +96,7 @@ test('CLI: quill ui --static writes a standalone file; quill export requires --y
   const w = await startWorker(fx);
   try {
     const c = await cli(['ticket', 'create', 'Export me please', '--session', 'sess-X'], fx.env);
-    const key = /(LOCAL-export-me-please-[0-9a-f]{8})/.exec(c.out)[1];
+    const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(c.out)[1];
     const out = path.join(fx.home, 'snapshot.html');
     const r = await cli(['ui', '--static', out], fx.env);
     assert.equal(r.code, 0, r.err);

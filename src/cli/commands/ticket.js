@@ -1,9 +1,8 @@
 import { loadContext, sessionFromFlags, cliEvent, submitAndWait, latestSnapshot, findTicketByKey, effectiveDefaults, commandName } from '../context.js';
-import { allocateKey, slugify, validateKey } from '../../core/keys.js';
-import { createState } from '../../core/state.js';
+import { validateKey } from '../../core/keys.js';
 import { CATEGORIES, PRIORITIES, loadRepoConfig, resolveTracker } from '../../config/config.js';
 import { renderUrl, isSafeExternalUrl, TRACKER_SYSTEMS } from '../../core/external-keys.js';
-import { uuid, shortId } from '../../lib/ids.js';
+import { uuid } from '../../lib/ids.js';
 import { isDate } from '../../lib/time.js';
 import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
 import { sessionKey, TICKET_STATUSES } from '../../core/state.js';
@@ -11,18 +10,6 @@ import { TrackerError } from '../../lib/errors.js';
 
 function timeout(flags) {
   return flags.timeout ? Number(flags.timeout) : 10_000;
-}
-
-function keyIndexFromSnapshot(snapshot) {
-  const state = createState({ store_id: 'x', machine_id: 'y' });
-  for (const t of snapshot ? snapshot.tickets : []) {
-    state.tickets.set(t.id, t);
-    state.keyIndex.set(t.key, t.id);
-    for (const a of t.aliases ?? []) state.keyIndex.set(a, t.id);
-    const m = t.parent_id && /\.(\d+)$/.exec(t.key);
-    if (m) state.counters.childByParent.set(t.parent_id, Math.max(state.counters.childByParent.get(t.parent_id) ?? 0, Number(m[1])));
-  }
-  return state;
 }
 
 async function bind(ctx, io, session, ticket, flags) {
@@ -34,7 +21,7 @@ async function bind(ctx, io, session, ticket, flags) {
   return snap;
 }
 
-async function create(ctx, io, args, flags) {
+async function create(ctx, io, args, flags, { work = false } = {}) {
   const title = args.join(' ').trim();
   if (!title) throw new TrackerError('title-required', 'a ticket title is required');
   const defaults = effectiveDefaults(ctx, process.cwd(), flags);
@@ -44,33 +31,27 @@ async function create(ctx, io, args, flags) {
   const project_id = defaults.project_id || Object.keys(ctx.config.projects)[0];
   if (!project_id) throw new TrackerError('project-required', 'no project configured; pass --project or run quill init');
   const project = ctx.config.projects[project_id] ?? {};
-  const snapshot = latestSnapshot(ctx);
-  const index = keyIndexFromSnapshot(snapshot);
   let parent = null;
   if (flags.parent) {
     validateKey(flags.parent);
     parent = findTicketByKey(ctx, flags.parent);
     if (!parent) throw new TrackerError('parent-invalid', `unknown parent ticket key ${flags.parent}`);
   }
-  const key = allocateKey(index, { prefix: ctx.config.key_prefix ?? 'LOCAL', title, parent_id: parent ? parent.id : null });
-  const session = flags.session || flags.bind ? sessionFromFlags(flags, ctx.env) : null;
+  const session = work || flags.session || flags.bind ? sessionFromFlags(flags, ctx.env) : null;
   const ticket = {
-    id: uuid(), key, title: title.slice(0, 200), project_id, project_name: project.name ?? project_id, category: defaults.category, priority: defaults.priority,
+    id: uuid(), allocate_internal_key: true, key_prefix: ctx.config.key_prefix, title: title.slice(0, 200), project_id, project_name: project.name ?? project_id, category: defaults.category, priority: defaults.priority,
     parent_id: parent ? parent.id : null, repo_id: defaults.repo_id ?? project.repo_id ?? null, due: flags.due ?? null, jira: null,
   };
-  const ack = await submitAndWait(ctx, cliEvent(ctx, { kind: 'ticket-create', payload: { ticket }, session, ticket_id: ticket.id }), { timeoutMs: timeout(flags) });
-  if (ack.rejected) {
-    if (ack.rejected === 'key-collision') {
-      // Extremely unlikely with an 8-hex suffix; retry once with a fresh id.
-      ticket.key = `${ctx.config.key_prefix ?? 'LOCAL'}-${slugify(title)}-${shortId()}`;
-      const retry = await submitAndWait(ctx, cliEvent(ctx, { kind: 'ticket-create', payload: { ticket }, session, ticket_id: ticket.id }), { timeoutMs: timeout(flags) });
-      if (retry.rejected) throw new TrackerError(retry.rejected, `ticket creation rejected: ${retry.rejected}`);
-    } else {
-      throw new TrackerError(ack.rejected, `ticket creation rejected: ${ack.rejected}`);
-    }
-  }
-  io.println(`Created ${ticket.key} — ${ticket.title} [${ticket.category}, ${ticket.priority}, project ${project_id}${parent ? `, child of ${parent.key}` : ''}]`);
-  if (flags.bind) await bind(ctx, io, session, ticket, flags);
+  const ack = await submitAndWait(ctx, cliEvent(ctx, { kind: 'ticket-create', payload: { ticket, ...(work ? { reuse_task: true } : {}) }, session, ticket_id: ticket.id }), { timeoutMs: timeout(flags) });
+  if (ack.rejected) throw new TrackerError(ack.rejected, ack.rejected === 'task-ambiguous' ? 'Multiple open tasks have that title. Use ticket list, then ticket bind <KEY> to choose the intended task.' : `ticket creation rejected: ${ack.rejected}`);
+  Object.assign(ticket, ack.ticket);
+  if (!ticket.key) throw new TrackerError('worker-upgrade-required', 'Restart the Quill worker to enable sequential internal ticket keys.');
+  delete ticket.allocate_internal_key;
+  delete ticket.key_prefix;
+  delete ticket.reused;
+  io.println(`${ack.ticket?.reused ? 'Reused' : 'Created'} ${ticket.key} — ${ticket.title}${work ? '' : ` [${ticket.category}, ${ticket.priority}, project ${project_id}${parent ? `, child of ${parent.key}` : ''}]`}`);
+  if (work) io.println(`Working on ${ticket.key} in session ${session.session_id}. Earlier work keeps its original ticket attribution.`);
+  else if (flags.bind) await bind(ctx, io, session, ticket, flags);
   else io.println(`Bind with: ${commandName('ticket')} bind ${ticket.key}`);
   if (flags.json) io.json({ ticket });
   return 0;
@@ -241,6 +222,7 @@ export async function run({ args, flags, io, env }) {
   const ctx = loadContext(env);
   switch (verb) {
     case 'create': return create(ctx, io, rest, flags);
+    case 'work': return create(ctx, io, rest, flags, { work: true });
     case 'bind': {
       const [key] = rest;
       if (!key) throw new TrackerError('key-required', 'usage: ticket bind <KEY> --session <id>');
@@ -259,6 +241,6 @@ export async function run({ args, flags, io, env }) {
     case 'list': return list(ctx, io, flags);
     case 'children': return children(ctx, io, rest, flags);
     default:
-      throw new TrackerError('usage', 'usage: ticket create|bind|show|set|off|on|relink|list|children');
+      throw new TrackerError('usage', 'usage: ticket work|create|bind|show|set|off|on|relink|list|children');
   }
 }

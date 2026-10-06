@@ -40,7 +40,7 @@ test('status --json and --statusline reflect the binding', async () => {
     const un = await cli(['status', '--statusline'], fx.env, { stdin: JSON.stringify({ session_id: 'sess-S' }) });
     assert.match(un.out, /unbound/);
     const c = await cli(['ticket', 'create', 'Status demo', '--bind', '--session', 'sess-S'], fx.env);
-    const key = /(LOCAL-status-demo-[0-9a-f]{8})/.exec(c.out)[1];
+    const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(c.out)[1];
     const sl = await cli(['status', '--statusline'], fx.env, { stdin: JSON.stringify({ session_id: 'sess-S', cwd: os.tmpdir() }) });
     assert.match(sl.out, new RegExp(`${key} Status demo`));
     const js = await cli(['status', '--json', '--session', 'sess-S'], fx.env);
@@ -86,7 +86,7 @@ test('replay --into renders a staging store from the journal without touching th
   const w = await startWorker(fx);
   try {
     const c = await cli(['ticket', 'create', 'Replay me', '--session', 'sess-R'], fx.env);
-    const key = /(LOCAL-replay-me-[0-9a-f]{8})/.exec(c.out)[1];
+    const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(c.out)[1];
     const staging = path.join(fx.home, 'staging');
     const r = await cli(['replay', '--into', staging], fx.env);
     assert.equal(r.code, 0, r.err);
@@ -102,7 +102,7 @@ test('import turns supported frontmatter changes into events', async () => {
   const w = await startWorker(fx);
   try {
     const c = await cli(['ticket', 'create', 'Import me', '--session', 'sess-I'], fx.env);
-    const key = /(LOCAL-import-me-[0-9a-f]{8})/.exec(c.out)[1];
+    const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(c.out)[1];
     await cli(['sync', '--notes'], fx.env);
     const note = path.join(fx.storePath, 'tickets', `${key}.md`);
     assert.ok(fs.existsSync(note));

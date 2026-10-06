@@ -2,6 +2,7 @@
 // gate decision. No network, no model calls, no journal scans (TRD §Durability 8, ADR 0003).
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { makeEvent } from '../core/events.js';
 import { writeIngress } from '../core/ingress.js';
 import { putBlob } from '../core/blobs.js';
@@ -24,6 +25,11 @@ import {
 export const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SubagentStart', 'SubagentStop', 'PreCompact', 'SessionEnd'];
 
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+const bundledCli = fileURLToPath(new URL('../../bin/quill.js', import.meta.url)).replaceAll('\\', '/');
+
+function taskContext(session_id) {
+  return `Session Quill task tracking: tickets represent tasks, not sessions or individual prompts. Before substantive work on a distinct task, inspect existing tickets with node ${JSON.stringify(bundledCli)} ticket list --json. Reuse the matching task with ticket bind <KEY> --session ${session_id}, or run ticket work "<concise task title>" --session ${session_id} to reuse/create and bind an open task. Use --category feature for FEAT or --category bugfix for FIX; other tasks use DEV. Keep follow-up questions, corrections, retries, and approvals on the same task. Switch bindings before working on another task; switching never moves earlier activity. A task can span multiple sessions. Do not create tickets just for session startup, greetings, or status questions. Do not ask the user to do routine local ticket setup. Never treat a binding as permission to commit, push, or deploy.`;
+}
 
 function denyOutput(reason) {
   return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
@@ -166,7 +172,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
         const plan = branch ? planAutoBind({ source: 'branch', text: branch, snapshot: current, tracker: scope.tracker }) : null;
         if (plan && autoBind({ plan, source: 'branch', titleHint: branchTitle(branch, plan.key), base, key, snapshot: current, scope, identity, env, result, occurred_at })) current = readBindingSnapshot(key, env);
       }
-      result.stdout = contextOutput('SessionStart', bindingContext(current, session_id, mode, scope.tracker));
+      result.stdout = contextOutput('SessionStart', `${bindingContext(current, session_id, mode, scope.tracker)} ${taskContext(session_id)}`);
       return result;
     }
     case 'UserPromptSubmit': {
@@ -191,6 +197,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
           context.push(`Session Quill session: ${session_id}. Linked to ${plan.key}${was} because the prompt mentions it; captured work is attributed to it from now on.`);
         }
       }
+      if (!handoff) context.push(taskContext(session_id));
       if (context.length) result.stdout = contextOutput('UserPromptSubmit', context.join(' '));
       return result;
     }

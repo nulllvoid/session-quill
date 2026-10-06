@@ -263,6 +263,7 @@ export class Worker {
     if (record.producer !== 'cli') return;
     writeJsonAtomic(path.join(stateDir(this.env), 'acks', `${record.event_id}.json`), {
       event_id: record.event_id, sequence: record.sequence, kind: record.kind, rejected: result.rejected ?? null, duplicate: result.duplicate === true, at: this.now(),
+      ...(result.ticket ? { ticket: result.ticket } : {}),
     });
   }
 
