@@ -49,13 +49,20 @@ export async function run({ flags, io, env }) {
     if (flags.open) await openInBrowser(result.path);
     return 0;
   }
-  if (!ctx.initialized) {
+  const needsSetup = !ctx.initialized;
+  if (needsSetup) {
     const { run: start } = await import('./start.js');
     await start({ flags, io, env });
     ctx = loadContext(env);
   }
   const { ensureReady } = await import('../../runtime/readiness.js');
   await ensureReady(ctx, { dashboard: true });
+  // Readiness comes first so opening the dashboard respects an explicit pause.
+  if (!needsSetup && (flags.session || flags.repo)) {
+    const { run: start } = await import('./start.js');
+    await start({ flags, io: { ...io, println() {} }, env });
+    ctx = loadContext(env);
+  }
   const { url, base } = await issueOwnerUrl(ctx);
   io.println(`Dashboard: ${base}`);
   io.println('Private access link (open on this machine):');

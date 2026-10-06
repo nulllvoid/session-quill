@@ -7,7 +7,7 @@ allowed-tools: Bash(node *)
 Show the Session Quill status for this session.
 
 1. Find this session's id in your context (the line starting with `Session Quill session:`).
-2. Run:
+2. Run (omit `--session` when the context has no session id; never guess it):
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quill.js" status $ARGUMENTS --session <session id>

@@ -65,7 +65,8 @@ Open your dashboard whenever you need it:
 /session-quill:ui
 ```
 
-The dashboard command also sets up Quill if needed and starts a missing worker.
+The dashboard command also sets up Quill if needed, attaches your current Claude
+session and repository, and starts a missing worker.
 After a reboot, the next Claude session reconnects automatically. You do not need
 to configure Task Scheduler or systemd for ordinary session tracking. Scheduled
 jobs run while the worker is running; opening Claude after downtime starts recovery.
@@ -77,8 +78,8 @@ into a committable `.quill.toml`, explicitly use `--share-settings`.
 Existing gate policies are preserved, including strict repository policies.
 
 If something is wrong, use `/session-quill:status`. Run `/session-quill:start`
-to reconnect or resume processing inside Claude. `quill doctor` remains available
-for detailed diagnostics. A stopped worker stays stopped until you explicitly
+to reconnect or resume processing inside Claude. `/session-quill:doctor` (or
+`quill doctor`) provides detailed diagnostics. A stopped worker stays stopped until you explicitly
 resume it with `start`; hooks continue durable capture where storage is available.
 
 ### Terminal and advanced setup

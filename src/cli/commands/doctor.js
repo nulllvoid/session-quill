@@ -7,6 +7,7 @@ import { journalPath, ingressDir } from '../../lib/paths.js';
 import { countIngress } from '../../core/ingress.js';
 import { readHealthErrors } from '../../worker/health.js';
 import { repoStatus, REPO_STATUS_TEXT } from '../../config/repos.js';
+import { pausePath } from '../../runtime/readiness.js';
 
 export const MIN_NODE_MAJOR = 22;
 
@@ -42,9 +43,10 @@ export async function collect(env) {
   add('ok', 'store', `${ctx.storeMeta.store_name} at ${ctx.config.store_path} (store ${ctx.storeMeta.store_id})`);
   const locked = await isLocked(ctx.storeMeta.store_id, ctx.storeMeta.owner_machine_id, env);
   const ws = workerStatus(ctx);
-  if (ws.healthy && locked) add('ok', 'worker', `healthy (pid ${ws.pid}, heartbeat ${ws.heartbeat_at})`);
+  if (fs.existsSync(pausePath(env))) add('warn', 'worker', 'paused by you — run /session-quill:start (or quill start) to resume processing');
+  else if (ws.healthy && locked) add('ok', 'worker', `healthy (pid ${ws.pid}, heartbeat ${ws.heartbeat_at})`);
   else if (locked) add('warn', 'worker', `lock held but heartbeat stale (${ws.age_ms ?? 'none'} ms)`);
-  else add(owner ? 'error' : 'warn', 'worker', `unavailable — start with \`quill worker start\`${ws.heartbeat_at ? ` (last heartbeat ${ws.heartbeat_at})` : ''}`);
+  else add(owner ? 'error' : 'warn', 'worker', `unavailable — run /session-quill:start (or quill start)${ws.heartbeat_at ? ` (last heartbeat ${ws.heartbeat_at})` : ''}`);
   const backlog = countIngress(env);
   add(backlog > 100 ? 'warn' : 'ok', 'ingress backlog', `${backlog} pending event(s) in ${ingressDir(env)}`);
   const j = new Journal(journalPath(env));

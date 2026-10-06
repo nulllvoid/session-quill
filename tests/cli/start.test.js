@@ -50,6 +50,11 @@ test('dashboard bootstraps a fresh home and an explicit stop stays paused until 
   assert.equal(result.code, 0, result.err);
   assert.match(result.out, /http:\/\/127\.0\.0\.1:\d+\/auth\?secret=/);
   assert.equal((await cli(['worker', 'stop'], fx.env)).code, 0);
+  const status = await cli(['status', '--session', 'paused-session'], fx.env);
+  assert.match(status.out, /paused by you/);
+  assert.match(status.out, /session-quill:start/);
+  assert.match(status.out, /ticket is optional/);
+  assert.equal((await cli(['ui', '--repo', fx.repo, '--session', 'paused-session', '--no-open'], fx.env)).code, 1);
   const hook = await cli(['hook', 'SessionStart'], fx.env, { stdin: JSON.stringify({ session_id: 'paused-session', cwd: fx.repo }) });
   assert.equal(hook.code, 0);
   assert.match(hook.err, /paused/);
@@ -135,5 +140,20 @@ test('private registration supplies ticket defaults and concurrent enables keep 
   assert.equal(effectiveDefaults(ctx, path.join(other, 'src'), {}).project_id, 'other-app');
   assert.equal(effectiveDefaults(ctx, path.join(other, 'src'), {}).repo_id, 'other-app');
   assert.equal(effectiveDefaults(ctx, other, { project: 'override' }).project_id, 'override');
+  assert.equal(fs.existsSync(path.join(other, '.quill.toml')), false);
+});
+
+test('dashboard attaches the current session and repository to an existing store', async (t) => {
+  const fx = fixture(); t.after(() => stop(fx));
+  assert.equal((await cli(['start', '--repo', fx.repo], fx.env)).code, 0);
+  const other = path.join(fx.root, 'dashboard-app');
+  fs.mkdirSync(other); execFileSync('git', ['init', other], { stdio: 'ignore', windowsHide: true });
+  const result = await cli(['ui', '--repo', other, '--session', 'dashboard-session', '--no-open'], fx.env);
+  assert.equal(result.code, 0, result.err);
+  const ctx = loadContext(fx.env);
+  assert.equal(ctx.config.repos['dashboard-app'].canonical_path, other);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !latestSnapshot(ctx)?.sessions.some((s) => s.host_session_id === 'dashboard-session')) await new Promise((r) => setTimeout(r, 100));
+  assert.ok(latestSnapshot(ctx).sessions.some((s) => s.host_session_id === 'dashboard-session'));
   assert.equal(fs.existsSync(path.join(other, '.quill.toml')), false);
 });
