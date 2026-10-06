@@ -27,12 +27,12 @@ function slugId(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'project';
 }
 
-export async function run({ flags, io, env }) {
+export async function initialize({ flags, io, env, requireOwner = false }) {
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   if (nodeMajor < MIN_NODE_MAJOR) throw new TrackerError('node-unsupported', `Node ${process.versions.node} is unsupported; install Node >= ${MIN_NODE_MAJOR} LTS (Claude Code does not bundle Node)`);
   const cfg = loadUserConfig(env);
   const yes = flags.yes === true;
-  const defaultStore = cfg.store_path || path.join(os.homedir(), 'Documents', 'Quill');
+  const defaultStore = cfg.store_path || (flags.private ? path.join(quillHome(env), 'store') : path.join(os.homedir(), 'Documents', 'Quill'));
   const storePath = path.resolve(flags.store ?? (yes ? defaultStore : await ask(io, 'Markdown store folder (plain folder or inside an Obsidian vault)', defaultStore)));
   const repoDir = path.resolve(flags.repo ?? process.cwd());
   const isGit = isGitWorkTree(repoDir);
@@ -55,6 +55,7 @@ export async function run({ flags, io, env }) {
     writeStoreMeta(storePath, meta);
     io.println(`created store ${meta.store_name} (${meta.store_id}) at ${storePath}`);
   } else if (meta.owner_machine_id !== machineId) {
+    if (requireOwner) throw new TrackerError('not-owner', 'This store belongs to another machine. Its local copy remains read-only.');
     io.println(`! store at ${storePath} is owned by machine ${meta.owner_machine_id}; this machine will have a read-only copy. Transfer ownership explicitly to write.`);
   } else {
     io.println(`using existing store ${meta.store_name} at ${storePath}`);
@@ -77,23 +78,22 @@ export async function run({ flags, io, env }) {
   cfg.repos = { ...cfg.repos, [repoId]: { ...(cfg.repos[repoId] ?? {}), project_id: projectId, display_name: path.basename(repoDir), canonical_path: repoDir, default_branch: isGit ? detectDefaultBranch(repoDir) : ((cfg.repos[repoId] ?? {}).default_branch ?? 'main'), ...((cfg.repos[repoId] ?? {}).deployment_environments ? { deployment_environments: cfg.repos[repoId].deployment_environments } : {}) } };
   const cfgFile = saveUserConfig(cfg, env);
   io.println(`wrote user config ${cfgFile}`);
-  if (fs.existsSync(repoDir)) {
+  if (!flags.private && fs.existsSync(repoDir)) {
     const repoCfg = { ...existingRepo, project_id: projectId, project_name: projectName, category, repo_id: repoId };
     const f = saveRepoConfig(repoDir, repoCfg);
     io.println(`wrote repository defaults ${f} (safe to commit; contains no secrets or ownership)`);
   }
 
-  if (meta.owner_machine_id === machineId && flags['no-worker'] !== true) {
-    const { startDetached, waitHealthy } = await import('./worker.js');
-    const { isLocked } = await import('../../worker/lock.js');
-    const ctx = { env, config: cfg, storeMeta: meta, machineId };
-    if (!(await isLocked(meta.store_id, machineId, env))) {
-      const pid = startDetached(ctx);
-      const ok = await waitHealthy(ctx, 10_000);
-      io.println(ok ? `worker started (pid ${pid}) and heartbeat verified` : `! worker spawned (pid ${pid}) but no heartbeat within 10 s; run quill doctor`);
-    } else {
-      io.println('worker already running');
-    }
+  return { env, config: cfg, storeMeta: meta, machineId, initialized: true, repoDir };
+}
+
+export async function run({ flags, io, env }) {
+  const ctx = await initialize({ flags, io, env });
+  const { repoDir } = ctx;
+  if (ctx.storeMeta.owner_machine_id === ctx.machineId && flags['no-worker'] !== true) {
+    const { ensureReady } = await import('../../runtime/readiness.js');
+    await ensureReady(ctx, { resume: true });
+    io.println('worker ready; heartbeat verified');
   }
   const { report } = await collect(env);
   for (const item of report.items.filter((i) => i.level !== 'ok')) io.println(`${item.level === 'warn' ? '!' : '✗'} ${item.label}: ${item.detail}`);
@@ -102,6 +102,6 @@ export async function run({ flags, io, env }) {
   io.println(`  1. Load the plugin in Claude Code (e.g. claude --plugin-dir <path-to-session-quill>) and start a session in ${repoDir}.`);
   io.println(`  2. Create and bind a ticket: ${commandName('ticket')} create "<title>" --bind`);
   io.println('  3. Open the dashboard: quill ui');
-  io.println('To keep the worker running across reboots, register `quill worker start` with your OS login items / Task Scheduler / systemd user service.');
+  io.println('Quill reconnects automatically when your next Claude session starts.');
   return report.ok ? 0 : 1;
 }

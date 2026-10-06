@@ -34,7 +34,7 @@ export async function collect(env) {
   add('ok', 'platform', `${process.platform} ${process.arch}`);
   add('ok', 'commands', `${commandName('ticket')}, ${commandName('approve')}, ${commandName('status')}, ${commandName('handoff')}`);
   if (!ctx.initialized) {
-    add('error', 'store', 'not initialized — run `quill init`');
+    add('error', 'store', 'not enabled — run /session-quill:start (or quill start)');
     return { ctx, report };
   }
   const owner = ctx.storeMeta.owner_machine_id === ctx.machineId;

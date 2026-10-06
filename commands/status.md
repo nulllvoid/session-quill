@@ -13,4 +13,4 @@ Show the Session Quill status for this session.
 node "${CLAUDE_PLUGIN_ROOT}/bin/quill.js" status $ARGUMENTS --session <session id>
 ```
 
-3. Relay the output. If the worker is unavailable, suggest `node "${CLAUDE_PLUGIN_ROOT}/bin/quill.js" doctor` and `worker start` from a terminal; do not start the worker from inside a gated session unless the user asks.
+3. Summarize whether capture is enabled and whether processing is ready. If setup is missing or processing is unavailable, offer `/session-quill:start` to enable or recover it inside Claude. If the user asked you to repair Quill, run that command directly. Diagnose persistent failures with the bundled `doctor` command; never claim capture succeeded without evidence.

@@ -177,12 +177,12 @@ test('ingress failure never blocks a non-gate hook and never returns a false rec
   assert.equal(JSON.parse(r2.stdout).hookSpecificOutput.permissionDecision, 'deny');
 });
 
-test('uninitialized quill (no identity, no config) emits a diagnostic and no decision', () => {
+test('uninitialized quill stays quiet on tool calls and makes no decision', () => {
   const env = { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-hook-')) };
   const r = run('pre-tool-use-edit', env);
   assert.equal(r.exitCode, 0);
   assert.equal(r.stdout, '');
-  assert.match(r.stderr, /quill init/);
+  assert.equal(r.stderr, '');
 });
 
 test('hook path stays within budget: 200 bound Edit decisions p95 < 200 ms', () => {

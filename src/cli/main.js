@@ -2,6 +2,7 @@ import { parseArgs, Io } from './context.js';
 import { TrackerError } from '../lib/errors.js';
 
 const COMMANDS = {
+  start: () => import('./commands/start.js'),
   init: () => import('./commands/init.js'),
   ticket: () => import('./commands/ticket.js'),
   approve: () => import('./commands/approve.js'),
@@ -27,6 +28,7 @@ const HELP = `quill — Session Quill CLI
 
 Usage: quill <command> [options]
 
+  start [--repo <path>] [--store <path>] [--session <id>] [--share-settings]
   init [--store <path>] [--project <id>] [--project-name <name>] [--repo <path>] [--timezone <tz>] [--yes]
   ticket create "<title>" [--category c] [--priority P2] [--parent KEY] [--project id] [--due YYYY-MM-DD] [--bind] --session <id>
   ticket bind <KEY> --session <id>          ticket show --session <id> [--json]

@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import { configPath } from '../../lib/paths.js';
 import { runHook, readStdinJson, HOOK_EVENTS } from '../../hooks/adapter.js';
 import { READ_TOOLS } from '../../gate/decide.js';
 import { readRuntimeIdentity } from '../../hooks/binding-snapshot.js';
@@ -31,6 +33,18 @@ export async function run({ args, io, env }) {
     if (eventName === 'PreToolUse' && failsClosed(env)) io.out(DENY('Session Quill: the gate could not read this tool call (malformed hook input); covered operations are denied. Run `quill doctor`.'));
     return 0;
   }
+  // Only session startup performs recovery. Tool hooks keep their existing fast capture path.
+  let startupNote = '';
+  if (eventName === 'SessionStart' && fs.existsSync(configPath(env))) {
+    try {
+      const { loadContext } = await import('../context.js');
+      const ctx = loadContext(env, { requireStore: false });
+      if (ctx.initialized) {
+        const { ensureReady } = await import('../../runtime/readiness.js');
+        await ensureReady(ctx, { wait: false });
+      }
+    } catch (err) { startupNote = 'Session Quill: ' + err.message + '\n'; }
+  }
   let result;
   try {
     result = runHook(eventName, input, { env });
@@ -42,7 +56,7 @@ export async function run({ args, io, env }) {
     return 0;
   }
   if (result.stdout) io.out(result.stdout);
-  if (result.stderr) io.err(result.stderr);
+  if (result.stderr || startupNote) io.err((result.stderr ?? '') + startupNote);
   return result.exitCode ?? 0;
 }
 

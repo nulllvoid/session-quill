@@ -124,7 +124,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
   const toolCovered = eventName === 'PreToolUse' && !!input.tool_name && !READ_TOOLS.has(input.tool_name) && !(identity && Array.isArray(identity.allow_tools) && identity.allow_tools.includes(input.tool_name));
 
   if (!identity) {
-    result.stderr += 'Session Quill: not initialized; run `quill init` to enable capture and the ticket gate.\n';
+    if (eventName === 'SessionStart') result.stdout = contextOutput('SessionStart', `Session Quill session: ${session_id ?? 'unknown'}. Quill is not enabled yet. If the user wants tracking, run /session-quill:start. Do not interrupt normal work or claim activity is being captured.`);
     return result;
   }
   const scope = scopeFor(identity, input.cwd);

@@ -39,60 +39,73 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 
 Supported platforms are recorded after each acceptance run in `docs/ACCEPTANCE-RESULTS.md`. CI runs the suite on Windows, macOS and Linux with Node 22 and 24.
 
-## Install
+## Get started inside Claude Code
 
-This repository is also its own plugin marketplace. Install from a terminal:
+From the repository you want to track, install the plugin:
 
-```bash
-claude plugin marketplace add nulllvoid/session-quill
+```text
+/plugin marketplace add nulllvoid/session-quill
+/plugin install session-quill@session-quill
 ```
 
-```bash
-claude plugin install session-quill@session-quill
+Start a new Claude session to load the plugin, then run:
+
+```text
+/session-quill:start
 ```
 
-The same commands work inside Claude Code as `/plugin marketplace add nulllvoid/session-quill` and `/plugin install session-quill@session-quill`. Start a new session; `/session-quill:status` confirms the plugin is loaded. To update later, run `claude plugin marketplace update session-quill` and then `claude plugin update session-quill@session-quill`.
+Keep coding. Quill detects the repository, saves its registration privately, starts
+its background worker, and captures the current session. No CLI alias, tracker
+connection, ticket, or repository configuration file is required. Node 22 or newer
+must still be on your PATH; it is not bundled with Claude Code.
 
-The terminal CLI ships inside the plugin, at `~/.claude/plugins/cache/session-quill/session-quill/<version>/bin/quill.js` (`%USERPROFILE%\.claude\plugins\cache\...` on Windows, or under `CLAUDE_CONFIG_DIR` if you set it). Point a shell alias named `quill` at it, or use a clone as below.
+Open your dashboard whenever you need it:
 
-**From a clone** (to develop, or to pin a commit), load the directory directly:
-
-```bash
-git clone https://github.com/nulllvoid/session-quill.git
+```text
+/session-quill:ui
 ```
 
+The dashboard command also sets up Quill if needed and starts a missing worker.
+After a reboot, the next Claude session reconnects automatically. You do not need
+to configure Task Scheduler or systemd for ordinary session tracking. Scheduled
+jobs run while the worker is running; opening Claude after downtime starts recovery.
+
+Quill keeps your existing store. A first setup uses `~/.claude/quill/store`
+(or `QUILL_HOME/store` when set). To choose a notes folder instead, run
+`/session-quill:start --store <folder>` on first setup. To write team defaults
+into a committable `.quill.toml`, explicitly use `--share-settings`.
+Existing gate policies are preserved, including strict repository policies.
+
+If something is wrong, use `/session-quill:status`. Run `/session-quill:start`
+to reconnect or resume processing inside Claude. `quill doctor` remains available
+for detailed diagnostics. A stopped worker stays stopped until you explicitly
+resume it with `start`; hooks continue durable capture where storage is available.
+
+### Terminal and advanced setup
+
+The same install commands work from a terminal with `claude plugin` in place
+of `/plugin`. Update with `claude plugin marketplace update session-quill`
+and `claude plugin update session-quill@session-quill`.
+
+From a development clone, use `claude --plugin-dir /path/to/session-quill`.
+`npm link` optionally exposes `quill` on PATH. Otherwise run
+`node /path/to/session-quill/bin/quill.js` in place of `quill`.
+The Claude commands always locate their bundled CLI automatically.
+
 ```bash
-claude --plugin-dir /path/to/session-quill
-```
-
-A shell alias for that command works well. In a clone, `npm link` puts the CLI on your `PATH` as `quill`. Run `claude plugin validate /path/to/session-quill` to check the plugin and marketplace manifests.
-
-## Initialize
-
-From the repository you want to track:
-
-```bash
+quill start                                 # private setup or resume
+quill ui                                    # open dashboard, starting worker if needed
+quill worker stop                           # pause processing and automatic restart
+quill start                                 # resume; captured activity catches up
 quill init --store ~/Documents/Quill --project my-project --project-name "My Project"
+quill repo add ~/src/payments-api
+quill repo list
 ```
 
-Use `node /path/to/session-quill/bin/quill.js` wherever this README says `quill` if you have no alias. `init` writes `~/.claude/quill/config.toml` (user defaults), a committable `.quill.toml` in the repository (project and category defaults; no secrets, no ownership), creates the store, starts the worker and verifies its heartbeat. Re-running is idempotent. Add `--yes` to skip prompts.
-
-More repositories for the same or another project don't need `init` again:
-
-```bash
-quill repo add ~/src/payments-api            # id from the folder, default branch from origin/HEAD
-quill repo add ~/src/legacy --id old-app --project billing --repo-file   # also write .quill.toml
-quill repo list                               # flags paths that moved or are no longer git work trees
-quill repo remove old-app
-```
-
-`repo add` requires a git work tree and never restarts the worker; a running worker picks up the change. `init` refuses a folder that isn't a git work tree unless you pass `--force`.
-
-Keep the worker running across reboots by registering this with your OS (Task Scheduler, login item, systemd user unit):
-
-```bash
-quill worker start
-```
+`quill init` retains the advanced interactive setup, including repository defaults.
+`start` uses sensible defaults without prompts and requires a Git work tree.
+The worker remains a single owner per store; it never takes ownership from another
+machine. Automatic launch attempts are rate-limited to avoid a crash loop.
 
 ## Link sessions to your tracker
 

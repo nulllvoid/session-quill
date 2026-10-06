@@ -62,7 +62,7 @@ export function loadContext(env = process.env, { requireStore = true } = {}) {
     }
   }
   if (requireStore && !storeMeta) {
-    throw new TrackerError('not-initialized', 'Session Quill is not initialized. Run `quill init` first.');
+    throw new TrackerError('not-initialized', 'Session Quill is not initialized. Run /session-quill:start (or quill start) to enable it.');
   }
   return { env, config, machineId, storeMeta, initialized: !!storeMeta };
 }
@@ -134,7 +134,13 @@ export function findTicketByKey(ctx, key) {
 
 export function effectiveDefaults(ctx, cwd, flags) {
   const repo = loadRepoConfig(cwd);
-  return resolveConfig({ cli: { category: flags.category, project_id: flags.project, repo_id: flags.repo, priority: flags.priority }, repo: repo ?? {}, user: ctx.config });
+  const registered = Object.entries(ctx.config.repos ?? {}).filter(([, r]) => {
+    if (!r.canonical_path) return false;
+    const relative = path.relative(r.canonical_path, cwd);
+    return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+  }).sort((a, b) => b[1].canonical_path.length - a[1].canonical_path.length)[0];
+  const defaults = registered ? { project_id: registered[1].project_id, repo_id: registered[0] } : {};
+  return resolveConfig({ cli: { category: flags.category, project_id: flags.project, repo_id: flags.repo, priority: flags.priority }, repo: { ...defaults, ...repo }, user: ctx.config });
 }
 
 export function commandName(name) {

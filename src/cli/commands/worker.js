@@ -3,9 +3,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadContext, workerStatus, writeControl } from '../context.js';
 import { Worker } from '../../worker/worker.js';
-import { isLocked } from '../../worker/lock.js';
+import { isLocked, acquireLock } from '../../worker/lock.js';
 import { logsDir } from '../../lib/paths.js';
-import { ensureDir } from '../../lib/atomic-fs.js';
+import { ensureDir, writeJsonAtomic } from '../../lib/atomic-fs.js';
 import { TrackerError } from '../../lib/errors.js';
 import fs from 'node:fs';
 
@@ -58,26 +58,20 @@ export async function runForeground(ctx, io) {
   return new Promise(() => {});
 }
 
-export function startDetached(ctx) {
+export async function startDetached(ctx) {
   ensureDir(logsDir(ctx.env));
   const out = fs.openSync(path.join(logsDir(ctx.env), 'worker.out.log'), 'a');
   const child = spawn(process.execPath, [BIN, 'worker', 'run'], {
     detached: true, stdio: ['ignore', out, out], windowsHide: true, env: { ...process.env, ...ctx.env },
   });
-  child.unref();
-  return child.pid;
+  try {
+    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    child.unref();
+    return child.pid;
+  } finally { fs.closeSync(out); }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-export async function waitHealthy(ctx, timeoutMs = 10_000) {
-  const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    if (workerStatus(ctx).healthy) return true;
-    await sleep(200);
-  }
-  return false;
-}
 
 export async function run({ args, flags, io, env }) {
   const ctx = loadContext(env);
@@ -86,25 +80,26 @@ export async function run({ args, flags, io, env }) {
     case 'run':
       return runForeground(ctx, io);
     case 'start': {
-      if (await isLocked(ctx.storeMeta.store_id, ctx.storeMeta.owner_machine_id, env)) {
-        io.println('worker already running');
-        return 0;
-      }
-      if (ctx.storeMeta.owner_machine_id !== ctx.machineId) throw new TrackerError('not-owner', 'this machine does not own the store; copies are read-only until ownership is explicitly transferred');
-      const pid = startDetached(ctx);
-      const ok = await waitHealthy(ctx, flags.timeout ? Number(flags.timeout) : 10_000);
-      io.println(ok ? `worker started (pid ${pid})` : `worker spawned (pid ${pid}) but no heartbeat yet; check ${path.join(logsDir(env), 'worker.out.log')}`);
-      return ok ? 0 : 1;
+      const { ensureReady } = await import('../../runtime/readiness.js');
+      await ensureReady(ctx, { resume: true, timeoutMs: flags.timeout ? Number(flags.timeout) : 10000 });
+      io.println('worker ready');
+      return 0;
     }
     case 'stop': {
-      writeControl(ctx, 'stop.json');
-      const started = Date.now();
-      while (Date.now() - started < 5000) {
-        if (!(await isLocked(ctx.storeMeta.store_id, ctx.storeMeta.owner_machine_id, env))) { io.println('worker stopped'); return 0; }
-        await sleep(200);
-      }
-      io.println('stop requested; worker has not released ownership yet');
-      return 1;
+      if (ctx.storeMeta.owner_machine_id !== ctx.machineId) throw new TrackerError('not-owner', 'This machine does not own the store.');
+      const controlLock = await acquireLock(`${ctx.storeMeta.store_id}-startup`, ctx.machineId, env);
+      try {
+        const { pausePath } = await import('../../runtime/readiness.js');
+        writeJsonAtomic(pausePath(env), { at: new Date().toISOString() });
+        writeControl(ctx, 'stop.json');
+        const started = Date.now();
+        while (Date.now() - started < 5000) {
+          if (!(await isLocked(ctx.storeMeta.store_id, ctx.storeMeta.owner_machine_id, env))) { io.println('worker stopped'); return 0; }
+          await sleep(200);
+        }
+        io.println('stop requested; worker has not released ownership yet');
+        return 1;
+      } finally { await controlLock.release(); }
     }
     case 'status': {
       const locked = await isLocked(ctx.storeMeta.store_id, ctx.storeMeta.owner_machine_id, env);

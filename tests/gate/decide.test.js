@@ -37,6 +37,11 @@ test('direct quill CLI invocations are exempt; shell wrappers around them are no
   assert.equal(isTrackerCliCommand('node "C:/Program Files/plug in/bin/quill.js" ticket create "Fix the thing" --session abc'), true);
   assert.equal(isTrackerCliCommand('quill ticket show'), true);
   assert.equal(isTrackerCliCommand('quill ticket off'), true);
+  assert.equal(isTrackerCliCommand('node "C:/plugins/quill/bin/quill.js" start --session abc'), true);
+  assert.equal(isTrackerCliCommand('quill ui --no-open'), true);
+  assert.equal(isTrackerCliCommand('quill ui --static out.html'), false);
+  assert.equal(isTrackerCliCommand('quill ui --static=out.html'), false);
+  assert.equal(isTrackerCliCommand('quill start && echo unsafe'), false);
   assert.equal(isTrackerCliCommand('quill ticket bind X && rm -rf /'), false);
   assert.equal(isTrackerCliCommand('quill ticket bind $(cat x)'), false);
   assert.equal(isTrackerCliCommand('quill worker stop'), false);

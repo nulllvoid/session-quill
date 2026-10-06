@@ -10,7 +10,7 @@ export const SHELL_TOOLS = { Bash: 'bash', PowerShell: 'powershell' };
 export const DENIAL_REASON = 'Session Quill: this session is not bound to a ticket. Run /session-quill:ticket bind <KEY> or /session-quill:ticket create "<title>" (or /session-quill:ticket off to disable the gate for this session).';
 export const WORKER_UNAVAILABLE_REASON = 'Session Quill: quill worker unavailable or binding unreadable; covered writes are denied. Run `quill doctor` (or /session-quill:ticket off to disable the gate for this session).';
 
-const QUILL_SUBCOMMANDS = new Set(['ticket', 'approve', 'dismiss', 'status', 'init', 'doctor']);
+const QUILL_SUBCOMMANDS = new Set(['ticket', 'approve', 'dismiss', 'status', 'init', 'start', 'ui', 'doctor']);
 const TICKET_VERBS = new Set(['create', 'bind', 'show', 'off', 'on', 'relink', 'children', 'list']);
 const UNSAFE_OUTSIDE_QUOTES = /[|&;<>$`(){}\n\r*?[\]~!]/;
 
@@ -56,6 +56,8 @@ export function isTrackerCliCommand(command) {
   }
   const sub = tokens[idx];
   if (!QUILL_SUBCOMMANDS.has(sub)) return false;
+  // Opening the local dashboard is a recovery action; writing an export is not.
+  if (sub === 'ui' && tokens.slice(idx + 1).some((arg) => /^--static(?:=|$)/.test(arg))) return false;
   if (sub === 'ticket') {
     const verb = tokens[idx + 1];
     if (!TICKET_VERBS.has(verb)) return false;
