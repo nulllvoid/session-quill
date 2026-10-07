@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-07
+
 ### Added
 
 - `quill ticket set <KEY>` edits title, status and blocker, next action, priority, category, due, parent and repository after creation or migration, as one revision-checked update; `none` clears due, parent and repository ([#4](https://github.com/nulllvoid/session-quill/issues/4)).
@@ -11,6 +13,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - Migration profiles accept a list of candidate names per field, a `repo` field mapped to registered repositories, and `ignore_globs` (default `templates/**`); the bundled profile also reads `key`, `next` and `pri` and maps `progress` to active. `--profile <path.json>` is documented ([#3](https://github.com/nulllvoid/session-quill/issues/3)).
 
 ### Fixed
+
+- Dashboard review fixes: the ticket drawer opens at its title, closes on view switch without rewriting the URL, keeps close/previous/next pinned on phones, and shows the next action once with an Edit button; a tracker key that was not found is one chip that relinks. Provider errors collapse into one plain-language chip with details on demand, and Refresh sits on the health line. Pick next cards show one reason with the score breakdown in a tooltip, and equal scores rank the longest deployment wait first. Blocked work groups by project and collapses behind Show all; unlinked work and the Sessions table lead with the session title. Deployments says Waive instead of N/A.
+- Prompt-derived titles no longer keep harness markup such as `<scheduled-task …>`; slash commands read as the command and its arguments.
 
 - `quill migrate` no longer drops notes that share a key: the note named after the key (else the newest) is kept and the others import as its children (`KEY.1`, `KEY.2`). The dry run lists duplicate keys and warns when no tracker keys were found, and the summary counts only applied events, names rejected notes and exits non-zero ([#2](https://github.com/nulllvoid/session-quill/issues/2)).
 - `quill init` refuses a folder that isn't a git work tree unless `--force`, detects the default branch, and gives a second repository of a project its own id instead of overwriting the first ([#5](https://github.com/nulllvoid/session-quill/issues/5)).
@@ -96,5 +101,6 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nulllvoid/session-quill/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nulllvoid/session-quill/releases/tag/v0.1.0
