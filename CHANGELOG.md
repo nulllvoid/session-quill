@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-07
+
 ### Added
 
 - Done when check ([ADR 0016](docs/decisions/0016-done-when-check.md)): after a turn that worked on a bound ticket without a repository, the Stop hook asks Claude once to check the ticket's Done when items and set it to Review when they are met. It never loops, repeats only after new work and 30 quiet minutes, and leaves repository tickets to their PR evidence.
@@ -130,7 +132,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/nulllvoid/session-quill/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nulllvoid/session-quill/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nulllvoid/session-quill/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nulllvoid/session-quill/compare/v0.1.0...v0.2.0

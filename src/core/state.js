@@ -27,7 +27,7 @@ export function createState(meta) {
       approval_phrases_enabled: meta.approval_phrases_enabled === true,
       projects: meta.projects ?? {},
       repos: meta.repos ?? {},
-      tracker_version: meta.tracker_version ?? '0.4.0',
+      tracker_version: meta.tracker_version ?? '0.5.0',
     },
     tickets: new Map(),
     sessions: new Map(),
