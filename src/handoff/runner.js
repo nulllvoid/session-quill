@@ -173,6 +173,7 @@ function permissionLines(handoff, repo) {
     ];
   }
   return [
+    ...(handoff.access === 'full' ? ['Access: full. No permission checks apply in this run, so the limits below are yours to keep: stay within the task and this checkout.'] : handoff.access === 'settings' ? ["Access: the owner's Claude Code settings. Their permission rules and connected tools (MCP servers) apply; anything that would need their approval is refused, because nobody is there to answer. Use connectors for context where they help, read-only unless the task needs more."] : []),
     `Granted permissions for this run: ${grants.length ? grants.join(', ') : 'none (note-only analysis)'}. Anything not granted is forbidden: you must not read or edit source outside what is granted, must not commit, push, open pull requests, merge or deploy unless that exact permission is listed, and must never touch a default or protected branch.`,
     p.read_source ? `All file and command access is confined to your current working directory (an isolated checkout${repo ? ` of ${repo.display_name ?? repo.id}` : ''}). Do not access other paths. Use plain git log, git show, git diff and git status; options that write files, run programs or read outside the checkout (--output, --ext-diff, --textconv, --no-index), redirects and command substitution are refused.` : 'You have no source access. Work only from the notes below; do not attempt to read files or run commands.',
   ];
@@ -190,6 +191,25 @@ const GIT_OPTION_DENIALS = ['git log', 'git show', 'git diff'].flatMap((c) => ['
 function forRuntime({ allowed, disallowed }, permissions) {
   const readOnlyGit = (t) => { const m = /^Bash\((.+)\)$/.exec(t); return Boolean(m) && READ_ONLY_GIT.some((p) => m[1] === p || m[1].startsWith(p) && /^[\s:*]/.test(m[1].slice(p.length))); };
   return { allowed: allowed.filter((t) => !readOnlyGit(t)), disallowed: permissions.read_source ? [...disallowed, ...GIT_OPTION_DENIALS] : disallowed };
+}
+
+// The runtime permissions for a run's access level (ADR 0017).
+// - standard: Quill's own profile, everything else refused (`dontAsk`), as before.
+// - settings: the owner's Claude Code rules and MCP servers decide; with nobody to answer, anything
+//   they would prompt for is refused. Edits inside the checkout are accepted for fix runs, and the
+//   run's own side-effect permissions still gate commit, push, draft PRs and merges.
+// - full: no permission checks (`bypassPermissions`), and git credentials stay available.
+export function runtimeAccess({ access = 'standard', mode, permissions = {}, tools = null }) {
+  if (access === 'full') return { permissionMode: 'bypassPermissions', allowed: [], disallowed: [], keepCredentials: true };
+  if (access === 'settings') {
+    const disallowed = ['Bash(git push --force*)', 'Bash(gh pr merge*)', 'Bash(git merge*)', 'Bash(git checkout main*)', 'Bash(git checkout master*)'];
+    if (!permissions.commit) disallowed.push('Bash(git commit*)');
+    if (!permissions.push_branch) disallowed.push('Bash(git push*)');
+    if (!permissions.open_draft_pr) disallowed.push('Bash(gh pr create*)');
+    if (!permissions.edit_source) disallowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit');
+    return { permissionMode: permissions.edit_source ? 'acceptEdits' : 'default', allowed: [], disallowed, keepCredentials: false };
+  }
+  return { permissionMode: 'dontAsk', ...allowedToolsFor({ mode, permissions, tools }), keepCredentials: false };
 }
 
 export function allowedToolsFor({ mode, permissions = {}, tools = null }) {
@@ -318,12 +338,12 @@ const GIT_PROGRAM_VARS = /^(GIT_EXTERNAL_DIFF|GIT_CONFIG|GIT_CONFIG_PARAMETERS|G
 // The agent's environment: nested-session markers and git program/config overrides removed, so
 // only the on-disk git config can name a diff program; unless push/PR was explicitly granted,
 // provider tokens are removed and git is told never to prompt, so a non-permitted push fails.
-export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {}) {
+export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {}, { keepCredentials = false } = {}) {
   const childEnv = { ...baseEnv, ...extra };
   delete childEnv.CLAUDECODE;
   delete childEnv.CLAUDE_CODE_ENTRYPOINT;
   for (const k of Object.keys(childEnv)) if (GIT_PROGRAM_VARS.test(k)) delete childEnv[k];
-  if (!(permissions.push_branch || permissions.open_draft_pr)) {
+  if (!keepCredentials && !(permissions.push_branch || permissions.open_draft_pr)) {
     for (const k of CREDENTIAL_VARS) delete childEnv[k];
     childEnv.GIT_TERMINAL_PROMPT = '0';
     childEnv.GIT_ASKPASS = 'echo';
@@ -333,8 +353,8 @@ export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {})
 
 // The prompt goes to the runtime on stdin: with full notes and a diff it can exceed what a command
 // line may carry (about 32 KiB on Windows). `resume` continues an earlier session of the same run.
-export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd, tools, env = {}, permissions = {}, logPath, maxTurns = 40, model = null, resume = null }) {
-  const args = [...claudeArgs, '-p', '--output-format', 'json', '--permission-mode', 'dontAsk', '--max-turns', String(maxTurns)];
+export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd, tools, env = {}, permissions = {}, logPath, maxTurns = 40, model = null, resume = null, permissionMode = 'dontAsk', keepCredentials = false }) {
+  const args = [...claudeArgs, '-p', '--output-format', 'json', '--permission-mode', permissionMode, '--max-turns', String(maxTurns)];
   if (resume) args.push('--resume', resume);
   if (tools.allowed.length) args.push('--allowedTools', ...tools.allowed);
   if (tools.disallowed.length) args.push('--disallowedTools', ...tools.disallowed);
@@ -342,7 +362,7 @@ export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const log = fs.openSync(logPath, 'a');
   if (resume) { try { fs.writeSync(log, `\n--- follow-up turn (resume ${resume}) ---\n`); } catch { /* ignore */ } }
-  const childEnv = childEnvFor(permissions, process.env, env);
+  const childEnv = childEnvFor(permissions, process.env, env, { keepCredentials });
   const child = spawn(claudePath, args, { cwd, env: childEnv, detached: process.platform !== 'win32', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => { /* the runtime may exit before reading; its exit code reports that */ });
   child.stdin.end(prompt);

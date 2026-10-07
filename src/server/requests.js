@@ -350,7 +350,7 @@ export function evaluateRequest(worker, req) {
       if (existing) return { outcome: 'failed', error: { code: 'handoff-reserved', message: `handoff ${existing.id} is already ${existing.state} for this ticket`, retryable: true, current_revision: ticket.revision }, result: { existing_handoff_id: existing.id } };
       const handoff = {
         schema_version: 1, store_id: state.meta.store_id, id: uuid(), revision: 1, created_at: worker.now(), updated_at: worker.now(),
-        ticket_id: ticket.id, request_id: req.id, mode: checked.mode, note: checked.note, permissions: checked.permissions,
+        ticket_id: ticket.id, request_id: req.id, mode: checked.mode, note: checked.note, permissions: checked.permissions, access: checked.access ?? 'standard',
         // The next action as queued: a run's own suggestion conflicts only if someone changed it since.
         base_ticket_revision: ticket.revision, base_next_action: ticket.next_action ?? '', repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
         requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,

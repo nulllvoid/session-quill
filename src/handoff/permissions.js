@@ -5,6 +5,10 @@ import { TrackerError } from '../lib/errors.js';
 // `files` (ADR 0015) works on a ticket's attached files, outside any repository.
 export const MODES = ['analyse', 'analyse-followups', 'attempt-fix', 'files'];
 export const NOTE_MAX = 280;
+// How much of Claude Code a run may use (ADR 0017): `standard` is Quill's narrow tool profile,
+// `settings` the owner's own Claude Code permission rules and connectors, `full` no permission
+// checks at all. A request that names none stays standard, as schedules and older requests do.
+export const ACCESS = ['standard', 'settings', 'full'];
 const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
 
 export function isProtectedBranch(branch, repo) {
@@ -20,6 +24,9 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   if (!MODES.includes(mode)) throw new TrackerError('mode-invalid', `handoff mode must be one of ${MODES.join(', ')}`);
   const note = typeof payload.note === 'string' ? payload.note.trim() : '';
   if (note.length > NOTE_MAX) throw new TrackerError('note-too-long', `handoff note exceeds ${NOTE_MAX} characters`);
+  const access = payload.access ?? 'standard';
+  if (!ACCESS.includes(access)) throw new TrackerError('access-invalid', `access must be one of ${ACCESS.join(', ')}`);
+  if (access !== 'standard' && mode === 'files') throw new TrackerError('access-invalid', 'a files run always uses standard access: its staging and undo rely on the agent never reaching the originals');
   const raw = payload.permissions ?? {};
   const permissions = {};
   for (const k of PERMISSION_KEYS) permissions[k] = raw[k] === true;
@@ -51,7 +58,7 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   }
   if ((permissions.read_source || permissions.edit_source) && !repo) throw new TrackerError('repo-required', 'source access requires a registered repository on the owner machine');
   if (recipe) {
-    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}) };
+    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}) };
   }
-  return { mode, note, permissions, branch: permissions.push_branch ? branch : null };
+  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null };
 }

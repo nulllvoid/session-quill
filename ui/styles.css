@@ -790,3 +790,7 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 .run-files, .file-effects { margin: 4px 0; padding-left: 18px; }
 .run-files code, .file-effects code { overflow-wrap: anywhere; }
 .file-effects li { padding: 2px 0; }
+
+/* Run access (ADR 0017): Full access reads as a warning where it is chosen. */
+.access label.danger { color: var(--critical); }
+.access label.danger .small { color: var(--critical); opacity: .85; }

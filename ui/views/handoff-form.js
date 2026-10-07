@@ -1,4 +1,4 @@
-import { esc, attr, keyEl, icon, normalizeSnapshot, normalizeTicket } from '../components.js';
+import { esc, attr, keyEl, icon, normalizeSnapshot, normalizeTicket, accessFieldset } from '../components.js';
 
 export function renderHandoffForm(rawTicket, rawSnapshot, { retryOf = null, prerequisites = {} } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
@@ -19,6 +19,7 @@ ${issues.length ? `<ul class="issues">${issues.map((i) => `<li>${icon('alert')}$
 </fieldset>
 <label class="label" for="handoff-note">Note <span class="muted">(max 280)</span></label>
 <textarea id="handoff-note" name="note" maxlength="280" rows="2" placeholder="What should the agent focus on?"></textarea>
+${accessFieldset()}
 <fieldset><legend>Source access</legend>
   <label><input type="checkbox" name="read_source" ${repo ? '' : 'disabled'}> Read source (registered repo on this machine)</label>
   <label><input type="checkbox" name="edit_source" ${repo ? '' : 'disabled'}> Edit source in an isolated checkout <span class="muted small">(requires read source; required for attempt fix)</span></label>

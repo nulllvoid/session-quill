@@ -541,7 +541,7 @@ function handleSubmit(form) {
   } else if (kind === 'handoff') {
     const permissions = {};
     for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr']) permissions[k] = fd.get(k) === 'on';
-    const payload = { mode: fd.get('mode'), note: String(fd.get('note') ?? '').trim(), permissions, branch: String(fd.get('branch') ?? '').trim() || null };
+    const payload = { mode: fd.get('mode'), note: String(fd.get('note') ?? '').trim(), permissions, access: fd.get('access') || 'settings', branch: String(fd.get('branch') ?? '').trim() || null };
     const retryOf = form.dataset.retryOf || null;
     closeDialog();
     submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: retryOf }, { announceText: 'Handoff request accepted; execution is tracked separately' });
@@ -551,7 +551,7 @@ function handleSubmit(form) {
     const permissions = {};
     for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files']) permissions[k] = fd.get(k) === 'on';
     if (required) { permissions.read_source = true; permissions.edit_source = true; }
-    const payload = { recipe: form.dataset.recipe, note: String(fd.get('note') ?? '').trim(), permissions, branch: String(fd.get('branch') ?? '').trim() || null };
+    const payload = { recipe: form.dataset.recipe, note: String(fd.get('note') ?? '').trim(), permissions, access: fd.get('access') || 'standard', branch: String(fd.get('branch') ?? '').trim() || null };
     closeDialog();
     submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: form.dataset.retryOf || null }, { announceText: `${form.dataset.recipe} run requested; its results arrive as suggestions on the ticket` });
   } else if (kind === 'attach') {

@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Run access levels ([ADR 0017](docs/decisions/0017-run-access-levels.md)): handoff and recipe runs use the owner's Claude Code settings and connectors by default (anything needing approval is refused; commit, push and draft PRs still need their permissions), or Full access with no permission checks, chosen per run in the dashboard or with `--access`. Schedules, file runs and runs that name no level keep the standard profile.
+
 ## [0.5.0] - 2026-10-07
 
 ### Added
