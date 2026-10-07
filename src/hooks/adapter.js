@@ -12,7 +12,7 @@ import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } f
 import { readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
 import { scopeFor } from './scope.js';
 import { planAutoBind } from './autobind.js';
-import { markUnboundWork, shouldNudge, markNudged, nudgeReason } from './nudge.js';
+import { markUnboundWork, shouldNudge, markNudged, nudgeReason, isWorkTool, markTicketWork, shouldCheckDone, markDoneChecked, doneCheckReason } from './nudge.js';
 import { keyExample, renderUrl, externalTicketId, branchTitle } from '../core/external-keys.js';
 import { currentBranch } from '../lib/git-head.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
@@ -262,6 +262,10 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
       if (mode === 'nudge' && !(snapshot && snapshot.ticket_id) && (payload.write_paths.length || payload.commit)) {
         try { markUnboundWork(key, env, occurred_at); } catch { /* best effort; never blocks capture */ }
       }
+      // Work on a bound ticket arms the end-of-turn Done when check (ADR 0016).
+      if (!handoff && snapshot && snapshot.ticket_id && isWorkTool(tool_name)) {
+        try { markTicketWork(key, env, snapshot.ticket_id, occurred_at); } catch { /* best effort */ }
+      }
       const ev = makeEvent({ ...base, kind: 'post-tool', tool_call_id, payload, source_identity: tool_call_id ? `post-tool:${key}:${tool_call_id}` : undefined });
       persist(ev, env, result);
       return result;
@@ -293,6 +297,14 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
       if (nudge) {
         try { markNudged(key, env, occurred_at); } catch { /* stop_hook_active still prevents a loop */ }
         result.stdout = JSON.stringify({ decision: 'block', reason: nudgeReason(scope.tracker) });
+      } else if (eventName === 'Stop' && !handoff && input.stop_hook_active !== true && snapshot && snapshot.ticket_id
+        && snapshot.ticket_repo_id === null && ['todo', 'active'].includes(snapshot.ticket_status)
+        && Array.isArray(snapshot.ticket_done_when) && snapshot.ticket_done_when.length
+        && shouldCheckDone(key, env, snapshot.ticket_id, occurred_at)) {
+        // A repo-less ticket's status moves only by hand (ADR 0016): after a working turn, Claude
+        // checks its Done when items once, then not again until new work and a quiet period.
+        try { markDoneChecked(key, env, snapshot.ticket_id, occurred_at); } catch { /* stop_hook_active still prevents a loop */ }
+        result.stdout = JSON.stringify({ decision: 'block', reason: doneCheckReason({ key: snapshot.ticket_key, doneWhen: snapshot.ticket_done_when }, bundledCli) });
       }
       return result;
     }

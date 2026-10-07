@@ -22,7 +22,14 @@ import { renderSessionNote, renderHandoffNote, writeNote, writeGeneratedNote } f
 import { publishGeneration, buildSnapshot } from './projections.js';
 import { captureHealth } from './health.js';
 import { effectiveEnvironments } from '../deploy/environments.js';
-import { hasValidDescription } from '../core/description.js';
+import { descriptionProblems, parseDescription } from '../core/description.js';
+
+// What hooks need to know about a bound ticket, with a signature to tell when it changed.
+function ticketFacts(ticket) {
+  const valid = descriptionProblems(ticket.summary).length === 0;
+  const done = valid ? parseDescription(ticket.summary).done.slice(0, 10).map((d) => d.slice(0, 300)) : [];
+  return { valid, done, signature: JSON.stringify([valid, ticket.status, ticket.repo_id ?? null, done]) };
+}
 
 export const NOTE_FLUSH_MS = 30 * SECOND;
 export const HEARTBEAT_MS = 5 * SECOND;
@@ -49,7 +56,7 @@ export class Worker {
     this.dirtyTickets = new Set();
     this.dirtySessions = new Set();
     this.dirtyHandoffs = new Set();
-    this.publishedDescription = new Map(); // session key -> description validity last published
+    this.publishedTicketFacts = new Map(); // session key -> ticket facts the hooks last saw
     this.firstDirtyAt = null;
     this.flushRequested = false;
     this.generationDirty = false;
@@ -303,13 +310,13 @@ export class Worker {
     if (record.session_id) this.dirtySessions.add(sessionKey(record));
     for (const id of result.handoffsChanged) this.dirtyHandoffs.add(id);
     for (const key of result.bindingChanged) this.publishBinding(key);
-    // Hooks nudge for a missing description from the binding snapshot, so a session bound to a
-    // changed ticket is republished when the description's validity flips, and only then.
+    // Hooks act on the bound ticket's description, status, repository and Done when items from the
+    // binding snapshot, so a session bound to a changed ticket is republished when any of those
+    // change, and only then.
     if (result.changed.size) {
       for (const [key, session] of this.state.sessions) {
         if (result.bindingChanged.has(key) || !session.current_ticket_id || !result.changed.has(session.current_ticket_id)) continue;
-        const valid = hasValidDescription(this.state.tickets.get(session.current_ticket_id));
-        if (this.publishedDescription.get(key) !== valid) this.publishBinding(key);
+        if (this.publishedTicketFacts.get(key) !== ticketFacts(this.state.tickets.get(session.current_ticket_id)).signature) this.publishBinding(key);
       }
     }
     for (const id of result.requestsChanged) this.publishRequest(id);
@@ -338,8 +345,8 @@ export class Worker {
       if (age < PROVISIONAL_MAX_MS) return;
     }
     const ticket = session.current_ticket_id ? this.state.tickets.get(session.current_ticket_id) : null;
-    const description = ticket ? hasValidDescription(ticket) : null;
-    this.publishedDescription.set(key, description);
+    const facts = ticket ? ticketFacts(ticket) : null;
+    this.publishedTicketFacts.set(key, facts ? facts.signature : null);
     writeBindingSnapshot(key, {
       session_id: session.id,
       ticket_id: ticket ? ticket.id : null,
@@ -350,7 +357,10 @@ export class Worker {
       binding_revision: session.current_binding_revision,
       gate_enabled: session.gate_enabled,
       has_title: !!session.title,
-      ticket_has_description: description,
+      ticket_has_description: facts ? facts.valid : null,
+      ticket_status: ticket ? ticket.status : null,
+      ticket_repo_id: ticket ? ticket.repo_id ?? null : null,
+      ticket_done_when: facts ? facts.done : [],
       revision_committed_at: this.now(),
     }, this.env);
   }
