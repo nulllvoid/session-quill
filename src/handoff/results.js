@@ -18,14 +18,15 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
   children.forEach((c, i) => {
     items.push({
       type: 'child', id: deterministicId(`${h.id}:child:${i}`), key: keys[i], title: c.title,
-      category: CATEGORIES.includes(c.category) ? c.category : ticket.category, priority: PRIORITIES.includes(c.priority) ? c.priority : ticket.priority, next_action: c.next_action ?? '',
+      category: CATEGORIES.includes(c.category) ? c.category : ticket.category, priority: PRIORITIES.includes(c.priority) ? c.priority : ticket.priority, next_action: c.next_action ?? '', summary: c.description ?? '',
     });
   });
   if (!suggesting && state === 'done' && result.next_action) items.push({ type: 'next-action', text: result.next_action });
   if (!suggesting && state === 'done' && result.blocker) items.push({ type: 'blocker', text: result.blocker });
+  if (!suggesting && state === 'done' && result.description) items.push({ type: 'description', text: result.description });
   let result_ref = h.result_ref ?? null;
   if (result && (result.raw || result.summary)) {
-    try { result_ref = putBlob(JSON.stringify({ summary: result.summary, next_action: result.next_action, blocker: result.blocker, children: result.children, deploy_evidence: result.deploy_evidence, comment_draft: result.comment_draft, test_results: result.test_results, changed_files: result.changed_files, confidence: result.confidence ?? null, sources: result.sources ?? [], raw: result.raw ?? null }, null, 2), worker.env).hash; } catch { /* keep previous */ }
+    try { result_ref = putBlob(JSON.stringify({ summary: result.summary, next_action: result.next_action, blocker: result.blocker, children: result.children, deploy_evidence: result.deploy_evidence, comment_draft: result.comment_draft, test_results: result.test_results, changed_files: result.changed_files, description: result.description ?? null, confidence: result.confidence ?? null, sources: result.sources ?? [], raw: result.raw ?? null }, null, 2), worker.env).hash; } catch { /* keep previous */ }
   }
   const update = {
     state,

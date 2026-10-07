@@ -119,6 +119,20 @@ instructions to reuse or create a ticket before substantive work, and to keep
 follow-ups, corrections, and retries on the same task. Starting a session alone
 does not create a ticket.
 
+Every ticket Claude creates has a description in one format, which the dashboard shows and agent runs read as context ([ADR 0014](docs/decisions/0014-ticket-descriptions.md)):
+
+```markdown
+**Goal:** Make retry() call fn up to `attempts` times.
+
+**Context:** retry.js gives up one attempt early (loop bound at retry.js:4). Keep the signature.
+
+**Done when:**
+- retry(fn, { attempts: 3 }) calls fn 3 times
+- npm test passes
+```
+
+`ticket create` and `ticket work` refuse a missing or malformed description and print the format, so Claude writes it as it creates the ticket. Tickets made without an agent (a tracker key in a prompt, migration, the dashboard) are flagged, and the next session on them is asked to write one with `ticket set <KEY> --description`. `analyse` fills in a missing description and every follow-up child it proposes carries one; neither ever replaces a description that is already valid.
+
 Use `/session-quill:ticket work "Improve onboarding"` to reuse a uniquely matching
 open task in this project/repository or create it and switch to it. General tasks
 use `DEV-1`, features use `FEAT-1` (`--category feature`), and fixes use `FIX-1`

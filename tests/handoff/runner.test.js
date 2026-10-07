@@ -90,6 +90,7 @@ test('analyse-followups runs the agent in an empty directory, finishes done, cre
     const child = b.w.state.tickets.get(done.children_ids[0]);
     assert.equal(child.parent_id, T1);
     assert.match(child.key, /^LOCAL-a-00000001\.\d$/);
+    assert.match(child.summary, /^\*\*Goal:\*\* Make the retry tests deterministic/, 'a child an agent proposes carries its description');
   } finally { await b.w.stop(); }
 });
 
@@ -244,5 +245,27 @@ test('a run journalled before base_next_action existed keeps the revision check'
     const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'done' ? h : null; });
     assert.equal(b.w.state.tickets.get(T1).next_action, '');
     assert.ok(done.uncertain_effects.some((u) => /next_action suggestion conflicted/.test(u)));
+  } finally { await b.w.stop(); }
+});
+
+test('a built-in run writes the ticket description only when it has none, and never replaces one', async () => {
+  const desc = '**Goal:** Make the retry tests deterministic.\n\n**Context:** retry.test.js shares a real timer.\n\n**Done when:**\n- 50 runs in a row pass';
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_RESULT: JSON.stringify({ summary: 'Analysed.', next_action: 'Do it', description: desc }) } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(42), { target_id: T1, expected_revision: t.revision, payload: analyse });
+    b.w.tick();
+    let hid = b.w.state.requests.get(RID(42)).result.handoff_id;
+    await until(() => { b.w.tick(); return b.w.state.handoffs.get(hid).state === 'done'; });
+    assert.equal(b.w.state.tickets.get(T1).summary, desc);
+    const owner = desc.replace('Make the retry tests deterministic.', 'Owner wording that must stay as written.');
+    b.w.emit('ticket-update', { ticket_id: T1, fields: { summary: owner }, source: 'manual' });
+    const t2 = b.w.state.tickets.get(T1);
+    b.request(RID(43), { target_id: T1, expected_revision: t2.revision, payload: analyse });
+    b.w.tick();
+    hid = b.w.state.requests.get(RID(43)).result.handoff_id;
+    const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'done' ? h : null; });
+    assert.equal(b.w.state.tickets.get(T1).summary, owner);
+    assert.ok(done.uncertain_effects.some((u) => /description suggestion not applied/.test(u)));
   } finally { await b.w.stop(); }
 });

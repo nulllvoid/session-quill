@@ -22,6 +22,7 @@ import { renderSessionNote, renderHandoffNote, writeNote, writeGeneratedNote } f
 import { publishGeneration, buildSnapshot } from './projections.js';
 import { captureHealth } from './health.js';
 import { effectiveEnvironments } from '../deploy/environments.js';
+import { hasValidDescription } from '../core/description.js';
 
 export const NOTE_FLUSH_MS = 30 * SECOND;
 export const HEARTBEAT_MS = 5 * SECOND;
@@ -48,6 +49,7 @@ export class Worker {
     this.dirtyTickets = new Set();
     this.dirtySessions = new Set();
     this.dirtyHandoffs = new Set();
+    this.publishedDescription = new Map(); // session key -> description validity last published
     this.firstDirtyAt = null;
     this.flushRequested = false;
     this.generationDirty = false;
@@ -301,6 +303,15 @@ export class Worker {
     if (record.session_id) this.dirtySessions.add(sessionKey(record));
     for (const id of result.handoffsChanged) this.dirtyHandoffs.add(id);
     for (const key of result.bindingChanged) this.publishBinding(key);
+    // Hooks nudge for a missing description from the binding snapshot, so a session bound to a
+    // changed ticket is republished when the description's validity flips, and only then.
+    if (result.changed.size) {
+      for (const [key, session] of this.state.sessions) {
+        if (result.bindingChanged.has(key) || !session.current_ticket_id || !result.changed.has(session.current_ticket_id)) continue;
+        const valid = hasValidDescription(this.state.tickets.get(session.current_ticket_id));
+        if (this.publishedDescription.get(key) !== valid) this.publishBinding(key);
+      }
+    }
     for (const id of result.requestsChanged) this.publishRequest(id);
     if ((result.changed.size || result.handoffsChanged.size || record.session_id) && this.firstDirtyAt === null) this.firstDirtyAt = this.clock();
     for (const effect of result.effects) {
@@ -327,6 +338,8 @@ export class Worker {
       if (age < PROVISIONAL_MAX_MS) return;
     }
     const ticket = session.current_ticket_id ? this.state.tickets.get(session.current_ticket_id) : null;
+    const description = ticket ? hasValidDescription(ticket) : null;
+    this.publishedDescription.set(key, description);
     writeBindingSnapshot(key, {
       session_id: session.id,
       ticket_id: ticket ? ticket.id : null,
@@ -337,6 +350,7 @@ export class Worker {
       binding_revision: session.current_binding_revision,
       gate_enabled: session.gate_enabled,
       has_title: !!session.title,
+      ticket_has_description: description,
       revision_committed_at: this.now(),
     }, this.env);
   }

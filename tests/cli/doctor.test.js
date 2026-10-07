@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { makeHome, startWorker, cli } from './helpers.js';
+import { makeHome, startWorker, cli, DESC } from './helpers.js';
 
 test('doctor without a worker reports it unavailable and exits non-zero; with a worker it is healthy', async () => {
   const fx = makeHome();
@@ -39,7 +39,7 @@ test('status --json and --statusline reflect the binding', async () => {
   try {
     const un = await cli(['status', '--statusline'], fx.env, { stdin: JSON.stringify({ session_id: 'sess-S' }) });
     assert.match(un.out, /unbound/);
-    const c = await cli(['ticket', 'create', 'Status demo', '--bind', '--session', 'sess-S'], fx.env);
+    const c = await cli(['ticket', 'create', '--description', DESC, 'Status demo', '--bind', '--session', 'sess-S'], fx.env);
     const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(c.out)[1];
     const sl = await cli(['status', '--statusline'], fx.env, { stdin: JSON.stringify({ session_id: 'sess-S', cwd: os.tmpdir() }) });
     assert.match(sl.out, new RegExp(`${key} Status demo`));
@@ -57,7 +57,7 @@ test('approve promotes the latest checkpoint once and dismiss clears the unpromo
   const fx = makeHome();
   const w = await startWorker(fx);
   try {
-    await cli(['ticket', 'create', 'Approve demo', '--bind', '--session', 'sess-P'], fx.env);
+    await cli(['ticket', 'create', '--description', DESC, 'Approve demo', '--bind', '--session', 'sess-P'], fx.env);
     const none = await cli(['approve', '--session', 'sess-P'], fx.env);
     assert.notEqual(none.code, 0);
     assert.match(none.err, /no complete checkpoint/i);
@@ -85,7 +85,7 @@ test('replay --into renders a staging store from the journal without touching th
   const fx = makeHome();
   const w = await startWorker(fx);
   try {
-    const c = await cli(['ticket', 'create', 'Replay me', '--session', 'sess-R'], fx.env);
+    const c = await cli(['ticket', 'create', '--description', DESC, 'Replay me', '--session', 'sess-R'], fx.env);
     const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(c.out)[1];
     const staging = path.join(fx.home, 'staging');
     const r = await cli(['replay', '--into', staging], fx.env);
@@ -101,7 +101,7 @@ test('import turns supported frontmatter changes into events', async () => {
   const fx = makeHome();
   const w = await startWorker(fx);
   try {
-    const c = await cli(['ticket', 'create', 'Import me', '--session', 'sess-I'], fx.env);
+    const c = await cli(['ticket', 'create', '--description', DESC, 'Import me', '--session', 'sess-I'], fx.env);
     const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(c.out)[1];
     await cli(['sync', '--notes'], fx.env);
     const note = path.join(fx.storePath, 'tickets', `${key}.md`);

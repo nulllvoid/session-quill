@@ -229,3 +229,33 @@ test('run detail shows confidence, checks and sources; exports keep sources only
   const withCp = sanitizeSnapshot({ ...snap, sessions: [], checkpoints: [] }, { fields: ['key', 'title', 'status'], includeCheckpoints: true });
   assert.deepEqual([withCp.handoffs[0].result_confidence, withCp.handoffs[0].result_sources], ['low', ['deploy/values.yaml@3f2a1c9']]);
 });
+
+test('a recipe that declares description offers it as a suggestion; accepting it sets the description', async () => {
+  const { buildSuggestions, suggestionMutation } = await import('../../src/agents/suggestions.js');
+  const desc = '**Goal:** Ship the deploy check.\n\n**Context:** deploy/values.yaml.\n\n**Done when:**\n- production shows v1.2';
+  const [sug] = buildSuggestions(['summary', 'description'], { description: desc }, '2026-10-02T09:00:00Z');
+  assert.deepEqual([sug.type, sug.text], ['description', desc]);
+  const m = suggestionMutation({}, { id: T1, deployments: [], prs: [] }, { id: 'h1' }, sug, 'accepted');
+  assert.deepEqual(m.fields, { summary: desc });
+  assert.deepEqual(buildSuggestions(['summary'], { description: desc }, 'x'), [], 'undeclared, it is dropped');
+});
+
+test('ticket detail shows the description as Goal, Context and Done when, and flags a missing one', async () => {
+  const { renderDetail } = await import('../../ui/views/detail.js');
+  const { ticketSummary } = await import('../../src/worker/projections.js');
+  const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
+  const base = { id: T1, key: 'PROJ-1', title: 'T', status: 'active', project_id: 'demo', repo_id: null, timeline: [], prs: [], deployments: [], tags: [], plans: [], conclusions: [], files_touched: [], children_ids: [], handoff_ids: [] };
+  const desc = '**Goal:** Ship the deploy check.\n\n**Context:** deploy/values.yaml <b>tag</b>.\n\n**Done when:**\n- production shows v1.2';
+  const valid = ticketSummary({ ...base, summary: desc });
+  const snap = { generation_id: 'g', tickets: [valid], handoffs: [], recipes: [], sessions: [], checkpoints: [], capabilities: { read: true }, meta: { timezone: 'UTC' } };
+  const html = renderDetail(valid, snap, { now: '2026-10-02T09:00:00Z' });
+  assert.match(html, /<dt>Goal<\/dt><dd>Ship the deploy check\.<\/dd>/);
+  assert.match(html, /&lt;b&gt;tag&lt;\/b&gt;/, 'escaped');
+  assert.match(html, /<li>production shows v1\.2<\/li>/);
+  const missing = ticketSummary({ ...base, summary: '' });
+  assert.match(renderDetail(missing, { ...snap, tickets: [missing] }, { now: '2026-10-02T09:00:00Z' }), /Missing description[\s\S]*quill ticket set PROJ-1 --description/);
+  const loose = ticketSummary({ ...base, summary: 'just some text' });
+  assert.match(renderDetail(loose, { ...snap, tickets: [loose] }, { now: '2026-10-02T09:00:00Z' }), /not in the required format[\s\S]*just some text/);
+  assert.equal('description' in sanitizeSnapshot(snap, { fields: ['key', 'title'] }).tickets[0], false, 'not exported without the summary');
+  assert.equal(sanitizeSnapshot(snap, { fields: ['key', 'title', 'summary'] }).tickets[0].description.goal, 'Ship the deploy check.');
+});

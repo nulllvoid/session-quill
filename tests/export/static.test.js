@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import { sanitizeSnapshot, previewExport, DEFAULT_FIELDS } from '../../src/export/sanitize.js';
 import { buildStaticHtml, bundleUiModules } from '../../src/export/static.js';
 import { snapshot, TID } from '../ui/fixtures.js';
-import { makeHome, startWorker, cli } from '../cli/helpers.js';
+import { makeHome, startWorker, cli, DESC } from '../cli/helpers.js';
 
 function privateSnapshot() {
   const s = snapshot();
@@ -95,7 +95,7 @@ test('CLI: quill ui --static writes a standalone file; quill export requires --y
   const fx = makeHome();
   const w = await startWorker(fx);
   try {
-    const c = await cli(['ticket', 'create', 'Export me please', '--session', 'sess-X'], fx.env);
+    const c = await cli(['ticket', 'create', '--description', DESC, 'Export me please', '--session', 'sess-X'], fx.env);
     const key = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(c.out)[1];
     const out = path.join(fx.home, 'snapshot.html');
     const r = await cli(['ui', '--static', out], fx.env);

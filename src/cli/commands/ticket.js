@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { loadContext, sessionFromFlags, cliEvent, submitAndWait, latestSnapshot, findTicketByKey, effectiveDefaults, commandName } from '../context.js';
 import { validateKey } from '../../core/keys.js';
 import { CATEGORIES, PRIORITIES, loadRepoConfig, resolveTracker } from '../../config/config.js';
@@ -7,6 +8,7 @@ import { isDate } from '../../lib/time.js';
 import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
 import { sessionKey, TICKET_STATUSES } from '../../core/state.js';
 import { TrackerError } from '../../lib/errors.js';
+import { descriptionProblems, descriptionHelp, normalizeDescription } from '../../core/description.js';
 
 function timeout(flags) {
   return flags.timeout ? Number(flags.timeout) : 10_000;
@@ -21,9 +23,26 @@ async function bind(ctx, io, session, ticket, flags) {
   return snap;
 }
 
+// The description is mandatory wherever a ticket is created from the CLI (ADR 0014): Claude runs
+// these commands, and the error shows it the format to retry with.
+function descriptionFrom(flags, { required }) {
+  let text = typeof flags.description === 'string' ? flags.description : null;
+  if (typeof flags['description-file'] === 'string') {
+    try { text = fs.readFileSync(flags['description-file'], 'utf8'); } catch (err) { throw new TrackerError('description-invalid', `cannot read --description-file: ${err.message}`); }
+  }
+  if (text === null) {
+    if (!required) return null;
+    throw new TrackerError('description-required', `a ticket description is required: pass --description "<text>" (or --description-file <path>).\n${descriptionHelp()}`);
+  }
+  const problems = descriptionProblems(text);
+  if (problems.length) throw new TrackerError('description-invalid', descriptionHelp(problems));
+  return normalizeDescription(text);
+}
+
 async function create(ctx, io, args, flags, { work = false } = {}) {
   const title = args.join(' ').trim();
   if (!title) throw new TrackerError('title-required', 'a ticket title is required');
+  const description = descriptionFrom(flags, { required: true });
   const defaults = effectiveDefaults(ctx, process.cwd(), flags);
   if (!CATEGORIES.includes(defaults.category)) throw new TrackerError('category-invalid', `category must be one of ${CATEGORIES.join(', ')}`);
   if (!PRIORITIES.includes(defaults.priority)) throw new TrackerError('priority-invalid', `priority must be one of ${PRIORITIES.join(', ')}`);
@@ -40,7 +59,7 @@ async function create(ctx, io, args, flags, { work = false } = {}) {
   const session = work || flags.session || flags.bind ? sessionFromFlags(flags, ctx.env) : null;
   const ticket = {
     id: uuid(), allocate_internal_key: true, key_prefix: ctx.config.key_prefix, title: title.slice(0, 200), project_id, project_name: project.name ?? project_id, category: defaults.category, priority: defaults.priority,
-    parent_id: parent ? parent.id : null, repo_id: defaults.repo_id ?? project.repo_id ?? null, due: flags.due ?? null, jira: null,
+    parent_id: parent ? parent.id : null, repo_id: defaults.repo_id ?? project.repo_id ?? null, due: flags.due ?? null, jira: null, summary: description,
   };
   const ack = await submitAndWait(ctx, cliEvent(ctx, { kind: 'ticket-create', payload: { ticket, ...(work ? { reuse_task: true } : {}) }, session, ticket_id: ticket.id }), { timeoutMs: timeout(flags) });
   if (ack.rejected) throw new TrackerError(ack.rejected, ack.rejected === 'task-ambiguous' ? 'Multiple open tasks have that title. Use ticket list, then ticket bind <KEY> to choose the intended task.' : `ticket creation rejected: ${ack.rejected}`);
@@ -149,6 +168,8 @@ async function set(ctx, io, args, flags) {
   }
   if (status === 'blocked' && blocker === undefined) fields.blocker = ticket.blocker;
   if (typeof flags.next === 'string') fields.next_action = flags.next.trim();
+  const description = descriptionFrom(flags, { required: false });
+  if (description !== null) fields.summary = description;
   const priority = str('priority');
   if (priority !== undefined) {
     if (!PRIORITIES.includes(priority)) throw new TrackerError('priority-invalid', `priority must be one of ${PRIORITIES.join(', ')}`);

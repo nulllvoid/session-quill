@@ -64,6 +64,8 @@ function sanitizeTicket(t, o) {
     else if (f === 'timeline') out.timeline = (t.timeline ?? []).map(({ content_ref, event_id, ...e }) => e);
     else if (f === 'plans') out.plans = (t.plans ?? []).map(({ content_ref, preview, ...p }) => (o.includeCheckpoints ? { ...p, preview } : p));
     else if (f === 'conclusions') out.conclusions = (t.conclusions ?? []).map(({ content_ref, preview, ...c }) => (o.includeCheckpoints ? { ...c, preview } : c));
+    // The parsed description travels only with the summary it comes from (ADR 0014).
+    else if (f === 'summary') { out.summary = t.summary; if (t.description) out.description = t.description; }
     else if (f === 'jira') out.jira = t.jira ? (o.includeLinks ? { ...t.jira } : (({ url, ...j }) => j)(t.jira)) : null;
     // Remote tracker data (assignees, fix versions) stays on the owner's dashboard (ADR 0011).
     else if (f === 'external') out.external = t.external ? (({ remote, ...x }) => (o.includeLinks ? x : (({ url, ...y }) => y)(x)))(t.external) : null;

@@ -47,8 +47,8 @@ function run() {
       next_action: 'Use fake timers in the retry tests',
       blocker: null,
       children: [
-        { title: 'Add fake timers to retry tests', category: 'bugfix', priority: 'P2', next_action: 'Replace setTimeout with jest fake timers' },
-        { title: 'Document retry timing contract', category: 'research', priority: 'P3', next_action: '' },
+        { title: 'Add fake timers to retry tests', category: 'bugfix', priority: 'P2', next_action: 'Replace setTimeout with jest fake timers', description: '**Goal:** Make the retry tests deterministic with fake timers.\n\n**Context:** The flake comes from a shared real timer.\n\n**Done when:**\n- retry tests pass 50 runs in a row' },
+        { title: 'Document retry timing contract', category: 'research', priority: 'P3', next_action: '', description: '**Goal:** Document how retry timing behaves for callers.\n\n**Context:** Callers rely on the backoff schedule.\n\n**Done when:**\n- the README describes the schedule' },
       ],
       test_results: ['node --test: 12 passed'],
     };

@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
+import { descriptionProblems, normalizeDescription, DESCRIPTION_TEMPLATE } from '../core/description.js';
 
 const MODE_INSTRUCTIONS = {
   analyse: 'Analyse the ticket from its notes and recommend what to do next. Do not propose child tickets.',
@@ -14,7 +15,8 @@ const OUTPUT_FIELDS = {
   summary: '"summary": "2-6 sentences of findings, each claim citing its source"',
   next_action: '"next_action": "one concrete next step or null"',
   blocker: '"blocker": "text or null"',
-  followups: '"children": [{"title": "...", "category": "feature|bugfix|vuln|infra|research|analysis", "priority": "P0|P1|P2|P3", "next_action": "..."}]',
+  followups: '"children": [{"title": "...", "category": "feature|bugfix|vuln|infra|research|analysis", "priority": "P0|P1|P2|P3", "next_action": "...", "description": "**Goal:** ...\\n\\n**Context:** ...\\n\\n**Done when:**\\n- ..."}]',
+  description: '"description": "the ticket description in the Goal / Context / Done when format if Description status is not valid, else null"',
   deploy_evidence: '"deploy_evidence": [{"environment": "...", "pr": "the PR URL this evidence is for", "state": "deployed|pending|n-a", "evidence": "commit, file or reason", "deployed_at": "RFC 3339 UTC time or null"}]',
   comment_draft: '"comment_draft": "a tracker comment the owner may copy; it is never posted automatically"',
   test_results: '"test_results": ["..."]',
@@ -22,7 +24,7 @@ const OUTPUT_FIELDS = {
 };
 // Every reply says how sure it is and what it relied on (ADR 0013).
 const QUALITY_FIELDS = ['"confidence": "high|medium|low"', '"sources": ["file:line, commit, PR URL, note entry or earlier run you relied on"]'];
-const LEGACY_OUTPUTS = ['summary', 'next_action', 'blocker', 'followups', 'test_results', 'changed_files'];
+const LEGACY_OUTPUTS = ['summary', 'next_action', 'blocker', 'followups', 'test_results', 'changed_files', 'description'];
 const ALL_INPUTS = ['ticket', 'notes', 'prs', 'deployments', 'work', 'related', 'history'];
 
 // How every run works, whatever the recipe asks (ADR 0013).
@@ -82,6 +84,8 @@ export function buildPrompt(handoff, ticket, { notes = [], repo = null, recipe =
   const ctx = { ...EMPTY_CONTEXT, ...(context ?? {}) };
   const data = [];
   if (inputs.has('ticket')) {
+    const problems = descriptionProblems(ticket.summary);
+    data.push(`Description status: ${problems.length ? `missing or invalid (${problems.join('; ')})` : 'valid'}`);
     data.push(`Title: ${ticket.title}`, `Status: ${ticket.status}; priority ${ticket.priority ?? ''}; category ${ticket.category ?? ''}`, `Owner note for this run: ${handoff.note || '(none)'}`, `Current next action: ${ticket.next_action || '(none)'}`);
     if (ticket.blocker) data.push(`Blocker: ${ticket.blocker}`);
   }
@@ -110,6 +114,8 @@ export function buildPrompt(handoff, ticket, { notes = [], repo = null, recipe =
     task,
     '----- END TASK -----',
     '',
+    ...(outputs.includes('description') || outputs.includes('followups') ? [`Ticket descriptions (this ticket's when its Description status is not valid, and each follow-up child's) use exactly this format:
+${DESCRIPTION_TEMPLATE}`, ''] : []),
     'Finish your reply with exactly one fenced JSON block in this shape (use null or [] when empty):',
     '```json',
     `{${fields.join(', ')}}`,
@@ -217,7 +223,9 @@ function profileTools({ mode, permissions = {} }) {
 export const CONFIDENCE = ['high', 'medium', 'low'];
 
 // `problems` lists what breaks the reply contract (ADR 0013); a non-empty list earns one repair turn.
-export function parseAgentResult(stdout) {
+// Descriptions are enforced only for outputs the run declared (`outputs`; null means every output).
+export function parseAgentResult(stdout, { outputs = null } = {}) {
+  const declared = (o) => !outputs || outputs.includes(o);
   let text = typeof stdout === 'string' ? stdout : '';
   let isError = false;
   let sessionId = null;
@@ -230,7 +238,7 @@ export function parseAgentResult(stdout) {
     }
   } catch { /* plain text output */ }
   const blocks = [...text.matchAll(/```json\s*([\s\S]*?)```/g)];
-  const parsed = { summary: null, next_action: null, blocker: null, children: [], test_results: [], changed_files: [], deploy_evidence: [], comment_draft: null, confidence: null, sources: [], raw: text, is_error: isError, session_id: sessionId, problems: [] };
+  const parsed = { summary: null, next_action: null, blocker: null, description: null, children: [], test_results: [], changed_files: [], deploy_evidence: [], comment_draft: null, confidence: null, sources: [], raw: text, is_error: isError, session_id: sessionId, problems: [] };
   if (!blocks.length) parsed.problems.push('the reply has no fenced ```json block');
   if (blocks.length) {
     try {
@@ -249,6 +257,18 @@ export function parseAgentResult(stdout) {
       parsed.test_results = Array.isArray(obj.test_results) ? obj.test_results.filter((t) => typeof t === 'string').slice(0, 50) : [];
       parsed.changed_files = Array.isArray(obj.changed_files) ? obj.changed_files.filter((t) => typeof t === 'string').slice(0, 500) : [];
       parsed.deploy_evidence = Array.isArray(obj.deploy_evidence) ? obj.deploy_evidence.filter((d) => d && typeof d.environment === 'string' && d.environment.trim() && ['deployed', 'pending', 'n-a'].includes(d.state)).slice(0, 20).map((d) => ({ environment: d.environment.trim().slice(0, 64), state: d.state, pr: typeof d.pr === 'string' && d.pr.trim() ? d.pr.trim().slice(0, 300) : null, evidence: typeof d.evidence === 'string' ? d.evidence.slice(0, 500) : null, deployed_at: typeof d.deployed_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(d.deployed_at) ? d.deployed_at : null })) : [];
+      // Descriptions are checked here, so a malformed one earns the repair turn (ADR 0014).
+      if (declared('description') && typeof obj.description === 'string' && obj.description.trim()) {
+        const issues = descriptionProblems(obj.description);
+        if (issues.length) parsed.problems.push(`"description" does not follow the format: ${issues.join('; ')}`);
+        else parsed.description = normalizeDescription(obj.description);
+      }
+      const children = declared('followups') && Array.isArray(obj.children) ? obj.children : [];
+      children.forEach((c, i) => {
+        const issues = c && typeof c.description === 'string' ? descriptionProblems(c.description) : ['it is missing'];
+        if (issues.length) parsed.problems.push(`children[${i}].description does not follow the format: ${issues.join('; ')}`);
+        else if (parsed.children[i]) parsed.children[i].description = normalizeDescription(c.description);
+      });
       parsed.comment_draft = typeof obj.comment_draft === 'string' && obj.comment_draft.trim() ? obj.comment_draft.trim().slice(0, 4000) : null;
     } catch {
       parsed.problems.push('the ```json block is not a valid JSON object');
