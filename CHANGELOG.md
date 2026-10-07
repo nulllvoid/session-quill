@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-07
+
 ### Added
 
 - Ticket descriptions are mandatory for agent-created tickets ([ADR 0014](docs/decisions/0014-ticket-descriptions.md)): `ticket create` and `ticket work` require `--description` in the Goal / Context / Done when format and print the format when it is missing or malformed; `ticket set --description` writes or replaces one. Hook instructions tell Claude to write it, and a session bound to a ticket without one is asked to add it. Ticket detail shows Goal, Context and Done when, or a "Missing description" warning.
@@ -118,6 +120,7 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/nulllvoid/session-quill/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nulllvoid/session-quill/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nulllvoid/session-quill/releases/tag/v0.1.0
