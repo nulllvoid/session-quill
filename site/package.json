@@ -1,0 +1,13 @@
+{
+  "name": "session-quill-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node check.mjs",
+    "dev": "node build.mjs && node serve.mjs"
+  },
+  "dependencies": {
+    "gsap": "3.15.0"
+  }
+}

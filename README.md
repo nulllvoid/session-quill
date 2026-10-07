@@ -25,6 +25,7 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 | For | Read |
 | --- | --- |
 | Using the plugin | This README, then `node bin/quill.js help` |
+| Product website and GitHub Pages deployment | [site/README.md](site/README.md) |
 | How it works inside | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | What it must do (spec) | [docs/README.md](docs/README.md): PRD, TRD, data contract, UI spec, decisions |
 | What has been verified | [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) and [docs/ACCEPTANCE-RESULTS.md](docs/ACCEPTANCE-RESULTS.md) |

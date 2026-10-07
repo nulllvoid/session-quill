@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Keep your tasks, coding sessions, and next actions connected. Session Quill is an open-source, local-first plugin for Claude Code.">
+  <meta property="og:title" content="Session Quill | Keep the thread. Ship the work.">
+  <meta property="og:description" content="A local memory layer for your development work. Tasks that span sessions. Context you can pick up again.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://nulllvoid.github.io/session-quill/assets/thread-art.jpg">
+  <meta name="theme-color" content="#101512">
+  <title>Session Quill | Keep the thread. Ship the work.</title>
+  <link rel="icon" href="assets/quill.svg" type="image/svg+xml">
+  <link rel="preload" href="assets/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+  <script src="theme.js"></script>
+  <script src="vendor/gsap.min.js" defer></script>
+  <script src="vendor/ScrollTrigger.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="nav-wrap">
+    <nav class="nav container" aria-label="Main navigation">
+      <a class="brand" href="#" aria-label="Session Quill home"><img src="assets/quill.svg" width="32" height="32" alt=""><span>session quill</span></a>
+      <div class="nav-links"><a href="#workflow">How it works</a><a href="#product">Inside Quill</a><a href="#install">Install</a></div>
+      <div class="nav-tools"><button class="theme-toggle" type="button" aria-label="Switch to light theme">Light mode</button><a class="source-link" href="https://github.com/nulllvoid/session-quill">GitHub <span aria-hidden="true">↗</span></a></div>
+    </nav>
+  </header>
+  <main id="main">
+    <section class="hero container" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow hero-enter">A memory layer for Claude Code</p>
+        <h1 id="hero-title"><span class="line"><span>Keep the thread.</span></span><span class="line accent"><span>Ship the work.</span></span></h1>
+        <p class="hero-description hero-enter">Your tasks, sessions, and next actions. Connected, recoverable, and right where you left them.</p>
+        <div class="hero-actions hero-enter"><a class="button primary" href="#install">Install inside Claude <span aria-hidden="true">↗</span></a><a class="text-link" href="#workflow">See how it connects <span aria-hidden="true">↓</span></a></div>
+      </div>
+      <div class="hero-art" aria-hidden="true"><img src="assets/thread-art.jpg" width="1536" height="1024" alt="" fetchpriority="high"><div class="art-mask"></div></div>
+    </section>
+
+    <div class="principles container" aria-label="Project facts"><span>Local-first by design</span><span>Plain Markdown notes</span><span>Open source. MIT licensed.</span><span>Built for Claude Code</span></div>
+
+    <section class="product-section container" id="product" aria-labelledby="product-title">
+      <div class="section-heading reveal"><h2 id="product-title">Less reconstructing.<br><span class="muted">More getting somewhere.</span></h2><p>See what needs your attention, recover the context, and make your next move.</p></div>
+      <figure class="product-figure reveal">
+        <div class="product-controls"><div class="view-switch" role="group" aria-label="Dashboard preview"><button type="button" data-view="pick" aria-pressed="true">Pick next</button><button type="button" data-view="board" aria-pressed="false">Board + detail</button></div><button type="button" class="expand-preview" aria-label="Expand dashboard screenshot">Explore the screenshot <span aria-hidden="true">↗</span></button></div>
+        <div class="screenshot-stage"><img id="product-image" src="assets/dashboard-pick-next.jpg" width="1280" height="720" alt="Session Quill Pick next dashboard, showing workspace statistics and unlinked work" loading="lazy"></div>
+        <figcaption><span id="preview-caption">Pick next: the work that deserves your attention.</span><span>Actual dashboard. Sample workspace.</span></figcaption>
+      </figure>
+    </section>
+
+    <section class="workflow container" id="workflow" aria-labelledby="workflow-title">
+      <div class="section-heading reveal"><h2 id="workflow-title">Your task has a history.<br><span class="accent">Give it a home.</span></h2><p>A ticket follows the work across sessions. A session can move between tickets. The context stays connected.</p></div>
+      <div class="workflow-grid">
+        <div class="story-steps">
+          <article class="story-step" data-step="0"><span class="task-key">DEV-123</span><h3>Start with the task.</h3><p>Claude can reuse an existing ticket or create one with a clear, readable key. Follow-ups stay with the same task.</p><code>ticket work "Improve onboarding"</code></article>
+          <article class="story-step" data-step="1"><span class="task-key">FIX-42</span><h3>Change focus.<br>Keep the record.</h3><p>Switch to a fix without losing the feature you were building. Files and checkpoints keep their original attribution.</p><code>ticket bind FIX-42</code></article>
+          <article class="story-step" data-step="2"><span class="task-key">DEV-123</span><h3>New session.<br>Same thread.</h3><p>Return to the task from another session. Its notes, changes, and next action are already there.</p><code>ticket bind DEV-123</code></article>
+        </div>
+        <div class="connection-visual" aria-label="Example of two sessions sharing a task and switching to a fix">
+          <div class="diagram-label"><span>One task. Many sessions.</span><button type="button" class="motion-toggle" aria-pressed="false">Pause motion</button></div>
+          <svg class="connections" viewBox="0 0 600 540" aria-hidden="true"><path class="route route-a" d="M120 145 C120 220 300 150 300 235"/><path class="route route-b" d="M480 145 C480 220 300 150 300 235"/><path class="route route-c" d="M120 145 C30 300 440 285 440 435"/><path class="route route-d" d="M300 315 C300 410 150 355 150 435"/></svg>
+          <div class="session-node session-a"><span class="node-symbol" aria-hidden="true">⌘</span><strong>Session A</strong><span>Build the feature</span></div>
+          <div class="session-node session-b"><span class="node-symbol" aria-hidden="true">⌘</span><strong>Session B</strong><span>Continue the work</span></div>
+          <div class="task-node main-task"><div><span class="task-key">DEV-123</span><span class="status-tag">Active</span></div><strong>Improve onboarding</strong><span>Notes + files + next action</span></div>
+          <div class="task-node small-task note-node"><span class="node-symbol" aria-hidden="true">.md</span><strong>Your local notes</strong><span>Readable. Yours.</span></div>
+          <div class="task-node small-task fix-node"><span class="task-key">FIX-42</span><strong>Fix login timeout</strong><span>A separate task</span></div>
+          <p class="diagram-caption" id="diagram-caption">A task gets a stable identity, independent of the session.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="ownership container" aria-labelledby="ownership-title">
+      <div class="ownership-visual reveal"><img src="assets/thread-art.jpg" width="1536" height="1024" alt="Fine mint-colored strands joined into one continuous ribbon" loading="lazy"></div>
+      <div class="ownership-copy reveal"><p class="eyebrow">Built to stay with you</p><h2 id="ownership-title">Your machine.<br>Your memory.</h2><p>Durable capture, a local background worker, and notes you can open in any editor. Connect a tracker when you need one.</p><div class="ownership-facts"><div><strong>Local storage</strong><span>Journaled events and plain Markdown.</span></div><div><strong>Loopback dashboard</strong><span>Private access on your machine.</span></div><div><strong>Explicit sharing</strong><span>Export or publish when you choose.</span></div></div><a class="text-link" href="https://github.com/nulllvoid/session-quill/blob/main/docs/ARCHITECTURE.md">Read the architecture <span aria-hidden="true">↗</span></a></div>
+    </section>
+
+    <section class="install-section container" id="install" aria-labelledby="install-title">
+      <div class="section-heading reveal"><h2 id="install-title">Start here.<br><span class="accent">Keep the context.</span></h2><p>Install in Claude Code. Enable Quill in your repository. Get back to the work.</p></div>
+      <div class="install-layout reveal">
+        <div class="install-notes"><h3>A few commands.<br>A lot less catching up.</h3><p>Run these inside Claude Code. Node.js 22 or newer must be on your PATH.</p><a class="text-link" href="https://github.com/nulllvoid/session-quill#prerequisites">Check prerequisites <span aria-hidden="true">↗</span></a><div class="install-assurance"><span>Already installed?</span><a href="https://github.com/nulllvoid/session-quill#terminal-and-advanced-setup">Update instructions ↗</a></div></div>
+        <div class="install-commands">
+          <div class="command-group"><div class="command-heading"><span>Add the marketplace</span><button class="copy-button" type="button" data-copy="/plugin marketplace add nulllvoid/session-quill" aria-label="Copy marketplace command">Copy <span aria-hidden="true">↗</span></button></div><pre><code><span class="command-prefix">/plugin</span> marketplace add nulllvoid/session-quill</code></pre></div>
+          <div class="command-group"><div class="command-heading"><span>Install the plugin</span><button class="copy-button" type="button" data-copy="/plugin install session-quill@session-quill" aria-label="Copy plugin install command">Copy <span aria-hidden="true">↗</span></button></div><pre><code><span class="command-prefix">/plugin</span> install session-quill@session-quill</code></pre></div>
+          <p class="restart-note">Start a new Claude session to load the plugin, then:</p>
+          <div class="command-group"><div class="command-heading"><span>Enable in your repository</span><button class="copy-button" type="button" data-copy="/session-quill:start" aria-label="Copy enable command">Copy <span aria-hidden="true">↗</span></button></div><pre><code><span class="command-prefix">/session-quill:start</span></code></pre></div>
+          <p class="dashboard-command">Open the dashboard with <code>/session-quill:ui</code></p>
+          <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="faq container" aria-labelledby="faq-title"><h2 id="faq-title" class="reveal">A few things worth knowing.</h2><div class="faq-list reveal">
+      <details><summary>Do I need Jira, Linear, or GitHub Issues?<span aria-hidden="true">+</span></summary><p>No. Internal tickets work locally with readable DEV, FEAT, and FIX keys. External trackers are optional and can be linked later.</p></details>
+      <details><summary>Is a ticket the same as a session?<span aria-hidden="true">+</span></summary><p>No. A ticket represents a task. Multiple sessions can contribute to one task, and one session can switch between tasks. Previous activity keeps its original attribution.</p></details>
+      <details><summary>What happens when I close Claude or reboot?<span aria-hidden="true">+</span></summary><p>Captured activity stays in local storage. The next Claude session can restart a missing worker. If you explicitly paused it, use /session-quill:start to resume.</p></details>
+      <details><summary>Does it run background agents without permission?<span aria-hidden="true">+</span></summary><p>The local worker processes capture and scheduled jobs. Agent recipes have explicit read, edit, commit, push, and draft-PR permissions. A ticket binding is never permission to publish or deploy.</p></details>
+    </div></section>
+    <section class="closing container reveal"><p>Less lost context.<br><span class="accent">More finished work.</span></p><a class="round-link" href="https://github.com/nulllvoid/session-quill#readme" aria-label="Read Session Quill documentation">↗</a></section>
+  </main>
+  <footer class="container footer"><a class="brand" href="#"><img src="assets/quill.svg" width="28" height="28" alt=""><span>session quill</span></a><p>Made for work worth picking up again.</p><div><a href="https://github.com/nulllvoid/session-quill/blob/main/LICENSE">MIT License</a><a href="https://github.com/nulllvoid/session-quill/issues">Issues ↗</a></div></footer>
+  <dialog class="image-dialog" aria-label="Dashboard screenshot"><button class="close-dialog button" type="button">Close <span aria-hidden="true">×</span></button><img width="1280" height="720" alt="Expanded Session Quill dashboard screenshot"></dialog>
+</body>
+</html>
