@@ -17,6 +17,21 @@ function trackerRemote(t, { now, tz }) {
   return `<p class="small tracker-remote"><span class="label">${esc(name)}</span> ${parts.join(' · ')}${r.title && r.title !== t.title ? ` <span class="muted">(“${esc(r.title)}”)</span>` : ''} <span class="muted">read ${timeEl(r.fetched_at, now, tz)}</span></p>`;
 }
 
+// The ticket description (ADR 0014): Goal, Context and Done when as parsed by the worker. A missing
+// or malformed one is shown as such, with how it gets written.
+function descriptionBlock(t) {
+  const d = t.description;
+  const howTo = `The next Claude session on this ticket is asked to write one, or run <code>quill ticket set ${esc(t.key)} --description "…"</code> in the Goal / Context / Done when format.`;
+  if (d && d.valid) {
+    return `<dl class="description"><dt>Goal</dt><dd>${esc(d.goal)}</dd><dt>Context</dt><dd>${esc(d.context)}</dd><dt>Done when</dt><dd><ul>${d.done.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></dd></dl>`;
+  }
+  if (t.summary && t.summary.trim()) {
+    const problems = d && d.problems ? d.problems : [];
+    return `<p class="chip warning small">${icon('alert')}Description not in the required format</p>${problems.length ? `<p class="small muted">${esc(problems.join('; '))}.</p>` : ''}<p class="prewrap">${esc(t.summary)}</p><p class="small muted">${howTo}</p>`;
+  }
+  return `<p class="chip warning small">${icon('alert')}Missing description</p><p class="small muted">${howTo}</p>`;
+}
+
 function timelineItem(e, { now, tz, generation }) {
   const kindLabel = { bind: 'Bound', write: 'Write', tool: 'Tool', commit: 'Commit', pr: 'PR', plan: 'Plan', conclusion: 'Conclusion', handoff: 'Handoff', comment: 'Comment', status: 'Status', deployment: 'Deployment', 'capture-error': 'Capture error' }[e.kind] ?? e.kind;
   return `<li class="timeline-item" data-kind="${attr(e.kind)}"><span class="tl-kind">${esc(kindLabel)}</span> ${timeEl(e.at, now, tz)} <span class="tl-text">${esc(e.text)}</span>${e.coverage !== 'complete' ? ` <span class="chip warning small" title="Change coverage">${esc(e.coverage)}</span>` : ''}${e.content_ref ? ` <button type="button" class="link small" data-action="load-content" data-hash="${attr(e.content_ref)}" data-generation="${attr(generation)}">Full text</button>` : ''}</li>`;
@@ -68,7 +83,7 @@ export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], conten
   ${t.validation_issues && t.validation_issues.length ? `<p class="issues">${icon('alert')}Validation: ${t.validation_issues.map((i) => `<code>${esc(i)}</code>`).join(' ')}</p>` : ''}
 </header>
 ${mine.length ? `<section class="detail-requests" aria-label="Pending edits">${mine.map((r) => requestFeedback(r, { now })).join('')}</section>` : ''}
-<section class="detail-section"><h3>Summary</h3>${t.summary ? `<p class="prewrap">${esc(t.summary)}</p>` : '<p class="muted small">No summary. Add one in the note\'s Summary section; it is preserved byte-for-byte.</p>'}</section>
+<section class="detail-section"><h3>Description</h3>${descriptionBlock(t)}</section>
 <section class="detail-section"><h3>Next action</h3>${nextValue}${editNext}</section>
 <section class="detail-section"><h3>Status</h3><p>${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} <span class="muted small">source: ${esc(t.status_source)}</span></p>${t.blocker ? `<p class="card-blocker">${icon('alert')}<span class="label">Blocker</span> ${esc(t.blocker)}</p>` : ''}${t.due ? `<p>${icon('clock')}Due ${esc(t.due)}</p>` : ''}${statusControls}</section>
 <section class="detail-section"><h3>Timeline <span class="count">${esc(total)}</span></h3>${timeline.length ? `<ul class="timeline">${timeline.map((e) => timelineItem(e, { now, tz, generation: snapshot.generation_id })).join('')}</ul>${total > timeline.length ? `<button type="button" class="btn small" data-action="load-ticket" data-ticket="${attr(t.id)}" data-generation="${attr(snapshot.generation_id)}">Load all ${esc(total)} entries</button>` : ''}` : '<p class="muted small">No events yet.</p>'}</section>

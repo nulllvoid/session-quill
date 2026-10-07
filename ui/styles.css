@@ -778,3 +778,10 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 .run-quality .sources summary { cursor: pointer; color: var(--text-muted); }
 .run-quality .sources ul { margin: 4px 0 0; padding-left: 16px; }
 .run-quality .sources code { overflow-wrap: anywhere; }
+
+/* Ticket description (ADR 0014): Goal, Context and Done when. */
+.description { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 13.5px; }
+.description dt { color: var(--text-faint); font-size: 12px; padding-top: 1px; }
+.description dd { margin: 0; overflow-wrap: anywhere; }
+.description ul { margin: 0; padding-left: 18px; }
+@media (max-width: 480px) { .description { grid-template-columns: 1fr; gap: 2px; } .description dd { margin-bottom: 8px; } }

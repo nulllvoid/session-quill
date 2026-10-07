@@ -83,8 +83,16 @@ test('parseAgentResult reports contract problems and reads confidence, sources a
   assert.deepEqual([good.problems, good.confidence, good.sources, good.session_id], [[], 'medium', ['src/a.js:3'], 'sess-1']);
   assert.match(parseAgentResult(wrap('no block')).problems[0], /no fenced/);
   assert.match(parseAgentResult(wrap('```json\n{nope\n```')).problems[0], /not a valid JSON object/);
-  const bad = parseAgentResult(wrap('```json\n{"summary":"","confidence":"sure","children":[{"category":"bugfix"}]}\n```'));
-  assert.equal(bad.problems.length, 3);
+  const bad = parseAgentResult(wrap('```json\n{"summary":"","confidence":"sure","children":[{"category":"bugfix"}]}\n```'), { outputs: ['summary'] });
+  assert.equal(bad.problems.length, 3, 'children are not checked for descriptions when follow-ups were not declared');
+  const desc = '**Goal:** Make retry call fn attempts times.\\n\\n**Context:** retry.js:4 stops one early.\\n\\n**Done when:**\\n- npm test passes';
+  const withDesc = parseAgentResult(wrap(`\`\`\`json\n{"summary":"s","description":"${desc}","children":[{"title":"t","description":"${desc}"}]}\n\`\`\``), { outputs: ['summary', 'followups', 'description'] });
+  assert.deepEqual(withDesc.problems, []);
+  assert.match(withDesc.description, /^\*\*Goal:\*\* Make retry/);
+  assert.match(withDesc.children[0].description, /\*\*Done when:\*\*\n- npm test passes/);
+  const badDesc = parseAgentResult(wrap('```json\n{"summary":"s","description":"fix it","children":[{"title":"t"}]}\n```'), { outputs: ['summary', 'followups', 'description'] });
+  assert.equal(badDesc.description, null);
+  assert.match(badDesc.problems.join(' | '), /"description" does not follow the format.*children\[0\]\.description does not follow the format: it is missing/);
   assert.equal(bad.confidence, null);
   assert.match(repairPrompt(bad.problems), /"summary" is missing/);
 });

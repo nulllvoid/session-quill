@@ -15,6 +15,7 @@ import { createStoreMeta, writeStoreMeta } from '../../src/config/store.js';
 import { main } from '../../src/cli/main.js';
 import { replayToStaging } from '../../src/cli/commands/sync.js';
 
+import { DESC } from '../cli/helpers.js';
 const cli = async (argv, env) => { let out = ''; let err = ''; const code = await main(argv, { env, stdout: (x) => { out += x; }, stderr: (x) => { err += x; }, stdin: async () => '' }); return { code, out, err }; };
 
 test('A08 parallel sessions on one ticket and on different tickets lose nothing; a rebind while a tool is in flight keeps the result on the original ticket', async () => {
@@ -239,13 +240,13 @@ test('A17 duplicate slugs and child allocations yield distinct keys; relink pres
   const s = await scenario().start();
   const run = (argv) => s.ticking(() => cli(argv, s.env));
   try {
-    const a = await run(['ticket', 'create', 'Same title', '--session', 'k1']);
-    const b = await run(['ticket', 'create', 'Same title', '--session', 'k1']);
+    const a = await run(['ticket', 'create', '--description', DESC, 'Same title', '--session', 'k1']);
+    const b = await run(['ticket', 'create', '--description', DESC, 'Same title', '--session', 'k1']);
     const ka = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(a.out)[1];
     const kb = /((?:DEV|FEAT|FIX)-[0-9]+)/.exec(b.out)[1];
     assert.notEqual(ka, kb);
-    const c1 = await run(['ticket', 'create', 'Child', '--parent', ka, '--session', 'k1']);
-    const c2 = await run(['ticket', 'create', 'Child', '--parent', ka, '--session', 'k1']);
+    const c1 = await run(['ticket', 'create', '--description', DESC, 'Child', '--parent', ka, '--session', 'k1']);
+    const c2 = await run(['ticket', 'create', '--description', DESC, 'Child', '--parent', ka, '--session', 'k1']);
     assert.match(c1.out, new RegExp(`${ka}\\.1`));
     assert.match(c2.out, new RegExp(`${ka}\\.2`));
     const idBefore = s.w.state.keyIndex.get(ka);

@@ -6,6 +6,7 @@ import { projectionsDir } from '../lib/paths.js';
 import { ensureDir, writeJsonAtomic, readJsonIfExists } from '../lib/atomic-fs.js';
 import { addMs, HOUR } from '../lib/time.js';
 import { environmentStatus } from '../deploy/environments.js';
+import { descriptionProblems, parseDescription } from '../core/description.js';
 
 export const SNAPSHOT_TIMELINE_LIMIT = 20;
 
@@ -14,6 +15,9 @@ export function ticketSummary(ticket, { environmentsFor = null } = {}) {
   const out = { ...rest, timeline: timeline.slice(-SNAPSHOT_TIMELINE_LIMIT), timeline_total: timeline.length };
   // Per-environment status (ADR 0009) for the configured environments of the ticket's repository.
   out.environments = environmentStatus(ticket, environmentsFor ? environmentsFor(ticket.repo_id) : []);
+  // The description parsed for display (ADR 0014); the text itself stays in `summary`.
+  const problems = descriptionProblems(ticket.summary);
+  out.description = { valid: problems.length === 0, problems, ...(problems.length ? {} : parseDescription(ticket.summary)) };
   return out;
 }
 

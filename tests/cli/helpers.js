@@ -34,3 +34,6 @@ export async function cli(argv, env, { stdin = '' } = {}) {
   const code = await main(argv, { env, stdout: (s) => { out += s; }, stderr: (s) => { err += s; }, stdin: async () => stdin });
   return { code, out, err };
 }
+
+// A valid ticket description (ADR 0014) for tests that create tickets through the CLI.
+export const DESC = '**Goal:** Exercise the ticket under test end to end.\n\n**Context:** Created by an automated test.\n\n**Done when:**\n- the test passes';

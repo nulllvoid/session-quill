@@ -30,7 +30,8 @@ function recipeRow(r, ticket, canRun) {
 function suggestionText(s) {
   if (s.type === 'next-action') return `<span class="label">Next action</span> ${esc(s.text)}`;
   if (s.type === 'blocker') return `<span class="label">Blocker</span> ${esc(s.text)}`;
-  if (s.type === 'followup') return `<span class="label">Follow-up</span> ${esc(s.title)}${s.next_action ? `. Next: ${esc(s.next_action)}` : ''}`;
+  if (s.type === 'followup') return `<span class="label">Follow-up</span> ${esc(s.title)}${s.next_action ? `. Next: ${esc(s.next_action)}` : ''}${s.description ? `<details class="small"><summary>Description</summary><pre class="preview">${esc(s.description)}</pre></details>` : ''}`;
+  if (s.type === 'description') return `<span class="label">Description</span> <span class="muted small">replaces the ticket's description when accepted</span><pre class="preview">${esc(s.text)}</pre>`;
   if (s.type === 'deploy-evidence') return `<span class="label">Deployment evidence</span> ${(s.items ?? []).map((i) => `${esc(i.environment)}: ${esc(i.state)}${i.evidence ? ` (${esc(i.evidence)})` : ''}`).join('; ')}`;
   if (s.type === 'comment-draft') return `<span class="label">Comment draft</span> <span class="muted small">never posted for you</span><pre class="preview">${esc(s.text)}</pre>`;
   return esc(s.type);

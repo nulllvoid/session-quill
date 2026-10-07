@@ -53,15 +53,16 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   // self-check. Each needs the session to resume and a minute left before the deadline; a turn
   // that fails or makes things worse leaves the earlier reply in place.
   async function improve(worker, entry, outcome) {
+    const parseOpts = { outputs: entry.outputs };
     const quality = { problems: [], repaired: false, self_checked: false };
-    let parsed = parseAgentResult(outcome.stdout);
+    let parsed = parseAgentResult(outcome.stdout, parseOpts);
     quality.problems = parsed.problems;
     entry.sessionId = parsed.session_id;
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
     if (parsed.is_error || !entry.sessionId) return { outcome, quality };
     if (parsed.problems.length && timeLeft()) {
       const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: 2 });
-      const fixed = next ? parseAgentResult(next.stdout) : null;
+      const fixed = next ? parseAgentResult(next.stdout, parseOpts) : null;
       if (fixed && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
         outcome = next;
         parsed = fixed;
@@ -73,7 +74,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       // The check re-reads sources; it never edits, whatever the run was allowed to do.
       const readOnly = allowedToolsFor({ mode: 'analyse', permissions: { read_source: !!entry.permissions.read_source } });
       const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: 12 });
-      const checked = next ? parseAgentResult(next.stdout) : null;
+      const checked = next ? parseAgentResult(next.stdout, parseOpts) : null;
       if (checked && !checked.is_error && !checked.problems.length) {
         outcome = next;
         quality.self_checked = true;
@@ -84,6 +85,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
 
   async function finish(worker, h, run, outcome) {
     const entry = running.get(h.id);
+    const parseOpts = { outputs: entry ? entry.outputs : null };
     const current = worker.state.handoffs.get(h.id);
     if (!current || !['running'].includes(current.state)) { running.delete(h.id); return; }
     let quality = null;
@@ -95,13 +97,13 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     }
     running.delete(h.id);
     const reason = entry ? entry.reason : null;
-    if (reason === 'timeout') { recordResult(worker, h.id, parseAgentResult(outcome.stdout), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'cancel') { recordResult(worker, h.id, parseAgentResult(outcome.stdout), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'stopped') { recordResult(worker, h.id, parseAgentResult(outcome.stdout), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'timeout') { recordResult(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'cancel') { recordResult(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'stopped') { recordResult(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
     if (outcome.error) { fail(worker, current, outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', outcome.error.message); return; }
     const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
     const explicit = readJsonIfExists(resultFile);
-    const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: outcome.stdout } : parseAgentResult(outcome.stdout);
+    const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: outcome.stdout } : parseAgentResult(outcome.stdout, parseOpts);
     if (outcome.code !== 0) { recordResult(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
     if (parsed.is_error) { recordResult(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
     const extras = await fixExtras(worker, current, { finalize: true });
@@ -198,7 +200,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     } catch (err) {
       return fail(worker, h, 'spawn-failed', err.message);
     }
-    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck: !!(recipe && recipe.self_check), sessionId: null });
+    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck: !!(recipe && recipe.self_check), sessionId: null, outputs: recipe ? recipe.outputs : null });
     run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 

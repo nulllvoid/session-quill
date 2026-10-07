@@ -17,7 +17,7 @@ const PERMISSION_ALIASES = { push: 'push_branch', draft_pr: 'open_draft_pr' };
 // `work`, `related` and `history` (ADR 0013): files, commits and their diff; the parent, siblings
 // and children; and earlier runs on the ticket with the owner's decisions on their suggestions.
 export const INPUTS = ['ticket', 'notes', 'prs', 'deployments', 'work', 'related', 'history'];
-export const OUTPUTS = ['summary', 'next_action', 'blocker', 'followups', 'deploy_evidence', 'comment_draft', 'test_results', 'changed_files'];
+export const OUTPUTS = ['summary', 'next_action', 'blocker', 'followups', 'deploy_evidence', 'comment_draft', 'test_results', 'changed_files', 'description'];
 export const PLACEHOLDERS = ['ticket.key', 'ticket.url', 'ticket.title', 'ticket.status', 'ticket.next_action', 'note', 'prs', 'deployments', 'environments'];
 export const MAX_TIMEOUT_MIN = 20;
 export const FRONTMATTER_KEYS = ['name', 'description', 'mode', 'permissions', 'tools', 'timeout_min', 'inputs', 'outputs', 'self_check'];

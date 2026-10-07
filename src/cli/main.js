@@ -30,13 +30,13 @@ Usage: quill <command> [options]
 
   start [--repo <path>] [--store <path>] [--session <id>] [--share-settings]
   init [--store <path>] [--project <id>] [--project-name <name>] [--repo <path>] [--timezone <tz>] [--yes]
-  ticket create "<title>" [--category c] [--priority P2] [--parent KEY] [--project id] [--due YYYY-MM-DD] [--bind] --session <id>
-  ticket work "<task title>" [--category c] [--project id] [--repo id] --session <id>  (reuse or create, then bind)
+  ticket create "<title>" --description "<Goal/Context/Done when>" [--category c] [--priority P2] [--parent KEY] [--project id] [--due YYYY-MM-DD] [--bind] --session <id>
+  ticket work "<task title>" --description "<Goal/Context/Done when>" [--category c] [--project id] [--repo id] --session <id>  (reuse or create, then bind)
   ticket bind <KEY> --session <id>          ticket show --session <id> [--json]
   ticket off --session <id>                 ticket on --session <id>
   ticket relink <KEY> --external <EXT-KEY> [--system s] [--url <url>] --session <id>   (--jira is an alias)
   ticket children <KEY>                     ticket list [--status s] [--json]
-  ticket set <KEY> [--title t] [--status s] [--blocker b] [--next text] [--priority P] [--category c] [--due D|none] [--parent KEY|none] [--repo id|none]
+  ticket set <KEY> [--description d] [--title t] [--status s] [--blocker b] [--next text] [--priority P] [--category c] [--due D|none] [--parent KEY|none] [--repo id|none]
   repo add <path> [--id id] [--project id] [--repo-file]   repo list [--json]   repo remove <id>
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>
   status [--json] [--session <id>] | status --statusline

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- Ticket descriptions are mandatory for agent-created tickets ([ADR 0014](docs/decisions/0014-ticket-descriptions.md)): `ticket create` and `ticket work` require `--description` in the Goal / Context / Done when format and print the format when it is missing or malformed; `ticket set --description` writes or replaces one. Hook instructions tell Claude to write it, and a session bound to a ticket without one is asked to add it. Ticket detail shows Goal, Context and Done when, or a "Missing description" warning.
+- Agent runs: follow-up children carry a description, checked like the rest of the reply contract; a new `description` output fills a missing ticket description (applied directly by built-in modes only when none is valid, a suggestion otherwise).
 - Recipe runs see much more of their ticket ([ADR 0013](docs/decisions/0013-recipe-context-and-reply-contract.md)): the owner's Notes section (previously never sent), the full latest approved plan and checkpoint instead of previews, and three new inputs: `work` (files touched, commits and, with source access, their diff), `related` (parent, siblings, children) and `history` (earlier runs and how their suggestions were decided).
 - Every run follows a stated method and evidence rule, and its reply adds `confidence` and `sources`, shown on the run in ticket detail. The built-in recipes were rewritten as step-by-step instructions with a quality bar.
 - A reply that breaks the output contract gets one repair turn in the same session; a recipe with `self_check: true` (`attempt-fix`, `deploy-check`) verifies each claim against its source in a read-only follow-up turn.

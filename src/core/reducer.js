@@ -7,6 +7,7 @@ import {
 } from './state.js';
 import { isIsoZ } from '../lib/time.js';
 import { stripMarkupTags } from '../lib/text.js';
+import { hasValidDescription, descriptionProblems } from './description.js';
 import { TrackerError } from '../lib/errors.js';
 import { validateKey, validateParent, allocateInternalKey } from './keys.js';
 import { externalTicketId } from './external-keys.js';
@@ -651,7 +652,7 @@ function handleHandoffTx(state, ev, result) {
         if (!state.handoffChildren) state.handoffChildren = new Set();
         const childId = item.id ?? deterministicId(`${h.id}:child:${index}`);
         if (state.tickets.has(childId)) continue;
-        const r = createTicket(state, ev, { id: childId, key: item.key, title: item.title, project_id: ticket.project_id, project_name: ticket.project_name, category: item.category ?? ticket.category, priority: item.priority ?? ticket.priority, parent_id: ticket.id, repo_id: ticket.repo_id, next_action: item.next_action ?? '' }, 'manual', result);
+        const r = createTicket(state, ev, { id: childId, key: item.key, title: item.title, project_id: ticket.project_id, project_name: ticket.project_name, category: item.category ?? ticket.category, priority: item.priority ?? ticket.priority, parent_id: ticket.id, repo_id: ticket.repo_id, next_action: item.next_action ?? '', summary: item.summary ?? '' }, 'manual', result);
         if (!r.rejected) {
           state.handoffChildren.add(identity);
           h.children_ids = [...(h.children_ids ?? []), childId];
@@ -667,6 +668,10 @@ function handleHandoffTx(state, ev, result) {
         } else {
           applyTicketFields(state, ticket, { next_action: item.text }, ev, 'manual', result);
         }
+      } else if (item.type === 'description') {
+        // A built-in run writes the description only where none is valid; the owner's stays (ADR 0014).
+        if (!hasValidDescription(ticket) && descriptionProblems(item.text).length === 0) applyTicketFields(state, ticket, { summary: item.text }, ev, 'manual', result);
+        else h.uncertain_effects = [...(h.uncertain_effects ?? []), 'description suggestion not applied: the ticket already has a valid description'];
       } else if (item.type === 'blocker') {
         h.result_summary = `${h.result_summary ?? ''}\nSuggested blocker: ${item.text}`.trim();
       }
@@ -821,6 +826,11 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
             (t.parent_id ?? null) === (incoming.parent_id ?? null) && normalized(t.title) === normalized(incoming.title));
           if (matches.length > 1) { result.rejected = 'task-ambiguous'; break; }
           let ticket = matches[0];
+          // A reused task without a valid description takes the one this call brings (ADR 0014);
+          // a valid one already there is never replaced.
+          if (ticket && typeof incoming.summary === 'string' && incoming.summary.trim() && !hasValidDescription(ticket)) {
+            applyTicketFields(state, ticket, { summary: incoming.summary }, ev, 'manual', result);
+          }
           if (!ticket) {
             Object.assign(result, createTicket(state, ev, incoming, source, result));
             if (result.rejected) break;

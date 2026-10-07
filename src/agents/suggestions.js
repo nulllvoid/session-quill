@@ -5,7 +5,7 @@ import { deterministicId } from '../lib/ids.js';
 import { CATEGORIES, PRIORITIES } from '../core/state.js';
 import { TrackerError } from '../lib/errors.js';
 
-export const SUGGESTION_TYPES = ['next-action', 'blocker', 'followup', 'deploy-evidence', 'comment-draft'];
+export const SUGGESTION_TYPES = ['next-action', 'blocker', 'followup', 'deploy-evidence', 'comment-draft', 'description'];
 export const DEPLOY_STATES = ['deployed', 'pending', 'n-a'];
 
 export function childKeys(state, parent, count) {
@@ -27,10 +27,11 @@ export function buildSuggestions(outputs = [], parsed = {}, createdAt) {
   if (outputs.includes('next_action') && parsed.next_action) add('next-action', { text: parsed.next_action });
   if (outputs.includes('blocker') && parsed.blocker) add('blocker', { text: parsed.blocker });
   if (outputs.includes('followups')) {
-    for (const c of parsed.children ?? []) add('followup', { title: c.title, category: c.category ?? null, priority: c.priority ?? null, next_action: c.next_action ?? '' });
+    for (const c of parsed.children ?? []) add('followup', { title: c.title, category: c.category ?? null, priority: c.priority ?? null, next_action: c.next_action ?? '', description: c.description ?? '' });
   }
   if (outputs.includes('deploy_evidence') && (parsed.deploy_evidence ?? []).length) add('deploy-evidence', { items: parsed.deploy_evidence });
   if (outputs.includes('comment_draft') && parsed.comment_draft) add('comment-draft', { text: parsed.comment_draft });
+  if (outputs.includes('description') && parsed.description) add('description', { text: parsed.description });
   return out;
 }
 
@@ -41,11 +42,12 @@ export function suggestionMutation(state, ticket, h, sug, decision) {
   if (decision !== 'accepted') return mutation;
   if (sug.type === 'next-action') mutation.fields = { next_action: sug.text };
   else if (sug.type === 'blocker') mutation.fields = { status: 'blocked', blocker: String(sug.text).slice(0, 500) };
+  else if (sug.type === 'description') mutation.fields = { summary: String(sug.text) };
   else if (sug.type === 'followup') {
     const [key] = childKeys(state, ticket, 1);
     mutation.child = {
       id: deterministicId(`${h.id}:suggestion:${sug.id}`), key, title: sug.title,
-      category: CATEGORIES.includes(sug.category) ? sug.category : ticket.category, priority: PRIORITIES.includes(sug.priority) ? sug.priority : ticket.priority, next_action: sug.next_action ?? '',
+      category: CATEGORIES.includes(sug.category) ? sug.category : ticket.category, priority: PRIORITIES.includes(sug.priority) ? sug.priority : ticket.priority, next_action: sug.next_action ?? '', summary: sug.description ?? '',
     };
   } else if (sug.type === 'deploy-evidence') {
     const items = [];
