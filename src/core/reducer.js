@@ -658,7 +658,11 @@ function handleHandoffTx(state, ev, result) {
           ticket.handoff_ids = ticket.handoff_ids.includes(h.id) ? ticket.handoff_ids : [...ticket.handoff_ids, h.id];
         }
       } else if (item.type === 'next-action') {
-        if (ticket.revision !== h.base_ticket_revision) {
+        // The run's own tool calls are attributed to its ticket and bump the revision, so a run
+        // queued with base_next_action conflicts only when the next action itself changed. Runs
+        // journalled before that field existed keep the revision check, so replay is unchanged.
+        const changed = typeof h.base_next_action === 'string' ? (ticket.next_action ?? '') !== h.base_next_action : ticket.revision !== h.base_ticket_revision;
+        if (changed) {
           h.uncertain_effects = [...(h.uncertain_effects ?? []), `next_action suggestion conflicted with revision ${ticket.revision}`];
         } else {
           applyTicketFields(state, ticket, { next_action: item.text }, ev, 'manual', result);

@@ -85,12 +85,17 @@ function sanitizeSession(s, o) {
 }
 
 function sanitizeHandoff(h, o) {
-  const { worktree_path, result_ref, pr_url, result_summary, changed_files, log_path, patch_path, suggestions, ...rest } = h;
+  const { worktree_path, result_ref, pr_url, result_summary, result_confidence, result_sources, result_quality, changed_files, log_path, patch_path, suggestions, ...rest } = h;
   const out = { ...rest };
   // Agent output, like the result summary, is shared only when checkpoints are included.
   out.suggestions = o.includeCheckpoints ? (suggestions ?? []) : [];
   if (o.includeLinks) out.pr_url = pr_url ?? null;
-  if (o.includeCheckpoints) out.result_summary = result_summary ?? null;
+  if (o.includeCheckpoints) {
+    out.result_summary = result_summary ?? null;
+    // Sources name files and commits, so they travel with the summary and not otherwise.
+    out.result_confidence = result_confidence ?? null;
+    out.result_sources = result_sources ?? [];
+  }
   out.changed_files = (changed_files ?? []).length;
   return out;
 }

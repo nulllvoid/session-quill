@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Recipe runs see much more of their ticket ([ADR 0013](docs/decisions/0013-recipe-context-and-reply-contract.md)): the owner's Notes section (previously never sent), the full latest approved plan and checkpoint instead of previews, and three new inputs: `work` (files touched, commits and, with source access, their diff), `related` (parent, siblings, children) and `history` (earlier runs and how their suggestions were decided).
+- Every run follows a stated method and evidence rule, and its reply adds `confidence` and `sources`, shown on the run in ticket detail. The built-in recipes were rewritten as step-by-step instructions with a quality bar.
+- A reply that breaks the output contract gets one repair turn in the same session; a recipe with `self_check: true` (`attempt-fix`, `deploy-check`) verifies each claim against its source in a read-only follow-up turn.
+
+### Fixed
+
+- Built-in handoff runs applied their next action almost never: the agent's own tool calls are recorded on the ticket and moved its revision, so the result was always treated as a conflict. A run now conflicts only when the next action itself changed after it was queued.
+- The recipe Run dialog offered "Open a draft PR" for a repository without a PR provider, which the worker then refused; the option is now disabled with the reason, as in the handoff form.
+
+### Changed
+
+- The agent runtime receives its prompt on stdin, so large prompts no longer hit the Windows command-line limit.
+
 ## [0.2.0] - 2026-10-07
 
 ### Added

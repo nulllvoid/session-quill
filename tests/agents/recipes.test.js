@@ -121,3 +121,14 @@ test('recipes: the catalog caches per repository and re-reads after its refresh 
   assert.ok(listed.some((r) => r.name === 'triage' && r.repo_id === 'app' && !('body' in r) && !('path' in r)));
   assert.ok(listed.some((r) => r.name === 'analyse' && r.repo_id === null));
 });
+
+test('recipes: work, related and history are inputs; self_check must be a boolean; the built-ins check deploy and fix replies', () => {
+  const ok = normalizeRecipe({ name: 'r', source: 'personal', text: recipe('Go.', 'inputs: [ticket, work, related, history]\nself_check: true\n') });
+  assert.equal(ok.error, null);
+  assert.deepEqual([ok.inputs, ok.self_check], [['ticket', 'work', 'related', 'history'], true]);
+  assert.match(normalizeRecipe({ name: 'r', source: 'personal', text: recipe('Go.', 'self_check: yes\n') }).error, /self_check must be true or false/);
+  assert.equal(normalizeRecipe({ name: 'r', source: 'personal', text: recipe('Go.') }).self_check, false);
+  const { effective } = loadRecipes({ env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-r-')) } });
+  assert.deepEqual(['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check', 'standup'].map((n) => effective.get(n).self_check), [false, false, true, true, false]);
+  for (const r of effective.values()) assert.equal(r.error, null, `${r.name}: ${r.error}`);
+});

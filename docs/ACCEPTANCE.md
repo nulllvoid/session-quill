@@ -67,7 +67,7 @@ These are release requirements, not tests already executed. Record host/runtime 
 | A38 | FR-12 | Execution reaches 20 min including sleep or user cancels: subprocesses stop; patch, logs and partial results remain linked; state timed-out/cancelled is visible |
 | A39 | FR-12 | Worker restarts during run: state failed/interrupted, no automatic rerun. Uncertain push/PR effect is reconciled before an explicit retry |
 | A40 | FR-12 | Default fix returns local diff/tests. Explicitly authorized push uses non-default/non-protected branch; draft PR is distinct from merged deployment work |
-| A41 | FR-11, FR-12 | Parent changes during handoff: proposed next action conflicts against base revision; newer owner fields remain. Missing runtime/credentials fail at dispatch with reason |
+| A41 | FR-11, FR-12 | Parent changes during handoff: proposed next action conflicts when the next action changed after the run was queued (the run's own activity does not count); newer owner fields remain. Missing runtime/credentials fail at dispatch with reason |
 
 ## Phase 5 — Release evidence
 
