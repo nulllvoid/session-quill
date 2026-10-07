@@ -55,6 +55,12 @@ export function scoreTicket(ticket, { nowIso, timezone, byId }) {
   return { ticket_id: ticket.id, raw_score: raw, score: Math.min(100, raw), reasons, limitations };
 }
 
+// Oldest merge still waiting on a deployment; tickets with none sort after every waiting one.
+function oldestDeployWait(ticket) {
+  const merged = (ticket.deployments ?? []).filter((d) => d.state === 'pending' && d.merged_at).map((d) => d.merged_at);
+  return merged.length ? merged.reduce((m, x) => (x < m ? x : m)) : '9999';
+}
+
 export function rankPickNext(tickets, { nowIso, timezone, limit = 5 }) {
   const byId = new Map(tickets.map((t) => [t.id, t]));
   const scored = tickets.filter((t) => ELIGIBLE.has(t.status)).map((t) => ({ ...scoreTicket(t, { nowIso, timezone, byId }), _t: t }));
@@ -63,6 +69,10 @@ export function rankPickNext(tickets, { nowIso, timezone, limit = 5 }) {
     const da = a._t.due ?? '9999-99-99';
     const db = b._t.due ?? '9999-99-99';
     if (da !== db) return da < db ? -1 : 1;
+    // Equal scores: the longer a merged PR has waited for deployment, the sooner it is picked.
+    const wa = oldestDeployWait(a._t);
+    const wb = oldestDeployWait(b._t);
+    if (wa !== wb) return wa < wb ? -1 : 1;
     const pa = PRIORITY_ORDER[a._t.priority] ?? 9;
     const pb = PRIORITY_ORDER[b._t.priority] ?? 9;
     if (pa !== pb) return pa - pb;

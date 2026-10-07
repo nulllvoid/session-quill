@@ -85,3 +85,13 @@ test('a fresh merge awaiting deployment earns 10 (20 once two days old); days un
   const stale = scoreTicket(t({ last_activity: '2026-09-20T00:00:00Z', stale: true }), by);
   assert.equal(stale.raw_score, 10, 'stale replaces the per-day points');
 });
+
+test('equal scores rank the longest deployment wait first', () => {
+  const merged = (iso) => [{ state: 'pending', merged_at: iso }];
+  // Created first, so the older tie-breaks (activity, then id) alone would put it on top.
+  const recent = t({ deployments: merged('2026-09-27T12:00:00Z') });
+  const old = t({ deployments: merged('2026-09-20T12:00:00Z') });
+  const ranked = rankPickNext([recent, old], { nowIso: NOW, timezone: TZ });
+  assert.equal(ranked[0].raw_score, ranked[1].raw_score);
+  assert.deepEqual(ranked.map((r) => r.ticket_id), [old.id, recent.id]);
+});

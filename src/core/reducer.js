@@ -6,6 +6,7 @@ import {
   indexChild, registerSession, registerCheckpoint,
 } from './state.js';
 import { isIsoZ } from '../lib/time.js';
+import { stripMarkupTags } from '../lib/text.js';
 import { TrackerError } from '../lib/errors.js';
 import { validateKey, validateParent, allocateInternalKey } from './keys.js';
 import { externalTicketId } from './external-keys.js';
@@ -208,7 +209,9 @@ function bindExternal(state, session, ev, result) {
     if (!project_id) return { rejected: 'project-required' };
     const external = { system: ext.system ?? 'custom', key: ext.key, url: ext.url ?? null, validation: 'pending', validated_at: null, error: ext.error ?? null };
     const id = externalTicketId(state.meta.store_id, ext.key);
-    const title = (typeof p.title_hint === 'string' && p.title_hint.trim()) ? p.title_hint.trim().slice(0, 200) : ext.key;
+    // Hints journalled before hooks stripped prompt markup are cleaned on replay too.
+    const hint = typeof p.title_hint === 'string' ? stripMarkupTags(p.title_hint).replace(/\s+/g, ' ').trim() : '';
+    const title = hint ? hint.slice(0, 200) : ext.key;
     const created = createTicket(state, ev, {
       id, key: ext.key, title, project_id, category: 'research', priority: 'P2', repo_id: p.repo_id ?? null, external,
       jira: external.system === 'jira' ? { key: ext.key, url: external.url, validation: 'pending', validated_at: null, error: external.error } : null,
@@ -716,7 +719,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       const s = getOrCreateSession(state, ev);
       // A session first seen through a prompt (started before `quill init`) gets a snapshot now.
       if (!seen) result.bindingChanged.add(sessionKey(ev));
-      if (!s.title && ev.payload.title_candidate) s.title = String(ev.payload.title_candidate).slice(0, 80);
+      if (!s.title && ev.payload.title_candidate) s.title = stripMarkupTags(ev.payload.title_candidate).replace(/\s+/g, ' ').trim().slice(0, 80) || null;
       if (ev.payload.approval_candidate === true) {
         const cp = heuristicApprovalEligible(state, s, ev.occurred_at);
         if (cp) approveCheckpoint(state, ev, { checkpoint_id: cp.id, ticket_id: cp.ticket_id, provenance: 'heuristic' }, result);

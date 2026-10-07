@@ -1,6 +1,7 @@
 // Extracts only the fields the data contract allows from raw hook input. Never retains whole
 // prompts, environments, credentials or command output (PRD NFR Privacy).
 import path from 'node:path';
+import { stripMarkupTags } from '../lib/text.js';
 
 export const PREVIEW_CHARS = 1500;
 export const TITLE_CHARS = 80;
@@ -8,7 +9,7 @@ export const TITLE_CHARS = 80;
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 export function sanitizeTitle(text) {
-  return String(text ?? '')
+  return stripMarkupTags(text)
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]+/g, ' ')
     .replace(/\s+/g, ' ')

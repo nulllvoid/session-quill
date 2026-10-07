@@ -29,6 +29,8 @@ const appState = {
   dialog: null,
   theme: null,
   boardExpanded: new Set(),
+  blockedExpanded: false,
+  editingNext: null,
   boardPages: {},
   sessionsPage: 0,
   treeRoot: null,
@@ -50,6 +52,7 @@ let countdownTimer = null;
 let motion;
 let detailCloseVersion = 0;
 let renderedView = null;
+let renderedDetail = null;
 const renderedMarkup = new WeakMap();
 
 // Preserve DOM nodes (and focus, hover and active animations) on unchanged polls.
@@ -69,8 +72,18 @@ function readHash() {
   if (VIEWS.includes(view)) appState.view = view;
   for (const k of ['project', 'category', 'tag', 'repo', 'machine', 'q']) if (params.has(k)) appState.filters[k] = params.get(k);
   appState.filters.stale = params.get('stale') === '1';
-  if (params.get('ticket')) appState.selected = params.get('ticket');
-  if (params.get('root')) appState.treeRoot = params.get('root');
+  appState.selected = params.get('ticket') || null;
+  appState.treeRoot = params.get('root') || null;
+}
+
+// The drawer belongs to the view it was opened from: switching views closes it.
+function setView(view) {
+  if (view === appState.view) return;
+  appState.view = view;
+  appState.treeRoot = null;
+  appState.selected = null;
+  appState.editingNext = null;
+  appState.loadedTicket = null;
 }
 
 function writeHash() {
@@ -111,13 +124,16 @@ function render() {
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
   setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online }));
+  // Keep the provider-error popover open across the header's per-minute re-render.
+  const healthOpen = !!document.querySelector('#header .health-pop[open]');
   setMarkup($('#header'), renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt }));
+  if (healthOpen) { const pop = $('#header .health-pop'); if (pop) pop.open = true; }
   if (searchFocused) { const sInput = $('#search'); if (sInput) { sInput.focus(); if (searchPos !== null) sInput.setSelectionRange(searchPos, searchPos); } }
   setMarkup($('#filters'), renderFilterBar(s));
   const pending = [...appState.requests.values()];
   const opts = { now, pending, selected: appState.selected };
   let html = '';
-  if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, opts);
+  if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, { ...opts, blockedExpanded: appState.blockedExpanded });
   else if (appState.view === 'board') html = renderBoard(s, appState.filters, { ...opts, layout: layoutMode() === 'desktop' ? 'columns' : 'list', expanded: appState.boardExpanded, pages: appState.boardPages });
   else if (appState.view === 'tree') html = renderTree(s, appState.filters, { root: appState.treeRoot });
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
@@ -165,7 +181,7 @@ function renderDetailPanel(now, pending) {
   const mode = layoutMode();
   panel.hidden = !ticket;
   document.body.dataset.detail = ticket ? 'open' : 'closed';
-  if (!ticket) { setMarkup(panel, ''); panel.removeAttribute('aria-modal'); return; }
+  if (!ticket) { setMarkup(panel, ''); panel.removeAttribute('aria-modal'); renderedDetail = null; return; }
   const modal = mode !== 'desktop';
   panel.setAttribute('role', modal ? 'dialog' : 'complementary');
   if (modal) panel.setAttribute('aria-modal', 'true'); else panel.removeAttribute('aria-modal');
@@ -174,7 +190,9 @@ function renderDetailPanel(now, pending) {
   const selectionStart = active && panel.contains(active) && active.tagName === 'TEXTAREA' ? active.selectionStart : null;
   const editing = active && panel.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
   if (editing) return; // never clobber an in-progress edit on poll
-  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket }));
+  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id }));
+  // A different ticket starts at its title, not at the previous ticket's scroll offset.
+  if (renderedDetail !== ticket.id) { panel.scrollTop = 0; renderedDetail = ticket.id; }
   if (activeId) { const el = panel.querySelector(`#${CSS.escape(activeId)}`) || panel.querySelector(`[data-action="${CSS.escape(activeId)}"]`); if (el) { el.focus(); if (selectionStart !== null && el.setSelectionRange) el.setSelectionRange(selectionStart, selectionStart); } }
 }
 
@@ -339,6 +357,17 @@ function handleAction(el) {
     case 'help': appState.dialog = { type: 'help' }; render(); break;
     case 'export': appState.dialog = { type: 'export', preview: null }; render(); break;
     case 'close-detail': closeDetail(); break;
+    case 'detail-prev': stepDetail(-1); break;
+    case 'detail-next': stepDetail(1); break;
+    case 'edit-next': {
+      appState.editingNext = el.dataset.ticket;
+      render();
+      const ta = $(`#next-action-${CSS.escape(el.dataset.ticket)}`);
+      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+      break;
+    }
+    case 'cancel-next': appState.editingNext = null; render(); break;
+    case 'toggle-blocked': appState.blockedExpanded = !appState.blockedExpanded; render(); break;
     case 'close-dialog': closeDialog(); break;
     case 'handoff': appState.dialog = { type: 'handoff', ticket: el.dataset.ticket, retryOf: el.dataset.retryOf ?? null }; render(); break;
     case 'record-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'record', deploymentId: el.dataset.deployment ?? null }; render(); break;
@@ -420,6 +449,7 @@ function openDetail(id, source) {
   appState.lastFocus = source ?? document.activeElement;
   appState.selected = id;
   appState.loadedTicket = null;
+  appState.editingNext = null;
   render();
   const panel = $('#detail');
   const first = panel.querySelector('[data-action="close-detail"]');
@@ -432,6 +462,7 @@ async function closeDetail() {
   await motion?.exit($('#detail'));
   if (version !== detailCloseVersion || appState.selected !== selected) return;
   appState.selected = null;
+  appState.editingNext = null;
   render();
   const source = appState.lastFocus && document.contains(appState.lastFocus) ? appState.lastFocus : $(`#main [data-ticket="${CSS.escape(selected ?? '')}"]`);
   source?.focus({ preventScroll: true });
@@ -447,7 +478,17 @@ function closeDialog() {
 }
 
 function visibleTicketIds() {
-  return [...document.querySelectorAll('#main [data-ticket]')].map((el) => el.dataset.ticket);
+  return [...new Set([...document.querySelectorAll('#main [data-ticket]')].map((el) => el.dataset.ticket))];
+}
+
+function stepDetail(delta) {
+  const ids = visibleTicketIds();
+  const next = ids[ids.indexOf(appState.selected) + delta];
+  if (!next) return;
+  appState.selected = next;
+  appState.loadedTicket = null;
+  appState.editingNext = null;
+  render();
 }
 
 function toLocalIso(value) {
@@ -463,6 +504,7 @@ function handleSubmit(form) {
   const t = ticketId ? ticketById(appState.snapshot, ticketId) : null;
   const fd = new FormData(form);
   if (kind === 'next-action') {
+    appState.editingNext = null;
     submit({ kind: 'set-next-action', target_id: ticketId, expected_revision: revision, payload: { next_action: String(fd.get('next_action') ?? '').trim() } }, { original: { next_action: t.next_action } });
   } else if (kind === 'status') {
     const status = form.dataset.status;
@@ -534,30 +576,32 @@ function onKey(e) {
   const inInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
   const dialogOpen = $('#dialog').open;
   if (e.key === 'Escape') {
+    const pop = document.querySelector('.health-pop[open]');
+    if (pop) { e.preventDefault(); pop.open = false; pop.querySelector('summary')?.focus(); return; }
     if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
     if (appState.selected && !inInput) { e.preventDefault(); closeDetail(); return; }
-    if (inInput && target.form && target.form.dataset.form === 'next-action') { target.value = ticketById(appState.snapshot, target.form.dataset.ticket).next_action; target.blur(); return; }
+    if (inInput && target.form && target.form.dataset.form === 'next-action') { target.value = ticketById(appState.snapshot, target.form.dataset.ticket).next_action; target.blur(); appState.editingNext = null; render(); return; }
   }
   if (inInput || dialogOpen) {
     if (e.key === 'Enter' && !e.shiftKey && target.tagName === 'TEXTAREA' && target.form && target.form.dataset.form === 'next-action') { e.preventDefault(); handleSubmit(target.form); }
     return;
   }
   if (e.key === '/') { e.preventDefault(); const s = $('#search'); if (s) s.focus(); return; }
-  if (/^[1-6]$/.test(e.key)) { appState.view = VIEWS[Number(e.key) - 1]; render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
+  if (/^[1-6]$/.test(e.key)) { setView(VIEWS[Number(e.key) - 1]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
   if (card && e.key === 'h' && card.querySelector('[data-action="handoff"]')) { e.preventDefault(); appState.lastFocus = card; appState.dialog = { type: 'handoff', ticket: card.dataset.ticket }; render(); return; }
   if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && target && target.dataset && target.dataset.action === 'detail-nav' && appState.selected) {
     e.preventDefault();
-    const ids = visibleTicketIds();
-    const idx = ids.indexOf(appState.selected);
-    const next = ids[idx + (e.key === 'ArrowRight' ? 1 : -1)];
-    if (next) { appState.selected = next; appState.loadedTicket = null; render(); const nav = $('#detail [data-action="detail-nav"]'); if (nav) nav.focus(); }
+    stepDetail(e.key === 'ArrowRight' ? 1 : -1);
+    const nav = $('#detail [data-action="detail-nav"]');
+    if (nav) nav.focus();
   }
 }
 
 function onClick(e) {
+  for (const pop of document.querySelectorAll('.health-pop[open]')) if (!pop.contains(e.target)) pop.open = false;
   const copy = e.target.closest('[data-copy]');
   if (copy && navigator.clipboard) { navigator.clipboard.writeText(copy.dataset.copy).then(() => announce(`Copied ${copy.dataset.copyLabel ?? copy.dataset.copy}`)).catch(() => {}); e.stopPropagation(); return; }
   const open = e.target.closest('[data-open]');
@@ -565,7 +609,7 @@ function onClick(e) {
   const action = e.target.closest('[data-action]');
   if (action && action.dataset.action !== 'detail-nav') { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
   const tab = e.target.closest('[data-view]');
-  if (tab) { appState.view = tab.dataset.view; appState.treeRoot = null; render(); return; }
+  if (tab) { setView(tab.dataset.view); render(); return; }
   const card = e.target.closest('#main [data-ticket][role=button]');
   if (card && !e.target.closest('button, a, [data-copy]')) openDetail(card.dataset.ticket, card);
 }

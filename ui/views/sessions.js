@@ -16,6 +16,8 @@ export function renderSessions(rawSnapshot, filters, { now, page = 0, selected =
   sessions.sort((a, b) => (order[a.state] - order[b.state]) || (a.last_event_at < b.last_event_at ? 1 : -1));
   if (!sessions.length) return `<section class="view view-sessions" aria-labelledby="tab-sessions">${emptyState('No sessions recorded', 'Sessions appear when a Claude Code session with the plugin loaded starts. Live means recent activity, not a running process.')}</section>`;
   const pages = Math.ceil(sessions.length / SESSIONS_PAGE_SIZE);
+  const machines = [...new Set(snapshot.sessions.map((s) => s.machine_name))];
+  const multiMachine = machines.length > 1;
   const rows = sessions.slice(page * SESSIONS_PAGE_SIZE, (page + 1) * SESSIONS_PAGE_SIZE).map((s) => {
     const current = s.current_ticket_id ? ticketById(snapshot, s.current_ticket_id) : null;
     const history = s.bindings.filter((b) => b.ticket_id && b.ticket_id !== s.current_ticket_id).map((b) => ticketById(snapshot, b.ticket_id)).filter(Boolean);
@@ -24,21 +26,20 @@ export function renderSessions(rawSnapshot, filters, { now, page = 0, selected =
     if (hasUnlinkedWork(s)) flags.push(`<span class="chip warning" title="Changed files or committed without a ticket; see Pick next">${icon('inbox')}Unlinked work · ${esc(countLabel((s.unbound_work.files ?? []).length, 'file'))}</span>`);
     if (s.gate_enabled === false) flags.push(`<span class="chip critical">${icon('alert')}Gate off</span>`);
     if (s.capture_health && s.capture_health.status !== 'ok') flags.push(`<span class="chip warning">${icon('alert')}Capture ${esc(s.capture_health.status)}${s.capture_health.reason ? `: ${esc(s.capture_health.reason)}` : ''}</span>`);
+    // Lead with what the session was about; the host ID is a short, hoverable reference.
     return `<tr data-session="${attr(s.id)}">
+  <td><div class="session-title">${s.title ? esc(s.title) : '<span class="muted">Untitled session</span>'}</div><div class="small muted"><span class="session-id" title="${attr(s.host_session_id)}">${esc(String(s.host_session_id ?? '').slice(0, 8))}</span>${s.agent_id ? ` · agent ${esc(s.agent_id)}` : ''}${multiMachine ? ` · ${esc(s.machine_name)}` : ''}</div></td>
   <td>${sessionChip(s.state)}</td>
-  <td><div class="session-id">${esc(s.host_session_id)}${s.agent_id ? ` <span class="muted small">agent ${esc(s.agent_id)}</span>` : ''}</div>${s.title ? `<div class="small muted">${esc(s.title)}</div>` : ''}</td>
   <td>${current ? `<button type="button" class="link" data-open="${attr(current.id)}">${keyEl(current.key)}</button>` : '<span class="muted">Unbound</span>'}${history.length ? `<div class="small muted">Earlier: ${history.map((h) => `<button type="button" class="link" data-open="${attr(h.id)}">${esc(h.key)}</button>`).join(', ')}</div>` : ''}<div class="small muted">binding rev ${esc(s.current_binding_revision)}</div></td>
-  <td>${esc(s.machine_name)}</td>
   <td>${timeEl(s.started_at, now, tz)}</td>
   <td>${esc(s.successful_write_count)} <span class="small muted">/ ${esc(s.change_coverage)}</span></td>
   <td class="preview">${s.last_checkpoint_preview ? `<span title="${attr(s.last_checkpoint_preview.slice(0, 300))}">${esc(s.last_checkpoint_preview.slice(0, 80))}${s.last_checkpoint_preview.length > 80 ? '…' : ''}</span>` : '<span class="muted" aria-label="none">-</span>'}</td>
   <td>${flags.join(' ') || '<span class="muted" aria-label="none">-</span>'}</td>
 </tr>`;
   }).join('');
-  const machines = [...new Set(snapshot.sessions.map((s) => s.machine_name))];
   return `<section class="view view-sessions" aria-labelledby="tab-sessions">
-<p class="section-count">${esc(countLabel(sessions.length, 'session'))}${machines.length > 1 ? ` · <label>Machine <select data-filter="machine"><option value="">All</option>${machines.map((m) => `<option value="${attr(m)}" ${filters.machine === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>` : ''}</p>
-<div class="table-wrap"><table class="sessions"><thead><tr><th scope="col">State</th><th scope="col">Session</th><th scope="col">Binding</th><th scope="col">Machine</th><th scope="col">Started</th><th scope="col">Writes / coverage</th><th scope="col">Checkpoint</th><th scope="col">Indicators</th></tr></thead><tbody>${rows}</tbody></table></div>
+<p class="section-count">${esc(countLabel(sessions.length, 'session'))}${multiMachine ? ` · <label>Machine <select data-filter="machine"><option value="">All</option>${machines.map((m) => `<option value="${attr(m)}" ${filters.machine === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>` : ''}</p>
+<div class="table-wrap"><table class="sessions"><thead><tr><th scope="col">Session</th><th scope="col">State</th><th scope="col">Ticket</th><th scope="col">Started</th><th scope="col">Writes / coverage</th><th scope="col">Checkpoint</th><th scope="col">Indicators</th></tr></thead><tbody>${rows}</tbody></table></div>
 ${pager(page, pages, { prefix: 'sessions' })}
 </section>`;
 }

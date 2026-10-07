@@ -24,7 +24,7 @@ function cell(d, ticket, { now, tz, canEdit }) {
   if (!d) return '<td class="env-cell" data-env-state="none"><span class="muted" aria-label="none">-</span></td>';
   if (d.state === 'deployed') return `<td class="env-cell" data-env-state="done"><span class="chip good small">Done</span> ${d.deployed_at ? timeEl(d.deployed_at, now, tz) : ''}<div class="small">${esc(EVIDENCE_LABELS[d.evidence_kind ?? 'manual'] ?? d.evidence_kind)}${d.evidence ? `: ${esc(d.evidence)}` : ''}</div></td>`;
   if (d.state === 'waived') return `<td class="env-cell" data-env-state="n-a"><span class="chip small">N/A</span><div class="small muted">${esc(d.waiver_reason ?? '')}</div></td>`;
-  const actions = canEdit ? `<div class="env-actions"><button type="button" class="btn small" data-action="record-deployment" data-ticket="${attr(ticket.id)}" data-deployment="${attr(d.id)}">${icon('rocket')}Record</button><button type="button" class="btn small ghost" data-action="waive-deployment" data-ticket="${attr(ticket.id)}" data-deployment="${attr(d.id)}">N/A…</button></div>` : '';
+  const actions = canEdit ? `<div class="env-actions"><button type="button" class="btn small" data-action="record-deployment" data-ticket="${attr(ticket.id)}" data-deployment="${attr(d.id)}">${icon('rocket')}Record</button><button type="button" class="btn small ghost" data-action="waive-deployment" data-ticket="${attr(ticket.id)}" data-deployment="${attr(d.id)}" title="Mark this environment as not needed for this PR">Waive…</button></div>` : '';
   return `<td class="env-cell" data-env-state="pending"><span class="chip warning small">Pending</span>${actions}</td>`;
 }
 

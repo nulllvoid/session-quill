@@ -83,10 +83,21 @@ export function priorityMark(priority) {
   return `<span class="priority${strong ? ' strong' : ''}" aria-label="Priority ${attr(priority)} ${attr(PRIORITY_WORDS[priority] ?? '')}" title="${attr(PRIORITY_WORDS[priority] ?? '')}">${esc(priority)}${strong ? ` ${esc(PRIORITY_WORDS[priority])}` : ''}</span>`;
 }
 
+// The badge carries the full breakdown in its tooltip; the card shows only the leading reason.
 export function scoreBadge(entry) {
   const capped = entry.raw_score > 100;
-  const title = capped ? `Displayed score capped at 100; raw ${entry.raw_score} determines rank` : `Score ${entry.score}`;
-  return `<span class="score" title="${attr(title)}" aria-label="${attr(title)}">${esc(entry.score)}${capped ? '<span class="cap">+</span>' : ''}</span>`;
+  const lines = [`Priority score ${entry.score}${capped ? ` (capped at 100; raw ${entry.raw_score} determines rank)` : ''}`, ...(entry.reasons ?? [])];
+  const title = lines.join('\n');
+  return `<span class="score" title="${attr(title)}" aria-label="${attr(lines.join('. '))}"><span class="score-label">Score</span> ${esc(entry.score)}${capped ? '<span class="cap">+</span>' : ''}</span>`;
+}
+
+// "Merged PR awaiting deployment for 12 day(s): +20" -> the reason worth the most points, in words.
+export function leadingReason(entry) {
+  const reasons = entry.reasons ?? [];
+  if (!reasons.length) return null;
+  const points = (r) => { const m = /: \+(\d+)/.exec(r); return m ? Number(m[1]) : 0; };
+  const top = reasons.reduce((best, r) => (points(r) > points(best) ? r : best), reasons[0]);
+  return top.replace(/: \+\d+/, '').replace(/(\d+) day\(s\)/g, (_, n) => `${n} day${n === '1' ? '' : 's'}`);
 }
 
 export function sessionChip(state) {
@@ -127,7 +138,7 @@ export function ticketKey(ticket) {
 export function externalChip(ticket) {
   const link = externalLink(ticket);
   if (!link) return '';
-  const label = `${SYSTEM_LABELS[link.system] ?? 'Tracker'} ${link.key} · ${link.validation}`;
+  const label = `${SYSTEM_LABELS[link.system] ?? 'Tracker'} ${link.key} · ${String(link.validation).replace(/-/g, ' ')}`;
   return link.url
     ? ` <a class="chip external" data-validation="${attr(link.validation)}" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer">${icon('link')}${esc(label)}</a>`
     : ` <span class="chip external" data-validation="${attr(link.validation)}">${icon('link')}${esc(label)}</span>`;
@@ -242,7 +253,7 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   <div class="card-status">${categoryChip(ticket.category)}</div>
   ${variant !== 'compact' && ticket.next_action ? `<p class="next-strip"><span class="prompt" aria-hidden="true">&gt;</span><span><span class="eyebrow">Next action</span>${esc(ticket.next_action)}</span></p>` : ''}
   ${ticket.blocker ? `<p class="card-blocker">${icon('alert')}<span><span class="eyebrow">Blocker</span> ${esc(ticket.blocker)}</span></p>` : ''}
-  ${entry ? `<ul class="reasons">${entry.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}${(entry.limitations ?? []).map((l) => `<li class="limitation">${icon('alert')}${esc(l)}</li>`).join('')}</ul>${entry.raw_score > 100 ? `<p class="small muted">Displayed score capped at 100; raw ${esc(entry.raw_score)} determines the order.</p>` : ''}` : ''}
+  ${entry && (leadingReason(entry) || (entry.limitations ?? []).length) ? `<ul class="reasons">${leadingReason(entry) ? `<li>${esc(leadingReason(entry))}</li>` : ''}${(entry.limitations ?? []).map((l) => `<li class="limitation">${icon('alert')}${esc(l)}</li>`).join('')}</ul>` : ''}
   <footer class="card-meta">${meta.join('')}</footer>
   ${canHandoff ? `<div class="card-actions"><button type="button" class="btn small" data-action="handoff" data-ticket="${attr(ticket.id)}">${icon('play')}Handoff</button></div>` : ''}
 </article>`;

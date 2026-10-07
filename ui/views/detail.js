@@ -9,7 +9,8 @@ function trackerRemote(t, { now, tz }) {
   const ext = t.external;
   if (!ext) return '';
   const name = TRACKER_NAMES[ext.system] ?? 'the tracker';
-  if (ext.validation === 'not-found') return `<p class="small warning-text tracker-remote">${icon('alert')}${esc(ext.key)} was not found in ${esc(name)}. Check the key, or link the ticket to the right one.</p>`;
+  // A key the tracker did not find is shown once, as the chip in the key row, which relinks it.
+  if (ext.validation === 'not-found') return '';
   const r = ext.remote;
   if (!r) return '';
   const parts = [r.status, r.assignee, r.fix_versions && r.fix_versions.length ? `fix ${r.fix_versions.join(', ')}` : null].filter(Boolean).map((x) => esc(x));
@@ -21,7 +22,15 @@ function timelineItem(e, { now, tz, generation }) {
   return `<li class="timeline-item" data-kind="${attr(e.kind)}"><span class="tl-kind">${esc(kindLabel)}</span> ${timeEl(e.at, now, tz)} <span class="tl-text">${esc(e.text)}</span>${e.coverage !== 'complete' ? ` <span class="chip warning small" title="Change coverage">${esc(e.coverage)}</span>` : ''}${e.content_ref ? ` <button type="button" class="link small" data-action="load-content" data-hash="${attr(e.content_ref)}" data-generation="${attr(generation)}">Full text</button>` : ''}</li>`;
 }
 
-export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, loadedTicket = null }) {
+// The tracker chip; when the tracker could not find the key, the chip itself offers the relink.
+function trackerChip(t, readOnly) {
+  const ext = t.external;
+  if (!ext || ext.validation !== 'not-found' || readOnly) return externalChip(t);
+  const name = TRACKER_NAMES[ext.system] ?? 'tracker';
+  return ` <button type="button" class="chip external" data-validation="not-found" data-action="link-external" data-ticket="${attr(t.id)}" title="${attr(`${ext.key} was not found in ${name}. Link the ticket to the right key.`)}">${icon('alert')}${esc(`${ext.key} not found in ${name}`)} · Relink…</button>`;
+}
+
+export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, loadedTicket = null, editingNext = false }) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const ticket = normalizeTicket(rawTicket);
   const caps = snapshot.capabilities ?? {};
@@ -37,16 +46,22 @@ export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], conten
   const timeline = [...(t.timeline ?? [])].sort((a, b) => (a.at < b.at ? 1 : -1));
   const total = t.timeline_total ?? timeline.length;
 
-  const editNext = readOnly ? '' : `<form class="inline-edit" data-form="next-action" data-ticket="${attr(t.id)}" data-revision="${attr(t.revision)}">
-      <textarea id="next-action-${attr(t.id)}" name="next_action" rows="2" maxlength="2000" aria-label="Edit next action" placeholder="What should happen next? Enter submits, Shift+Enter for a new line, Escape cancels">${esc(t.next_action)}</textarea>
-      <div class="inline-actions"><button type="submit" class="btn small">Save</button><span class="small muted">Confirmed value stays until the worker applies the change.</span></div>
+  // A set next action reads as text with an Edit button; the editor opens on request, pre-filled.
+  // With none set, the editor is shown empty so the placeholder explains it.
+  const showEditor = !readOnly && (editingNext || !t.next_action);
+  const editNext = !showEditor ? '' : `<form class="inline-edit" data-form="next-action" data-ticket="${attr(t.id)}" data-revision="${attr(t.revision)}">
+      <textarea id="next-action-${attr(t.id)}" name="next_action" rows="2" maxlength="2000" aria-label="${t.next_action ? 'Edit next action' : 'Set next action'}" placeholder="What should happen next? Enter submits, Shift+Enter for a new line, Escape cancels">${esc(t.next_action)}</textarea>
+      <div class="inline-actions"><button type="submit" class="btn small">Save</button>${t.next_action ? '<button type="button" class="btn small ghost" data-action="cancel-next">Cancel</button>' : ''}<span class="small muted">Confirmed value stays until the worker applies the change.</span></div>
     </form>`;
+  const nextValue = t.next_action && !(showEditor && editingNext)
+    ? `<div class="next-value"><p class="prewrap confirmed-value">${esc(t.next_action)}</p>${readOnly ? '' : `<button type="button" class="btn small ghost" data-action="edit-next" data-ticket="${attr(t.id)}" aria-label="Edit next action">Edit</button>`}</div>`
+    : (readOnly && !t.next_action ? '<p class="muted small">None set.</p>' : '');
   const statusControls = readOnly ? '' : `<div class="status-controls"><label class="label" for="status-select-${attr(t.id)}">Change status</label> <select id="status-select-${attr(t.id)}" data-action="status-select" data-ticket="${attr(t.id)}" data-revision="${attr(t.revision)}">${STATUS_ORDER.map((s) => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${esc(STATUS_LABELS[s])}</option>`).join('')}</select>${caps.handoff && t.status !== 'done' && t.status !== 'blocked' ? ` <button type="button" class="btn small" data-action="handoff" data-ticket="${attr(t.id)}">${icon('play')}Handoff</button>` : ''}</div>`;
 
   return `<article class="detail" data-ticket="${attr(t.id)}" aria-labelledby="detail-title">
 <header class="detail-head">
-  <div class="detail-nav"><button type="button" class="btn icon-only" data-action="close-detail" aria-label="Close detail (Escape)">${icon('x')}</button><span class="detail-nav-keys" tabindex="0" data-action="detail-nav" aria-label="Record navigation: use Left and Right arrows while focused">${icon('chevron')}</span></div>
-  <div class="detail-keys">${ticketKey(t)}${(t.aliases ?? []).map((a) => ` <span class="muted small">alias ${esc(a)}</span>`).join('')}${externalChip(t)}${!readOnly && !t.external && !t.jira ? ` <button type="button" class="btn small ghost" data-action="link-external" data-ticket="${attr(t.id)}">${icon('link')}Link to external…</button>` : ''}</div>
+  <div class="detail-nav"><button type="button" class="btn icon-only" data-action="close-detail" aria-label="Close detail (Escape)">${icon('x')}</button><span class="detail-nav-keys" tabindex="0" data-action="detail-nav" aria-label="Record navigation: use Left and Right arrows while focused"><button type="button" class="btn small ghost icon-only prev" data-action="detail-prev" tabindex="-1" aria-label="Previous ticket">${icon('chevron')}</button><button type="button" class="btn small ghost icon-only" data-action="detail-next" tabindex="-1" aria-label="Next ticket">${icon('chevron')}</button></span></div>
+  <div class="detail-keys">${ticketKey(t)}${(t.aliases ?? []).map((a) => ` <span class="muted small">alias ${esc(a)}</span>`).join('')}${trackerChip(t, readOnly)}${!readOnly && !t.external && !t.jira ? ` <button type="button" class="btn small ghost" data-action="link-external" data-ticket="${attr(t.id)}">${icon('link')}Link to external…</button>` : ''}</div>
   <h2 id="detail-title">${esc(t.title)}</h2>
   ${trackerRemote(t, { now, tz })}
   <div class="detail-chips">${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} ${categoryChip(t.category)} ${priorityMark(t.priority)} <span class="muted small">${esc(t.project_name)}${repoName(snapshot, t.repo_id) ? ` · ${esc(repoName(snapshot, t.repo_id))}` : ''}</span>${readOnly ? ' <span class="chip" data-readonly="true">Read-only snapshot</span>' : ''}</div>
@@ -54,7 +69,7 @@ export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], conten
 </header>
 ${mine.length ? `<section class="detail-requests" aria-label="Pending edits">${mine.map((r) => requestFeedback(r, { now })).join('')}</section>` : ''}
 <section class="detail-section"><h3>Summary</h3>${t.summary ? `<p class="prewrap">${esc(t.summary)}</p>` : '<p class="muted small">No summary. Add one in the note\'s Summary section; it is preserved byte-for-byte.</p>'}</section>
-<section class="detail-section"><h3>Next action</h3>${t.next_action ? `<p class="prewrap confirmed-value">${esc(t.next_action)}</p>` : '<p class="muted small">None set.</p>'}${editNext}</section>
+<section class="detail-section"><h3>Next action</h3>${nextValue}${editNext}</section>
 <section class="detail-section"><h3>Status</h3><p>${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} <span class="muted small">source: ${esc(t.status_source)}</span></p>${t.blocker ? `<p class="card-blocker">${icon('alert')}<span class="label">Blocker</span> ${esc(t.blocker)}</p>` : ''}${t.due ? `<p>${icon('clock')}Due ${esc(t.due)}</p>` : ''}${statusControls}</section>
 <section class="detail-section"><h3>Timeline <span class="count">${esc(total)}</span></h3>${timeline.length ? `<ul class="timeline">${timeline.map((e) => timelineItem(e, { now, tz, generation: snapshot.generation_id })).join('')}</ul>${total > timeline.length ? `<button type="button" class="btn small" data-action="load-ticket" data-ticket="${attr(t.id)}" data-generation="${attr(snapshot.generation_id)}">Load all ${esc(total)} entries</button>` : ''}` : '<p class="muted small">No events yet.</p>'}</section>
 <section class="detail-section"><h3>Approved plans <span class="count">${esc(t.plans_count)}</span></h3>${t.plans.length ? t.plans.map((p) => `<details class="plan"><summary>${timeEl(p.approved_at, now, tz, { absolute: true })} · ${esc(p.provenance)}</summary><pre class="preview">${esc(p.preview)}</pre>${p.content_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(p.content_ref)}" data-generation="${attr(snapshot.generation_id)}">Full plan</button>${content[p.content_ref] ? `<pre class="full">${esc(content[p.content_ref])}</pre>` : ''}` : ''}</details>`).join('') : '<p class="muted small">No approved plans. Approve the latest checkpoint with <code>/session-quill:approve</code>.</p>'}</section>

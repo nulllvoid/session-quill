@@ -111,9 +111,13 @@ test('renderSessions shows state, binding, machine, writes, coverage, unpromoted
   assert.match(html, /200 sessions/);
   assert.match(html, /Unpromoted checkpoint/);
   assert.match(html, /Gate off/);
-  assert.match(html, /laptop/);
+  assert.doesNotMatch(html, /laptop/, 'a single machine is not repeated on every row');
   assert.match(html, /Live/);
   assert.match(html, /Page 1 of 4/);
+  assert.ok(html.indexOf('<th scope="col">Session</th>') < html.indexOf('<th scope="col">State</th>'), 'the human label leads');
+  assert.ok(html.indexOf('Fix things') < html.indexOf('data-state="live"'), 'the session title comes before its state');
+  const twoMachines = { ...s, sessions: s.sessions.map((x, i) => (i === 1 ? { ...x, machine_name: 'desktop' } : x)) };
+  assert.match(renderSessions(twoMachines, noFilters, { now: NOW, page: 0 }), /laptop/);
 });
 
 test('renderDeployments shows each ticket with outstanding work as a PR by environment matrix, oldest first; empty state', () => {
@@ -520,4 +524,62 @@ test('ticket detail shows what the tracker says (status, assignee, fix versions)
   assert.match(html, /tracker-remote"[\s\S]*?Jira[\s\S]*?In Review[\s\S]*?Sam Lee[\s\S]*?fix 1\.4/);
   t.external = { ...t.external, validation: 'not-found', remote: null, error: 'jira has no such issue' };
   assert.match(renderDetail(t, s, { now: NOW, pending: [], content: {} }), /PROJ-7 was not found in Jira/);
+});
+
+test('detail drawer: next action reads as text with Edit, the editor opens on request, and an unset one shows an empty editor', () => {
+  const s = snapshot();
+  const t = { ...s.tickets[1], next_action: 'Ship it' };
+  const view = renderDetail(t, s, { now: NOW, pending: [], content: {} });
+  assert.match(view, /confirmed-value">Ship it</);
+  assert.match(view, /data-action="edit-next"/);
+  assert.doesNotMatch(view, /<textarea[^>]*>Ship it<\/textarea>/, 'the value is not repeated in a pre-filled editor');
+  const editing = renderDetail(t, s, { now: NOW, pending: [], content: {}, editingNext: true });
+  assert.match(editing, /<textarea[^>]*>Ship it<\/textarea>/);
+  assert.doesNotMatch(editing, /confirmed-value/);
+  assert.match(editing, /data-action="cancel-next"/);
+  const unset = renderDetail({ ...t, next_action: '' }, s, { now: NOW, pending: [], content: {} });
+  assert.match(unset, /<textarea[^>]*placeholder="What should happen next\?[^"]*"><\/textarea>/);
+  assert.match(view, /data-action="detail-prev"/);
+  assert.match(view, /data-action="detail-next"/);
+});
+
+test('a tracker key that was not found is said once, as a chip that relinks', () => {
+  const s = snapshot();
+  const t = ticket(31, { key: 'ASKIT-1', external: { system: 'jira', key: 'ASKIT-1', url: null, validation: 'not-found' } });
+  const html = renderDetail(t, s, { now: NOW, pending: [], content: {} });
+  assert.equal((html.match(/not found/g) ?? []).length, 2, 'chip label and its tooltip only');
+  assert.match(html, /<button[^>]*class="chip external"[^>]*data-action="link-external"/);
+  assert.doesNotMatch(html, />[^<]*not-found/, 'no raw validation code in visible text');
+});
+
+test('provider errors collapse to one humanised chip; idle refresh has no status row', async () => {
+  const { humaniseProviderError } = await import('../../ui/views/header.js');
+  const s = snapshot();
+  s.meta = { ...s.meta, provider_health: [{ provider: 'github', error: 'gh: To get started with GitHub CLI, please run: gh auth login', last_success_at: null }, { provider: 'null', error: 'no PR provider configured for repository repo-a; evidence stays as last observed', last_success_at: null }] };
+  const html = renderHeader(s, { now: NOW, online: true, refresh: null, theme: 'light' });
+  assert.equal((html.match(/data-health="error"/g) ?? []).length, 1);
+  assert.match(html, /2 provider errors/);
+  assert.match(html, /GitHub is not signed in/);
+  assert.match(html, /No PR provider is set up for repo-a/);
+  assert.doesNotMatch(html, /Status: /);
+  assert.equal(humaniseProviderError('bitbucket', 'request failed; retry later'), 'Bitbucket: Request failed.');
+});
+
+test('pick next: one reason per card with the breakdown in the score tooltip; blocked collapses and groups by project', () => {
+  const s = snapshot();
+  const html = renderPickNext(s, noFilters, { now: NOW });
+  assert.match(html, /title="Priority score [^"]*Priority P1: \+25/);
+  assert.doesNotMatch(html, /<li>[^<]*: \+\d+<\/li>/, 'no point arithmetic on the card');
+  const many = snapshot();
+  for (let i = 0; i < 8; i += 1) {
+    many.tickets.push(ticket(40 + i, { status: 'blocked', blocker: `reason ${i}`, project_id: i % 2 ? 'p2' : 'demo', project_name: i % 2 ? 'Second' : 'Demo' }));
+  }
+  many.blocked = many.tickets.filter((x) => x.status === 'blocked').map((x) => ({ ticket_id: x.id, blocker: x.blocker }));
+  const collapsed = renderPickNext(many, noFilters, { now: NOW });
+  assert.match(collapsed, new RegExp(`Show all ${many.blocked.length}`));
+  assert.equal((collapsed.match(/class="blocker-text"/g) ?? []).length, 5);
+  const open = renderPickNext(many, noFilters, { now: NOW, blockedExpanded: true });
+  assert.equal((open.match(/class="blocker-text"/g) ?? []).length, many.blocked.filter((b) => b.blocker).length);
+  assert.match(open, /Show fewer/);
+  assert.match(open, /<h3>Second /, 'more than one project groups the list');
 });
