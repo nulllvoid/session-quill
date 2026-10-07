@@ -407,6 +407,7 @@ function handleAction(el) {
       submit({ kind: r.kind, target_id: r.target_id, expected_revision: targetRevision(r), payload: r.original }, { announceText: 'Reversal queued as a new revision-checked edit' });
       break;
     }
+    case 'undo-file-effect': submit({ kind: 'undo-file-effect', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff, effect_id: el.dataset.effect } }, { announceText: 'Undo queued; the file is restored within 10 seconds' }); break;
     case 'run-recipe': appState.dialog = { type: 'recipe-run', ticket: el.dataset.ticket, recipe: el.dataset.recipe, retryOf: el.dataset.retryOf ?? null }; render(); break;
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
@@ -548,7 +549,7 @@ function handleSubmit(form) {
     // Disabled boxes are not submitted: permissions the recipe requires come from the form itself.
     const required = form.dataset.requiresEdit === 'true';
     const permissions = {};
-    for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr']) permissions[k] = fd.get(k) === 'on';
+    for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files']) permissions[k] = fd.get(k) === 'on';
     if (required) { permissions.read_source = true; permissions.edit_source = true; }
     const payload = { recipe: form.dataset.recipe, note: String(fd.get('note') ?? '').trim(), permissions, branch: String(fd.get('branch') ?? '').trim() || null };
     closeDialog();

@@ -90,11 +90,15 @@ export function buildPrompt(handoff, ticket, { notes = [], repo = null, recipe =
     if (ticket.blocker) data.push(`Blocker: ${ticket.blocker}`);
   }
   data.push(...contextSections(ticket, inputs, ctx, notes));
+  if (Array.isArray(ctx.staged_files)) {
+    const lines = ctx.staged_files.map((f) => `- ${f.id}: ${f.path} — ${f.state === 'staged' ? `copy at ./${f.staged} (${f.size} bytes)` : f.state === 'missing' ? 'no longer exists' : `not available (${f.state})`}`);
+    data.push(`Attached files:\n${lines.join('\n')}`);
+  }
   const prUrl = (id) => { const p = (ticket.prs ?? []).find((x) => x.id === id); return p ? p.url : id; };
   if (inputs.has('prs')) data.push(`Pull requests:\n${(ticket.prs ?? []).length ? ticket.prs.map((x) => `- ${x.url} ${x.state}${x.merged_at ? ` merged ${x.merged_at}` : ''}`).join('\n') : '- (none)'}`);
   if (inputs.has('deployments')) data.push(`Deployment obligations:\n${(ticket.deployments ?? []).length ? ticket.deployments.map((d) => `- ${d.environment}: ${d.state}${d.deployed_at ? ` ${d.deployed_at}` : ''} for PR ${prUrl(d.pr_id)}`).join('\n') : '- (none)'}`);
   const task = recipe ? (render ? render(recipe) : recipe.body) : MODE_INSTRUCTIONS[handoff.mode] ?? MODE_INSTRUCTIONS.analyse;
-  const fields = [...['summary', ...outputs.filter((o) => o !== 'summary')].map((o) => OUTPUT_FIELDS[o]).filter(Boolean), ...QUALITY_FIELDS];
+  const fields = [...['summary', ...outputs.filter((o) => o !== 'summary')].map((o) => OUTPUT_FIELDS[o]).filter(Boolean), ...(handoff.mode === 'files' ? ['"delete_files": ["ids of attached files to delete, such as f1"]'] : []), ...QUALITY_FIELDS];
   const who = legacy
     ? `You are the Session Quill handoff agent for ticket ${ticket.key} (handoff ${handoff.id}, mode ${handoff.mode}).`
     : `You are the Session Quill agent running recipe "${recipe.name}" for ticket ${ticket.key} (run ${handoff.id}).`;
@@ -160,6 +164,14 @@ export function toolPermitted(tool, { mode, permissions = {} }) {
 function permissionLines(handoff, repo) {
   const p = handoff.permissions ?? {};
   const grants = Object.entries(p).filter(([, v]) => v).map(([k]) => k);
+  if (handoff.mode === 'files') {
+    return [
+      `Granted permissions for this run: ${grants.length ? grants.join(', ') : 'none (read the files only)'}.`,
+      `You work only on copies of the ticket's attached files, in ./files under your current directory. You cannot reach the originals or anything else; Quill applies your result to the originals afterwards and keeps what it replaces so the owner can undo it.`,
+      p.edit_files ? 'To change a file, edit its copy in ./files.' : 'Do not edit the copies: edits are not permitted for this run and would be discarded.',
+      p.delete_files ? 'To delete a file, list its id (such as f1) in "delete_files". Do not try to delete the copy yourself.' : 'Deleting files is not permitted for this run; leave "delete_files" empty.',
+    ];
+  }
   return [
     `Granted permissions for this run: ${grants.length ? grants.join(', ') : 'none (note-only analysis)'}. Anything not granted is forbidden: you must not read or edit source outside what is granted, must not commit, push, open pull requests, merge or deploy unless that exact permission is listed, and must never touch a default or protected branch.`,
     p.read_source ? `All file and command access is confined to your current working directory (an isolated checkout${repo ? ` of ${repo.display_name ?? repo.id}` : ''}). Do not access other paths. Use plain git log, git show, git diff and git status; options that write files, run programs or read outside the checkout (--output, --ext-diff, --textconv, --no-index), redirects and command substitution are refused.` : 'You have no source access. Work only from the notes below; do not attempt to read files or run commands.',
@@ -198,7 +210,16 @@ export function allowedToolsFor({ mode, permissions = {}, tools = null }) {
   return forRuntime({ allowed, disallowed: [...profile.disallowed, ...dropped] }, permissions);
 }
 
+// A files run (ADR 0015) reads, and with edit_files edits, only inside its sandbox, where the
+// staged copies are: path-scoped rules, no shell, no search across the disk, no network.
+const FILES_DENIED = ['Bash', 'PowerShell', 'Glob', 'Grep', 'LS', 'WebFetch', 'WebSearch', 'Task', 'Agent', 'NotebookEdit'];
+
 function profileTools({ mode, permissions = {} }) {
+  if (mode === 'files') {
+    const allowed = ['Read(./**)'];
+    if (permissions.edit_files) allowed.push('Edit(./**)', 'Write(./**)', 'MultiEdit(./**)');
+    return { allowed, disallowed: [...FILES_DENIED, ...(permissions.edit_files ? [] : ['Edit', 'Write', 'MultiEdit'])] };
+  }
   const allowed = [];
   const disallowed = [];
   if (!permissions.read_source) {
@@ -238,7 +259,7 @@ export function parseAgentResult(stdout, { outputs = null } = {}) {
     }
   } catch { /* plain text output */ }
   const blocks = [...text.matchAll(/```json\s*([\s\S]*?)```/g)];
-  const parsed = { summary: null, next_action: null, blocker: null, description: null, children: [], test_results: [], changed_files: [], deploy_evidence: [], comment_draft: null, confidence: null, sources: [], raw: text, is_error: isError, session_id: sessionId, problems: [] };
+  const parsed = { summary: null, next_action: null, blocker: null, description: null, delete_files: [], children: [], test_results: [], changed_files: [], deploy_evidence: [], comment_draft: null, confidence: null, sources: [], raw: text, is_error: isError, session_id: sessionId, problems: [] };
   if (!blocks.length) parsed.problems.push('the reply has no fenced ```json block');
   if (blocks.length) {
     try {
@@ -269,6 +290,7 @@ export function parseAgentResult(stdout, { outputs = null } = {}) {
         if (issues.length) parsed.problems.push(`children[${i}].description does not follow the format: ${issues.join('; ')}`);
         else if (parsed.children[i]) parsed.children[i].description = normalizeDescription(c.description);
       });
+      parsed.delete_files = Array.isArray(obj.delete_files) ? [...new Set(obj.delete_files.filter((x) => typeof x === 'string' && /^f\d{1,3}$/.test(x)))] : [];
       parsed.comment_draft = typeof obj.comment_draft === 'string' && obj.comment_draft.trim() ? obj.comment_draft.trim().slice(0, 4000) : null;
     } catch {
       parsed.problems.push('the ```json block is not a valid JSON object');

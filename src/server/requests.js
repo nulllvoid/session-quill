@@ -6,6 +6,7 @@ import { TrackerError } from '../lib/errors.js';
 import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
 import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
+import { attachedFiles, undoFileEffect } from '../handoff/files.js';
 import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
 import { scopeFor } from '../hooks/scope.js';
@@ -17,10 +18,10 @@ export const EDIT_DELAY_MS = 10_000;
 export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish'];
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
-const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion']);
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
-const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion']);
+const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect']);
 const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
@@ -76,6 +77,16 @@ export function resolveRecipe(recipes, payload, repoId) {
   if (!recipe) throw new TrackerError('recipe-unknown', `no recipe named ${name}`);
   if (recipe.error) throw new TrackerError('recipe-invalid', `recipe ${name} is invalid: ${recipe.error}`);
   return recipe;
+}
+
+// A change a file run made (ADR 0015), named by run and effect id, that has not been undone.
+function findFileEffect(state, ticket, payload) {
+  const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
+  if (!h || h.ticket_id !== ticket.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a run of the target ticket');
+  const effect = (h.file_effects ?? []).find((x) => x.id === payload.effect_id);
+  if (!effect) throw new TrackerError('effect-unknown', 'effect_id must name a file change of that run');
+  if (effect.undone_at) throw new TrackerError('effect-undone', 'this change was already undone');
+  return { h, effect };
 }
 
 function findSuggestion(state, ticket, payload) {
@@ -136,12 +147,17 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       normalized = { items: normalizeDeploymentItems(payload.items, target) };
       break;
     case 'handoff':
-      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, payload, target.repo_id) });
+      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, payload, target.repo_id), attachedFileCount: attachedFiles(target).length });
       break;
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
       const { h, sug } = findSuggestion(state, target, payload);
       normalized = { handoff_id: h.id, suggestion_id: sug.id };
+      break;
+    }
+    case 'undo-file-effect': {
+      const { h, effect } = findFileEffect(state, target, payload);
+      normalized = { handoff_id: h.id, effect_id: effect.id };
       break;
     }
     case 'handoff-cancel': {
@@ -323,7 +339,7 @@ export function evaluateRequest(worker, req) {
       let checked;
       try {
         recipe = resolveRecipe(catalogFor(worker), req.payload, ticket.repo_id);
-        checked = validateHandoffRequest({ ...req.payload, recipe: req.payload.recipe ? req.payload.recipe.name ?? req.payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe });
+        checked = validateHandoffRequest({ ...req.payload, recipe: req.payload.recipe ? req.payload.recipe.name ?? req.payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length });
       } catch (err) {
         return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
       }
@@ -360,6 +376,16 @@ export function evaluateRequest(worker, req) {
         return { outcome: 'failed', error: { code: err.code ?? 'suggestion-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
       }
       return { outcome: 'applied', mutation, result: { handoff_id: found.h.id, suggestion_id: found.sug.id, state: mutation.state } };
+    }
+    case 'undo-file-effect': {
+      // The restore happens here, once, when the request applies; the journal records its outcome.
+      try {
+        const { h, effect } = findFileEffect(state, ticket, req.payload);
+        undoFileEffect(effect);
+        return { outcome: 'applied', mutation: { type: 'file-effect-undo', handoff_id: h.id, effect_id: effect.id }, result: { path: effect.path, action: effect.action } };
+      } catch (err) {
+        return { outcome: 'failed', error: { code: err.code ?? 'undo-failed', message: err.message, retryable: false, current_revision: ticket.revision } };
+      }
     }
     case 'link-external': {
       const owner = keyOwner(state, req.payload.key);

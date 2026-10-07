@@ -2,9 +2,10 @@
 // (TRD §Handoff execution).
 import { TrackerError } from '../lib/errors.js';
 
-export const MODES = ['analyse', 'analyse-followups', 'attempt-fix'];
+// `files` (ADR 0015) works on a ticket's attached files, outside any repository.
+export const MODES = ['analyse', 'analyse-followups', 'attempt-fix', 'files'];
 export const NOTE_MAX = 280;
-const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr'];
+const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
 
 export function isProtectedBranch(branch, repo) {
   const protectedNames = new Set(['main', 'master', 'trunk', 'develop', repo && repo.default_branch].filter(Boolean));
@@ -13,7 +14,7 @@ export function isProtectedBranch(branch, repo) {
 
 // With a recipe (ADR 0008) the mode comes from the recipe and its frontmatter permissions are a
 // ceiling: a request may ask for less, never more.
-export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null } = {}) {
+export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null, attachedFileCount = null } = {}) {
   if (recipe && payload.mode !== undefined && payload.mode !== null && payload.recipe !== undefined && payload.mode !== recipe.mode) throw new TrackerError('mode-mismatch', `recipe ${recipe.name} runs in mode ${recipe.mode}`);
   const mode = recipe ? recipe.mode : payload.mode ?? 'analyse-followups';
   if (!MODES.includes(mode)) throw new TrackerError('mode-invalid', `handoff mode must be one of ${MODES.join(', ')}`);
@@ -42,6 +43,12 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   }
   if (permissions.open_draft_pr && !permissions.push_branch) throw new TrackerError('permission-dependency', 'open_draft_pr requires push_branch');
   if (permissions.open_draft_pr && !hasProvider) throw new TrackerError('provider-required', 'open_draft_pr requires a configured PR provider for the repository');
+  if ((permissions.edit_files || permissions.delete_files) && mode !== 'files') throw new TrackerError('permission-dependency', 'edit_files and delete_files are only meaningful for mode files');
+  if (mode === 'files') {
+    const repoAccess = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr'].filter((k) => permissions[k]);
+    if (repoAccess.length) throw new TrackerError('permission-dependency', `a files run works on staged copies of attached files and cannot use ${repoAccess.join(', ')}`);
+    if (attachedFileCount === 0) throw new TrackerError('files-required', 'this ticket has no attached files outside a repository for a files run to work on');
+  }
   if ((permissions.read_source || permissions.edit_source) && !repo) throw new TrackerError('repo-required', 'source access requires a registered repository on the owner machine');
   if (recipe) {
     return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}) };

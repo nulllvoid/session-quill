@@ -785,3 +785,8 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 .description dd { margin: 0; overflow-wrap: anywhere; }
 .description ul { margin: 0; padding-left: 18px; }
 @media (max-width: 480px) { .description { grid-template-columns: 1fr; gap: 2px; } .description dd { margin-bottom: 8px; } }
+
+/* File runs (ADR 0015): the files in reach, and what a run changed. */
+.run-files, .file-effects { margin: 4px 0; padding-left: 18px; }
+.run-files code, .file-effects code { overflow-wrap: anywhere; }
+.file-effects li { padding: 2px 0; }

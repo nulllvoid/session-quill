@@ -12,7 +12,7 @@ import { allowedToolsFor, toolPermitted } from '../handoff/runner.js';
 import { quillHome } from '../lib/paths.js';
 
 export const BUILTIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'recipes');
-export const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr'];
+export const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
 const PERMISSION_ALIASES = { push: 'push_branch', draft_pr: 'open_draft_pr' };
 // `work`, `related` and `history` (ADR 0013): files, commits and their diff; the parent, siblings
 // and children; and earlier runs on the ticket with the owner's decisions on their suggestions.
@@ -54,6 +54,8 @@ function permissionsFrom(raw, mode) {
   if (out.push_branch && !out.commit) throw new Error('push_branch requires commit');
   if (out.open_draft_pr && !out.push_branch) throw new Error('open_draft_pr requires push_branch');
   if (mode === 'attempt-fix' && !(out.read_source && out.edit_source)) throw new Error('mode attempt-fix requires read_source and edit_source');
+  if ((out.edit_files || out.delete_files) && mode !== 'files') throw new Error('edit_files and delete_files require mode files');
+  if (mode === 'files' && (out.read_source || out.edit_source || out.commit || out.push_branch || out.open_draft_pr)) throw new Error('mode files works on staged copies of attached files and cannot have repository permissions');
   return out;
 }
 
@@ -90,7 +92,8 @@ export function normalizeRecipe({ name, text, source, path: filePath = null }) {
       ...base, description: data.description.trim().slice(0, 300), mode, permissions, tools, timeout_min: timeout, inputs, outputs, self_check: data.self_check === true, body: body.trim(),
       // Only Quill's own handoff modes keep applying results directly; every other recipe suggests.
       legacy: source === 'builtin' && MODES.includes(name),
-      schedulable: mode !== 'attempt-fix',
+      // Changing files is never left to a schedule (ADR 0015), as fixes never are.
+      schedulable: mode !== 'attempt-fix' && mode !== 'files',
     };
   } catch (err) {
     return { ...base, description: '', mode: null, permissions: null, tools: null, timeout_min: null, inputs: [], outputs: [], self_check: false, body: '', legacy: false, schedulable: false, error: err.message };
