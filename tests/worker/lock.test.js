@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { acquireLock, lockEndpoint } from '../../src/worker/lock.js';
+import { acquireLock, lockEndpoint, MAX_SOCKET_PATH } from '../../src/worker/lock.js';
 
 const STORE = '11111111-1111-4111-8111-111111111111';
 const MACHINE = '22222222-2222-4222-8222-222222222222';
@@ -36,4 +36,14 @@ test('isLocked reports a live owner', async () => {
   assert.equal(await isLocked(STORE, MACHINE, env), true);
   await lock.release();
   assert.equal(await isLocked(STORE, MACHINE, env), false);
+});
+
+test('a socket path that would exceed the Unix limit falls back to a short one both sides agree on', { skip: process.platform === 'win32' && 'named pipes have no path limit' }, () => {
+  const deep = { QUILL_HOME: path.join(os.tmpdir(), 'x'.repeat(90)) };
+  const a = lockEndpoint('store', 'machine', deep);
+  assert.ok(Buffer.byteLength(a) <= MAX_SOCKET_PATH, a);
+  assert.equal(a, lockEndpoint('store', 'machine', deep), 'every caller computes the same endpoint');
+  assert.notEqual(a, lockEndpoint('other-store', 'machine', deep));
+  const shallow = lockEndpoint('store', 'machine', { QUILL_HOME: '/h' });
+  assert.ok(shallow.startsWith(path.resolve('/h')), 'a short home keeps its own run folder');
 });
