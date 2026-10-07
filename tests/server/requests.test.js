@@ -61,7 +61,7 @@ test('handoff permission rules', () => {
   assert.throws(() => validateHandoffRequest({ mode: 'attempt-fix', note: '', permissions: { read_source: true, edit_source: true, commit: true, push_branch: true, branch: 'main' } }, { repo }), (e) => e.code === 'branch-protected');
   assert.throws(() => validateHandoffRequest({ mode: 'attempt-fix', note: '', permissions: { read_source: true, edit_source: true, commit: true, push_branch: true, branch: 'feat/x', open_draft_pr: true } }, { repo }), (e) => e.code === 'provider-required');
   const ok = validateHandoffRequest({ mode: 'attempt-fix', note: 'fix it', permissions: { read_source: true, edit_source: true, commit: true, push_branch: true, branch: 'feat/x', open_draft_pr: true } }, { repo: { ...repo, provider: 'github' } });
-  assert.deepEqual(Object.keys(ok.permissions).sort(), ['commit', 'edit_source', 'open_draft_pr', 'push_branch', 'read_source']);
+  assert.deepEqual(Object.keys(ok.permissions).sort(), ['commit', 'delete_files', 'edit_files', 'edit_source', 'open_draft_pr', 'push_branch', 'read_source']);
   assert.equal(ok.branch, 'feat/x');
   const def = validateHandoffRequest({}, { repo });
   assert.equal(def.mode, 'analyse-followups');

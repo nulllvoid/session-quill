@@ -2,10 +2,11 @@
 import { loadContext, findTicketByKey, latestSnapshot } from '../context.js';
 import { createRecipeCatalog, PERMISSION_KEYS } from '../../agents/recipes.js';
 import { validateHandoffRequest } from '../../handoff/permissions.js';
+import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest } from './handoff.js';
 
-const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
+const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
 
@@ -67,8 +68,11 @@ async function run(ctx, io, args, flags) {
     commit: flags.commit === true,
     push_branch: typeof flags['push-branch'] === 'string',
     open_draft_pr: flags['draft-pr'] === true,
+    // File runs (ADR 0015): changing or deleting attached files is granted only by flag.
+    edit_files: flags['edit-files'] === true,
+    delete_files: flags['delete-files'] === true,
   };
-  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo, recipe });
+  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length });
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};

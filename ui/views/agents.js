@@ -14,7 +14,13 @@ export function effectiveRecipes(rawSnapshot, repoId) {
   return [...byName.values()];
 }
 
+// Attached files a files run may work on (ADR 0015): absolute paths recorded on the ticket.
+export function attachedFilePaths(ticket) {
+  return [...new Set((ticket.files_touched ?? []).map((f) => (typeof f === 'string' ? f : f.relative_path)).filter((p) => typeof p === 'string' && /^(?:[A-Za-z]:[\\/]|\/)/.test(p)))];
+}
+
 export function permissionSummary(p = {}) {
+  if (p.edit_files || p.delete_files) return `Works on copies of the ticket's attached files; may ${[p.edit_files ? 'edit' : null, p.delete_files ? 'delete' : null].filter(Boolean).join(' and ')} them, undoably`;
   const extra = [p.commit ? 'commit' : null, p.push_branch ? 'push a branch' : null, p.open_draft_pr ? 'open a draft PR' : null].filter(Boolean);
   const base = p.edit_source ? 'Edits source in an isolated checkout' : p.read_source ? 'Reads source' : 'Notes only';
   return extra.length ? `${base}; may ${extra.join(', ')}` : base;
@@ -65,10 +71,23 @@ function runQuality(h) {
   return parts.length || list ? `<div class="run-quality">${parts.join(' ')}${list}</div>` : '';
 }
 
+// What a files run changed (ADR 0015), each with an Undo while it still applies.
+function fileEffects(h, ticket, { canEdit, pending }) {
+  const effects = h.file_effects ?? [];
+  if (!effects.length) return '';
+  const rows = effects.map((e) => {
+    const busy = pending.find((r) => r.kind === 'undo-file-effect' && ACTIVE.has(r.state) && r.payload && r.payload.handoff_id === h.id && r.payload.effect_id === e.id);
+    const verb = e.action === 'deleted' ? 'Deleted' : 'Edited';
+    const control = e.undone_at ? ' <span class="chip small">Undone</span>' : busy ? ' <span class="chip request small" data-state="pending">Undo queued</span>' : canEdit ? ` <button type="button" class="btn small ghost" data-action="undo-file-effect" data-ticket="${attr(ticket.id)}" data-handoff="${attr(h.id)}" data-effect="${attr(e.id)}">${icon('undo')}Undo</button>` : '';
+    return `<li><span class="label">${esc(verb)}</span> <code>${esc(e.path)}</code>${control}</li>`;
+  }).join('');
+  return `<ul class="file-effects small">${rows}</ul>`;
+}
+
 function runItem(h, ticket, snapshot, { now, tz, caps, pending }) {
   const name = h.recipe ? h.recipe.name : h.mode;
   const suggestions = h.suggestions ?? [];
-  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong> <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${h.result_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(h.result_ref)}" data-generation="${attr(snapshot.generation_id)}">Partial/full result</button>` : ''}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
+  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong> <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${fileEffects(h, ticket, { canEdit: !!caps.edit_tickets, pending })}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${h.result_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(h.result_ref)}" data-generation="${attr(snapshot.generation_id)}">Partial/full result</button>` : ''}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
 }
 
 export function renderAgentsSection(ticket, rawSnapshot, { now, pending = [] } = {}) {
@@ -76,7 +95,9 @@ export function renderAgentsSection(ticket, rawSnapshot, { now, pending = [] } =
   const caps = snapshot.capabilities ?? {};
   const tz = snapshot.meta.timezone;
   const runs = (ticket.handoff_ids ?? []).map((id) => snapshot.handoffs.find((h) => h.id === id)).filter(Boolean);
-  const recipes = effectiveRecipes(snapshot, ticket.repo_id);
+  // A files recipe is offered only where there are attached files for it to work on.
+  const hasFiles = attachedFilePaths(ticket).length > 0;
+  const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => r.mode !== 'files' || hasFiles);
   const canRun = !!caps.handoff && ticket.status !== 'done';
   const busy = runs.some((h) => ['queued', 'running'].includes(h.state));
   return `<section class="detail-section agents"><h3>Agents <span class="count">${esc(runs.length)}</span></h3>
@@ -95,6 +116,12 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
   if (p.edit_source) boxes.push(`<label><input type="checkbox" name="edit_source" ${repo ? 'checked' : ''} disabled> Edit source in that checkout <span class="muted small">(required by this recipe)</span></label>`);
   if (p.commit) boxes.push('<label><input type="checkbox" name="commit"> Commit locally</label>');
   if (p.push_branch) boxes.push('<label><input type="checkbox" name="push_branch"> Push a branch <span class="muted small">(never a default or protected branch)</span></label><label class="indent">Branch <input type="text" name="branch" placeholder="feat/agent-..." pattern="[A-Za-z0-9._/-]+"></label>');
+  if (recipe.mode === 'files') {
+    const files = attachedFilePaths(ticket);
+    boxes.push(`<p class="small">Works on copies of these attached files only; nothing else on this computer is in reach:</p><ul class="small run-files">${files.map((f) => `<li><code>${esc(f)}</code></li>`).join('')}</ul>`);
+    if (p.edit_files) boxes.push('<label><input type="checkbox" name="edit_files"> Edit these files <span class="muted small">(the original of each changed file is kept, with Undo)</span></label>');
+    if (p.delete_files) boxes.push('<label><input type="checkbox" name="delete_files"> Delete these files <span class="muted small">(moved to the Quill trash folder, with Undo)</span></label>');
+  }
   // The worker refuses a draft PR without a PR provider, so the box is offered only when one is set.
   const provider = !!(repo && repo.provider);
   if (p.open_draft_pr) boxes.push(`<label><input type="checkbox" name="open_draft_pr"${provider ? '' : ' disabled'}> Open a draft PR${provider ? '' : ' <span class="muted small">(no PR provider configured for this repository)</span>'}</label>`);

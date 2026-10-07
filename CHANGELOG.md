@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- File runs ([ADR 0015](docs/decisions/0015-file-runs.md)): the built-in `file-task` recipe works on a repo-less ticket's attached files from the dashboard or `quill agent run file-task <KEY> --delete-files --edit-files`. The agent sees only staged copies through sandbox-scoped tools; the worker applies edits and deletions to originals unchanged since staging, keeps what it replaced or removed in a Quill trash folder, and offers Undo for each change. Edit and delete permissions are off by default and never scheduled; a run that changed files moves the ticket to Review.
+
 ## [0.3.0] - 2026-10-07
 
 ### Added

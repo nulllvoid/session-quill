@@ -7,7 +7,7 @@ import { submitRequest } from '../../src/server/requests.js';
 import { bootWorker, makeRepo } from '../handoff/helpers.js';
 
 const NOW = Date.parse('2026-10-03T08:00:00Z');
-const NONE = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
+const NONE = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false, edit_files: false, delete_files: false };
 
 test('agent schedules name a recipe, a ticket scope and a limit; bad ones are reported and skipped', () => {
   const { schedules, warnings } = normalizeSchedules({ schedule: [

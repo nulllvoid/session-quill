@@ -47,7 +47,7 @@ Usage: quill <command> [options]
   ui [--static <out.html>] [--open]         export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
   handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr]
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
-  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr]
+  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
   publish list [--json]                     publish [<name>] [--confirm]
   migrate --source <dir> [--profile <name|path.json>] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>

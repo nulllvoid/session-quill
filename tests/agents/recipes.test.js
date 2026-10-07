@@ -24,7 +24,7 @@ const recipe = (body, extra = '') => `---\nname: r\ndescription: test\n${extra}-
 test('recipes: the proposal example normalizes, with push and draft_pr as aliases', () => {
   const r = normalizeRecipe({ name: 'deploy-check', text: DEPLOY_CHECK, source: 'repo' });
   assert.equal(r.error, null);
-  assert.deepEqual(r.permissions, { read_source: true, edit_source: false, commit: false, push_branch: false, open_draft_pr: false });
+  assert.deepEqual(r.permissions, { read_source: true, edit_source: false, commit: false, push_branch: false, open_draft_pr: false, edit_files: false, delete_files: false });
   assert.deepEqual([r.mode, r.timeout_min, r.legacy, r.schedulable], ['analyse', 10, false, true]);
   assert.deepEqual(r.outputs, ['deploy_evidence', 'next_action']);
   assert.deepEqual(r.tools, ['Read', 'Grep', 'Bash(git log:*)']);
@@ -64,7 +64,8 @@ test('recipes: a read-only recipe may narrow its tools; git log is accepted in e
 
 test('recipes: built-ins ship the three handoff modes plus deploy-check and standup, all valid', () => {
   const { effective } = loadRecipes({ env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-rec-')) } });
-  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check', 'standup']);
+  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check', 'file-task', 'standup']);
+  assert.deepEqual([effective.get('file-task').mode, effective.get('file-task').schedulable], ['files', false], 'a files run is never scheduled');
   for (const r of effective.values()) assert.equal(r.error, null, r.name);
   assert.deepEqual(['analyse', 'analyse-followups', 'attempt-fix'].map((n) => effective.get(n).legacy), [true, true, true]);
   assert.equal(effective.get('deploy-check').legacy, false);

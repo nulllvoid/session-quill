@@ -8,6 +8,7 @@ import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
 import { buildPrompt, allowedToolsFor, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT } from './runner.js';
 import { gatherContext, gatherDiff } from './context.js';
+import { stageFiles, applyFileRun } from './files.js';
 import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
 import { recordResult, updateHandoff } from './results.js';
 import { handoffsDir, logsDir } from '../lib/paths.js';
@@ -108,6 +109,13 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (parsed.is_error) { recordResult(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
     const extras = await fixExtras(worker, current, { finalize: true });
     if (quality) extras.result_quality = { ...quality, problems: explicit ? [] : parsed.problems };
+    // Only a run that finished cleanly changes files; a failed, cancelled or timed-out one leaves
+    // every original untouched.
+    if (entry && entry.staged) {
+      const { effects, skipped } = applyFileRun({ env: worker.env, handoffId: h.id, sandbox: entry.cwd, files: entry.staged, permissions: current.permissions ?? {}, deleteIds: parsed.delete_files ?? [], now: worker.now() });
+      extras.file_effects = effects;
+      if (skipped.length) extras.uncertain_effects = [...(current.uncertain_effects ?? []), ...skipped];
+    }
     recordResult(worker, h.id, parsed, { state: extras.error ? 'failed' : 'done', error: extras.error ?? null, extra: extras });
   }
 
@@ -178,6 +186,13 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       cwd = path.join(handoffsDir(worker.env), 'sandbox', h.id);
       fs.mkdirSync(cwd, { recursive: true });
     }
+    // A files run (ADR 0015) gets copies of the ticket's attached files; the originals are never
+    // in reach of the agent.
+    let staged = null;
+    if (h.mode === 'files') {
+      try { staged = stageFiles(ticket, cwd); } catch (err) { return fail(worker, h, err.code ?? 'files-unavailable', err.message); }
+      updateHandoff(worker, h.id, { files: staged.map(({ id, path: p, state, size }) => ({ id, path: p, state, size })) });
+    }
     const logPath = path.join(logsDir(worker.env), 'handoffs', `${h.id}.log`);
     const started = worker.now();
     const deadlineAt = addMs(started, Math.min(deadlineMs, h.deadline_ms ?? Infinity));
@@ -190,6 +205,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const inputs = !recipe || recipe.legacy ? null : new Set(recipe.inputs);
     // The diff is read from the run's own checkout, so it exists only with source access.
     if (worktreePath && (!inputs || inputs.has('work'))) context.diff = await gatherDiff(worktreePath, context.commits);
+    if (staged) context.staged_files = staged;
     const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
     const tools = recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions });
     const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
@@ -200,7 +216,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     } catch (err) {
       return fail(worker, h, 'spawn-failed', err.message);
     }
-    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck: !!(recipe && recipe.self_check), sessionId: null, outputs: recipe ? recipe.outputs : null });
+    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck: !!(recipe && recipe.self_check), sessionId: null, outputs: recipe ? recipe.outputs : null, staged });
     run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 

@@ -87,8 +87,10 @@ function sanitizeSession(s, o) {
 }
 
 function sanitizeHandoff(h, o) {
-  const { worktree_path, result_ref, pr_url, result_summary, result_confidence, result_sources, result_quality, changed_files, log_path, patch_path, suggestions, ...rest } = h;
+  const { worktree_path, result_ref, pr_url, result_summary, result_confidence, result_sources, result_quality, changed_files, log_path, patch_path, suggestions, files, file_effects, ...rest } = h;
   const out = { ...rest };
+  // File runs (ADR 0015) name absolute paths and trash locations: never exported, only counted.
+  out.file_effects = (file_effects ?? []).length;
   // Agent output, like the result summary, is shared only when checkpoints are included.
   out.suggestions = o.includeCheckpoints ? (suggestions ?? []) : [];
   if (o.includeLinks) out.pr_url = pr_url ?? null;

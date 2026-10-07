@@ -573,6 +573,17 @@ function handleRequestTx(state, ev, result) {
         handoff.base_ticket_revision = ticket.revision;
       }
       result.handoffsChanged.add(m.handoff.id);
+    } else if (m.type === 'file-effect-undo') {
+      const h = state.handoffs.get(m.handoff_id);
+      const effect = h ? (h.file_effects ?? []).find((x) => x.id === m.effect_id) : null;
+      if (effect && !effect.undone_at) {
+        effect.undone_at = ev.occurred_at;
+        h.revision = (h.revision ?? 1) + 1;
+        h.updated_at = ev.occurred_at;
+        const ticket = state.tickets.get(h.ticket_id);
+        if (ticket) { ticket.timeline.push(timelineEntry(ev, 'handoff', `Undid: ${effect.action === 'deleted' ? 'restored' : 'reverted'} ${effect.path}`)); touch(state, ticket, ev, result); }
+        result.handoffsChanged.add(h.id);
+      }
     } else if (m.type === 'handoff-cancel') {
       const h = state.handoffs.get(m.handoff_id);
       if (h && h.state === 'queued') {
@@ -676,6 +687,15 @@ function handleHandoffTx(state, ev, result) {
         h.result_summary = `${h.result_summary ?? ''}\nSuggested blocker: ${item.text}`.trim();
       }
     }
+  }
+  // A files run's changes (ADR 0015) join the timeline, and a ticket it changed waits for the
+  // owner in review; it is never closed for them.
+  if (ticket && p.update && Array.isArray(p.update.file_effects) && p.update.file_effects.length) {
+    for (const [i, e] of p.update.file_effects.entries()) {
+      ticket.timeline.push(timelineEntry(ev, 'write', `${e.action === 'deleted' ? 'Deleted (moved to Quill trash)' : 'Edited'} ${e.path}`, { index: i }));
+    }
+    if (['todo', 'active'].includes(ticket.status)) applyTicketFields(state, ticket, { status: 'review' }, ev, 'evidence', result);
+    else touch(state, ticket, ev, result);
   }
   if (ticket && p.update && p.update.state && terminal.includes(p.update.state)) {
     ticket.timeline.push(timelineEntry(ev, 'handoff', `Handoff ${p.update.state}${h.error && h.error.code ? ` (${h.error.code})` : ''}`, { content_ref: h.result_ref ?? null }));

@@ -280,6 +280,8 @@ scope  = "deploy-pending"          # deploy-pending | active | review | blocked 
 
 Every run sees the ticket's Notes section, the full latest plan and checkpoint, the work so far (files, commits and, with source access, their diff), the tickets around it and what earlier runs suggested, as far as its `inputs` allow. Each reply says how confident it is and lists its sources; a reply that breaks the format gets one repair turn ([ADR 0013](docs/decisions/0013-recipe-context-and-reply-contract.md)).
 
+**Tickets without a repository** can run `file-task` on their attached files, for chores such as deleting a leftover script. The agent works on copies; Quill applies its edits and deletions to the originals, moves deleted files to a Quill trash folder, and shows each change on the run with **Undo**. Edit and delete permissions stay off until you tick them, nothing outside the ticket's attached files is in reach, and a run that changed files moves the ticket to Review for you to confirm ([ADR 0015](docs/decisions/0015-file-runs.md)).
+
 The run dialog shows what a recipe may do before you queue it; anything with a side effect stays off until you tick it, and scheduled runs only ever read. Results from your own recipes and `deploy-check` or `standup` arrive as suggestions on the ticket: accept or dismiss each one. A comment draft is never posted to your tracker.
 
 ## Example walkthrough
