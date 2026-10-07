@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-07
+
 ### Added
 
 - Run access levels ([ADR 0017](docs/decisions/0017-run-access-levels.md)): handoff and recipe runs use the owner's Claude Code settings and connectors by default (anything needing approval is refused; commit, push and draft PRs still need their permissions), or Full access with no permission checks, chosen per run in the dashboard or with `--access`. Schedules, file runs and runs that name no level keep the standard profile.
@@ -136,7 +138,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/nulllvoid/session-quill/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nulllvoid/session-quill/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/nulllvoid/session-quill/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nulllvoid/session-quill/compare/v0.2.0...v0.3.0
