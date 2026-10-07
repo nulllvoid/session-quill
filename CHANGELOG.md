@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Done when check ([ADR 0016](docs/decisions/0016-done-when-check.md)): after a turn that worked on a bound ticket without a repository, the Stop hook asks Claude once to check the ticket's Done when items and set it to Review when they are met. It never loops, repeats only after new work and 30 quiet minutes, and leaves repository tickets to their PR evidence.
+
 ## [0.4.0] - 2026-10-07
 
 ### Added
