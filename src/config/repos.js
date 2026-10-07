@@ -27,10 +27,35 @@ export function repoIdFromPath(dir) {
   return String(path.basename(path.resolve(dir))).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 40) || 'repo';
 }
 
+// One spelling per directory: symlinks (macOS /var is /private/var) and Windows short names
+// (RUNNER~1) resolve to the form git reports, so a repository registered from `git rev-parse`
+// matches a cwd given another way. For a path that does not exist yet, its nearest existing
+// ancestor is resolved and the rest kept as given.
+export function canonicalPath(p) {
+  const resolved = path.resolve(p);
+  let dir = resolved;
+  const rest = [];
+  let out = resolved;
+  for (;;) {
+    try { out = path.join(fs.realpathSync.native(dir), ...rest); break; } catch { /* try the parent */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    rest.unshift(path.basename(dir));
+    dir = parent;
+  }
+  return process.platform === 'win32' ? out.toLowerCase() : out;
+}
+
 export function samePath(a, b) {
   if (!a || !b) return false;
-  const norm = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
-  return norm(a) === norm(b);
+  return canonicalPath(a) === canonicalPath(b);
+}
+
+// True when `child` is `parent` or inside it, comparing canonical paths.
+export function isWithin(parent, child) {
+  const p = canonicalPath(parent);
+  const c = canonicalPath(child);
+  return c === p || c.startsWith(p.endsWith(path.sep) ? p : p + path.sep);
 }
 
 export function repoStatus(repo) {
