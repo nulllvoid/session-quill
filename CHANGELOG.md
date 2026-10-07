@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-07
+
 ### Added
 
 - File runs ([ADR 0015](docs/decisions/0015-file-runs.md)): the built-in `file-task` recipe works on a repo-less ticket's attached files from the dashboard or `quill agent run file-task <KEY> --delete-files --edit-files`. The agent sees only staged copies through sandbox-scoped tools; the worker applies edits and deletions to originals unchanged since staging, keeps what it replaced or removed in a Quill trash folder, and offers Undo for each change. Edit and delete permissions are off by default and never scheduled; a run that changed files moves the ticket to Review.
@@ -124,7 +126,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/nulllvoid/session-quill/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/nulllvoid/session-quill/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/nulllvoid/session-quill/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/nulllvoid/session-quill/releases/tag/v0.1.0

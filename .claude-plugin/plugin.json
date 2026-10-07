@@ -1,7 +1,7 @@
 {
   "name": "session-quill",
   "displayName": "Session Quill",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Ticket-bound Claude Code sessions: zero-command linking, a workflow gate, durable local capture to markdown or Obsidian, a loopback dashboard with pick-next ranking, agent recipes, per-environment deployments and Today, publishers and read-only tracker sync.",
   "author": {
     "name": "Shivam Shah"

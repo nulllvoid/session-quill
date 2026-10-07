@@ -86,7 +86,7 @@ export class Worker {
       approval_phrases_enabled: this.config.approval_phrases_enabled,
       projects: this.config.projects,
       repos: this.config.repos,
-      tracker_version: this.config.tracker_version ?? '0.3.0',
+      tracker_version: this.config.tracker_version ?? '0.4.0',
     });
     for (const ev of this.journal.read()) this.safeApply(ev, { replay: true });
     this.notesIndex = readJsonIfExists(path.join(stateDir(this.env), 'notes-index.json')) ?? {};
