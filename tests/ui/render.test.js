@@ -435,6 +435,10 @@ test('the recipe run dialog shows what the run may do and pre-selects only sourc
   assert.match(fix, /name="push_branch"(?! checked)/);
   assert.match(fix, /name="branch"/);
   assert.match(fix, /applies its next action and follow-ups directly/);
+  const hasProvider = !!(s.repos ?? []).find((r) => r.id === t.repo_id)?.provider;
+  assert.match(fix, hasProvider ? /name="open_draft_pr">/ : /name="open_draft_pr" disabled> Open a draft PR <span class="muted small">\(no PR provider configured/);
+  const other = { ...s, repos: (s.repos ?? []).map((r) => (r.id === t.repo_id ? { ...r, provider: hasProvider ? null : 'github' } : r)) };
+  assert.match(renderRecipeRunDialog(other.recipes.find((r) => r.name === 'attempt-fix'), t, other), hasProvider ? /name="open_draft_pr" disabled/ : /name="open_draft_pr">/, 'the box follows the repository provider');
   const standup = renderRecipeRunDialog(s.recipes.find((r) => r.source === 'repo' && r.name === 'standup'), t, s);
   assert.match(standup, /works from the ticket notes only/);
   assert.doesNotMatch(standup, /type="checkbox"/);

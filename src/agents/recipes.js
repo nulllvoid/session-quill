@@ -14,11 +14,13 @@ import { quillHome } from '../lib/paths.js';
 export const BUILTIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'recipes');
 export const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr'];
 const PERMISSION_ALIASES = { push: 'push_branch', draft_pr: 'open_draft_pr' };
-export const INPUTS = ['ticket', 'notes', 'prs', 'deployments'];
+// `work`, `related` and `history` (ADR 0013): files, commits and their diff; the parent, siblings
+// and children; and earlier runs on the ticket with the owner's decisions on their suggestions.
+export const INPUTS = ['ticket', 'notes', 'prs', 'deployments', 'work', 'related', 'history'];
 export const OUTPUTS = ['summary', 'next_action', 'blocker', 'followups', 'deploy_evidence', 'comment_draft', 'test_results', 'changed_files'];
 export const PLACEHOLDERS = ['ticket.key', 'ticket.url', 'ticket.title', 'ticket.status', 'ticket.next_action', 'note', 'prs', 'deployments', 'environments'];
 export const MAX_TIMEOUT_MIN = 20;
-export const FRONTMATTER_KEYS = ['name', 'description', 'mode', 'permissions', 'tools', 'timeout_min', 'inputs', 'outputs'];
+export const FRONTMATTER_KEYS = ['name', 'description', 'mode', 'permissions', 'tools', 'timeout_min', 'inputs', 'outputs', 'self_check'];
 // The input a placeholder reads from; a recipe must declare it (environments come from config).
 const PLACEHOLDER_INPUT = { 'ticket.key': 'ticket', 'ticket.url': 'ticket', 'ticket.title': 'ticket', 'ticket.status': 'ticket', 'ticket.next_action': 'ticket', note: 'ticket', prs: 'prs', deployments: 'deployments', environments: null };
 const NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
@@ -77,6 +79,7 @@ export function normalizeRecipe({ name, text, source, path: filePath = null }) {
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > MAX_TIMEOUT_MIN) throw new Error(`timeout_min must be a whole number from 1 to ${MAX_TIMEOUT_MIN}`);
     const inputs = list(data.inputs, 'inputs', INPUTS, INPUTS);
     const outputs = list(data.outputs, 'outputs', OUTPUTS, ['summary', 'next_action']);
+    if (data.self_check !== undefined && data.self_check !== null && typeof data.self_check !== 'boolean') throw new Error('self_check must be true or false');
     if (!body.trim()) throw new Error('the prompt body is empty');
     for (const m of body.matchAll(PLACEHOLDER_RE)) {
       if (!PLACEHOLDERS.includes(m[1])) throw new Error(`unknown placeholder {{${m[1]}}}; use ${PLACEHOLDERS.map((p) => `{{${p}}}`).join(', ')}`);
@@ -84,13 +87,13 @@ export function normalizeRecipe({ name, text, source, path: filePath = null }) {
       if (needs && !inputs.includes(needs)) throw new Error(`placeholder {{${m[1]}}} needs input ${needs}`);
     }
     return {
-      ...base, description: data.description.trim().slice(0, 300), mode, permissions, tools, timeout_min: timeout, inputs, outputs, body: body.trim(),
+      ...base, description: data.description.trim().slice(0, 300), mode, permissions, tools, timeout_min: timeout, inputs, outputs, self_check: data.self_check === true, body: body.trim(),
       // Only Quill's own handoff modes keep applying results directly; every other recipe suggests.
       legacy: source === 'builtin' && MODES.includes(name),
       schedulable: mode !== 'attempt-fix',
     };
   } catch (err) {
-    return { ...base, description: '', mode: null, permissions: null, tools: null, timeout_min: null, inputs: [], outputs: [], body: '', legacy: false, schedulable: false, error: err.message };
+    return { ...base, description: '', mode: null, permissions: null, tools: null, timeout_min: null, inputs: [], outputs: [], self_check: false, body: '', legacy: false, schedulable: false, error: err.message };
   }
 }
 
@@ -181,7 +184,7 @@ export function renderRecipe(recipe, { ticket = {}, url = null, note = '', prs =
 function publicEntry(r, repoId) {
   return {
     name: r.name, description: r.description, source: r.source, repo_id: repoId, hash: r.hash, error: r.error, mode: r.mode, permissions: r.permissions,
-    tools: r.tools, timeout_min: r.timeout_min, inputs: r.inputs, outputs: r.outputs, legacy: r.legacy, schedulable: r.schedulable,
+    tools: r.tools, timeout_min: r.timeout_min, inputs: r.inputs, outputs: r.outputs, self_check: r.self_check, legacy: r.legacy, schedulable: r.schedulable,
     overridden_by: r.overridden_by ?? null, preview: r.body ? r.body.slice(0, 600) : '',
   };
 }

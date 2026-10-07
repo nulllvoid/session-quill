@@ -25,7 +25,7 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
   if (!suggesting && state === 'done' && result.blocker) items.push({ type: 'blocker', text: result.blocker });
   let result_ref = h.result_ref ?? null;
   if (result && (result.raw || result.summary)) {
-    try { result_ref = putBlob(JSON.stringify({ summary: result.summary, next_action: result.next_action, blocker: result.blocker, children: result.children, deploy_evidence: result.deploy_evidence, comment_draft: result.comment_draft, test_results: result.test_results, changed_files: result.changed_files, raw: result.raw ?? null }, null, 2), worker.env).hash; } catch { /* keep previous */ }
+    try { result_ref = putBlob(JSON.stringify({ summary: result.summary, next_action: result.next_action, blocker: result.blocker, children: result.children, deploy_evidence: result.deploy_evidence, comment_draft: result.comment_draft, test_results: result.test_results, changed_files: result.changed_files, confidence: result.confidence ?? null, sources: result.sources ?? [], raw: result.raw ?? null }, null, 2), worker.env).hash; } catch { /* keep previous */ }
   }
   const update = {
     state,
@@ -33,6 +33,9 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
     error,
     result_ref,
     result_summary: result && result.summary ? result.summary : h.result_summary ?? null,
+    // How sure the agent is and what it relied on (ADR 0013), shown beside the summary.
+    result_confidence: result && result.confidence ? result.confidence : h.result_confidence ?? null,
+    result_sources: result && Array.isArray(result.sources) && result.sources.length ? result.sources : h.result_sources ?? [],
     test_results: result && result.test_results && result.test_results.length ? result.test_results : h.test_results ?? [],
     changed_files: extra.changed_files ?? (result && result.changed_files && result.changed_files.length ? result.changed_files : h.changed_files ?? []),
     ...extra,

@@ -11,6 +11,8 @@ import { loadUserConfig } from '../../src/config/config.js';
 import { runDir } from '../../src/lib/paths.js';
 import { writeJsonAtomic } from '../../src/lib/atomic-fs.js';
 import { isLocked } from '../../src/worker/lock.js';
+import { samePath } from '../../src/config/repos.js';
+import { scopeFor } from '../../src/hooks/scope.js';
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quill-onboard-'));
@@ -33,7 +35,7 @@ test('fresh enable privately registers the git root, captures this session, and 
   assert.equal(ctx.config.store_path, path.join(fx.env.QUILL_HOME, 'store'));
   assert.equal(fs.existsSync(path.join(fx.repo, '.quill.toml')), false);
   assert.equal(fs.existsSync(path.join(sub, '.quill.toml')), false);
-  assert.equal(ctx.config.repos['sample-app'].canonical_path, fx.repo);
+  assert.ok(samePath(ctx.config.repos['sample-app'].canonical_path, fx.repo), 'the git root is registered, in whatever spelling git reports');
   assert.equal(ctx.config.gate.mode, 'nudge');
   const pid = workerStatus(ctx).pid;
   const again = await cli(['start', '--repo', fx.repo], fx.env);
@@ -151,9 +153,25 @@ test('dashboard attaches the current session and repository to an existing store
   const result = await cli(['ui', '--repo', other, '--session', 'dashboard-session', '--no-open'], fx.env);
   assert.equal(result.code, 0, result.err);
   const ctx = loadContext(fx.env);
-  assert.equal(ctx.config.repos['dashboard-app'].canonical_path, other);
+  assert.ok(samePath(ctx.config.repos['dashboard-app'].canonical_path, other));
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline && !latestSnapshot(ctx)?.sessions.some((s) => s.host_session_id === 'dashboard-session')) await new Promise((r) => setTimeout(r, 100));
   assert.ok(latestSnapshot(ctx).sessions.some((s) => s.host_session_id === 'dashboard-session'));
   assert.equal(fs.existsSync(path.join(other, '.quill.toml')), false);
+});
+
+// macOS reports /var temp folders as /private/var and Windows CI as RUNNER~1; a link reproduces
+// both here: the repository is registered under one spelling and used under another.
+test('a repository reached through a link or another spelling of its path keeps its scope and defaults', async (t) => {
+  const fx = fixture(); t.after(() => stop(fx));
+  const link = path.join(fx.root, 'linked-app');
+  fs.symlinkSync(fx.repo, link, process.platform === 'win32' ? 'junction' : 'dir');
+  fs.writeFileSync(path.join(fx.repo, '.quill.toml'), '[gate]\nmode = "strict"\n');
+  assert.equal((await cli(['start', '--repo', fx.repo], fx.env)).code, 0);
+  const ctx = loadContext(fx.env);
+  assert.equal(effectiveDefaults(ctx, path.join(link, 'src'), {}).repo_id, 'sample-app');
+  const scope = scopeFor({ gate_mode: 'nudge', repos: [{ path: ctx.config.repos['sample-app'].canonical_path, repo_id: 'sample-app', gate_mode: 'strict' }] }, path.join(link, 'src'));
+  assert.deepEqual([scope.repo_id, scope.gate_mode], ['sample-app', 'strict']);
+  const hook = await cli(['hook', 'PreToolUse'], fx.env, { stdin: JSON.stringify({ session_id: 'linked-session', tool_name: 'Edit', cwd: link, tool_input: { file_path: 'x.js' } }) });
+  assert.match(hook.out, /deny/, 'the strict gate applies through the link');
 });

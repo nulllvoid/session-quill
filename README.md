@@ -246,7 +246,9 @@ mode: analyse                      # analyse | analyse-followups | attempt-fix
 permissions: { read_source: true } # the most a run may get
 tools: [Read, Grep, "Bash(git log:*)"]
 timeout_min: 10
+inputs: [ticket, prs, deployments, work]   # also notes, related, history; omit for all
 outputs: [summary, deploy_evidence, next_action]
+self_check: true                   # verify each claim against its source before finishing
 ---
 For {{ticket.key}} ({{ticket.url}}): for each merged PR {{prs}}, find the deployment evidence...
 ```
@@ -261,6 +263,8 @@ cron   = "0 11 * * 1-5"
 recipe = "deploy-check"
 scope  = "deploy-pending"          # deploy-pending | active | review | blocked | open
 ```
+
+Every run sees the ticket's Notes section, the full latest plan and checkpoint, the work so far (files, commits and, with source access, their diff), the tickets around it and what earlier runs suggested, as far as its `inputs` allow. Each reply says how confident it is and lists its sources; a reply that breaks the format gets one repair turn ([ADR 0013](docs/decisions/0013-recipe-context-and-reply-contract.md)).
 
 The run dialog shows what a recipe may do before you queue it; anything with a side effect stays off until you tick it, and scheduled runs only ever read. Results from your own recipes and `deploy-check` or `standup` arrive as suggestions on the ticket: accept or dismiss each one. A comment draft is never posted to your tracker.
 
@@ -309,7 +313,7 @@ Reports Node, Git and Claude versions, store ownership (copies on other machines
 - No telemetry. Hooks capture tool metadata and selected assistant content, not full prompts, environments or command output.
 - The gate covers tool calls delivered to its hooks. External processes, disabled hooks and host crashes are outside its guarantee, and a valid binding never bypasses normal Claude Code permissions.
 - Exports are copies: they do not update and cannot be revoked after you share them.
-- Handoffs use your configured model provider; selected ticket content leaves the machine when you queue one.
+- Handoffs use your configured model provider; selected ticket content leaves the machine when you queue one. That includes the ticket's Notes section, its full latest plan and checkpoint, its earlier run summaries and, with source access, the diff of its commits.
 - An **attempt-fix** handoff runs the repository's own tests inside the isolated worktree, which means it executes repository code with your user account. Granting `edit_source` is granting that. Push and draft-PR permissions are enforced by removing provider tokens and disabling git prompts from the agent's environment unless you grant them, plus the explicit tool allow-list; treat them as policy you can audit in the handoff log, not as a sandbox. Read-only git commands go through Claude Code's own read-only check instead of an allow rule, so options that write files or run programs (`git log --output=…`, `--ext-diff`) are refused. Programs you configured yourself in git config, such as `diff.external`, still run. Details are in [TRD §Handoff execution](docs/TRD.md#handoff-execution).
 - Plan mode: the gate identifies a session's plan file by its first `Write` of a Markdown file directly inside `~/.claude/plans` (the host does not report the path). See [ADR 0004](docs/decisions/0004-plan-path-first-claim.md).
 

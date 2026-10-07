@@ -212,3 +212,37 @@ test('hook adapter attributes a handoff agent session to the handoff ticket inst
   assert.equal(bind.payload.ticket_id, T1);
   assert.equal(bind.payload.handoff_id, 'h-123');
 });
+
+test('activity on the ticket during a run, such as the agent\'s own tool calls, does not block its next action; an owner edit of the next action still does', async () => {
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '300' } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(40), { target_id: T1, expected_revision: t.revision, payload: analyse });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(40)).result.handoff_id;
+    assert.equal(b.w.state.handoffs.get(hid).base_next_action, '');
+    // Stand-ins for what the agent's hooked tool calls and checkpoints do: other fields change, the revision moves.
+    b.w.emit('ticket-update', { ticket_id: T1, fields: { priority: 'P1' }, source: 'manual' });
+    b.w.emit('ticket-update', { ticket_id: T1, fields: { summary: 'updated while the run worked' }, source: 'manual' });
+    assert.notEqual(b.w.state.tickets.get(T1).revision, b.w.state.handoffs.get(hid).base_ticket_revision);
+    const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'done' ? h : null; });
+    assert.equal(b.w.state.tickets.get(T1).next_action, 'Use fake timers in the retry tests', 'the run\'s next action is applied');
+    assert.equal(b.w.state.tickets.get(T1).priority, 'P1', 'and the other edits remain');
+    assert.ok(!(done.uncertain_effects ?? []).some((u) => /next_action/.test(u)));
+  } finally { await b.w.stop(); }
+});
+
+test('a run journalled before base_next_action existed keeps the revision check', async () => {
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '300' } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(41), { target_id: T1, expected_revision: t.revision, payload: analyse });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(41)).result.handoff_id;
+    delete b.w.state.handoffs.get(hid).base_next_action; // as an older journal records it
+    b.w.emit('ticket-update', { ticket_id: T1, fields: { priority: 'P1' }, source: 'manual' });
+    const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'done' ? h : null; });
+    assert.equal(b.w.state.tickets.get(T1).next_action, '');
+    assert.ok(done.uncertain_effects.some((u) => /next_action suggestion conflicted/.test(u)));
+  } finally { await b.w.stop(); }
+});

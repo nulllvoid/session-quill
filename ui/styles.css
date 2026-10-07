@@ -769,3 +769,12 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 .session-title { font-weight: 500; overflow-wrap: anywhere; }
 .inbox-title { overflow-wrap: anywhere; }
 .blocked-list li.blocked-group { padding: 0; background: none; box-shadow: none; border: 0; }
+
+/* Agent runs: confidence, checks and sources beside the summary (ADR 0013). */
+.run-quality { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0; }
+.chip[data-confidence="high"] { color: var(--good); }
+.chip[data-confidence="low"] { color: var(--warning); }
+.run-quality .sources { flex-basis: 100%; }
+.run-quality .sources summary { cursor: pointer; color: var(--text-muted); }
+.run-quality .sources ul { margin: 4px 0 0; padding-left: 16px; }
+.run-quality .sources code { overflow-wrap: anywhere; }

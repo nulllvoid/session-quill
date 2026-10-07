@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadUserConfig, loadRepoConfig, resolveConfig } from '../config/config.js';
+import { canonicalPath, isWithin } from '../config/repos.js';
 import { loadStoreMeta, ensureMachineId } from '../config/store.js';
 import { makeEvent } from '../core/events.js';
 import { writeIngress } from '../core/ingress.js';
@@ -134,11 +135,9 @@ export function findTicketByKey(ctx, key) {
 
 export function effectiveDefaults(ctx, cwd, flags) {
   const repo = loadRepoConfig(cwd);
-  const registered = Object.entries(ctx.config.repos ?? {}).filter(([, r]) => {
-    if (!r.canonical_path) return false;
-    const relative = path.relative(r.canonical_path, cwd);
-    return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
-  }).sort((a, b) => b[1].canonical_path.length - a[1].canonical_path.length)[0];
+  const registered = Object.entries(ctx.config.repos ?? {})
+    .filter(([, r]) => r.canonical_path && isWithin(r.canonical_path, cwd))
+    .sort((a, b) => canonicalPath(b[1].canonical_path).length - canonicalPath(a[1].canonical_path).length)[0];
   const defaults = registered ? { project_id: registered[1].project_id, repo_id: registered[0] } : {};
   return resolveConfig({ cli: { category: flags.category, project_id: flags.project, repo_id: flags.repo, priority: flags.priority }, repo: { ...defaults, ...repo }, user: ctx.config });
 }

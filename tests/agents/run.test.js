@@ -165,3 +165,67 @@ test('exports carry recipe suggestions only when checkpoints are included, like 
   const full = sanitizeSnapshot(snap, { fields: ['key', 'title', 'status'], includeCheckpoints: true });
   assert.equal(full.handoffs[0].suggestions[0].text, 'internal draft text');
 });
+
+test('a reply without its JSON block gets one repair turn in the same session, and the run says so', async () => {
+  const capture2 = path.join(makeRepo().dir, '..', `capture-${randomUUID()}.json`);
+  const { b: b2 } = await boot({ fakeEnv: { FAKE_CLAUDE_MODE: 'malformed', FAKE_CLAUDE_RESULT: JSON.stringify({ ...RESULT, confidence: 'low', sources: ['deploy/values.yaml'] }), FAKE_CLAUDE_CAPTURE: capture2 } });
+  try {
+    const t = b2.ticket(T1, 'PROJ-8');
+    const h = await runToDone(b2, RID(20), { recipe: 'standup', note: '', permissions: NONE }, t);
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.equal(h.result_summary, RESULT.summary, 'the repaired reply is the result');
+    assert.deepEqual([h.result_quality.repaired, h.result_quality.problems], [true, []]);
+    assert.deepEqual([h.result_confidence, h.result_sources], ['low', ['deploy/values.yaml']]);
+    const turns = fs.readFileSync(`${capture2}.resume`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.equal(turns.length, 1, 'standup has no self-check, so only the repair turn ran');
+    assert.match(turns[0].prompt, /no fenced ```json block/);
+    assert.equal(turns[0].args[turns[0].args.indexOf('--resume') + 1], 'fake-session');
+  } finally { await b2.w.stop(); }
+});
+
+test('a repair that still breaks the contract leaves the first reply and records the problems', async () => {
+  const { b } = await boot({ fakeEnv: { FAKE_CLAUDE_MODE: 'malformed', FAKE_CLAUDE_RESUME_RESULT: 'malformed' } });
+  try {
+    const t = b.ticket(T1, 'PROJ-9');
+    const h = await runToDone(b, RID(21), { recipe: 'standup', note: '', permissions: NONE }, t);
+    assert.equal(h.state, 'done');
+    assert.equal(h.result_summary, null);
+    assert.equal(h.result_quality.repaired, false);
+    assert.match(h.result_quality.problems.join(' '), /no fenced/);
+    assert.deepEqual(h.suggestions, []);
+  } finally { await b.w.stop(); }
+});
+
+test('a self-checking recipe verifies its reply in a read-only follow-up turn and keeps the checked answer', async () => {
+  const checked = { ...RESULT, summary: 'Checked: production has the v1.2 tag.', confidence: 'high', sources: ['deploy/values.yaml@3f2a1c9'] };
+  const repo = makeRepo();
+  const capture = path.join(repo.dir, '..', `capture-${randomUUID()}.json`);
+  const b = await bootWorker({ repo, runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_RESULT: JSON.stringify(RESULT), FAKE_CLAUDE_RESUME_RESULT: JSON.stringify(checked), FAKE_CLAUDE_CAPTURE: capture } });
+  try {
+    const t = b.ticket(T1, 'PROJ-10');
+    const h = await runToDone(b, RID(22), { recipe: 'deploy-check', note: '', permissions: { ...NONE, read_source: true } }, t);
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.deepEqual([h.result_quality.self_checked, h.result_quality.repaired], [true, false]);
+    assert.equal(h.result_summary, checked.summary);
+    assert.equal(h.result_confidence, 'high');
+    const [turn] = fs.readFileSync(`${capture}.resume`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.match(turn.prompt, /check your answer/i);
+    const denied = turn.args.slice(turn.args.indexOf('--disallowedTools') + 1);
+    assert.ok(denied.includes('Edit') && denied.includes('Write'), 'the self-check never edits');
+  } finally { await b.w.stop(); }
+});
+
+test('run detail shows confidence, checks and sources; exports keep sources only with checkpoints', async () => {
+  const { renderAgentsSection } = await import('../../ui/views/agents.js');
+  const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
+  const h = { id: 'h9', ticket_id: T1, state: 'done', mode: 'analyse', recipe: { name: 'deploy-check', source: 'builtin' }, legacy: false, requested_at: '2026-10-02T08:00:00Z', result_summary: 'ok', result_confidence: 'low', result_sources: ['deploy/values.yaml@3f2a1c9'], result_quality: { problems: [], repaired: true, self_checked: true }, suggestions: [] };
+  const ticket = { id: T1, key: 'PROJ-1', title: 'T', status: 'active', project_id: 'demo', repo_id: null, handoff_ids: ['h9'], tags: [], timeline: [], prs: [], deployments: [] };
+  const snap = { generation_id: 'g', tickets: [ticket], handoffs: [h], recipes: [], capabilities: { read: true, handoff: true, edit_tickets: true }, meta: { timezone: 'UTC' } };
+  const html = renderAgentsSection(ticket, snap, { now: '2026-10-02T09:00:00Z' });
+  for (const re of [/Low confidence/, /Self-checked/, /Repaired reply/, /1 source</, /deploy\/values\.yaml@3f2a1c9/]) assert.match(html, re);
+  const exported = sanitizeSnapshot({ ...snap, sessions: [], checkpoints: [] }, { fields: ['key', 'title', 'status'] });
+  assert.equal(JSON.stringify(exported.handoffs).includes('values.yaml'), false);
+  assert.equal('result_quality' in exported.handoffs[0], false);
+  const withCp = sanitizeSnapshot({ ...snap, sessions: [], checkpoints: [] }, { fields: ['key', 'title', 'status'], includeCheckpoints: true });
+  assert.deepEqual([withCp.handoffs[0].result_confidence, withCp.handoffs[0].result_sources], ['low', ['deploy/values.yaml@3f2a1c9']]);
+});
