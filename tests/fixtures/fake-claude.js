@@ -31,7 +31,8 @@ function wrap(text) {
 function run() {
   const capture = process.env.FAKE_CLAUDE_CAPTURE;
   if (capture && resumed) fs.appendFileSync(`${capture}.resume`, `${JSON.stringify({ prompt, args })}\n`);
-  else if (capture) fs.writeFileSync(capture, JSON.stringify({ prompt, args }));
+  // Whether a provider token reached the agent, for credential tests; never its value.
+  else if (capture) fs.writeFileSync(capture, JSON.stringify({ prompt, args, gh_token: !!process.env.GH_TOKEN }));
   process.stderr.write(`fake-claude cwd=${process.cwd()} args=${args.join(' ')}\n`);
   setTimeout(() => {
     if (process.env.FAKE_CLAUDE_EDIT && !resumed) {

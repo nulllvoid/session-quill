@@ -47,7 +47,10 @@ async function queue(ctx, io, args, flags) {
     push_branch: typeof flags['push-branch'] === 'string',
     open_draft_pr: flags['draft-pr'] === true,
   };
-  const payload = validateHandoffRequest({ mode, note: flags.note ?? '', permissions, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo });
+  // Runs from the terminal use the owner's Claude Code settings unless --access says otherwise (ADR 0017).
+  const access = typeof flags.access === 'string' ? flags.access : 'settings';
+  const payload = validateHandoffRequest({ mode, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo });
+  if (access === 'full') io.println('! Full access: this run skips every permission check and can run any command, use connectors and push with your credentials.');
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};

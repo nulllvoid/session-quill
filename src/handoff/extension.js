@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
-import { buildPrompt, allowedToolsFor, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT } from './runner.js';
+import { buildPrompt, allowedToolsFor, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT } from './runner.js';
 import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
 import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
@@ -36,10 +36,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
 
   // A follow-up turn in the same runtime session. It is tracked like the first turn, so the
   // deadline and cancellation stop it too; null means it did not finish cleanly.
-  async function followUp(entry, prompt, { tools, maxTurns }) {
+  async function followUp(entry, prompt, { tools, maxTurns, permissionMode = entry.permissionMode }) {
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, model, resume: entry.sessionId, maxTurns });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, model, resume: entry.sessionId, maxTurns, permissionMode, keepCredentials: entry.keepCredentials });
     } catch {
       return null;
     }
@@ -74,7 +74,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (entry.selfCheck && !parsed.problems.length && !entry.reason && timeLeft()) {
       // The check re-reads sources; it never edits, whatever the run was allowed to do.
       const readOnly = allowedToolsFor({ mode: 'analyse', permissions: { read_source: !!entry.permissions.read_source } });
-      const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: 12 });
+      const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: 12, permissionMode: 'dontAsk' });
       const checked = next ? parseAgentResult(next.stdout, parseOpts) : null;
       if (checked && !checked.is_error && !checked.problems.length) {
         outcome = next;
@@ -207,16 +207,20 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (worktreePath && (!inputs || inputs.has('work'))) context.diff = await gatherDiff(worktreePath, context.commits);
     if (staged) context.staged_files = staged;
     const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
-    const tools = recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions });
+    // Standard access keeps the recipe's own tool narrowing; settings and full access hand the
+    // decision to Claude Code itself (ADR 0017).
+    const access = h.access ?? 'standard';
+    const rt = access === 'standard' ? { permissionMode: 'dontAsk', ...(recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions })), keepCredentials: false } : runtimeAccess({ access, mode: h.mode, permissions: h.permissions ?? {} });
+    const tools = { allowed: rt.allowed, disallowed: rt.disallowed };
     const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
     if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, model });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, model, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
     } catch (err) {
       return fail(worker, h, 'spawn-failed', err.message);
     }
-    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck: !!(recipe && recipe.self_check), sessionId: null, outputs: recipe ? recipe.outputs : null, staged });
+    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck: !!(recipe && recipe.self_check), sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
     run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 

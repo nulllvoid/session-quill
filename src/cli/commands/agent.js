@@ -6,7 +6,7 @@ import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest } from './handoff.js';
 
-const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
+const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
 
@@ -72,7 +72,9 @@ async function run(ctx, io, args, flags) {
     edit_files: flags['edit-files'] === true,
     delete_files: flags['delete-files'] === true,
   };
-  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length });
+  const access = typeof flags.access === 'string' ? flags.access : (recipe.mode === 'files' ? 'standard' : 'settings');
+  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length });
+  if (access === 'full') io.println('! Full access: this run skips every permission check and can run any command, use connectors and push with your credentials.');
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};

@@ -45,9 +45,9 @@ Usage: quill <command> [options]
   sync [--notes]                            replay --into <dir> [--switch]
   import <note.md>                          note restore <KEY>
   ui [--static <out.html>] [--open]         export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
-  handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr]
+  handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access standard|settings|full]
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
-  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files]
+  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
   publish list [--json]                     publish [<name>] [--confirm]
   migrate --source <dir> [--profile <name|path.json>] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>

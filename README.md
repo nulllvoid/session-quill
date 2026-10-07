@@ -282,6 +282,8 @@ Every run sees the ticket's Notes section, the full latest plan and checkpoint, 
 
 **Tickets without a repository** have no PRs to move their status, so after a turn that worked on one, Claude checks its Done when items and sets it to Review when they are met (at most once per 30 minutes of work; [ADR 0016](docs/decisions/0016-done-when-check.md)). They can also run `file-task` on their attached files, for chores such as deleting a leftover script. The agent works on copies; Quill applies its edits and deletions to the originals, moves deleted files to a Quill trash folder, and shows each change on the run with **Undo**. Edit and delete permissions stay off until you tick them, nothing outside the ticket's attached files is in reach, and a run that changed files moves the ticket to Review for you to confirm ([ADR 0015](docs/decisions/0015-file-runs.md)).
 
+**Access.** Runs use your own Claude Code settings by default: your permission rules and connected MCP servers apply, and anything that would need your approval is refused, since nobody is there to answer. Commit, push and draft PRs still need their own checkbox. Pick **Full access** in the Run dialog (or `--access full`) to skip every permission check for one run; it is never the default and never scheduled. Schedules and `file-task` use Quill's narrow standard profile ([ADR 0017](docs/decisions/0017-run-access-levels.md)).
+
 The run dialog shows what a recipe may do before you queue it; anything with a side effect stays off until you tick it, and scheduled runs only ever read. Results from your own recipes and `deploy-check` or `standup` arrive as suggestions on the ticket: accept or dismiss each one. A comment draft is never posted to your tracker.
 
 ## Example walkthrough

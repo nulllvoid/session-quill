@@ -271,3 +271,13 @@ export function pager(page, pages, { prefix }) {
   if (pages <= 1) return '';
   return `<nav class="pager" aria-label="Pagination"><button type="button" class="btn small" data-action="${attr(prefix)}-page" data-page="${page - 1}" ${page === 0 ? 'disabled' : ''}>Previous</button><span>Page ${page + 1} of ${pages}</span><button type="button" class="btn small" data-action="${attr(prefix)}-page" data-page="${page + 1}" ${page + 1 >= pages ? 'disabled' : ''}>Next</button></nav>`;
 }
+
+// How much of Claude Code a run may use (ADR 0017). The owner's settings are the default; Full
+// access skips every permission check and says so where it is chosen.
+export function accessFieldset() {
+  return `<fieldset class="access"><legend>Access</legend>
+  <label><input type="radio" name="access" value="settings" checked> My Claude Code settings <span class="muted small">(your permission rules and connectors; anything that would need your approval is refused)</span></label>
+  <label><input type="radio" name="access" value="standard"> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
+  <label class="danger"><input type="radio" name="access" value="full"> Full access <span class="small">(no permission checks: any command, any file on this computer, network, connectors, and pushing with your credentials)</span></label>
+</fieldset>`;
+}
