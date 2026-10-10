@@ -1,7 +1,21 @@
 # Session Quill product website
 
-Static HTML, CSS, and locally bundled GSAP. No application backend, analytics,
-external fonts, or runtime CDN. The Quill application is not served by this site.
+Static HTML and CSS rendered by a small generator on Node built-ins (`build.mjs`), with
+locally bundled GSAP for the landing page motion. No application backend, analytics,
+external fonts or runtime CDN. The Quill application is not served by this site.
+
+## Layout of this folder
+
+| Path | What |
+| --- | --- |
+| `layout.html` | The shell every page is rendered into: head, navigation, footer, scripts. `{{placeholders}}` are filled by the build. |
+| `pages/index.html` | The landing page fragment. Each page starts with a `<!-- page: {...} -->` header (title, description, scripts, body class). |
+| `pages/docs/*.html` | The docs pages (quickstart, recipes, configuration). A `nav` key in the header wraps them in the docs shell with the side navigation. |
+| `styles.css` | Graphite Ink, ported from `ui/styles.css`: the same colour tokens in both themes, radius scale, hairlines and vendored Geist fonts, plus the marketing layout. |
+| `site.js` | Shared behaviour: theme toggle, copy buttons, live region. |
+| `app.js` | Landing page only: the hero dispatch sequence and scroll reveals (GSAP). |
+| `theme.js` | Runs before first paint; follows the OS like the dashboard unless a choice was saved. |
+| `build.mjs`, `check.mjs`, `serve.mjs` | Build to `dist/`, validate it, preview it. |
 
 ## Local preview
 
@@ -12,7 +26,9 @@ npm run dev --prefix site
 
 Open http://127.0.0.1:4173/session-quill/. The project subpath deliberately matches
 GitHub Pages. `npm run build --prefix site` produces `site/dist`; `npm run check
---prefix site` validates assets, links, and subpath-safe references.
+--prefix site` validates every page: asset references resolved from each page's own
+folder, anchors, subpath-safe references, no em or en dashes and no emoji in copy (the
+same rules as the dashboard), and the theme and reduced-motion fallbacks.
 
 ## GitHub Pages
 
@@ -23,22 +39,28 @@ The expected project URL is https://nulllvoid.github.io/session-quill/.
 
 The workflow uploads only `site/dist`, never the repository or private Quill data.
 All runtime assets use relative paths, so the same output can be hosted at another
-subpath. Update the `og:image` URL when hosting under a different domain.
+subpath. Update the `og:image` URL in `layout.html` when hosting under a different domain.
 
-Official setup reference:
-https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages
+## Copy rules
+
+The site follows the reviewed 1.0 delivery plan (`docs/superpowers/plans/2026-10-11-orchestration-1.0.md`),
+not the earlier PRD drafts: clones are previewed and confirmed, there is no pre-warmed
+worktree pool, the test gate is worker logic with one repair turn, remote page edits
+become proposed runs the owner approves, the dashboard port defaults to 47321. Keep the
+Graphite Ink voice: sentence case, no dashes in copy, mono only for keys, commands and
+numbers, outcomes stated with their evidence ("Tests passed (worker)").
 
 ## Design and assets
 
-Design variance 7/10, motion intensity 8/10, visual density 4/10. Native CSS with
-Geist and Geist Mono, the existing Quill mark, graphite surfaces and mint accents.
-The brand defaults to graphite; the Light mode control switches the entire page.
-Reduced motion skips entry choreography, parallax, and moving connection paths.
-Pause motion also disables the motion layer. Content remains readable without JS.
+Graphite Ink (`docs/ui/graphite_ink/DESIGN.md`): warm graphite neutrals, one accent,
+hairlines over boxes, Geist and Geist Mono. The hero and feature visuals are built
+from the dashboard's own component rules (cards, chips, buttons, status line, the 1.0
+bulk action bar) rather than screenshots, so they stay current with the tokens. Motion
+is feedback only: the hero sequence plays once, reveals play once, and everything
+switches off under `prefers-reduced-motion`.
 
-Dashboard images are real sample-workspace captures from `docs/images`, copied
-at build time. Fonts and their OFL license are copied from `ui/fonts`. GSAP and
-its license notices and README are bundled from the pinned npm dependency.
+Fonts and their OFL license are copied from `ui/fonts`. GSAP and its license notices
+and README are bundled from the pinned npm dependency.
 
 `assets/thread-art.jpg` is original generated artwork made with the built-in
 image generation tool, optimized as JPEG. Prompt:

@@ -1,0 +1,89 @@
+<!-- page: {"title": "Recipe authoring | Session Quill docs", "description": "How a Markdown recipe becomes an agent run: frontmatter, permissions, inputs and outputs, the reply contract, self-check and the worker's test gate.", "nav": "recipes"} -->
+<h1>Recipe authoring</h1>
+<p class="lede">A recipe is a Markdown file with frontmatter and a prompt. The frontmatter is a ceiling on what a run may do; the worker decides the rest.</p>
+
+<h2 id="where">Where recipes live</h2>
+<table>
+  <thead><tr><th scope="col">Location</th><th scope="col">Scope</th><th scope="col">Precedence</th></tr></thead>
+  <tbody>
+    <tr><td>.quill/agents/</td><td>The repository, shared with the team</td><td>Highest for that repository</td></tr>
+    <tr><td>~/.claude/quill/agents/</td><td>Just you, including installed recipes</td><td>Personal</td></tr>
+    <tr><td>recipes/ (plugin)</td><td>Built in: analyse, analyse-followups, attempt-fix, deploy-check, standup, file-task, workspace-setup</td><td>Lowest</td></tr>
+  </tbody>
+</table>
+<p>Install someone else's recipes from a Git repository or a folder. The first command shows what each recipe may do and installs nothing; <code>--confirm</code> installs and records where each came from.</p>
+<pre><code>quill agent install https://github.com/acme/quill-recipes --ref v1.2
+quill agent install https://github.com/acme/quill-recipes --ref v1.2 --only triage --confirm
+quill agent uninstall triage</code></pre>
+
+<h2 id="frontmatter">Frontmatter</h2>
+<pre><code>---
+name: deploy-check
+description: Check whether each merged PR reached each environment
+mode: analyse                      # analyse | analyse-followups | attempt-fix
+permissions: { read_source: true } # the most a run may get
+tools: [Read, Grep, "Bash(git log:*)"]
+timeout_min: 10
+inputs: [ticket, prs, deployments, work]   # also notes, related, history; omit for all
+outputs: [summary, deploy_evidence, next_action]
+self_check: true
+---
+For {{ticket.key}} ({{ticket.url}}): for each merged PR {{prs}}, find the deployment evidence...</code></pre>
+<table>
+  <thead><tr><th scope="col">Field</th><th scope="col">Meaning</th></tr></thead>
+  <tbody>
+    <tr><td>name</td><td>The recipe's id. A repository recipe with the same name as a built-in replaces it for that repository.</td></tr>
+    <tr><td>mode</td><td>Which reply contract applies: <code>analyse</code> (summary, next action, blocker), <code>analyse-followups</code> (plus child tickets, each with a description) or <code>attempt-fix</code> (plus test results and changed files).</td></tr>
+    <tr><td>permissions</td><td><code>read_source</code>, <code>edit_source</code>, <code>commit</code>, <code>push_branch</code>, <code>open_draft_pr</code>. A ceiling: the run dialog shows them and anything with a side effect stays off until you tick it. Scheduled runs only ever read.</td></tr>
+    <tr><td>tools</td><td>Narrows the tool allow-list; it can never widen the permissions. Read-only analyse runs may use Claude Code subagents to split a large analysis by module and merge the results.</td></tr>
+    <tr><td>timeout_min</td><td>The run's own time cap.</td></tr>
+    <tr><td>inputs</td><td>What the prompt may see: <code>ticket</code>, <code>notes</code> (your Notes section), <code>prs</code>, <code>deployments</code>, <code>work</code> (files, commits and, with source access, their diff), <code>related</code> (parent, siblings, children), <code>history</code> (earlier runs and how their suggestions were decided).</td></tr>
+    <tr><td>outputs</td><td>The typed fields the reply must return. Results from your own recipes arrive as suggestions on the ticket: accept or dismiss each one.</td></tr>
+    <tr><td>self_check</td><td>Verify each claim against its source in a read-only follow-up turn. From 1.0 this is always on for any run with <code>edit_source</code>, whatever the file says.</td></tr>
+  </tbody>
+</table>
+<p>A recipe edited after a run was queued fails that run instead of running unreviewed.</p>
+
+<h2 id="contract">The reply contract</h2>
+<p>Every run follows a stated method and evidence rule. Its reply adds <code>confidence</code> and <code>sources</code>, shown on the run in ticket detail. A reply that breaks the output contract gets one repair turn in the same session. A follow-up child ticket must carry a description in the Goal / Context / Done when format; a <code>description</code> output fills a missing ticket description and never replaces a valid one.</p>
+
+<h2 id="access">Access levels</h2>
+<p>Runs use your own Claude Code settings by default: your permission rules and connected MCP servers apply, and anything that would need your approval is refused, since nobody is there to answer. Commit, push and draft PRs still need their own checkbox. <em>Full access</em> (<code>--access full</code>) skips every permission check for one run; it is never the default and never scheduled. Schedules and <code>file-task</code> use Quill's narrow standard profile.</p>
+
+<h2 id="worktree">The worktree</h2>
+<p>An attempt-fix run gets <code>git worktree add --detach</code> at the ticket's recorded base commit, under Quill's own directory, never your working directory. Push and draft-PR rights exist only as provider tokens the agent's environment is given when you grant them. Each run records <code>queue_wait_ms</code>, <code>worktree_ms</code>, <code>agent_ms</code> and, when a test gate ran, <code>test_ms</code>, visible on the run and in <code>quill handoff show</code>.</p>
+<div class="callout">There is no pre-warmed worktree pool. Recycling is deferred until the recorded timings show worktree creation matters; the decision is written down as an ADR either way.</div>
+
+<h2 id="test-gate">The test gate</h2>
+<p>With <code>test_command</code> set on the repository, the worker runs it in the run's worktree after any run with <code>edit_source</code> finishes with a diff. No stdin, a timeout (<code>test_timeout_ms</code>, default ten minutes), and the exit code, duration and the last 4 KB of output recorded on the run:</p>
+<pre><code>test_gate: { status: "passed" | "failed" | "timeout" | "skipped", exit_code, ms, tail }</code></pre>
+<ol>
+  <li><strong>Passed.</strong> The run's chip reads <em>Tests passed (worker)</em>, and only then do PR bodies and suggestion text say so.</li>
+  <li><strong>Failed.</strong> The worker resumes the agent once with the failing output, then runs the gate again.</li>
+  <li><strong>Failed again.</strong> No suggestion is surfaced; the run records why.</li>
+  <li><strong>No test command.</strong> <code>status: "skipped"</code>, and the run dialog says fixes are not test-verified.</li>
+</ol>
+<div class="callout warn">The test command is repository code running under your user account. Granting <code>edit_source</code> is granting that.</div>
+
+<h2 id="concurrency">Concurrency</h2>
+<pre><code>[handoff]
+max_concurrent_readonly = 2     # analyse, deploy-check, standup
+max_concurrent_fix      = 1     # anything with edit_source</code></pre>
+<p>Read-only runs and source-editing runs are counted separately. Fixes on one repository stay serialised whatever the cap says, and the bulk handoff form shows <em>waits for repo</em> for the ones that will queue.</p>
+
+<h2 id="batches">Batches and proposals</h2>
+<p>A handoff request may carry a <code>batch_id</code> (up to 64 characters). The dashboard's bulk action bar uses one per selection so a batch has a progress strip and a <em>Cancel batch</em> that cancels every queued run in it; <code>quill handoff cancel --batch &lt;id&gt;</code> does the same from the CLI.</p>
+<p>A <em>Run agent</em> edit on a two-way artifact page becomes a proposed run on the ticket, with a deterministic id so repeated reconciles create exactly one. It runs when you approve it on the dashboard or with <code>quill approve --run &lt;id&gt;</code>. <code>[publish.&lt;name&gt;] auto_run_editors</code> and <code>auto_run_recipes</code> may auto-queue read-only recipes for named editors; nothing with <code>edit_source</code> is ever auto-run.</p>
+
+<h2 id="run">Run a recipe</h2>
+<pre><code>quill agent run deploy-check PROJ-123
+/session-quill:agent run deploy-check PROJ-123
+
+[[schedule]]
+name   = "deploy-followup"
+job    = "agent"
+cron   = "0 11 * * 1-5"
+recipe = "deploy-check"
+scope  = "deploy-pending"          # deploy-pending | active | review | blocked | open</code></pre>
+
+<div class="docs-foot"><a href="quickstart.html">← Quickstart</a><a href="configuration.html">Next: configuration →</a></div>
