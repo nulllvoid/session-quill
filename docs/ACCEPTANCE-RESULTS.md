@@ -63,7 +63,17 @@ Run: https://github.com/nulllvoid/session-quill/actions/runs/37018025766 (296 te
 | 2,000 tickets / 20,000 events (default `npm test`) | 3.9 s | 1.4 ms | 1.7 ms | 13.2 ms | 648 ms | 18 ms |
 | 10,000 tickets / 100,000 events (`QUILL_PERF_FULL=1`) | 12.9 s | 1.5 ms | 1.7 ms | 4.7 ms | 673 ms | 63 ms |
 
-Hook timings are in-process (`runHook`) and exclude Node process start-up (~40–80 ms on this machine), which the host incurs per hook invocation; the 200 ms budget still holds with margin. Cold-start numbers per OS remain to be recorded.
+Hook timings are in-process (`runHook`) and exclude Node process start-up (~40–80 ms on this machine), which the host incurs per hook invocation; the 200 ms budget still holds with margin.
+
+Whole-process numbers, as the host sees them, come from `node scripts/bench-hooks.mjs` (a fresh `node` per call with a bound session). Windows 11, Node 24.19.0, 40 calls each, 2026-10-11:
+
+| Entry | p50 | p95 | max |
+| --- | --- | --- | --- |
+| bare `node -e ""` | 47 ms | 51 ms | 52 ms |
+| `bin/quill.js hook PreToolUse` (before 0.6.1) | 106 ms | 114 ms | 116 ms |
+| `bin/quill-hook.js PreToolUse` (plugin hooks from 0.6.1) | 94 ms | 104 ms | 106 ms |
+
+The rest is module loading on the hook path (about 34 ms, mostly `node:crypto` and event validation). Node's compile cache made no measurable difference. macOS and Linux numbers remain to be recorded.
 
 ## Phase 2 — migration
 
