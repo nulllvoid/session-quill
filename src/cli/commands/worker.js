@@ -108,7 +108,20 @@ export async function run({ args, flags, io, env }) {
       io.println(`ownership lock: ${locked ? 'held' : 'free'}; heartbeat: ${ws.healthy ? 'healthy' : 'stale/none'}${ws.heartbeat_at ? ` (${ws.heartbeat_at})` : ''}`);
       return 0;
     }
+    case 'install': {
+      // A login entry that runs `quill worker start` once per login (ADR 0022).
+      const { installAutostart } = await import('../../worker/autostart.js');
+      const plan = await installAutostart({ env });
+      io.println(`installed ${plan.entry}; the worker starts when you log in. Undo with quill worker uninstall.`);
+      return 0;
+    }
+    case 'uninstall': {
+      const { uninstallAutostart } = await import('../../worker/autostart.js');
+      const { plan, removed } = await uninstallAutostart({ env });
+      io.println(removed ? `removed ${plan.entry}` : 'no login entry was installed; nothing to remove');
+      return 0;
+    }
     default:
-      throw new TrackerError('usage', 'usage: worker run|start|stop|status');
+      throw new TrackerError('usage', 'usage: worker run|start|stop|status|install|uninstall');
   }
 }

@@ -23,6 +23,14 @@ test('doctor without a worker reports it unavailable and exits non-zero; with a 
   }
 });
 
+test('doctor reports whether the worker starts at login (ADR 0022)', async () => {
+  const fx = makeHome();
+  assert.match((await cli(['doctor'], fx.env)).out, /login start: not installed.*quill worker install/);
+  fs.mkdirSync(path.join(fx.home, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(fx.home, 'state', 'autostart.json'), JSON.stringify({ platform: 'win32', entry: 'Task Scheduler task "Session Quill worker (quill)"', installed_at: '2026-10-11T00:00:00Z' }));
+  assert.match((await cli(['doctor'], fx.env)).out, /login start: installed \(Task Scheduler task "Session Quill worker \(quill\)"\)/);
+});
+
 test('doctor flags a read-only copy owned by another machine', async () => {
   const fx = makeHome();
   const meta = JSON.parse(fs.readFileSync(path.join(fx.storePath, 'store.json'), 'utf8'));

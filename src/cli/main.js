@@ -44,7 +44,7 @@ Usage: quill <command> [options]
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>
   status [--json] [--session <id>] | status --statusline
   doctor
-  worker run | start | stop | status
+  worker run | start | stop | status       worker install | uninstall  (start the worker at login)
   sync [--notes]                            replay --into <dir> [--switch]
   import <note.md>                          note restore <KEY>
   ui [--no-open] | ui --static <out.html> [--open] | ui --revoke  (sign every browser out)

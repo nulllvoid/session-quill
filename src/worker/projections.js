@@ -43,6 +43,7 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
     last_capture_at: state.lastCaptureAt ?? null,
     oldest_pending_event_at: capture.oldest_pending_event_at ?? null,
     worker_seen_at,
+    worker_autostart: capture.autostart === true,
     capture_health: capture.health,
     projection_health: { status: 'ok', reason: null, observed_at: now },
     provider_health: state.providerHealth ?? [],
