@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');
-const pages = fs.readdirSync(root, { recursive: true }).map(String).filter((f) => f.endsWith('.html'));
+const pages = fs.readdirSync(root, { recursive: true }).map((f) => String(f).split(path.sep).join('/')).filter((f) => f.endsWith('.html'));
 assert.ok(pages.includes('index.html') && pages.some((p) => p.startsWith('docs/')), 'landing page and docs pages built');
 
 const anchorsOf = new Map();
