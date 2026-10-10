@@ -1,6 +1,6 @@
 // Agents panel on ticket detail (ADR 0008): the recipes available for the ticket's repository,
 // the permissions each may use, and every run with the suggestions it left.
-import { esc, attr, icon, timeEl, handoffChip, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset } from '../components.js';
+import { esc, attr, icon, timeEl, handoffChip, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset, formatDuration } from '../components.js';
 
 const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 'repository' };
 const ACTIVE = new Set(['pending', 'applying']);
@@ -84,11 +84,19 @@ function fileEffects(h, ticket, { canEdit, pending }) {
   return `<ul class="file-effects small">${rows}</ul>`;
 }
 
+// Where a run's time went (ADR 0022): only the steps that were measured.
+function runTimings(h) {
+  const t = h.timings;
+  if (!t) return '';
+  const parts = [['queue_wait_ms', 'Queue wait'], ['worktree_ms', 'Setup'], ['agent_ms', 'Agent']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`);
+  return parts.length ? `<p class="run-timings small muted">${esc(parts.join(' · '))}</p>` : '';
+}
+
 function runItem(h, ticket, snapshot, { now, tz, caps, pending }) {
   const name = h.recipe ? h.recipe.name : h.mode;
   const suggestions = h.suggestions ?? [];
   const accessChip = h.access === 'full' ? ' <span class="chip warning small">Full access</span>' : h.access === 'settings' ? ' <span class="chip small">My settings</span>' : '';
-  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong>${accessChip} <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${fileEffects(h, ticket, { canEdit: !!caps.edit_tickets, pending })}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${h.result_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(h.result_ref)}" data-generation="${attr(snapshot.generation_id)}">Partial/full result</button>` : ''}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
+  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong>${accessChip} <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${runTimings(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${fileEffects(h, ticket, { canEdit: !!caps.edit_tickets, pending })}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${h.result_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(h.result_ref)}" data-generation="${attr(snapshot.generation_id)}">Partial/full result</button>` : ''}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
 }
 
 export function renderAgentsSection(ticket, rawSnapshot, { now, pending = [] } = {}) {

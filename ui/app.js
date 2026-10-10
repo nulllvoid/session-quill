@@ -123,10 +123,10 @@ function render() {
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
   setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters }));
-  // Keep the provider-error popover open across the header's per-minute re-render.
-  const healthOpen = !!document.querySelector('#header .health-pop[open]');
+  // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
+  const healthOpen = [...document.querySelectorAll('#header .health-pop')].findIndex((p) => p.open);
   setMarkup($('#header'), renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt }));
-  if (healthOpen) { const pop = $('#header .health-pop'); if (pop) pop.open = true; }
+  if (healthOpen >= 0) { const pop = document.querySelectorAll('#header .health-pop')[healthOpen]; if (pop) pop.open = true; }
   if (searchFocused) { const sInput = $('#search'); if (sInput) { sInput.focus(); if (searchPos !== null) sInput.setSelectionRange(searchPos, searchPos); } }
   setMarkup($('#filters'), renderFilterBar(s));
   const pending = [...appState.requests.values()];
