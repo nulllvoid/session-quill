@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-11
+
 ### Fixed
 
 - Running `start`, `init`, `ui --session` or `repo add` inside a linked git worktree registers the repository's main working tree instead of the worktree, which is usually deleted once its branch merges.
@@ -180,7 +182,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/nulllvoid/session-quill/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nulllvoid/session-quill/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nulllvoid/session-quill/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nulllvoid/session-quill/compare/v0.5.0...v0.6.0
