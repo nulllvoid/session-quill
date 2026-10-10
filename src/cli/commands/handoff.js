@@ -3,7 +3,7 @@ import path from 'node:path';
 import { loadContext, cliEvent, submitAndWait, findTicketByKey, latestSnapshot } from '../context.js';
 import { validateHandoffRequest, MODES } from '../../handoff/permissions.js';
 import { uuid } from '../../lib/ids.js';
-import { nowIso } from '../../lib/time.js';
+import { nowIso, formatDuration } from '../../lib/time.js';
 import { requestsDir, handoffsDir } from '../../lib/paths.js';
 import { readJsonIfExists, writeJsonAtomic } from '../../lib/atomic-fs.js';
 import { TrackerError } from '../../lib/errors.js';
@@ -62,6 +62,12 @@ async function queue(ctx, io, args, flags) {
   return 0;
 }
 
+// Where a run's time went (ADR 0022), listing only the steps that were measured.
+export function timingsText(t) {
+  if (!t) return '';
+  return [['queue_wait_ms', 'wait'], ['worktree_ms', 'setup'], ['agent_ms', 'agent']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`).join(', ');
+}
+
 function list(ctx, io, flags) {
   const snap = latestSnapshot(ctx);
   const handoffs = snap ? [...snap.handoffs].sort((a, b) => (a.requested_at < b.requested_at ? 1 : -1)) : [];
@@ -69,7 +75,7 @@ function list(ctx, io, flags) {
   if (!handoffs.length) { io.println('No handoffs.'); return 0; }
   for (const h of handoffs) {
     const t = snap.tickets.find((x) => x.id === h.ticket_id);
-    io.println(`${h.id}  ${h.state.padEnd(10)} ${h.mode.padEnd(18)} ${t ? t.key : h.ticket_id}  requested ${h.requested_at}${h.error && h.error.code ? `  error: ${h.error.code}` : ''}${h.children_ids && h.children_ids.length ? `  children: ${h.children_ids.length}` : ''}`);
+    io.println(`${h.id}  ${h.state.padEnd(10)} ${h.mode.padEnd(18)} ${t ? t.key : h.ticket_id}  requested ${h.requested_at}${h.error && h.error.code ? `  error: ${h.error.code}` : ''}${h.children_ids && h.children_ids.length ? `  children: ${h.children_ids.length}` : ''}${h.timings ? `  (${timingsText(h.timings)})` : ''}`);
   }
   return 0;
 }

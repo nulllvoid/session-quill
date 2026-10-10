@@ -25,3 +25,12 @@ test('dateDiffDays and validators', () => {
   assert.equal(isDate('2026-10-02'), true);
   assert.equal(isDate('2026-13-02'), false);
 });
+
+test('formatDuration and the handoff list timings line (ADR 0022)', async () => {
+  const { formatDuration } = await import('../../src/lib/time.js');
+  const { timingsText } = await import('../../src/cli/commands/handoff.js');
+  assert.deepEqual([450, 1234, 12_400, 95_000].map(formatDuration), ['450 ms', '1.2 s', '12 s', '1 min 35 s']);
+  assert.equal(timingsText({ queue_wait_ms: 2000, worktree_ms: 850, agent_ms: 95_000 }), 'wait 2.0 s, setup 850 ms, agent 1 min 35 s');
+  assert.equal(timingsText({ queue_wait_ms: 0, agent_ms: 30_000 }), 'wait 0 ms, agent 30 s');
+  assert.equal(timingsText(undefined), '');
+});

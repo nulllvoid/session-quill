@@ -70,3 +70,14 @@ export function isValidTimeZone(tz) {
     return false;
   }
 }
+
+// A measured duration as people say it: 450 ms, 1.2 s, 12 s, 1 min 5 s (the dashboard has its own copy).
+export function formatDuration(ms) {
+  const n = Math.max(0, Math.round(Number(ms) || 0));
+  if (n < 1000) return `${n} ms`;
+  if (n < 10_000) return `${(n / 1000).toFixed(1)} s`;
+  if (n < 60_000) return `${Math.round(n / 1000)} s`;
+  const total = Math.round(n / 1000);
+  const sec = total % 60;
+  return `${Math.floor(total / 60)} min${sec ? ` ${sec} s` : ''}`;
+}
