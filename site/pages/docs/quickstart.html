@@ -1,0 +1,64 @@
+<!-- page: {"title": "Quickstart | Session Quill docs", "description": "Install Session Quill in Claude Code, start tracking, open the dashboard, and let the worker start at login.", "nav": "quickstart"} -->
+<h1>Quickstart</h1>
+<p class="lede">From the marketplace command to a worker that starts at login, with the dashboard link in your status line. Nothing here needs a config file.</p>
+
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+  <li>Claude Code with plugin support.</li>
+  <li>Node.js 22 or newer on your PATH. It is not bundled with Claude Code.</li>
+  <li>Git, and a repository you work in. <code>start</code> requires a Git work tree.</li>
+</ul>
+
+<h2 id="install">Install the plugin</h2>
+<p>From the repository you want to track, inside Claude Code:</p>
+<pre><code>/plugin marketplace add nulllvoid/session-quill
+/plugin install session-quill@session-quill</code></pre>
+<p>The same commands work from a terminal with <code>claude plugin</code> in place of <code>/plugin</code>. Start a new Claude session so the plugin loads.</p>
+
+<h2 id="start">Start tracking</h2>
+<pre><code>/session-quill:start</code></pre>
+<p>Quill detects the repository, registers its main working tree privately, starts the background worker and captures the current session. No CLI alias, tracker connection, ticket or repository configuration file is required. A ticket key in your prompt or on your branch binds the session without a command.</p>
+<p>A first setup uses <code>~/.claude/quill/store</code> (or <code>QUILL_HOME/store</code>). To keep notes in a folder of your own, run <code>/session-quill:start --store &lt;folder&gt;</code> the first time. To write team defaults into a committable <code>.quill.toml</code>, add <code>--share-settings</code>.</p>
+
+<h2 id="dashboard">Open the dashboard</h2>
+<pre><code>/session-quill:ui</code></pre>
+<p>The dashboard runs on the loopback interface only. From 1.0 it listens on a stable port, <code>47321</code> by default, and falls back to a random port only when that one is taken. The command signs the browser in once; the session is stored as a hash with a sliding seven-day expiry, so a worker restart keeps you signed in. <code>quill ui --revoke</code> clears every session.</p>
+<p>A request without a valid session gets a small page that says to run <code>/session-quill:ui</code> again. API requests keep JSON errors.</p>
+
+<h2 id="login">Start the worker at login</h2>
+<pre><code>quill worker install</code></pre>
+<p>Registers a per-user login entry with no admin rights: a Task Scheduler logon task on Windows, a LaunchAgent on macOS, a systemd user unit on Linux. Installing twice leaves one entry; <code>quill worker uninstall</code> removes it and succeeds when it is already gone. <code>quill doctor</code> reports whether it is installed, and the dashboard's health popover shows <em>Starts at login</em>.</p>
+<div class="callout">Restarts stay with the plugin's own backoff, not the OS keep-alive. A worker you stop with <code>quill worker stop</code> stays stopped until you run <code>start</code> again.</div>
+
+<h2 id="statusline">The status line link</h2>
+<p>Add the quill segment to your Claude Code status line in <code>~/.claude/settings.json</code>:</p>
+<pre><code>{ "statusLine": { "type": "command", "command": "node /path/to/session-quill/scripts/statusline.js" } }</code></pre>
+<p>When the worker is healthy, the segment appends the dashboard URL as a terminal hyperlink. It prints nothing when the worker is down or its recorded pid is stale, and it never contains a secret.</p>
+
+<h2 id="tracker">Add a tracker</h2>
+<p>Optional. Put a <code>[tracker]</code> table in <code>~/.claude/quill/config.toml</code> (just you) or the repository's <code>.quill.toml</code> (shared), name the token variable, and schedule a sync:</p>
+<pre><code>[tracker]
+system          = "jira"                       # jira | github | linear
+domain          = "https://example.atlassian.net"
+sync_token_env  = "JIRA_TOKEN"                 # Jira Cloud also needs sync_username_env = "JIRA_EMAIL"
+import_assigned = true                         # pull issues assigned to you into tickets
+auto_clone_dir  = "~/src/quill"                # where consented clones land
+
+[[schedule]]
+name  = "tracker-sync"
+job   = "tracker-sync"
+every = "6h"</code></pre>
+<p><code>quill init --bootstrap-from-tracker</code> turns on the import and runs one immediately, listing what came in. Tickets whose repository is known but not cloned show <em>Needs clone</em>; confirm the clone from the card or with <code>quill repo clone KEY --confirm</code>.</p>
+
+<h2 id="verify">Make fixes test-verified</h2>
+<p>Give a repository a test command and the worker runs it after every attempt-fix run, in the run's worktree:</p>
+<pre><code>[repos.payments-api]
+test_command    = "npm test"
+test_timeout_ms = 600000</code></pre>
+<p>See <a href="recipes.html#test-gate">the test gate</a> for what happens on a failure.</p>
+
+<h2 id="check">Check that it works</h2>
+<pre><code>quill doctor</code></pre>
+<p>Reports Node, Git and Claude versions, store ownership, the worker lock and heartbeat, ingress backlog, journal health, hook latency, capture gaps and ticket coverage for the last seven days. Logs live under <code>~/.claude/quill/logs/</code>.</p>
+
+<div class="docs-foot"><span></span><a href="recipes.html">Next: recipe authoring →</a></div>
