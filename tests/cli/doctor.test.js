@@ -28,7 +28,15 @@ test('doctor reports whether the worker starts at login (ADR 0022)', async () =>
   assert.match((await cli(['doctor'], fx.env)).out, /login start: not installed.*quill worker install/);
   fs.mkdirSync(path.join(fx.home, 'state'), { recursive: true });
   fs.writeFileSync(path.join(fx.home, 'state', 'autostart.json'), JSON.stringify({ platform: 'win32', entry: 'Task Scheduler task "Session Quill worker (quill)"', installed_at: '2026-10-11T00:00:00Z' }));
-  assert.match((await cli(['doctor'], fx.env)).out, /login start: installed \(Task Scheduler task "Session Quill worker \(quill\)"\)/);
+  const { collect } = await import('../../src/cli/commands/doctor.js');
+  const calls = [];
+  const login = async (code) => (await collect(fx.env, { autostart: { platform: 'win32', run: async (cmd, args) => { calls.push([cmd, ...args]); return { code, stdout: '', stderr: '' }; } } })).report.items.find((i) => i.label === 'login start');
+  const present = await login(0);
+  assert.match(present.detail, /^installed \(Task Scheduler task "Session Quill worker \(quill\)"\)/);
+  assert.deepEqual(calls[0], ['schtasks', '/Query', '/TN', 'Session Quill worker (quill)']);
+  const gone = await login(1);
+  assert.equal(gone.level, 'warn');
+  assert.match(gone.detail, /marker present but task missing.*quill worker install again/);
 });
 
 test('doctor flags a read-only copy owned by another machine', async () => {

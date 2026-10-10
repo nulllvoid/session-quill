@@ -26,6 +26,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- `quill worker install`: the macOS LaunchAgent and the Linux systemd unit carry the install-time `PATH`, so `claude`, git and node resolve at login; the Linux unit escapes `%` (and `$` in `ExecStart=`); the Windows `worker-login.vbs` is written as UTF-16LE with a BOM, so a profile path outside ASCII works. `quill doctor` checks on Windows that the Task Scheduler task still exists and warns "marker present but task missing".
 - Configs from earlier releases stored `ui_port = 0` (the old default) and so never got the fixed dashboard port. The user config now carries `config_version = 1`; loading a file without it once drops a stored `ui_port = 0` and adds the marker, so a `ui_port = 0` set afterwards still means random. Saving no longer pins an untouched default `ui_port`.
 - `quill ui --revoke` always leaves the sign-out for the worker (`control/ui-revoke.json`), so a stopped worker applies it at its next start and a slow one on its next tick; until then no session verifies and a running worker can no longer write a revoked session back to `ui-sessions.json`. A worker that does not confirm within 5 s is reported, not treated as an error.
 - Cancelling or timing out a run on Windows kills its whole process tree; the parent was killed before `taskkill` walked the tree, which could leave children running and holding the run open.

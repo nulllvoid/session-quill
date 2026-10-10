@@ -10,7 +10,7 @@ import { countIngress } from '../../core/ingress.js';
 import { readHealthErrors } from '../../worker/health.js';
 import { repoStatus, REPO_STATUS_TEXT } from '../../config/repos.js';
 import { pausePath } from '../../runtime/readiness.js';
-import { autostartStatus } from '../../worker/autostart.js';
+import { verifyAutostart } from '../../worker/autostart.js';
 
 export const MIN_NODE_MAJOR = 22;
 
@@ -22,7 +22,8 @@ function version(cmd, args) {
   }
 }
 
-export async function collect(env) {
+// `autostart` passes test fakes ({ platform, run, home }) to the login-entry check.
+export async function collect(env, { autostart = {} } = {}) {
   const ctx = loadContext(env, { requireStore: false });
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   const report = { ok: true, items: [] };
@@ -50,8 +51,8 @@ export async function collect(env) {
   else if (ws.healthy && locked) add('ok', 'worker', `healthy (pid ${ws.pid}, heartbeat ${ws.heartbeat_at})`);
   else if (locked) add('warn', 'worker', `lock held but heartbeat stale (${ws.age_ms ?? 'none'} ms)`);
   else add(owner ? 'error' : 'warn', 'worker', `unavailable — run /session-quill:start (or quill start)${ws.heartbeat_at ? ` (last heartbeat ${ws.heartbeat_at})` : ''}`);
-  const login = autostartStatus(env);
-  add('ok', 'login start', login.installed ? `installed (${login.entry})` : login.missing ? `${login.entry} is gone; run quill worker install again` : 'not installed; Claude sessions start the worker. Run quill worker install to start it at login');
+  const login = await verifyAutostart(env, autostart);
+  add(login.missing ? 'warn' : 'ok', 'login start', login.installed ? `installed (${login.entry})` : login.missing ? `${login.detail ?? `${login.entry} is gone`}; run quill worker install again` : 'not installed; Claude sessions start the worker. Run quill worker install to start it at login');
   const backlog = countIngress(env);
   add(backlog > 100 ? 'warn' : 'ok', 'ingress backlog', `${backlog} pending event(s) in ${ingressDir(env)}`);
   const j = new Journal(journalPath(env));

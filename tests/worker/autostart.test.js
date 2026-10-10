@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { installAutostart, uninstallAutostart, autostartStatus, autostartMarkerPath, TASK_NAME, SYSTEMD_UNIT } from '../../src/worker/autostart.js';
+import { installAutostart, uninstallAutostart, autostartStatus, verifyAutostart, autostartMarkerPath, TASK_NAME, SYSTEMD_UNIT } from '../../src/worker/autostart.js';
 
 function tmp() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-autostart-'));
@@ -59,7 +59,9 @@ test('Windows: a logon task launches node windowless through a generated .vbs; i
   assert.match(xml, /<LogonTrigger><UserId>PC\\owner<\/UserId><\/LogonTrigger>/);
   assert.match(xml, /<LogonType>InteractiveToken<\/LogonType>/, 'no administrator rights needed');
   assert.match(xml, /<Command>wscript\.exe<\/Command>/);
-  const vbs = fs.readFileSync(path.join(t.env.QUILL_HOME, 'worker-login.vbs'), 'utf8');
+  const vbsBytes = fs.readFileSync(path.join(t.env.QUILL_HOME, 'worker-login.vbs'));
+  assert.deepEqual([vbsBytes[0], vbsBytes[1]], [0xff, 0xfe], 'the launcher is UTF-16LE with a BOM, like the task XML');
+  const vbs = vbsBytes.toString('utf16le').replace(/^﻿/, '');
   assert.match(vbs, /"""C:\\Program Files\\nodejs\\node\.exe"" ""C:\\quill\\bin\\quill\.js"" worker start", 0, False/);
   assert.match(vbs, /Environment\("Process"\)\("QUILL_HOME"\)/, 'a custom QUILL_HOME reaches the worker');
   assert.ok(fake.calls.every((c) => c.includes('/F') || c[1] !== '/Create'), 'create replaces in place');
@@ -144,4 +146,54 @@ test('the health payload says whether the worker starts at login', async () => {
   assert.equal(capture.autostart, true);
   const state = { tickets: new Map(), unresolved: [], meta: { sync_interval_hours: 2 } };
   assert.equal(buildMeta(state, { now, capture, worker_seen_at: now }).worker_autostart, true);
+});
+
+test('Windows: a profile path outside ASCII survives in the launcher', async () => {
+  const t = tmp();
+  const fake = fakeOs();
+  const env = { QUILL_HOME: path.join(t.env.QUILL_HOME, 'José 東京') };
+  await installAutostart({ platform: 'win32', env, run: fake.run, nodePath: 'C:\\Users\\José\\node.exe', binPath: 'C:\\quill\\bin\\quill.js', home: t.home, user: 'PC\\owner' });
+  const vbs = fs.readFileSync(path.join(env.QUILL_HOME, 'worker-login.vbs')).toString('utf16le');
+  assert.ok(vbs.includes('José 東京'), vbs);
+  assert.ok(vbs.includes('C:\\Users\\José\\node.exe'));
+});
+
+test('macOS and Linux entries carry the install-time PATH, so claude and node resolve at login', async () => {
+  const t = tmp();
+  const fake = fakeOs();
+  const PATH = '/opt/homebrew/bin:/Users/me/.local/bin:/usr/bin';
+  await installAutostart({ platform: 'darwin', env: { ...t.env, PATH }, run: fake.run, nodePath: NODE, binPath: BIN, home: t.home, uid: 501 });
+  const plist = fs.readFileSync(path.join(t.home, 'Library', 'LaunchAgents', 'com.session-quill.worker.plist'), 'utf8');
+  assert.match(plist, /<key>EnvironmentVariables<\/key>\s*<dict>.*<key>PATH<\/key><string>\/opt\/homebrew\/bin:\/Users\/me\/\.local\/bin:\/usr\/bin<\/string>.*<\/dict>/s);
+  assert.match(plist, /<key>QUILL_HOME<\/key>/);
+  await installAutostart({ platform: 'linux', env: { ...t.env, PATH }, run: fake.run, nodePath: NODE, binPath: BIN, home: t.home });
+  const unit = fs.readFileSync(path.join(t.home, '.config', 'systemd', 'user', SYSTEMD_UNIT), 'utf8');
+  assert.match(unit, /^Environment="PATH=\/opt\/homebrew\/bin:\/Users\/me\/\.local\/bin:\/usr\/bin"$/m);
+});
+
+test('Linux: % and $ in paths are escaped for systemd', async () => {
+  const t = tmp();
+  const fake = fakeOs();
+  const env = { QUILL_HOME: '/home/me/100%$q', PATH: '/p%h/bin' };
+  await installAutostart({ platform: 'linux', env, run: fake.run, nodePath: '/opt/n$de%/node', binPath: BIN, home: t.home });
+  const unit = fs.readFileSync(path.join(t.home, '.config', 'systemd', 'user', SYSTEMD_UNIT), 'utf8');
+  assert.match(unit, /^Environment="QUILL_HOME=[^"]*100%%\$q"$/m, 'specifiers escaped; Environment= does not expand $');
+  assert.match(unit, /^Environment="PATH=\/p%%h\/bin"$/m);
+  assert.match(unit, /^ExecStart="\/opt\/n\$\$de%%\/node" /m, 'ExecStart= expands both');
+});
+
+test('verifyAutostart asks Task Scheduler whether the task still exists (doctor only)', async () => {
+  const t = tmp();
+  const fake = fakeOs();
+  const opts = { platform: 'win32', env: t.env, run: fake.run, nodePath: NODE, binPath: BIN, home: t.home, user: 'PC\\owner' };
+  await installAutostart(opts);
+  assert.equal((await verifyAutostart(t.env, { platform: 'win32', run: fake.run, home: t.home })).installed, true);
+  fake.tasks.clear();
+  const gone = await verifyAutostart(t.env, { platform: 'win32', run: fake.run, home: t.home });
+  assert.deepEqual([gone.installed, gone.missing], [false, true]);
+  assert.match(gone.detail, /marker present but task missing/);
+  assert.equal(autostartStatus(t.env, { home: t.home }).installed, true, 'the hot-path status stays marker-only');
+  const calls = fake.calls.length;
+  await verifyAutostart(t.env, { platform: 'linux', run: fake.run, home: t.home });
+  assert.equal(fake.calls.length, calls, 'no Task Scheduler query off Windows');
 });
