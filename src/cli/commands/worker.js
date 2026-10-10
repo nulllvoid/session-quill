@@ -20,7 +20,7 @@ export async function buildWorker(ctx, { log } = {}) {
 
 async function attachExtensions(w, ctx) {
   // Later tasks register reconciliation, request transport and handoff extensions here.
-  for (const spec of ['../../reconcile/extension.js', '../../server/extension.js', '../../handoff/extension.js']) {
+  for (const spec of ['../../reconcile/extension.js', '../../server/extension.js', '../../handoff/extension.js', '../../mirror/mirror.js']) {
     try {
       const mod = await import(spec);
       if (mod.createExtension) w.use(mod.createExtension(ctx));

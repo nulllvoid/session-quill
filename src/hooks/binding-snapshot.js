@@ -1,11 +1,18 @@
 import path from 'node:path';
-import { bindingsDir, heartbeatPath, stateDir, configPath } from '../lib/paths.js';
+import { bindingsDir, heartbeatPath, stateDir, configPath, projectionsDir } from '../lib/paths.js';
 import { readJsonIfExists, writeJsonAtomic, readTextIfExists } from '../lib/atomic-fs.js';
 import { ageMs } from '../lib/time.js';
 import { parseToml } from '../config/toml.js';
 import { resolveGateMode, resolveTracker } from '../config/config.js';
 
 export const HEARTBEAT_MAX_AGE_MS = 15_000;
+
+// The worker's published projection of one ticket. Read only at session start and when a prompt
+// binds, never per tool call.
+export function readTicketProjection(ticketId, env = process.env) {
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(String(ticketId ?? ''))) return null;
+  try { return readJsonIfExists(path.join(projectionsDir(env), 'tickets', `${ticketId}.json`)); } catch { return null; }
+}
 
 export function snapshotFileName(sessionKey) {
   return `${String(sessionKey).replace(/[^A-Za-z0-9_-]/g, '_')}.json`;

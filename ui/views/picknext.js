@@ -1,4 +1,4 @@
-import { esc, attr, ticketCard, ticketById, emptyState, matchesFilters, keyEl, icon, normalizeSnapshot, sessionChip, timeEl, countLabel, hasUnlinkedWork, requestFeedback } from '../components.js';
+import { esc, attr, ticketCard, ticketById, emptyState, matchesFilters, keyEl, icon, normalizeSnapshot, sessionChip, timeEl, countLabel, hasUnlinkedWork, requestFeedback, pickNextEntries } from '../components.js';
 
 function mentionHint(snapshot) {
   return `Mention a ticket key such as <code>${esc(snapshot.meta.key_example ?? 'PROJ-123')}</code> in a Claude Code prompt, or run <code>/session-quill:ticket create "&lt;title&gt;"</code>.`;
@@ -65,7 +65,7 @@ function renderBlocked(blocked, { expanded }) {
 
 export function renderPickNext(rawSnapshot, filters, { now, pending = [], blockedExpanded = false }) {
   const snapshot = normalizeSnapshot(rawSnapshot);
-  const entries = (snapshot.picknext ?? []).map((e) => ({ entry: e, ticket: ticketById(snapshot, e.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
+  const entries = pickNextEntries(snapshot, filters);
   const blocked = (snapshot.blocked ?? []).map((b) => ({ b, ticket: ticketById(snapshot, b.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
   let main;
   const filtered = Object.values(filters).some(Boolean);

@@ -1,12 +1,14 @@
 // `quill agent`: list, show and run recipes, and resolve the suggestions their runs leave (ADR 0008).
 import { loadContext, findTicketByKey, latestSnapshot } from '../context.js';
-import { createRecipeCatalog, PERMISSION_KEYS } from '../../agents/recipes.js';
+import { createRecipeCatalog, PERMISSION_KEYS, personalRecipesDir } from '../../agents/recipes.js';
+import { fetchSource, discoverRecipes, planInstall, applyInstall, describeRecipe, uninstall, readInstalled } from '../../agents/install.js';
+import { nowIso } from '../../lib/time.js';
 import { validateHandoffRequest } from '../../handoff/permissions.js';
 import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest } from './handoff.js';
 
-const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
+const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
 
@@ -23,10 +25,12 @@ function catalog(ctx) {
 
 function list(ctx, io, flags) {
   const recipes = [...catalog(ctx).forRepo(repoIdFor(ctx, flags)).effective.values()];
-  if (flags.json) { io.json(recipes.map(({ path, body, ...r }) => r)); return 0; }
+  const installed = readInstalled(ctx.env);
+  const label = (r) => (r.source === 'personal' && installed[r.name] ? 'installed' : r.source);
+  if (flags.json) { io.json(recipes.map(({ path, body, ...r }) => ({ ...r, installed_from: r.source === 'personal' && installed[r.name] ? installed[r.name].source : null }))); return 0; }
   for (const r of recipes) {
-    if (r.error) { io.println(`${r.name.padEnd(20)} ${r.source.padEnd(9)} invalid: ${r.error}`); continue; }
-    io.println(`${r.name.padEnd(20)} ${r.source.padEnd(9)} ${r.mode.padEnd(18)} ${grants(r.permissions).padEnd(24)} ${String(r.timeout_min).padStart(2)} min  ${r.description}`);
+    if (r.error) { io.println(`${r.name.padEnd(20)} ${label(r).padEnd(9)} invalid: ${r.error}`); continue; }
+    io.println(`${r.name.padEnd(20)} ${label(r).padEnd(9)} ${r.mode.padEnd(18)} ${grants(r.permissions).padEnd(24)} ${String(r.timeout_min).padStart(2)} min  ${r.description}`);
   }
   return 0;
 }
@@ -122,9 +126,52 @@ async function resolve(ctx, io, verb, args, flags) {
   return 0;
 }
 
+// Shared recipes (ADR 0020): preview by default; --confirm installs.
+export async function install(ctx, io, args, flags, { clone } = {}) {
+  const [source] = args;
+  if (!source) throw new TrackerError('usage', 'usage: agent install <https git URL | folder> [--ref <branch|tag|commit>] [--only a,b] [--replace] [--confirm] [--json]');
+  const ref = typeof flags.ref === 'string' ? flags.ref : null;
+  const only = typeof flags.only === 'string' ? flags.only.split(',').map((s) => s.trim()).filter(Boolean) : null;
+  const fetched = fetchSource(source, { ref, ...(clone ? { clone } : {}) });
+  try {
+    const plan = planInstall(discoverRecipes(fetched.root), { env: ctx.env, only, replace: flags.replace === true });
+    if (!plan.length) throw new TrackerError('no-recipes', `no recipe files found in ${source}${only ? ` named ${only.join(', ')}` : ''} (looked in .quill/agents, recipes, agents and the top folder)`);
+    const rows = plan.map((p) => ({ name: p.name, file: p.file, action: p.action, reason: p.reason ?? null, ...(p.recipe && !p.error ? describeRecipe(p.recipe) : {}) }));
+    if (!flags.confirm) {
+      if (flags.json) { io.json({ preview: true, source, ref, commit: fetched.commit, recipes: rows }); return 0; }
+      io.println(`Preview of ${source}${ref ? ` at ${ref}` : ''}${fetched.commit ? ` (commit ${fetched.commit.slice(0, 12)})` : ''}; nothing is installed yet.`);
+      for (const r of rows) {
+        if (r.action === 'skip') { io.println(`  skip     ${r.name}: ${r.reason}`); continue; }
+        io.println(`  ${r.action.padEnd(8)} ${r.name} (${r.mode}, ${r.timeout_min} min): ${r.description}`);
+        io.println(`           permissions: ${r.permissions.join(', ') || 'none'}${r.tools ? `; tools: ${r.tools.join(', ')}` : ''}`);
+        if (r.changes.length) io.println(`           can change things: ${r.changes.join(', ')}. Each run still asks for these, and they are never scheduled.`);
+      }
+      io.println('Read the recipe files before trusting them: their prompts run with your Claude Code account. Install with --confirm.');
+      return 0;
+    }
+    const done = applyInstall(plan, { env: ctx.env, source, ref, commit: fetched.commit, now: nowIso() });
+    if (flags.json) { io.json({ installed: done, skipped: rows.filter((r) => r.action === 'skip') }); return 0; }
+    io.println(done.length ? `Installed ${done.join(', ')} into ${personalRecipesDir(ctx.env)}.` : 'Nothing installed.');
+    for (const r of rows.filter((x) => x.action === 'skip')) io.println(`  skipped ${r.name}: ${r.reason}`);
+    return done.length ? 0 : 1;
+  } finally {
+    fetched.cleanup();
+  }
+}
+
+function removeInstalled(ctx, io, args, flags) {
+  const [name] = args;
+  if (!name) throw new TrackerError('usage', 'usage: agent uninstall <recipe> [--force]');
+  const entry = uninstall(name, { env: ctx.env, force: flags.force === true });
+  io.println(`Removed ${name} (installed from ${entry.source}).`);
+  return 0;
+}
+
 export async function run_({ args, flags, io, env }) {
   const ctx = loadContext(env);
   const [verb, ...rest] = args;
+  if (verb === 'install') return install(ctx, io, rest, flags);
+  if (verb === 'uninstall') return removeInstalled(ctx, io, rest, flags);
   if (verb === 'list' || !verb) return list(ctx, io, flags);
   if (verb === 'show') return show(ctx, io, rest, flags);
   if (verb === 'run') return run(ctx, io, rest, flags);

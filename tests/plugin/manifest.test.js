@@ -27,15 +27,14 @@ test('hooks.json covers every supported hook event in exec form with node, synch
         assert.equal(h.type, 'command');
         assert.equal(h.command, 'node', `${event} uses exec form with node`);
         assert.ok(Array.isArray(h.args), `${event} has args`);
-        assert.equal(h.args[0], '${CLAUDE_PLUGIN_ROOT}/bin/quill.js');
-        assert.equal(h.args[1], 'hook');
-        assert.equal(h.args[2], event);
+        assert.equal(h.args[0], '${CLAUDE_PLUGIN_ROOT}/bin/quill-hook.js', 'the thin hook entry, not the full CLI');
+        assert.equal(h.args[1], event);
         assert.notEqual(h.async, true, `${event} must not be async`);
         assert.ok(Number.isInteger(h.timeout) && h.timeout <= 10, `${event} has a short timeout`);
       }
     }
   }
-  assert.ok(fs.existsSync(path.join(ROOT, 'bin', 'quill.js')));
+  assert.ok(fs.existsSync(path.join(ROOT, 'bin', 'quill-hook.js')));
   assert.equal(hooks.PreToolUse[0].matcher, undefined, 'PreToolUse evaluates every tool (no matcher)');
 });
 

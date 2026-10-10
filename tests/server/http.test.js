@@ -62,6 +62,7 @@ test('authentication: no cookie 401, bootstrap secret is one-use, cookie is Http
     assert.match(b.authRes.headers.get('set-cookie'), /HttpOnly/);
     assert.match(b.authRes.headers.get('set-cookie'), /SameSite=Strict/);
     assert.equal((await fetch(`${b.base}/v1/snapshot`)).status, 401);
+    assert.equal((await fetch(`${b.base}/favicon.ico`)).status, 204, 'the browser icon probe is not a 404');
     assert.equal((await fetch(`${b.base}/auth?secret=${b.secret}`, { redirect: 'manual' })).status, 403, 'secret cannot be reused');
     const snap = await (await b.get('/v1/snapshot')).json();
     assert.equal(snap.tickets.length, 1);

@@ -47,7 +47,7 @@ export async function run({ args, io, env }) {
   }
   let result;
   try {
-    result = runHook(eventName, input, { env });
+    result = runHook(eventName, input, { env, elapsedMs: () => performance.now() });
   } catch (err) {
     io.error(`Session Quill: hook failure (${err.message})`);
     if (eventName === 'PreToolUse' && input && input.tool_name && !READ_TOOLS.has(input.tool_name) && failsClosed(env)) {

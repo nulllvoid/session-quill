@@ -1,6 +1,6 @@
 # ADR 0011 — Tracker sync and two-way artifacts
 
-Date: 2026-10-03 · Status: accepted · Builds on [ADR 0005](0005-gate-modes-and-auto-binding.md) and [ADR 0010](0010-publishers.md)
+Date: 2026-10-03 · Status: accepted, amended by [ADR 0018](0018-tracker-write-back.md) (opt-in write-back) · Builds on [ADR 0005](0005-gate-modes-and-auto-binding.md) and [ADR 0010](0010-publishers.md)
 
 ## Context
 

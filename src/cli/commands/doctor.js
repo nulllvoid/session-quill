@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import { loadContext, workerStatus, commandName } from '../context.js';
+import { loadContext, workerStatus, commandName, latestSnapshot } from '../context.js';
+import { usageStats, usageItems, readJournalTail } from '../../core/usage.js';
+import { nowIso } from '../../lib/time.js';
 import { isLocked } from '../../worker/lock.js';
 import { Journal } from '../../core/journal.js';
 import { journalPath, ingressDir } from '../../lib/paths.js';
@@ -39,7 +41,7 @@ export async function collect(env) {
     return { ctx, report };
   }
   const owner = ctx.storeMeta.owner_machine_id === ctx.machineId;
-  add(owner ? 'ok' : 'warn', 'ownership', owner ? 'this machine' : `another machine (${ctx.storeMeta.owner_machine_id}); this copy is read-only until explicitly transferred`);
+  add(owner ? 'ok' : 'warn', 'ownership', owner ? 'this machine' : `another machine (${ctx.storeMeta.owner_machine_id}); this copy is read-only until explicitly transferred. To see the owner's board here, run quill mirror open`);
   add('ok', 'store', `${ctx.storeMeta.store_name} at ${ctx.config.store_path} (store ${ctx.storeMeta.store_id})`);
   const locked = await isLocked(ctx.storeMeta.store_id, ctx.storeMeta.owner_machine_id, env);
   const ws = workerStatus(ctx);
@@ -65,6 +67,10 @@ export async function collect(env) {
     const status = repoStatus(repo);
     if (status !== 'ok') add('warn', `repo ${id}`, `${repo.canonical_path ?? ''} ${REPO_STATUS_TEXT[status]} (fix the path with quill repo add, or quill repo remove ${id})`.trim());
   }
+  // Usage health stays on this machine; warnings here never fail the doctor.
+  const snap = latestSnapshot(ctx);
+  report.usage = usageStats({ events: readJournalTail(journalPath(env)), healthErrors: readHealthErrors(env, { limit: 5000 }), sessions: snap ? snap.sessions : [], nowIso: nowIso() });
+  for (const item of usageItems(report.usage)) report.items.push(item);
   return { ctx, report };
 }
 

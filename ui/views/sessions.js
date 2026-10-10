@@ -1,17 +1,11 @@
-import { esc, attr, keyEl, sessionChip, timeEl, ticketById, pager, icon, emptyState, countLabel, normalizeSnapshot, hasUnlinkedWork } from '../components.js';
+import { esc, attr, keyEl, sessionChip, timeEl, ticketById, pager, icon, emptyState, countLabel, normalizeSnapshot, hasUnlinkedWork, filterSessions } from '../components.js';
 
 export const SESSIONS_PAGE_SIZE = 50;
 
 export function renderSessions(rawSnapshot, filters, { now, page = 0, selected = null }) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const tz = snapshot.meta.timezone;
-  let sessions = [...snapshot.sessions];
-  if (filters.machine) sessions = sessions.filter((s) => s.machine_name === filters.machine);
-  if (filters.project) sessions = sessions.filter((s) => (s.project_ids ?? []).includes(filters.project) || s.ticket_ids.some((id) => (ticketById(snapshot, id) ?? {}).project_id === filters.project));
-  if (filters.q) {
-    const q = filters.q.toLowerCase();
-    sessions = sessions.filter((s) => `${s.host_session_id} ${s.title ?? ''} ${s.machine_name} ${s.ticket_ids.map((id) => (ticketById(snapshot, id) ?? {}).key ?? '').join(' ')}`.toLowerCase().includes(q));
-  }
+  const sessions = [...filterSessions(snapshot, filters)];
   const order = { live: 0, idle: 1, extinct: 2, ended: 3 };
   sessions.sort((a, b) => (order[a.state] - order[b.state]) || (a.last_event_at < b.last_event_at ? 1 : -1));
   if (!sessions.length) return `<section class="view view-sessions" aria-labelledby="tab-sessions">${emptyState('No sessions recorded', 'Sessions appear when a Claude Code session with the plugin loaded starts. Live means recent activity, not a running process.')}</section>`;

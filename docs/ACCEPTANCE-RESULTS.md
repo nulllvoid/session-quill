@@ -33,9 +33,9 @@ Run: https://github.com/nulllvoid/session-quill/actions/runs/37018025766 (296 te
 | A01 | Automated (in-process fixtures) | `tests/acceptance/phase0.test.js`, `tests/gate/*.test.js` — writes, unknown shell, redirects, substitutions, mutating MCP denied; reads and every allowlisted shell form pass |
 | A02 | Automated (in-process) | plan-file exception only for the session's claimed plan path under the plan directory; source edits in plan mode denied. **Limitation:** the host exposes no plan path in hook input, so the first plan-mode `Write` of a Markdown file directly inside `~/.claude/plans` is taken as the session's plan file ([ADR 0004](decisions/0004-plan-path-first-claim.md)) |
 | A03 | Automated | distinct identities for two sessions in one cwd and a subagent; missing `session_id` denies covered writes and never falls back to cwd |
-| A04 | **Pending manual** | real approved/rejected/cancelled `ExitPlanMode` payloads and Stop/subagent payloads from a live host; fixtures in `tests/fixtures/hooks/` follow the documented shapes |
+| A04 | Partly verified live + **Pending manual** | Live host, Claude Code 2.1 on Windows, 2026-10-10 (session 8e4ba15a, 365 events): `Stop` delivered `last_assistant_message` and was captured as complete checkpoints; `PostToolUseFailure` carried the host error text; `SessionStart` arrived as `startup` and later `resume` (from another device, `cwd` = home directory) followed by `SessionEnd` reason `other` while the session kept working. **Finding, fixed in 0.6.1:** the host's own helper agents (next-prompt suggestion, side questions) fire `SubagentStop` with `agent_type: ""` and no `SubagentStart`; one message was the user's predicted next prompt and was stored as a checkpoint. The hook now ignores `SubagentStop` with an empty `agent_type`. Still pending: real `ExitPlanMode` approved/rejected/cancelled payloads and a real typed subagent run |
 | A05 | Automated | `tests/acceptance/phase0.test.js`, `tests/server/http.test.js` — 202 after persistence, note revision change, confirmation; unauthenticated / wrong-Origin / wrong-Host / missing CSRF cannot mutate |
-| A06 | **Pending manual** | installed command names (`/session-quill:*`) and status-line composition on a live host; `claude plugin validate` passes |
+| A06 | Partly verified live + **Pending manual** | Live host, 2026-10-10: the installed plugin (`session-quill@quill-local` 0.6.0) exposes `/session-quill:agent`, `approve`, `doctor`, `handoff`, `publish`, `start`, `status`, `ticket` and `ui`, and the injected guidance names `/session-quill:ticket`. Still pending: status-line composition; `claude plugin validate` passes |
 | A07 | Automated | the hook process never fails; a PreToolUse the gate cannot evaluate (malformed input, internal error, failed capture) fails closed for every covered tool while reads pass; non-gate hooks never block; bound sessions emit no decision (never an `allow` override). Host fail-open limit: a hook the host times out or cannot launch is outside the guarantee (TRD) |
 
 ## Phase 1 — persistence, attribution and recovery
@@ -63,7 +63,17 @@ Run: https://github.com/nulllvoid/session-quill/actions/runs/37018025766 (296 te
 | 2,000 tickets / 20,000 events (default `npm test`) | 3.9 s | 1.4 ms | 1.7 ms | 13.2 ms | 648 ms | 18 ms |
 | 10,000 tickets / 100,000 events (`QUILL_PERF_FULL=1`) | 12.9 s | 1.5 ms | 1.7 ms | 4.7 ms | 673 ms | 63 ms |
 
-Hook timings are in-process (`runHook`) and exclude Node process start-up (~40–80 ms on this machine), which the host incurs per hook invocation; the 200 ms budget still holds with margin. Cold-start numbers per OS remain to be recorded.
+Hook timings are in-process (`runHook`) and exclude Node process start-up (~40–80 ms on this machine), which the host incurs per hook invocation; the 200 ms budget still holds with margin.
+
+Whole-process numbers, as the host sees them, come from `node scripts/bench-hooks.mjs` (a fresh `node` per call with a bound session). Windows 11, Node 24.19.0, 40 calls each, 2026-10-11:
+
+| Entry | p50 | p95 | max |
+| --- | --- | --- | --- |
+| bare `node -e ""` | 47 ms | 51 ms | 52 ms |
+| `bin/quill.js hook PreToolUse` (before 0.6.1) | 106 ms | 114 ms | 116 ms |
+| `bin/quill-hook.js PreToolUse` (plugin hooks from 0.6.1) | 94 ms | 104 ms | 106 ms |
+
+The rest is module loading on the hook path (about 34 ms, mostly `node:crypto` and event validation). Node's compile cache made no measurable difference. macOS and Linux numbers remain to be recorded.
 
 ## Phase 2 — migration
 
@@ -174,8 +184,12 @@ CI now runs `npm run test:ci`, which also writes TAP; when a job fails, `scripts
 
 Inbox and key chips were also checked in the built-in browser against the dev seed (`node scripts/dev-seed.mjs`): create-from-key queued with an undo countdown, applied after the window and emptied the inbox; tracker keys render as new-tab links with copy buttons; local keys offer "Link to external…". At 375 px the page is wider than the screen because of the header and sidebar, which predates this step.
 
-Unit coverage: `tests/core/external-keys.test.js` (validation, bounded scans, non-ticket tokens, URL templates), `tests/hooks/autobind.test.js`, `tests/hooks/nudge.test.js`, `tests/hooks/gate-modes.test.js`, `tests/worker/identity.test.js`, `tests/core/external-bind.test.js`. **Pending manual:** the Stop `decision: "block"` nudge and `UserPromptSubmit` context against a live Claude Code host (the same host gap as A04/A06).
+Unit coverage: `tests/core/external-keys.test.js` (validation, bounded scans, non-ticket tokens, URL templates), `tests/hooks/autobind.test.js`, `tests/hooks/nudge.test.js`, `tests/hooks/gate-modes.test.js`, `tests/worker/identity.test.js`, `tests/core/external-bind.test.js`. **Verified live (2026-10-10):** `SessionStart` and `UserPromptSubmit` `additionalContext` reach the model on Claude Code 2.1. **Pending manual:** the Stop `decision: "block"` nudge, which needs an unbound session that writes files.
 
 ## Phase 5 — release evidence
 
-Partially done. Done: license (MIT), repository owner (github.com/nulllvoid/session-quill), Ubuntu/macOS/Windows test matrix in CI, public documentation (README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, architecture guide). Still required: two outside installs under 10 minutes using the README only; WSL run; cold-start hook timings per OS; A04/A06 against a live Claude Code host; a tagged `v0.1.0` release.
+Partially done. Done: license (MIT), repository owner (github.com/nulllvoid/session-quill), Ubuntu/macOS/Windows test matrix in CI, public documentation (README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, architecture guide), tagged releases from v0.2.0, A04/A06 partly against a live host (above).
+
+First-run smoke (`node scripts/install-smoke.mjs`, also in CI on every OS): `quill start`, the SessionStart hook, Claude's first `ticket work`, a Write through PreToolUse/PostToolUse, `quill status` and `quill ui --no-open` on a throwaway home and a fresh Git repository. Windows 11, Node 24.19.0, 2026-10-11: 7/7 steps in 2.2 s (start 675 ms, dashboard link 720 ms, each hook about 100 ms). This covers the CLI side of installation only; the `/plugin marketplace add` and `/plugin install` steps need a live host.
+
+Still required: two outside installs under 10 minutes using the README only (needs people); WSL run; hook timings on macOS and Linux (CI now prints them).

@@ -103,7 +103,7 @@ Conventional prefixes (`feat:`, `fix:`, `docs:`, `test:`, `chore:`, `refactor:`)
 
 ### Adding a reducer event kind
 
-Add it to `EVENT_KINDS` in `src/core/events.js`, handle it in `src/core/reducer.js`, keep the handler idempotent (duplicate `event_id` or `source_identity` must have one effect), derive any new ids with `deterministicId`, and add a replay test.
+Add it to `EVENT_KINDS` in `src/core/events.js`, dispatch it in `src/core/reducer.js` (put a handler of any size in the matching `src/core/reduce/` module), keep the handler idempotent (duplicate `event_id` or `source_identity` must have one effect), derive any new ids with `deterministicId`, and add a replay test.
 
 ### Adding a PR provider
 

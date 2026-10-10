@@ -9,7 +9,7 @@ import { putBlob } from '../core/blobs.js';
 import { sessionKey } from '../core/state.js';
 import { matchApprovalPhrase } from '../core/approval.js';
 import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } from '../gate/decide.js';
-import { readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
+import { readTicketProjection, readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
 import { scopeFor } from './scope.js';
 import { planAutoBind } from './autobind.js';
 import { markUnboundWork, shouldNudge, markNudged, nudgeReason, isWorkTool, markTicketWork, shouldCheckDone, markDoneChecked, doneCheckReason } from './nudge.js';
@@ -18,6 +18,8 @@ import { currentBranch } from '../lib/git-head.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
 import { ensureDir, removeIfExists } from '../lib/atomic-fs.js';
 import { nowIso } from '../lib/time.js';
+import { resumeBrief } from '../core/brief.js';
+import { collectTurnUsage } from './usage.js';
 import {
   sanitizeTitle, writePathsFor, commitFromBash, prFromBash, planFromExitPlanMode, extractConclusions, preview,
 } from './payload.js';
@@ -27,8 +29,19 @@ export const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'P
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const bundledCli = fileURLToPath(new URL('../../bin/quill.js', import.meta.url)).replaceAll('\\', '/');
 
+const DESCRIPTION_FORMAT = '"**Goal:** <one sentence: what the task achieves>\\n\\n**Context:** <why it matters and where: files, components, constraints>\\n\\n**Done when:**\\n- <a checkable condition>\\n- <another, such as the test that must pass>"';
+
+// The full guidance is sent at SessionStart, which the host also fires after compaction. Later
+// prompts get one line, so a long session does not pay for the whole text on every turn.
 function taskContext(session_id) {
-  return `Session Quill task tracking: tickets represent tasks, not sessions or individual prompts. Before substantive work on a distinct task, inspect existing tickets with node ${JSON.stringify(bundledCli)} ticket list --json. Reuse the matching task with ticket bind <KEY> --session ${session_id}, or run ticket work "<concise task title>" --description "<description>" --session ${session_id} to reuse/create and bind an open task. The description is required, in Markdown, in this format: "**Goal:** <one sentence: what the task achieves>\\n\\n**Context:** <why it matters and where: files, components, constraints>\\n\\n**Done when:**\\n- <a checkable condition>\\n- <another, such as the test that must pass>". Write it from what the user asked and what you know; keep it under 4000 characters. Use --category feature for FEAT or --category bugfix for FIX; other tasks use DEV. Keep follow-up questions, corrections, retries, and approvals on the same task. Switch bindings before working on another task; switching never moves earlier activity. A task can span multiple sessions. Do not create tickets just for session startup, greetings, or status questions. Do not ask the user to do routine local ticket setup. Never treat a binding as permission to commit, push, or deploy.`;
+  return `Session Quill task tracking: tickets represent tasks, not sessions or individual prompts. Before substantive work on a distinct task, inspect existing tickets with node ${JSON.stringify(bundledCli)} ticket list --json. Reuse the matching task with ticket bind <KEY> --session ${session_id}, or run ticket work "<concise task title>" --description "<description>" --session ${session_id} to reuse/create and bind an open task. The description is required, in Markdown, in this format: ${DESCRIPTION_FORMAT}. Write it from what the user asked and what you know; keep it under 4000 characters. Use --category feature for FEAT or --category bugfix for FIX; other tasks use DEV. Keep follow-up questions, corrections, retries, and approvals on the same task. Switch bindings before working on another task; switching never moves earlier activity. A task can span multiple sessions. Do not create tickets just for session startup, greetings, or status questions. Do not ask the user to do routine local ticket setup. Never treat a binding as permission to commit, push, or deploy.`;
+}
+
+function taskReminder(bound, session_id) {
+  if (bound && bound.ticket_id) {
+    return `Session Quill: working on ${bound.ticket_key}. Keep follow-ups, corrections and retries on it; if this prompt starts a distinct task, switch with ticket work or ticket bind --session ${session_id} as described at session start.`;
+  }
+  return `Session Quill: this session is not linked to a task. Before substantive work, reuse or create one with ticket work --session ${session_id} as described at session start; skip this for greetings and status questions.`;
 }
 
 function denyOutput(reason) {
@@ -117,7 +130,10 @@ function autoBind({ plan, source, titleHint, base, key, snapshot, scope, identit
   return false;
 }
 
-export function runHook(eventName, input, { env = process.env, now } = {}) {
+// `elapsedMs`, when given, reports how long this hook process has run so far (start-up included);
+// tool events carry it so `quill doctor` can show real hook latency without telemetry.
+export function runHook(eventName, input, { env = process.env, now, elapsedMs = null } = {}) {
+  const hookMs = () => (elapsedMs ? Math.round(elapsedMs()) : undefined);
   const result = { exitCode: 0, stdout: '', stderr: '', persisted: null };
   const occurred_at = now ?? nowIso();
   if (!input || typeof input !== 'object') {
@@ -172,7 +188,8 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
         const plan = branch ? planAutoBind({ source: 'branch', text: branch, snapshot: current, tracker: scope.tracker }) : null;
         if (plan && autoBind({ plan, source: 'branch', titleHint: branchTitle(branch, plan.key), base, key, snapshot: current, scope, identity, env, result, occurred_at })) current = readBindingSnapshot(key, env);
       }
-      result.stdout = contextOutput('SessionStart', `${bindingContext(current, session_id, mode, scope.tracker)} ${taskContext(session_id)}`);
+      const brief = current && current.ticket_id ? resumeBrief(readTicketProjection(current.ticket_id, env), { nowIso: occurred_at }) : null;
+      result.stdout = contextOutput('SessionStart', [bindingContext(current, session_id, mode, scope.tracker), brief, taskContext(session_id)].filter(Boolean).join(' '));
       return result;
     }
     case 'UserPromptSubmit': {
@@ -195,14 +212,17 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
           const was = snapshot && snapshot.ticket_id ? ` (previously ${snapshot.ticket_key})` : '';
           context.length = 0;
           context.push(`Session Quill session: ${session_id}. Linked to ${plan.key}${was} because the prompt mentions it; captured work is attributed to it from now on.`);
+          const linked = readBindingSnapshot(key, env);
+          const brief = linked && linked.ticket_id ? resumeBrief(readTicketProjection(linked.ticket_id, env), { nowIso: occurred_at }) : null;
+          if (brief) context.push(brief);
         }
       }
-      if (!handoff) context.push(taskContext(session_id));
+      const bound = readBindingSnapshot(key, env);
+      if (!handoff) context.push(snapshot ? taskReminder(bound, session_id) : taskContext(session_id));
       // A ticket created without an agent (tracker key, migration, dashboard) still owes a
       // description; the session working on it writes one (ADR 0014).
-      const bound = readBindingSnapshot(key, env);
       if (!handoff && bound && bound.ticket_id && bound.ticket_has_description === false) {
-        context.push(`Session Quill: ticket ${bound.ticket_key} has no valid description. During this turn, write one from what you know with node ${JSON.stringify(bundledCli)} ticket set ${bound.ticket_key} --description "<description>", in the Goal / Context / Done when format above. Do not ask the user to do this.`);
+        context.push(`Session Quill: ticket ${bound.ticket_key} has no valid description. During this turn, write one from what you know with node ${JSON.stringify(bundledCli)} ticket set ${bound.ticket_key} --description "<description>", in this format: ${DESCRIPTION_FORMAT}. Do not ask the user to do this.`);
       }
       if (context.length) result.stdout = contextOutput('UserPromptSubmit', context.join(' '));
       return result;
@@ -231,7 +251,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
         ...base, kind: 'pre-tool', tool_call_id,
         ticket_id: snapshot && snapshot.ticket_id ? snapshot.ticket_id : null,
         binding_revision: snapshot ? snapshot.binding_revision ?? null : null,
-        payload: { tool_name, denied, gate_reason: gate.reason && !denied ? gate.reason : null, write_target: summarizeTarget(tool_name, input.tool_input), gate_enabled: gateEnabled, gate_mode: mode },
+        payload: { tool_name, denied, gate_reason: gate.reason && !denied ? gate.reason : null, write_target: summarizeTarget(tool_name, input.tool_input), gate_enabled: gateEnabled, gate_mode: mode, hook_ms: hookMs() },
         source_identity: tool_call_id ? `pre-tool:${key}:${tool_call_id}` : undefined,
       });
       if (denied) result.stdout = denyOutput(reason);
@@ -266,6 +286,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
       if (!handoff && snapshot && snapshot.ticket_id && isWorkTool(tool_name)) {
         try { markTicketWork(key, env, snapshot.ticket_id, occurred_at); } catch { /* best effort */ }
       }
+      payload.hook_ms = hookMs();
       const ev = makeEvent({ ...base, kind: 'post-tool', tool_call_id, payload, source_identity: tool_call_id ? `post-tool:${key}:${tool_call_id}` : undefined });
       persist(ev, env, result);
       return result;
@@ -278,6 +299,10 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
     }
     case 'Stop':
     case 'SubagentStop': {
+      // The host's own helper agents (next-prompt suggestion, side questions) stop with an empty
+      // agent_type and never start as subagents; their text is not the session's work. Observed
+      // on Claude Code 2.1 (ACCEPTANCE-RESULTS A04).
+      if (eventName === 'SubagentStop' && input.agent_type === '') return result;
       const message = typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null;
       let content_ref = null;
       let complete = false;
@@ -289,9 +314,13 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
           result.stderr += `Session Quill: capture gap — checkpoint blob not stored (${err.message})\n`;
         }
       }
+      let usage = null;
+      if (eventName === 'Stop') {
+        try { usage = collectTurnUsage(input.transcript_path, key, env); } catch { usage = null; /* effort is best effort; capture never fails on it */ }
+      }
       const nudge = eventName === 'Stop' && mode === 'nudge' && !(snapshot && snapshot.ticket_id) && input.stop_hook_active !== true && shouldNudge(key, env);
       const ev = makeEvent({ ...base, kind: eventName === 'Stop' ? 'stop' : 'subagent-stop', payload: {
-        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge,
+        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge, ...(usage ? { usage } : {}),
       }, source_identity: `${eventName === 'Stop' ? 'stop' : 'subagent-stop'}:${key}:${content_ref ?? 'missing'}:${occurred_at}` });
       persist(ev, env, result);
       if (nudge) {
