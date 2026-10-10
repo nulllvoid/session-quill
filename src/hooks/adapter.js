@@ -289,6 +289,10 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
     }
     case 'Stop':
     case 'SubagentStop': {
+      // The host's own helper agents (next-prompt suggestion, side questions) stop with an empty
+      // agent_type and never start as subagents; their text is not the session's work. Observed
+      // on Claude Code 2.1 (ACCEPTANCE-RESULTS A04).
+      if (eventName === 'SubagentStop' && input.agent_type === '') return result;
       const message = typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null;
       let content_ref = null;
       let complete = false;

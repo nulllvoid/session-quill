@@ -164,6 +164,18 @@ test('SessionStart injects binding context including the session id; SubagentSta
   assert.match(JSON.parse(r2.stdout).hookSpecificOutput.additionalContext, /unbound/);
 });
 
+// Live host (Claude Code 2.1, 2026-10-10): the next-prompt suggestion agent fired SubagentStop with
+// agent_type "" and no SubagentStart; its message was the user's predicted next prompt.
+test('a host helper agent (empty agent_type) is not captured; a real subagent still is', () => {
+  const env = setup({ bound: true });
+  const helper = { ...fixture('subagent-stop'), agent_id: 'abf8755c1666880f7', agent_type: '', last_assistant_message: 'start on A1–A3 in a worktree' };
+  const r = runHook('SubagentStop', helper, { env, now: NOW });
+  assert.equal(r.stdout, '');
+  assert.deepEqual(events(env), []);
+  run('subagent-stop', env);
+  assert.deepEqual(events(env).map((e) => e.kind), ['subagent-stop']);
+});
+
 test('ingress failure never blocks a non-gate hook and never returns a false receipt; covered PreToolUse is denied', () => {
   const env = setup({ bound: true });
   fs.rmSync(path.join(env.QUILL_HOME, 'ingress'), { recursive: true, force: true });
