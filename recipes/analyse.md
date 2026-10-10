@@ -14,6 +14,8 @@ Work out where this ticket really stands and what should happen next. Do not pro
 3. Look for what is in the way: failing or missing tests, open questions in the notes, an unmerged or stale PR, a deployment still pending, a sibling or parent this depends on.
 4. Recommend the single most useful next step. If something outside the owner's control stops progress, report it as the blocker and make the next action what unblocks it.
 
+When the work spans several modules or more files than you can read closely, split the analysis by module: give each subagent one module (or one area of the diff) and ask it for findings with their sources. Then merge the results yourself into one answer, removing duplicates and resolving disagreements by re-reading the source. For a small change, do it yourself; subagents only help when there is a lot to read.
+
 If the Description status is not valid, also write the ticket's description from what you found: the goal, the context that matters, and checkable done-when conditions.
 
 Summary: what is done, what is left, and the main risk, each with its source. Set a blocker only for something that actually stops progress now, not for a risk.

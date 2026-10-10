@@ -15,4 +15,6 @@ Analyse where this ticket stands, recommend a concrete next action, and propose 
 4. Propose at most five children, most important first, and fewer is better than padding. Each needs a title that names the change ("Add retry limit to the sync client", not "Retry improvements"), a category, a priority relative to this ticket, a first action someone could start right away, and a description in the required format whose Done when says how to tell that child is finished.
 5. If the Description status of this ticket is not valid, write its description too.
 
+When the work spans several modules or more files than you can read closely, split the analysis by module: give each subagent one module (or one area of the diff) and ask it for findings with their sources. Then merge the results yourself into one answer, removing duplicates and resolving disagreements by re-reading the source. For a small change, do it yourself; subagents only help when there is a lot to read.
+
 Proposing no children is a valid answer when the evidence shows none; say so in the summary.

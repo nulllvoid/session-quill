@@ -255,6 +255,10 @@ function profileTools({ mode, permissions = {} }) {
     allowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash(npm test*)', 'Bash(node --test*)', 'Bash(npx vitest*)', 'Bash(npx jest*)', 'Bash(pytest*)', 'Bash(go test*)', 'Bash(cargo test*)', 'Bash(git add*)');
   } else {
     disallowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit');
+    // A read-only analysis may split a large codebase across Claude Code subagents (ADR 0023).
+    // They run inside this same session, under these same rules, and one reservation still
+    // covers the whole run. A fix stays a single agent.
+    if (mode === 'analyse' || mode === 'analyse-followups') allowed.push('Task', 'Agent');
   }
   if (!permissions.commit) disallowed.push('Bash(git commit*)');
   else allowed.push('Bash(git commit*)');
