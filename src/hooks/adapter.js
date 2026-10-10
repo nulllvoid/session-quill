@@ -9,7 +9,7 @@ import { putBlob } from '../core/blobs.js';
 import { sessionKey } from '../core/state.js';
 import { matchApprovalPhrase } from '../core/approval.js';
 import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } from '../gate/decide.js';
-import { readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
+import { readTicketProjection, readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
 import { scopeFor } from './scope.js';
 import { planAutoBind } from './autobind.js';
 import { markUnboundWork, shouldNudge, markNudged, nudgeReason, isWorkTool, markTicketWork, shouldCheckDone, markDoneChecked, doneCheckReason } from './nudge.js';
@@ -18,6 +18,7 @@ import { currentBranch } from '../lib/git-head.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
 import { ensureDir, removeIfExists } from '../lib/atomic-fs.js';
 import { nowIso } from '../lib/time.js';
+import { resumeBrief } from '../core/brief.js';
 import {
   sanitizeTitle, writePathsFor, commitFromBash, prFromBash, planFromExitPlanMode, extractConclusions, preview,
 } from './payload.js';
@@ -186,7 +187,8 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
         const plan = branch ? planAutoBind({ source: 'branch', text: branch, snapshot: current, tracker: scope.tracker }) : null;
         if (plan && autoBind({ plan, source: 'branch', titleHint: branchTitle(branch, plan.key), base, key, snapshot: current, scope, identity, env, result, occurred_at })) current = readBindingSnapshot(key, env);
       }
-      result.stdout = contextOutput('SessionStart', `${bindingContext(current, session_id, mode, scope.tracker)} ${taskContext(session_id)}`);
+      const brief = current && current.ticket_id ? resumeBrief(readTicketProjection(current.ticket_id, env), { nowIso: occurred_at }) : null;
+      result.stdout = contextOutput('SessionStart', [bindingContext(current, session_id, mode, scope.tracker), brief, taskContext(session_id)].filter(Boolean).join(' '));
       return result;
     }
     case 'UserPromptSubmit': {
@@ -209,6 +211,9 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
           const was = snapshot && snapshot.ticket_id ? ` (previously ${snapshot.ticket_key})` : '';
           context.length = 0;
           context.push(`Session Quill session: ${session_id}. Linked to ${plan.key}${was} because the prompt mentions it; captured work is attributed to it from now on.`);
+          const linked = readBindingSnapshot(key, env);
+          const brief = linked && linked.ticket_id ? resumeBrief(readTicketProjection(linked.ticket_id, env), { nowIso: occurred_at }) : null;
+          if (brief) context.push(brief);
         }
       }
       const bound = readBindingSnapshot(key, env);

@@ -119,6 +119,13 @@ instructions to reuse or create a ticket before substantive work, and to keep
 follow-ups, corrections, and retries on the same task. Starting a session alone
 does not create a ticket.
 
+When a session binds to a ticket that already has history (at session start, after
+compaction, when a prompt mentions its key, or through `ticket bind` and `ticket work`),
+Claude also gets a short brief of where the work stands: the goal, next action or
+blocker, the approved plan, recent conclusions, recently changed files, PRs and pending
+deployments. It is read from the ticket's projection, capped at 1,200 characters, and
+absent for a ticket nothing has happened on yet.
+
 Every ticket Claude creates has a description in one format, which the dashboard shows and agent runs read as context ([ADR 0014](docs/decisions/0014-ticket-descriptions.md)):
 
 ```markdown

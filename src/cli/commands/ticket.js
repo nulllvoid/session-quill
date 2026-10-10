@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { loadContext, sessionFromFlags, cliEvent, submitAndWait, latestSnapshot, findTicketByKey, effectiveDefaults, commandName } from '../context.js';
+import { loadContext, sessionFromFlags, cliEvent, submitAndWait, latestSnapshot, latestTicketDetail, findTicketByKey, effectiveDefaults, commandName } from '../context.js';
+import { resumeBrief } from '../../core/brief.js';
 import { validateKey } from '../../core/keys.js';
 import { CATEGORIES, PRIORITIES, loadRepoConfig, resolveTracker } from '../../config/config.js';
 import { renderUrl, isSafeExternalUrl, TRACKER_SYSTEMS } from '../../core/external-keys.js';
@@ -21,6 +22,8 @@ async function bind(ctx, io, session, ticket, flags) {
   if (ack.rejected) throw new TrackerError(ack.rejected, `bind rejected: ${ack.rejected}`);
   const snap = readBindingSnapshot(sessionKey(session), ctx.env);
   io.println(`Bound session ${session.session_id}${session.agent_id ? ` (agent ${session.agent_id})` : ''} to ${ticket.key} — ${ticket.title} (binding revision ${snap ? snap.binding_revision : '?'}).`);
+  const brief = resumeBrief(latestTicketDetail(ctx, ticket.id) ?? ticket, { nowIso: nowIso() });
+  if (brief) io.println(brief);
   return snap;
 }
 
@@ -70,7 +73,11 @@ async function create(ctx, io, args, flags, { work = false } = {}) {
   delete ticket.key_prefix;
   delete ticket.reused;
   io.println(`${ack.ticket?.reused ? 'Reused' : 'Created'} ${ticket.key} — ${ticket.title}${work ? '' : ` [${ticket.category}, ${ticket.priority}, project ${project_id}${parent ? `, child of ${parent.key}` : ''}]`}`);
-  if (work) io.println(`Working on ${ticket.key} in session ${session.session_id}. Earlier work keeps its original ticket attribution.`);
+  if (work) {
+    io.println(`Working on ${ticket.key} in session ${session.session_id}. Earlier work keeps its original ticket attribution.`);
+    const brief = ack.ticket?.reused ? resumeBrief(latestTicketDetail(ctx, ticket.id), { nowIso: nowIso() }) : null;
+    if (brief) io.println(brief);
+  }
   else if (flags.bind) await bind(ctx, io, session, ticket, flags);
   else io.println(`Bind with: ${commandName('ticket')} bind ${ticket.key}`);
   if (flags.json) io.json({ ticket });
