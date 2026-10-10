@@ -68,6 +68,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       return null;
     }
     entry.child = run.child;
+    entry.kill = null;
     entry.done = run.done;
     const outcome = await run.done;
     if (entry.reason || outcome.error || outcome.code !== 0) return null;
@@ -88,7 +89,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       if (entry.selfCheck) quality.self_check_skipped = parsed.is_error ? 'the agent reported an error' : 'the reply carried no session id to resume';
       return { outcome, quality };
     }
-    if (parsed.problems.length && timeLeft()) {
+    if (parsed.problems.length && !entry.reason && timeLeft()) {
       const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: 2 });
       const fixed = next ? parseAgentResult(next.stdout, parseOpts) : null;
       if (fixed && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
@@ -211,7 +212,13 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const { command, timeoutMs } = testGateSettings(ctx.config.repos[h.repo_id]);
     if (!command) return { outcome, gate: { status: 'skipped', reason: 'no test_command for this repository; the fix is not test-verified' } };
     const env = childEnvFor(entry.permissions, process.env, entry.env);
-    const once = () => runTestCommand({ command, cwd: h.worktree_path, timeoutMs, env, onChild: (child) => { entry.child = child; } });
+    // The gate's command is the run's child while it runs: cancellation, the deadline and a worker
+    // stop kill it through its own handle, and onStop waits for it (entry.done).
+    const once = () => {
+      const p = runTestCommand({ command, cwd: h.worktree_path, timeoutMs, env, onChild: (child, kill) => { entry.child = child; entry.kill = kill; } });
+      entry.done = p;
+      return p;
+    };
     let total = 0;
     let attempts = 1;
     let result = await once();
@@ -310,14 +317,14 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
     running.set(h.id, { child: run.child, done: run.done, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, spawnedAt });
-    run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
+    running.get(h.id).finished = run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 
   function killWithReason(id, reason) {
     const entry = running.get(id);
     if (!entry) return;
     entry.reason = reason;
-    killTree(entry.child);
+    if (entry.kill) entry.kill(); else killTree(entry.child);
   }
 
   return {
@@ -352,7 +359,9 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       if (abandonRuns) { running.clear(); return; }
       const pending = [];
       for (const [id, entry] of running) {
-        if (entry.child) { killWithReason(id, 'stopped'); pending.push(entry.done); }
+        // Wait for the whole finish, not just the process: it may be in a follow-up turn or the
+        // test gate, and its outcome must reach the journal before the worker stops.
+        if (entry.child) { killWithReason(id, 'stopped'); pending.push(entry.done, entry.finished); }
       }
       await Promise.all(pending);
       // give finish() handlers a tick to journal their outcomes
