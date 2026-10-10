@@ -355,7 +355,7 @@ export function evaluateRequest(worker, req) {
         base_ticket_revision: ticket.revision, base_next_action: ticket.next_action ?? '', repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
         requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,
         children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
-        recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
+        batch_id: checked.batch_id ?? null, recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
       };
       return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
     }

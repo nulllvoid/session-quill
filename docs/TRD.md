@@ -174,6 +174,8 @@ Display score = min(100, raw score). Rank by raw score descending, then due asce
 
 `quill ui` opens a dashboard served by the worker on loopback only. It never binds to a LAN/public interface in v1. Initialization starts/supervises the worker via the OS service mechanism; CLI diagnostics expose ownership, backlog and errors. UI loss of connection leaves the last rendered generation visible with an offline banner and disables submissions.
 
+Always-on dashboard ([ADR 0022](decisions/0022-always-on-dashboard.md)): the server prefers port 47321 (`ui_port`) and falls back to a random port when it is taken; owner sessions are stored as hashes with a 7-day sliding expiry so a restart keeps the browser signed in, and `quill ui --revoke` clears them; a browser without a session gets a sign-in page; `quill worker install` registers a per-user login entry that runs `quill worker start` once.
+
 The worker provides versioned JSON endpoints:
 - `GET /v1/snapshot`: complete generation, collections and capabilities.
 - `GET /v1/tickets/<id>?generation=<id>` and `GET /v1/content/<hash>?generation=<id>`: paged detail and full permitted content from that generation; return generation-expired so the client can reload rather than mixing revisions.
@@ -222,6 +224,8 @@ Recipe context and replies ([ADR 0013](decisions/0013-recipe-context-and-reply-c
 Recipes ([ADR 0008](decisions/0008-agent-recipes.md)): the three modes are now built-in recipe files beside `deploy-check` and `standup`; teams and owners add recipes in `.quill/agents/` (repository, highest precedence) or `~/.claude/quill/agents/`. A recipe's frontmatter permissions are a ceiling for each run, its `tools` can only narrow the permission profile, and its `timeout_min` (at most 20) caps the run. The request records the recipe hash, re-checked when the request applies and again at dispatch. Outputs of recipes other than the built-in modes become suggestions accepted through revision-checked requests; a comment draft is never posted. An `agent` schedule queues read-only runs over a ticket scope and refuses `attempt-fix` recipes.
 
 Only analyse-followups creates children by default. Suggested next_action updates are checked against the next action recorded when the run was queued and become conflicts if it changed; the run's own tool calls, which are attributed to the ticket, do not count. Runs journalled before that value was recorded use the ticket revision instead. A blocker is a suggestion; the agent cannot silently overwrite a newer owner status. A draft PR creates no deploy-pending child. Deployment obligations appear only when merge evidence arrives.
+
+Bulk runs and the test gate ([ADR 0023](decisions/0023-bulk-runs-and-test-gate.md)): the dashboard queues bulk runs as one ordinary handoff request per ticket sharing a `batch_id`, with no transactional batch; Cancel batch cancels the batch's queued runs one by one. After a run with `edit_source` leaves a diff, the worker runs the repository's `test_command` in its checkout (timeout `test_timeout_ms`, default 10 min) and records `test_gate`; a failure gets one repair turn with the output, and a second failure or timeout fails the run with no commit, push, PR or suggestion. `[handoff] max_concurrent_readonly` (default 2) and `max_concurrent_fix` (default 1) cap read-only and fix runs separately. Read-only analyses with source access may fan out to Claude Code subagents within the one run.
 
 ## Publishing
 

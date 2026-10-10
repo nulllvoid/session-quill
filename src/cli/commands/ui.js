@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { loadContext, latestSnapshot, workerStatus } from '../context.js';
+import { loadContext, latestSnapshot, workerStatus, liveEndpoint } from '../context.js';
 import { hashSecret } from '../../server/auth.js';
-import { endpointPath, secretsDir } from '../../server/extension.js';
-import { readJsonIfExists, writeJsonAtomic, ensureDir } from '../../lib/atomic-fs.js';
+import { endpointPath, secretsDir, sessionsPath, revokePath } from '../../server/extension.js';
+import { readJsonIfExists, writeJsonAtomic, ensureDir, listFiles, removeIfExists } from '../../lib/atomic-fs.js';
 import { writeStaticHtml } from '../../export/static.js';
 import { nowIso, addMs, MINUTE } from '../../lib/time.js';
 import { TrackerError } from '../../lib/errors.js';
@@ -38,8 +38,30 @@ export async function issueOwnerUrl(ctx, { ttlMs = 10 * MINUTE } = {}) {
   return { url: `http://${endpoint.host}:${endpoint.port}/auth?secret=${secret}`, base: `http://${endpoint.host}:${endpoint.port}/`, ttlMs };
 }
 
+// Signs every browser out (ADR 0022): outstanding one-use links die, stored session hashes are
+// deleted, and a running worker drops the sessions it holds in memory.
+export async function revokeSessions(ctx) {
+  for (const name of listFiles(secretsDir(ctx.env), (f) => f.endsWith('.json'))) removeIfExists(path.join(secretsDir(ctx.env), name));
+  const live = liveEndpoint(ctx) !== null;
+  if (live) {
+    writeJsonAtomic(revokePath(ctx.env), { at: nowIso() });
+    const started = Date.now();
+    while (Date.now() - started < 5000 && fs.existsSync(revokePath(ctx.env))) await sleep(50);
+  }
+  removeIfExists(sessionsPath(ctx.env));
+  if (live && fs.existsSync(revokePath(ctx.env))) {
+    removeIfExists(revokePath(ctx.env));
+    throw new TrackerError('worker-unavailable', 'stored sessions were removed, but the worker did not confirm within 5 s; restart it (quill worker stop, then quill worker start) to sign out open pages');
+  }
+}
+
 export async function run({ flags, io, env }) {
   let ctx = loadContext(env, { requireStore: false });
+  if (flags.revoke) {
+    await revokeSessions(ctx);
+    io.println('signed out every dashboard browser; run `quill ui` to sign in again');
+    return 0;
+  }
   if (flags.static) {
     const out = flags.static === true ? path.join(process.cwd(), `session-quill-snapshot-${nowIso().replace(/[:]/g, '-')}.html`) : String(flags.static);
     const snapshot = latestSnapshot(ctx);

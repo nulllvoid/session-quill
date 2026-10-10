@@ -21,7 +21,7 @@ export function ticketSummary(ticket, { environmentsFor = null } = {}) {
   return out;
 }
 
-export function buildMeta(state, { now, capture, worker_seen_at, active_sync_request_id = null, key_example = 'PROJ-123', next_sync_due }) {
+export function buildMeta(state, { now, capture, worker_seen_at, active_sync_request_id = null, key_example = 'PROJ-123', next_sync_due, handoff_limits = null }) {
   const counts = { todo: 0, active: 0, blocked: 0, review: 0, 'deploy-pending': 0, done: 0 };
   let stale = 0;
   for (const t of state.tickets.values()) {
@@ -43,6 +43,7 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
     last_capture_at: state.lastCaptureAt ?? null,
     oldest_pending_event_at: capture.oldest_pending_event_at ?? null,
     worker_seen_at,
+    worker_autostart: capture.autostart === true,
     capture_health: capture.health,
     projection_health: { status: 'ok', reason: null, observed_at: now },
     provider_health: state.providerHealth ?? [],
@@ -51,10 +52,12 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
     unresolved_event_count: state.unresolved.length,
     active_sync_request_id,
     key_example,
+    // Concurrent run caps (ADR 0023), shown where bulk runs are queued.
+    handoff_limits,
   };
 }
 
-export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [] }) {
+export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [], handoff_limits = null }) {
   const dayAgo = addMs(generated_at, -24 * HOUR);
   const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo);
   return {
@@ -74,8 +77,8 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     blocked: derived.blocked ?? [],
     deployments_outstanding: derived.deployments_outstanding ?? [],
     today: derived.today ?? null,
-    meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id, key_example, next_sync_due }),
-    repos: Object.entries(state.meta.repos).map(([id, r]) => ({ id, project_id: r.project_id ?? null, display_name: r.display_name ?? id, default_branch: r.default_branch ?? 'main', deployment_environments: r.deployment_environments ?? ['production'] })),
+    meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id, key_example, next_sync_due, handoff_limits }),
+    repos: Object.entries(state.meta.repos).map(([id, r]) => ({ id, project_id: r.project_id ?? null, display_name: r.display_name ?? id, default_branch: r.default_branch ?? 'main', deployment_environments: r.deployment_environments ?? ['production'], test_command: typeof r.test_command === 'string' && r.test_command.trim() ? r.test_command.trim() : null })),
     unresolved: state.unresolved.slice(-200),
   };
 }

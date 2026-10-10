@@ -1,9 +1,20 @@
-import { loadContext, workerStatus, latestSnapshot } from '../context.js';
+import { loadContext, workerStatus, latestSnapshot, liveEndpoint } from '../context.js';
 import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
 import { sessionKey } from '../../core/state.js';
 import { countIngress } from '../../core/ingress.js';
 import fs from 'node:fs';
 import { pausePath } from '../../runtime/readiness.js';
+
+// The dashboard address as an OSC 8 hyperlink (ADR 0022). Only the base URL: the sign-in secret
+// never appears in the status line.
+function dashboardLink(ctx) {
+  const endpoint = liveEndpoint(ctx);
+  if (!endpoint) return '';
+  const url = `http://${endpoint.host ?? '127.0.0.1'}:${endpoint.port}/`;
+  const osc = '\u001b]8;;';
+  const st = '\u001b\\';
+  return ` ${osc}${url}${st}${url}${osc}${st}`;
+}
 
 function bindingFor(ctx, session) {
   if (!session) return null;
@@ -19,7 +30,7 @@ export async function run({ flags, io, env }) {
     const session = input.session_id ? { session_id: input.session_id, agent_id: null } : null;
     const b = bindingFor(ctx, session);
     const ws = workerStatus(ctx);
-    const warn = ws.healthy ? '' : ' ⚠ worker';
+    const warn = ws.healthy ? dashboardLink(ctx) : ' ⚠ worker';
     if (b && b.ticket_id) io.out(`⌁ ${b.ticket_key} ${b.ticket_title ?? ''}${b.gate_enabled === false ? ' (gate off)' : ''}${warn}`.trim());
     else io.out(`⌁ unbound${b && b.gate_enabled === false ? ' (gate off)' : ''}${warn}`);
     return 0;

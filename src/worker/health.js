@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { healthErrorsPath } from '../lib/paths.js';
 import { listIngress } from '../core/ingress.js';
+import { autostartStatus } from './autostart.js';
 
 export function readHealthErrors(env, { limit = 50 } = {}) {
   let text;
@@ -19,5 +20,6 @@ export function captureHealth(env, { now, journalInfo = {}, backlog = null }) {
   else if (errors.some((e) => e.kind === 'capture-gap')) { status = 'degraded'; reason = `capture gaps recorded (${errors.filter((e) => e.kind === 'capture-gap').length} recent)`; }
   else if (journalInfo.quarantined) { status = 'degraded'; reason = 'torn journal tail quarantined on last start'; }
   else if (pending.length > 100) { status = 'degraded'; reason = `${pending.length} events pending ingestion`; }
-  return { health: { status, reason, observed_at: now }, oldest_pending_event_at: oldest, backlog: pending.length, errors };
+  // Whether `quill worker install` registered a login entry (ADR 0022); read from its marker only.
+  return { health: { status, reason, observed_at: now }, oldest_pending_event_at: oldest, backlog: pending.length, errors, autostart: autostartStatus(env).installed };
 }

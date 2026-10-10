@@ -1,0 +1,38 @@
+# ADR 0023 — Bulk runs, and fixes the worker has tested
+
+Date: 2026-10-11 · Status: accepted · Builds on [ADR 0008](0008-agent-recipes.md), [ADR 0013](0013-recipe-context-and-reply-contract.md), [ADR 0017](0017-run-access-levels.md) and [ADR 0022](0022-always-on-dashboard.md)
+
+## Context
+
+Queuing a run was one ticket at a time: open the ticket, pick a recipe, choose access, queue it. Triage across a board, such as analysing every ticket in To do, meant repeating that for each one.
+
+A fix run's evidence that it worked was the agent's own word. The agent could report `test_results` it never ran, or run a narrower command than the repository needs, and a draft PR body could not tell a tested fix from an untested one.
+
+The worker ran at most two runs at once, whatever they were. A fix holds a checkout, runs the repository's tests and uses the machine far more than an analysis that reads notes, so one cap for both was either too tight for analyses or too loose for fixes.
+
+## Decision
+
+- **Bulk runs are a client fan-out.** The dashboard sends one ordinary `handoff` request per selected ticket. Each request keeps its own idempotent id, revision check, reservation and outcome. The requests share a client-chosen `batch_id` (1 to 64 characters from `A-Z a-z 0-9 . _ : -`), which the worker stores on each run and shows in the projection. There is no batch endpoint and no transaction: a stale ticket or one that is already running fails alone, and the dialog shows each ticket's outcome (*Queued*, *Already running*, *Stale, refresh*). **Cancel batch** is one `handoff-cancel` per queued run of the batch; running runs keep their own Cancel. `quill handoff cancel --batch <id>` does the same from a terminal and accepts a unique prefix of the id.
+- **Selection is separate from the open ticket.** The dashboard keeps checked tickets in their own set, never in the detail selection. In select mode each card on Board and Pick next has a checkbox beside its `role="button"` article, never inside it. `x` toggles the focused card, Shift-click selects a range in the order shown, and Esc clears the selection once no dialog or detail panel is open. A bulk action bar (`role="toolbar"`) shows the count and Analyze, Attempt fix, Change status and Clear. Bulk status changes are one `set-status` request per ticket, each with its 10-second undo, and **Undo all (N)** cancels those still waiting.
+- **The worker runs the tests.** A repository may set `test_command` and `test_timeout_ms` (default 600000) under `[repos.<id>]`. After a run with `edit_source` has finished its agent turns (including the reply repair and the self-check) and left a diff, the worker runs `test_command` in the run's checkout through the shell, with no stdin, the agent's environment (provider credentials removed unless push or PR was granted) and the timeout. It records `test_gate`: status, command, exit code, duration, the last 4096 characters of combined output, the number of attempts, and whether a repair made it pass. Test time is `timings.test_ms`; `agent_ms` no longer includes it.
+- **One repair turn.** When the tests fail or time out, the agent's session is resumed once with the command, its exit code and the output tail, framed as test output rather than instructions, and told not to weaken tests. The tests then run again. A second failure or timeout fails the run with `tests-failed` or `tests-timeout`. The run then has no commit, push or draft PR, no suggestion and no ticket change. The patch stays on disk so the owner can see what was tried. A deadline or cancellation during the gate stops the test process tree like an agent turn.
+- **Only a real pass is called a pass.** The dashboard shows *Tests passed (worker)* only for a recorded pass. A failure or timeout shows *Tests failed* or *Tests timed out*, and opening it shows the recorded output. *Self-checked* stays a neutral chip. A repository without `test_command` gives `status: 'skipped'` and *Not test-verified*. A draft PR body says "Tests passed (worker)" only after a pass and otherwise says the fix is not test-verified. The handoff and fix forms name the command or say there is none.
+- **Separate caps.** `[handoff] max_concurrent_readonly` (default 2) counts runs without `edit_source`, and `max_concurrent_fix` (default 1) counts runs with it. A value that is not a positive integer keeps the default. Fixes keep their per-repository serialisation on top of the cap. A queued run whose class is full is skipped for that tick, so a waiting fix never holds up an analysis. The caps in effect are in the snapshot's `meta.handoff_limits`, and the bulk dialog shows them.
+- **Fan-out inside one analysis.** Read-only `analyse` and `analyse-followups` runs with source access may use Claude Code's `Task`/`Agent` tool. The built-in analyse recipes tell the agent to split a large analysis by module across subagents and merge the results itself. Subagents run inside the same session under the same permission rules, and the run keeps one reservation and one result. Fix runs and runs without source access do not get the tool.
+
+## Consequences
+
+- Analysing a whole column is a few clicks. Each run is still an ordinary run, so retries, cancellation, timings and suggestions work as before.
+- A batch is only as consistent as its requests: a partly applied batch is normal, and the dialog says which tickets need a refresh and another try.
+- A fix that fails its tests costs one more agent turn and up to two test runs before it is dropped. A repository with slow tests should raise `test_timeout_ms`. The 20-minute run deadline still applies to the whole run.
+- The worker now executes `test_command` itself. That is the same trust as letting a fix agent run the repository's tests, but it happens even when the agent did not run them. The command is the owner's own config, never ticket data.
+- The test output tail is stored on the run in the journal. Exports keep only the gate's status, exit code, duration and attempts, never the command or the output.
+- The concurrency default for analyses is unchanged (2). The default for fixes drops from "any of the 2 slots" to 1.
+
+## Alternatives considered
+
+- **A transactional batch endpoint** that queues all runs or none. Rejected: all-or-nothing is the wrong outcome for triage, where one stale ticket should not block nine good ones. It would also need a new request kind, a second idempotency scheme and rollback for runs that had already started.
+- **Trusting the agent's `test_results`.** Rejected: the claim and the check would come from the same place. The agent may still run tests while it works; the gate is the evidence.
+- **Unlimited repair turns, or none.** None would drop fixes that a single look at the failure would correct. More than one turns a broken fix into a loop that burns the deadline and invites weakening tests. One turn matches the reply repair of ADR 0013.
+- **Runner-level fan-out**, splitting one analysis into several worker runs and merging their results. Rejected: each part would need its own reservation, context and suggestion merging, and the worker would have to guess module boundaries. The agent can see the code, so it decides the split inside its one run.
+- **One shared cap with a weight per run.** Rejected as harder to explain and configure than two counts.

@@ -145,3 +145,11 @@ test('buildRuntimeIdentity resolves per-repository scopes and reports invalid co
   assert.equal(api.tracker, null);
   assert.match(warnings.join('\n'), /api: .*backtracking/);
 });
+
+test('the dashboard port defaults to a fixed port, and 0 still means random (ADR 0022)', () => {
+  assert.equal(defaultUserConfig().ui_port, 47321);
+  const env = tmpHome();
+  fs.mkdirSync(env.QUILL_HOME, { recursive: true });
+  fs.writeFileSync(path.join(env.QUILL_HOME, 'config.toml'), 'ui_port = 0\n');
+  assert.equal(loadUserConfig(env).ui_port, 0);
+});

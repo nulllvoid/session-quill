@@ -1,3 +1,4 @@
+import { canSelect, renderSelectToggle, selectableCard } from './bulk.js';
 import { esc, attr, ticketCard, ticketById, emptyState, matchesFilters, keyEl, icon, normalizeSnapshot, sessionChip, timeEl, countLabel, hasUnlinkedWork, requestFeedback, pickNextEntries } from '../components.js';
 
 function mentionHint(snapshot) {
@@ -63,7 +64,7 @@ function renderBlocked(blocked, { expanded }) {
   return `<section class="blocked-list" aria-labelledby="blocked-heading"><h2 id="blocked-heading">${icon('alert')}Blocked <span class="count" aria-label="${attr(`${blocked.length} blocked`)}">${esc(blocked.length)}</span></h2><ul class="blocked-groups">${html.join('')}</ul>${toggle}</section>`;
 }
 
-export function renderPickNext(rawSnapshot, filters, { now, pending = [], blockedExpanded = false }) {
+export function renderPickNext(rawSnapshot, filters, { now, pending = [], blockedExpanded = false, selecting = false, checked = new Set() }) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const entries = pickNextEntries(snapshot, filters);
   const blocked = (snapshot.blocked ?? []).map((b) => ({ b, ticket: ticketById(snapshot, b.ticket_id) })).filter((x) => x.ticket && matchesFilters(x.ticket, filters, snapshot));
@@ -77,7 +78,8 @@ export function renderPickNext(rawSnapshot, filters, { now, pending = [], blocke
     main = emptyState('No eligible work', `Pick next fills as tickets in to do, active, review or deploy-pending appear. ${mentionHint(snapshot)}`);
   } else {
     main = `<div class="section-head"><h2>Up next</h2><span class="section-count" title="Ranked by raw score, display capped at 100; blocked and done excluded">${esc(entries.length)} candidate${entries.length === 1 ? '' : 's'} · ordered by priority score</span></div>
-<div class="picknext-grid">${entries.map(({ entry, ticket }) => ticketCard(ticket, snapshot, { variant: 'picknext', now, showHandoff: true, entry })).join('')}</div>`;
+<div class="picknext-grid">${entries.map(({ entry, ticket }) => { const card = ticketCard(ticket, snapshot, { variant: 'picknext', now, showHandoff: !selecting, entry }); return selecting ? selectableCard(card, ticket, { checked: checked.has(ticket.id) }) : card; }).join('')}</div>`;
+    if (canSelect(snapshot)) main = renderSelectToggle({ selecting, count: checked.size }) + main;
   }
   const blockedHtml = renderBlocked(blocked, { expanded: blockedExpanded });
   const tickets = snapshot.tickets.filter((t) => matchesFilters(t, filters, snapshot));

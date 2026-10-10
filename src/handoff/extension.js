@@ -1,12 +1,14 @@
 // Worker extension that dispatches queued handoffs, enforces the 20-minute wall-clock cap,
 // honours cancellation, and resolves runs interrupted by a restart (TRD §Handoff execution).
 import fs from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
-import { buildPrompt, allowedToolsFor, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT } from './runner.js';
+import { buildPrompt, allowedToolsFor, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
+import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
 import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
@@ -16,6 +18,24 @@ import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
 
 export const HANDOFF_DEADLINE_MS = 20 * MINUTE;
+export const DEFAULT_CONCURRENCY = { readonly: 2, fix: 1 };
+
+// How many runs may execute at once (ADR 0023): runs that may edit source count against
+// `[handoff] max_concurrent_fix`, every other run against `max_concurrent_readonly`. A value that
+// is not a positive integer keeps the default.
+export function concurrencyLimits(config = {}) {
+  const h = config && config.handoff && typeof config.handoff === 'object' ? config.handoff : {};
+  const pick = (v, d) => (Number.isInteger(v) && v > 0 ? v : d);
+  return { readonly: pick(h.max_concurrent_readonly, DEFAULT_CONCURRENCY.readonly), fix: pick(h.max_concurrent_fix, DEFAULT_CONCURRENCY.fix) };
+}
+
+// What a draft PR says about tests: "passed (worker)" only after a real pass of the gate.
+export function gateLine(gate) {
+  if (gate && gate.status === 'passed') return `Tests passed (worker): \`${gate.command}\` exited 0${gate.repaired ? ' after one repair turn' : ''}.`;
+  return 'Not test-verified by the worker: no test command is configured for this repository.';
+}
+
+const isFix = (h) => !!(h.permissions && h.permissions.edit_source);
 
 function detectRuntime(claudePath) {
   try {
@@ -26,8 +46,12 @@ function detectRuntime(claudePath) {
   }
 }
 
-export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = HANDOFF_DEADLINE_MS, maxConcurrent = 2, runtimeAvailable, model = null } = {}) {
-  const running = new Map(); // handoff id -> { child, done, reason }
+export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = HANDOFF_DEADLINE_MS, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null } = {}) {
+  const running = new Map(); // handoff id -> { child, done, reason, fix }
+  // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
+  const configured = concurrencyLimits(ctx.config);
+  const limits = { readonly: maxReadonly ?? maxConcurrent ?? configured.readonly, fix: maxFix ?? maxConcurrent ?? configured.fix };
+  const inUse = (fix) => [...running.values()].filter((e) => e.fix === fix).length;
   let paused = false;
 
   function fail(worker, h, code, message, extra = {}) {
@@ -90,24 +114,43 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const current = worker.state.handoffs.get(h.id);
     if (!current || !['running'].includes(current.state)) { running.delete(h.id); return; }
     let quality = null;
+    let gate = null;
     if (entry && !entry.reason && !outcome.error && outcome.code === 0) {
       const first = outcome;
       ({ outcome, quality } = await improve(worker, entry, outcome));
+      // A run that may edit source is checked by the worker's own test gate (ADR 0023).
+      if (!entry.reason && entry.permissions.edit_source) ({ outcome, gate } = await testGate(worker, entry, current, outcome));
       // A deadline or cancellation during a follow-up keeps the first reply as the partial result.
-      if (entry.reason) outcome = first;
+      if (entry.reason) { outcome = first; gate = null; }
     }
     running.delete(h.id);
+    // Measured, not estimated (ADR 0022): agent time covers every turn, including the self-check
+    // and the test repair turn; the gate's own test runs are test time.
+    const testMs = gate && Number.isFinite(gate.total_ms) ? gate.total_ms : null;
+    const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}) } : null;
+    if (gate) delete gate.total_ms;
+    const record = (w, id, parsed, opts) => recordResult(w, id, parsed, timings ? { ...opts, extra: { ...(opts.extra ?? {}), timings } } : opts);
     const reason = entry ? entry.reason : null;
-    if (reason === 'timeout') { recordResult(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'cancel') { recordResult(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'stopped') { recordResult(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'timeout') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'cancel') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'stopped') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
     if (outcome.error) { fail(worker, current, outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', outcome.error.message); return; }
     const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
     const explicit = readJsonIfExists(resultFile);
     const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: outcome.stdout } : parseAgentResult(outcome.stdout, parseOpts);
-    if (outcome.code !== 0) { recordResult(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
-    if (parsed.is_error) { recordResult(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
-    const extras = await fixExtras(worker, current, { finalize: true });
+    if (outcome.code !== 0) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
+    if (parsed.is_error) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
+    // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
+    // ticket change, only the diff for the owner to inspect and the reason (ADR 0023).
+    if (gate && (gate.status === 'failed' || gate.status === 'timeout')) {
+      const extra = { ...(await fixExtras(worker, current)), test_gate: gate };
+      if (quality) extra.result_quality = { ...quality, problems: explicit ? [] : parsed.problems };
+      const why = gate.status === 'timeout' ? 'did not finish in time' : `exited with code ${gate.exit_code ?? 'unknown'}`;
+      record(worker, h.id, parsed, { state: 'failed', error: { code: gate.status === 'timeout' ? 'tests-timeout' : 'tests-failed', message: `the test command ${why}${gate.attempts > 1 ? ' again after one repair turn' : ' and no repair turn was possible'}; no fix is suggested` }, extra });
+      return;
+    }
+    const extras = await fixExtras(worker, current, { finalize: true, gate });
+    if (gate) extras.test_gate = gate;
     if (quality) extras.result_quality = { ...quality, problems: explicit ? [] : parsed.problems };
     // Only a run that finished cleanly changes files; a failed, cancelled or timed-out one leaves
     // every original untouched.
@@ -116,11 +159,11 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       extras.file_effects = effects;
       if (skipped.length) extras.uncertain_effects = [...(current.uncertain_effects ?? []), ...skipped];
     }
-    recordResult(worker, h.id, parsed, { state: extras.error ? 'failed' : 'done', error: extras.error ?? null, extra: extras });
+    record(worker, h.id, parsed, { state: extras.error ? 'failed' : 'done', error: extras.error ?? null, extra: extras });
   }
 
   // For fix runs: collect changed files and a patch; perform explicitly permitted commit/push/PR.
-  async function fixExtras(worker, h, { finalize = false } = {}) {
+  async function fixExtras(worker, h, { finalize = false, gate = null } = {}) {
     const out = {};
     if (!h.worktree_path || !fs.existsSync(h.worktree_path)) return out;
     try {
@@ -142,13 +185,43 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       if (p.push_branch && out.commit_sha) {
         try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
         if (p.open_draft_pr) {
-          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
+          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.\n\n${gateLine(gate)}` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
         }
       }
     } catch (err) {
       out.error = { code: 'commit-failed', message: err.message };
     }
     return out;
+  }
+
+  // ADR 0023: run the repository's tests in the run's checkout; on a failure, one repair turn
+  // with the failing output, then the tests again. Only a real pass is ever reported as one.
+  async function testGate(worker, entry, h, outcome) {
+    const parsed = parseAgentResult(outcome.stdout, { outputs: entry.outputs });
+    if (parsed.is_error || !h.worktree_path) return { outcome, gate: null };
+    let changed = [];
+    try { changed = await changedFiles(h.worktree_path); } catch { /* treated as no diff */ }
+    if (!changed.length) return { outcome, gate: { status: 'skipped', reason: 'no changes to test' } };
+    const { command, timeoutMs } = testGateSettings(ctx.config.repos[h.repo_id]);
+    if (!command) return { outcome, gate: { status: 'skipped', reason: 'no test_command for this repository; the fix is not test-verified' } };
+    const env = childEnvFor(entry.permissions, process.env, entry.env);
+    const once = () => runTestCommand({ command, cwd: h.worktree_path, timeoutMs, env, onChild: (child) => { entry.child = child; } });
+    let total = 0;
+    let attempts = 1;
+    let result = await once();
+    total += result.ms;
+    const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
+    if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
+      const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: 40 });
+      if (entry.reason) return { outcome, gate: null };
+      const repaired = next ? parseAgentResult(next.stdout, { outputs: entry.outputs }) : null;
+      if (repaired && !repaired.is_error && repaired.problems.length <= parsed.problems.length) outcome = next;
+      attempts = 2;
+      result = await once();
+      total += result.ms;
+    }
+    if (entry.reason) return { outcome, gate: null };
+    return { outcome, gate: { status: result.status, command, exit_code: result.exit_code, ms: result.ms, tail: result.tail, attempts, repaired: attempts > 1 && result.status === 'passed', total_ms: total } };
   }
 
   async function dispatch(worker, h) {
@@ -169,6 +242,8 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const available = runtimeAvailable ?? detectRuntime(claudePath);
     if (!available) return fail(worker, h, 'runtime-missing', `Claude Code runtime (${claudePath}) is not installed or not on PATH; install and authenticate it, then retry as a new run`);
     const needsSource = h.permissions && h.permissions.read_source;
+    // How long the run waited for a slot (worker clock), then each setup step that actually ran.
+    const timings = { queue_wait_ms: Math.max(0, Date.parse(worker.now()) - Date.parse(h.requested_at)) };
     let cwd;
     let baseCommit = null;
     let worktreePath = null;
@@ -177,7 +252,9 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       try {
         baseCommit = await headCommit(repoCfg.canonical_path);
         worktreePath = path.join(handoffsDir(worker.env), 'worktrees', h.id);
+        const worktreeStarted = performance.now();
         await createWorktree({ repoPath: repoCfg.canonical_path, baseCommit, dir: worktreePath });
+        timings.worktree_ms = Math.round(performance.now() - worktreeStarted);
       } catch (err) {
         return fail(worker, h, err.code === 'worktree-failed' ? 'worktree-failed' : 'source-failed', err.message);
       }
@@ -196,7 +273,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const logPath = path.join(logsDir(worker.env), 'handoffs', `${h.id}.log`);
     const started = worker.now();
     const deadlineAt = addMs(started, Math.min(deadlineMs, h.deadline_ms ?? Infinity));
-    updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath });
+    updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings });
     const current = worker.state.handoffs.get(h.id);
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
     const environments = worker.environmentsFor ? worker.environmentsFor(ticket.repo_id) : repoCfg ? repoCfg.deployment_environments ?? [] : [];
@@ -220,7 +297,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     } catch (err) {
       return fail(worker, h, 'spawn-failed', err.message);
     }
-    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck: !!(recipe && recipe.self_check), sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
+    const spawnedAt = performance.now();
+    // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
+    const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
+    running.set(h.id, { child: run.child, done: run.done, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, spawnedAt });
     run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 
@@ -238,6 +318,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     runningIds: () => new Set(running.keys()),
     async onStart(worker) {
       worker.recipeInfo = () => catalogFor(worker).list();
+      worker.handoffLimits = () => ({ ...limits });
       for (const h of [...worker.state.handoffs.values()]) {
         if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
       }
@@ -251,10 +332,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       for (const [id, entry] of running) {
         if (entry.reason === null && entry.deadlineAt && now >= entry.deadlineAt) killWithReason(id, 'timeout');
       }
-      if (running.size >= maxConcurrent) return;
       for (const h of nextDispatchable(worker.state, { running: new Set(running.keys()) })) {
-        if (running.size >= maxConcurrent) break;
-        running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null });
+        const fix = isFix(h);
+        if (inUse(fix) >= (fix ? limits.fix : limits.readonly)) continue;
+        running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null, fix });
         dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); fail(worker, h, 'dispatch-failed', err.message); });
       }
     },

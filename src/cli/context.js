@@ -82,6 +82,16 @@ export function workerStatus(ctx) {
   return { healthy: hb.healthy, heartbeat_at: hb.heartbeat ? hb.heartbeat.at : null, age_ms: hb.ageMs, pid: hb.heartbeat ? hb.heartbeat.pid : null };
 }
 
+// The dashboard endpoint, only while the worker that wrote it is the healthy one: a file left by a
+// crashed worker or another process never yields a link (ADR 0022).
+export function liveEndpoint(ctx) {
+  if (!ctx.initialized) return null;
+  const endpoint = readJsonIfExists(path.join(stateDir(ctx.env), 'ui-endpoint.json'));
+  if (!endpoint || !endpoint.port) return null;
+  const ws = workerStatus(ctx);
+  return ws.healthy && ws.pid === endpoint.pid ? endpoint : null;
+}
+
 export function cliEvent(ctx, { kind, payload, session, ticket_id = null, source_identity }) {
   return makeEvent({
     kind, payload, store_id: ctx.storeMeta.store_id, machine_id: ctx.machineId, producer: 'cli',

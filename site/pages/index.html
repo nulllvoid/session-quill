@@ -1,0 +1,262 @@
+<!-- page: {"title": "Session Quill | The orchestration engine for ticket-bound AI coding", "description": "Session Quill runs quietly in the background: it syncs your tracker, prepares each repository, and runs self-verifying Claude agents on your tickets while you stay in the editor. A local-first Claude Code plugin with zero runtime dependencies.", "scripts": ["vendor/gsap.min.js", "vendor/ScrollTrigger.min.js", "app.js"], "bodyClass": "landing"} -->
+    <section class="hero container" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow hero-enter">Session Quill 1.0 for Claude Code</p>
+        <h1 id="hero-title"><span class="line"><span>The orchestration engine</span></span><span class="line"><span>for ticket-bound</span></span><span class="line accent"><span>AI coding.</span></span></h1>
+        <p class="hero-description hero-enter">Session Quill runs quietly in the background. It syncs your tracker, prepares each repository, and runs self-verifying Claude agents on your tickets while you stay in the editor.</p>
+        <div class="hero-install hero-enter">
+          <div class="command-group" data-copy-group>
+            <div class="command-heading"><span>Install inside Claude Code</span><button class="copy-button" type="button" data-copy="claude plugin marketplace add nulllvoid/session-quill
+claude plugin install session-quill@session-quill" aria-label="Copy install commands">Copy</button></div>
+            <pre><code><span class="command-prefix">claude</span> plugin marketplace add nulllvoid/session-quill
+<span class="command-prefix">claude</span> plugin install session-quill@session-quill</code></pre>
+          </div>
+          <div class="hero-actions"><a class="btn primary" href="#install">Set it up in two minutes</a><a class="text-link" href="docs/quickstart.html">Read the documentation <span aria-hidden="true">→</span></a></div>
+          <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+      <div class="hero-visual hero-enter" aria-label="Claude Code beside the Session Quill dashboard dispatching five analyse runs">
+        <div class="split-pane">
+          <div class="pane terminal" aria-label="Claude Code terminal">
+            <div class="pane-head"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span>claude · payments-api</span></div>
+            <pre class="term"><span class="prompt">&gt;</span> Review the five refund tickets assigned to me and queue analysis for each.
+
+<span class="dim">Session Quill: bound to <b>PAY-412</b> from branch feat/PAY-412-refund-retries</span>
+<span class="dim">Resume brief: 2 h 10 min active, next action set, PR #418 open</span>
+
+<span class="dim">Queued 5 analyse runs (batch 7f3a). Follow them on the dashboard.</span>
+
+<span class="prompt">&gt;</span> When PAY-412 lands, attempt the fix and run the tests.
+
+<span class="dim">Session Quill: attempt-fix needs edit_source. Confirm in the run dialog.</span>
+<span class="dim">Test gate: <b>npm test</b> runs in the worktree after the agent finishes.</span></pre>
+            <div class="term-status"><span class="good-dot" aria-hidden="true"></span><span>quill</span><span class="sep">·</span><span>PAY-412</span><span class="sep">·</span><span>worker ok</span><span class="sep">·</span><a href="#engine">Dashboard: http://127.0.0.1:47321</a></div>
+          </div>
+          <div class="pane dashboard" aria-label="Session Quill dashboard board view">
+            <div class="mini-topbar"><span class="mini-search">Search tickets <kbd>/</kbd></span><span class="endpoint"><strong>Local</strong>127.0.0.1:47321</span></div>
+            <div class="mini-statusline"><span class="health-item" data-connection="online"><span class="dot"></span>Worker: <strong>connected</strong></span><span class="health-item" data-freshness="fresh"><span class="dot"></span>Jira: <strong>fresh</strong></span><span class="receipt" data-receipt>Select mode on</span></div>
+            <div class="mini-board" data-board>
+              <div class="mini-column"><h4>Todo <span class="count">3</span></h4>
+                <label class="mini-card" data-card="1"><input type="checkbox" aria-label="Select PAY-412"><span class="k">PAY-412</span><span class="t">Refund webhook retries exhaust the queue</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+                <label class="mini-card" data-card="2"><input type="checkbox" aria-label="Select PAY-418"><span class="k">PAY-418</span><span class="t">Partial refunds round to the wrong cent</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+                <label class="mini-card" data-card="3"><input type="checkbox" aria-label="Select PAY-420"><span class="k">PAY-420</span><span class="t">Chargeback import skips EU merchants</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+              </div>
+              <div class="mini-column"><h4>Active <span class="count">2</span></h4>
+                <label class="mini-card" data-card="4"><input type="checkbox" aria-label="Select PAY-431"><span class="k">PAY-431</span><span class="t">Ledger export times out over 50k rows</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+                <label class="mini-card" data-card="5"><input type="checkbox" aria-label="Select PAY-437"><span class="k">PAY-437</span><span class="t">Reconcile report shows stale FX rate</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+              </div>
+            </div>
+            <div class="bulkbar" role="toolbar" aria-label="Bulk actions" data-bulkbar hidden>
+              <span class="count"><b data-count>0</b> selected</span><span class="sep"></span>
+              <button class="btn small primary" type="button" data-analyze>Analyze</button>
+              <button class="btn small" type="button" tabindex="-1">Attempt fix</button>
+              <button class="btn small" type="button" tabindex="-1">Change status</button>
+              <span class="sep"></span><button class="btn small ghost" type="button" tabindex="-1">Clear <kbd>Esc</kbd></button>
+            </div>
+            <div class="batch-strip" data-strip hidden><span class="chip handoff" data-state="running"><span class="dot pulse"></span><span data-strip-text>5 queued</span></span><span class="muted">batch 7f3a · 2 read-only runs at a time</span><button class="btn small ghost" type="button" tabindex="-1">Cancel batch</button></div>
+          </div>
+        </div>
+        <div class="visual-foot"><span>A real workflow, drawn with the dashboard's own components.</span><button class="motion-toggle" type="button" data-replay>Replay</button></div>
+      </div>
+    </section>
+
+    <div class="principles container" aria-label="Project facts"><span>Zero runtime dependencies. Node 22 and the standard library.</span><span>Local-first. Loopback only.</span><span>Consent at every trust boundary.</span><span>Open source. MIT licensed.</span></div>
+
+    <section class="engine container" id="engine" aria-labelledby="engine-title">
+      <div class="section-heading reveal"><p class="eyebrow">The orchestration engine</p><h2 id="engine-title">Three things the worker now does<br><span class="muted">before you ask.</span></h2><p>1.0 turns the background worker from a recorder into a runner. It still never acts past a trust boundary without you.</p></div>
+
+      <article class="feature reveal" id="workspace" aria-labelledby="f1-title">
+        <div class="feature-copy">
+          <p class="eyebrow">Zero-touch workspace</p>
+          <h3 id="f1-title">Assigned to you.<br>Prepared for you.</h3>
+          <p>Turn on <code>import_assigned</code> and tracker sync pulls the Jira or GitHub issues assigned to you into tickets, with no agent in the loop. A rule-based resolver links each ticket to a repository: your <code>repo_map</code> first, then the repository the issue itself names, then a clone it finds under <code>auto_clone_dir</code>.</p>
+          <p>When the remote is known but there is no clone, the card says <em>Needs clone</em>. One confirmation clones it over https or ssh from an allowed host, registers it, and links the ticket. Nothing clones on its own.</p>
+          <p>The worker starts at login with <code>quill worker install</code>, listens on a stable port, keeps you signed in across restarts, and puts the dashboard link in your status line.</p>
+          <ul class="facts"><li>Jira and GitHub assigned-issue import, idempotent</li><li>Clone hosts default to github.com, gitlab.com and bitbucket.org</li><li>Windows, macOS and Linux login entries, no admin rights</li></ul>
+        </div>
+        <div class="feature-visual">
+          <div class="ui-stack">
+            <div class="ui-frame">
+              <div class="card static"><div class="card-head"><span class="key">PAY-442</span><span class="card-title">Settlement file rejects negative adjustments</span></div><div class="card-status"><span class="chip warning">Needs clone</span><span class="chip category">imported from Jira 4 min ago</span></div><div class="card-meta"><span class="meta-item">acme/settlements</span><span class="meta-item">assigned to you</span></div><div class="card-actions"><button class="btn small primary" type="button" tabindex="-1">Clone…</button><button class="btn small ghost" type="button" tabindex="-1">No code</button></div></div>
+            </div>
+            <div class="ui-frame dialog-frame">
+              <h4>Clone acme/settlements?</h4>
+              <dl class="description">
+                <div><dt>Remote</dt><dd>git@github.com:acme/settlements.git</dd></div>
+                <div><dt>Target</dt><dd>~/src/quill/settlements</dd></div>
+                <div><dt>Host check</dt><dd><span class="chip good">github.com allowed</span></dd></div>
+                <div><dt>Then</dt><dd>register as <code>settlements</code>, link PAY-442</dd></div>
+              </dl>
+              <div class="dialog-foot"><button class="btn small ghost" type="button" tabindex="-1">Cancel</button><button class="btn small primary" type="button" tabindex="-1">Confirm clone</button></div>
+            </div>
+            <div class="ui-frame term-frame"><pre class="term small-term"><span class="dim">$</span> quill worker install
+<span class="dim">Registered "Session Quill worker (quill)" to run at login.</span>
+<span class="dim">$</span> quill status --statusline
+quill · PAY-442 · worker ok · <u>Dashboard: http://127.0.0.1:47321</u></pre></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature reverse reveal" id="pipelines" aria-labelledby="f2-title">
+        <div class="feature-copy">
+          <p class="eyebrow">Verified agent pipelines</p>
+          <h3 id="f2-title">Measured. Gated.<br>Self-checked.</h3>
+          <p>Every run records its own timings: queue wait, worktree setup, agent time, test time. A run that may edit source always gets a self-check turn, whatever its recipe says.</p>
+          <p>Give a repository a <code>test_command</code> and the worker itself runs it in the run's worktree after the agent finishes. It records the exit code, duration and output as evidence, grants exactly one repair turn on failure, and surfaces no suggestion if the tests fail again. Without a test command the run says so: fixes are not test-verified.</p>
+          <p>Read-only and source-editing runs have separate concurrency caps, and fixes on one repository still go one at a time. Large analyses split by module inside a single run and merge their findings.</p>
+          <ul class="facts"><li>Timings on every run, so worktree reuse is a measured decision, not a guess</li><li><code>max_concurrent_readonly</code> and <code>max_concurrent_fix</code>, per repository serialisation kept</li><li>Tests passed (worker) is written only on a real pass</li></ul>
+        </div>
+        <div class="feature-visual">
+          <div class="ui-frame runs">
+            <div class="run"><div class="run-head"><span class="key">PAY-412</span><span class="recipe">attempt-fix</span><span class="chip handoff" data-state="done">Done</span></div><div class="timings">queue 1.2 s · worktree 0.8 s · agent 4 m 10 s · tests 48 s</div><div class="card-status"><span class="chip">Self-checked</span><span class="chip good">Tests passed (worker)</span><span class="chip category">suggestion ready</span></div></div>
+            <div class="run"><div class="run-head"><span class="key">PAY-418</span><span class="recipe">attempt-fix</span><span class="chip handoff" data-state="done">Done</span></div><div class="timings">queue 0.4 s · worktree 0.7 s · agent 6 m 02 s · tests 1 m 51 s</div><div class="card-status"><span class="chip critical">Tests failed</span><span class="arrow" aria-hidden="true">→</span><span class="chip category">one repair turn</span><span class="arrow" aria-hidden="true">→</span><span class="chip good">Tests passed (worker)</span></div></div>
+            <div class="run"><div class="run-head"><span class="key">PAY-420</span><span class="recipe">attempt-fix</span><span class="chip handoff" data-state="failed">Failed</span></div><div class="timings">queue 0.3 s · worktree 0.9 s · agent 5 m 44 s · tests 2 m 05 s</div><div class="card-status"><span class="chip critical">Tests failed</span><span class="arrow" aria-hidden="true">→</span><span class="chip critical">Tests failed</span><span class="chip category">no suggestion: tests failed after repair</span></div></div>
+            <div class="run"><div class="run-head"><span class="key">PAY-431</span><span class="recipe">analyse</span><span class="chip handoff" data-state="running"><span class="dot pulse"></span>Running</span></div><div class="timings">queue 0.2 s · worktree 0.6 s · agent 2 m 30 s so far</div><div class="card-status"><span class="chip category">split by module: export, ledger, api</span></div></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="feature reveal" id="command" aria-labelledby="f3-title">
+        <div class="feature-copy">
+          <p class="eyebrow">Dashboard command center</p>
+          <h3 id="f3-title">Batch the board.<br>Approve the remote.</h3>
+          <p>Select cards on Board or Pick next and the bulk action bar queues analysis or attempt-fix runs for all of them under one batch id. Each ticket reports its own outcome: queued, already running, no repo, not eligible. Status changes undo together; a batch cancels together.</p>
+          <p>Share a live artifact page with your lead. A <em>Run agent</em> edit on that page arrives on your dashboard as a proposed run with the editor's name and the recipe. Nothing runs until you approve it. If you want, name editors who may queue read-only recipes without asking.</p>
+          <ul class="facts"><li>Keyboard first: Select, <kbd>x</kbd> to toggle, Shift-click for a range, <kbd>Esc</kbd> to clear</li><li>Bulk attempt-fix asks for an explicit <code>edit_source</code> confirmation</li><li>Proposed runs on Today and in ticket detail, with Approve and Dismiss</li></ul>
+        </div>
+        <div class="feature-visual">
+          <div class="ui-stack">
+            <div class="ui-frame">
+              <div class="mini-board compact">
+                <div class="mini-column"><h4>Review <span class="count">2</span></h4>
+                  <div class="mini-card is-checked"><span class="box" aria-hidden="true"></span><span class="k">PAY-412</span><span class="t">Refund webhook retries exhaust the queue</span></div>
+                  <div class="mini-card is-checked"><span class="box" aria-hidden="true"></span><span class="k">PAY-418</span><span class="t">Partial refunds round to the wrong cent</span></div>
+                </div>
+                <div class="mini-column"><h4>Blocked <span class="count">1</span></h4>
+                  <div class="mini-card is-checked"><span class="box" aria-hidden="true"></span><span class="k">PAY-420</span><span class="t">Chargeback import skips EU merchants</span></div>
+                </div>
+              </div>
+              <div class="bulkbar floating" role="toolbar" aria-label="Bulk actions"><span class="count"><b>3</b> selected</span><span class="sep"></span><button class="btn small primary" type="button" tabindex="-1">Analyze</button><button class="btn small" type="button" tabindex="-1">Attempt fix</button><button class="btn small" type="button" tabindex="-1">Change status</button><span class="sep"></span><button class="btn small ghost" type="button" tabindex="-1">Clear</button></div>
+            </div>
+            <div class="ui-frame proposals">
+              <h4>Proposed runs <span class="pill">2</span></h4>
+              <div class="proposal"><div><span class="key">PAY-431</span> <span class="recipe">analyse</span><span class="muted">proposed by Priya from the Payments board page</span></div><div class="card-actions"><button class="btn small primary" type="button" tabindex="-1">Approve</button><button class="btn small ghost" type="button" tabindex="-1">Dismiss</button></div></div>
+              <div class="proposal"><div><span class="key">PAY-437</span> <span class="recipe">deploy-check</span><span class="muted">proposed by Priya · read-only</span></div><div class="card-actions"><button class="btn small primary" type="button" tabindex="-1">Approve</button><button class="btn small ghost" type="button" tabindex="-1">Dismiss</button></div></div>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="trust container" id="trust" aria-labelledby="trust-title">
+      <div class="trust-visual reveal"><img src="assets/thread-art.jpg" width="1536" height="1024" alt="Fine luminous strands joined into one continuous ribbon" loading="lazy"></div>
+      <div class="trust-copy reveal">
+        <p class="eyebrow">Technical architecture and security</p>
+        <h2 id="trust-title">Built on strict invariants.</h2>
+        <p>The same rules held in 0.2 and hold in 1.0. The orchestration features are built on top of them, never around them.</p>
+        <dl class="invariants">
+          <div><dt>Zero runtime dependencies</dt><dd>The plugin, CLI, worker and dashboard use Node 22 and its standard library. No bundler, no framework, nothing to audit but the repository.</dd></div>
+          <div><dt>Durable journal</dt><dd>An append-only JSONL event log behind a single-writer worker lock. Ingress is fsynced and renamed before anything is acknowledged; replay rebuilds byte-identical state.</dd></div>
+          <div><dt>Isolated worktrees</dt><dd>Agent fixes run in a detached checkout at the ticket's recorded base commit, never in your working directory. The worktree is removed when the run ends.</dd></div>
+          <div><dt>Fail-closed gate</dt><dd>In strict mode, covered mutating tools are denied the moment the binding snapshot or the worker is unavailable. The gate never emits allow; your own Claude Code permissions always apply.</dd></div>
+        </dl>
+        <p class="trust-note">No plain secret is ever written to disk, and nothing secret goes in the status line. Session tokens are stored as hashes with a sliding seven-day expiry; <code>quill ui --revoke</code> clears them all.</p>
+        <a class="text-link" href="https://github.com/nulllvoid/session-quill/blob/main/docs/ARCHITECTURE.md">Read the architecture guide <svg class="icon" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 11l6-6M6 5h5v5"/></svg></a>
+      </div>
+    </section>
+
+    <section class="how container" id="how" aria-labelledby="how-title">
+      <div class="section-heading reveal"><p class="eyebrow">How it works</p><h2 id="how-title">Everything flows through the journal.</h2><p>Hooks and the CLI only write events. The worker is the only process that mutates state, notes and projections. The dashboard only reads projections and submits requests the worker turns into events.</p></div>
+      <div class="flow reveal" role="img" aria-label="Claude Code hooks and the CLI write events to an ingress directory. The single worker journals them, reduces state, publishes notes, projections and binding snapshots, and serves a loopback API that the dashboard reads. The worker also runs reconciliation against PR providers and the handoff runner, which executes Claude in an isolated git worktree and then the repository's test command.">
+        <div class="flow-row">
+          <div class="node"><span class="eyebrow">Claude Code</span><strong>Hooks</strong><span>SessionStart, PreToolUse, PostToolUse, Stop</span></div>
+          <div class="flow-arrow" aria-hidden="true">events →</div>
+          <div class="node"><span class="eyebrow">Durable</span><strong>Ingress</strong><span>temp, fsync, rename</span></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="node primary"><span class="eyebrow">One per store</span><strong>Worker</strong><span>single writer, 500 ms tick</span></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="node"><span class="eyebrow">Append only</span><strong>events.jsonl</strong><span>sequence numbers, tail quarantine</span></div>
+        </div>
+        <div class="flow-row">
+          <div class="node"><span class="eyebrow">Pure reducer</span><strong>State</strong><span>deterministic ids, idempotent</span></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="node"><span class="eyebrow">Yours</span><strong>Markdown notes</strong><span>authored text never absorbed</span></div>
+          <div class="flow-arrow" aria-hidden="true">+</div>
+          <div class="node"><span class="eyebrow">Complete generations</span><strong>Projections</strong><span>gen-N first, MANIFEST last</span></div>
+          <div class="flow-arrow" aria-hidden="true">+</div>
+          <div class="node"><span class="eyebrow">Read by hooks</span><strong>Binding snapshots</strong><span>the gate's only input</span></div>
+        </div>
+        <div class="flow-row">
+          <div class="node"><span class="eyebrow">127.0.0.1</span><strong>Loopback API</strong><span>stable port, hashed sessions</span></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="node"><span class="eyebrow">Plain ES modules</span><strong>Dashboard</strong><span>reads projections, submits requests</span></div>
+          <div class="flow-arrow" aria-hidden="true">·</div>
+          <div class="node"><span class="eyebrow">Extension</span><strong>Handoff runner</strong><span>claude -p in a detached worktree</span></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="node"><span class="eyebrow">Worker logic</span><strong>Test gate</strong><span>test_command, one repair turn</span></div>
+        </div>
+      </div>
+      <div class="how-grid reveal">
+        <div><h3>Single-writer journal</h3><p>Hooks write one JSON file per event and never read the journal. The worker ingests, journals, applies and republishes within its tick. A duplicate event id or source identity has no effect, so a crash mid-batch replays clean.</p></div>
+        <div><h3>Fail-closed gate</h3><p>PreToolUse reads one identity file, the heartbeat and the session's binding snapshot: no TOML, no network, no subprocess. In <code>strict</code> mode an unavailable snapshot denies covered writes. In the default <code>nudge</code> mode nothing is denied; Stop asks once which ticket the work belongs to.</p></div>
+        <div><h3>Worktree isolation</h3><p>An attempt-fix run gets <code>git worktree add --detach</code> at the recorded base commit. Permissions are explicit objects validated at submission and again at dispatch. Push and PR rights exist only as tokens the agent's environment is given.</p></div>
+      </div>
+    </section>
+
+    <section class="integrations container" id="integrations" aria-labelledby="integrations-title">
+      <div class="section-heading reveal"><p class="eyebrow">Integrations</p><h2 id="integrations-title">Your tracker, your hosts, your machine.</h2><p>Every integration is read-only until you turn on the write and confirm the first one.</p></div>
+      <div class="matrix-wrap reveal">
+        <table class="matrix">
+          <thead><tr><th scope="col">Surface</th><th scope="col">Supported</th><th scope="col">What 1.0 does with it</th></tr></thead>
+          <tbody>
+            <tr><th scope="row">Issue trackers</th><td>Jira, GitHub Issues, Linear</td><td>Sync title, status, assignee and fix versions. Import issues assigned to you (Jira, GitHub). Opt-in write-back of status and a comment, one ticket at a time, previewed first.</td></tr>
+            <tr><th scope="row">Pull requests</th><td>GitHub (gh), Bitbucket</td><td>Link PRs to the branch each write landed on, auto-close tickets on merge, treat a merge as a deployment with <code>deploy_on = "merge"</code>.</td></tr>
+            <tr><th scope="row">Clone hosts</th><td>github.com, gitlab.com, bitbucket.org</td><td>The allowlist for consented clones over https or ssh. URLs with credentials, other transports and paths outside <code>auto_clone_dir</code> are refused.</td></tr>
+            <tr><th scope="row">Publishers</th><td>Markdown note, HTML snapshot, claude.ai artifact</td><td>Sanitised rows, pinned writes, two-way edits and comments that become revision-checked requests or proposed runs.</td></tr>
+            <tr><th scope="row">Worker at login</th><td>Windows Task Scheduler, macOS LaunchAgent, Linux systemd user unit</td><td>Per-user entries with no admin rights, installed and removed idempotently; restarts stay with the plugin's own backoff.</td></tr>
+            <tr><th scope="row">Claude Code</th><td>Hooks, slash commands, plugin marketplace</td><td>SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop, SubagentStart, SubagentStop, PreCompact and SessionEnd. Runs use your own settings and connectors by default.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="docs-section container" id="docs" aria-labelledby="docs-title">
+      <div class="section-heading reveal"><p class="eyebrow">Documentation and setup</p><h2 id="docs-title">Short pages. Exact commands.</h2></div>
+      <div class="doc-cards reveal">
+        <a class="doc-card" href="docs/quickstart.html"><span class="eyebrow">Quickstart</span><strong>Install, start, open the dashboard</strong><span>From the marketplace command to a worker that starts at login, with the status line link.</span></a>
+        <a class="doc-card" href="docs/recipes.html"><span class="eyebrow">Recipe authoring</span><strong>Frontmatter, permissions, the test gate</strong><span>How a Markdown recipe becomes a run, what it may touch, and how its reply is checked.</span></a>
+        <a class="doc-card" href="docs/configuration.html"><span class="eyebrow">Configuration</span><strong>config.toml and .quill.toml</strong><span>Every table 1.0 reads: tracker, repos, handoff, gate, schedules and publishers.</span></a>
+        <a class="doc-card" href="https://github.com/nulllvoid/session-quill/tree/main/docs/decisions"><span class="eyebrow">Decisions</span><strong>Architecture decision records</strong><span>Why the worker is the single writer, why cloning needs consent, why there is no worktree pool yet.</span></a>
+      </div>
+    </section>
+
+    <section class="install-section container" id="install" aria-labelledby="install-title">
+      <div class="section-heading reveal"><p class="eyebrow">Install</p><h2 id="install-title">Two commands to install.<br><span class="accent">One to start.</span></h2><p>Run these inside Claude Code or in a terminal with <code>claude plugin</code> in place of <code>/plugin</code>. Node.js 22 or newer must be on your PATH.</p></div>
+      <div class="install-layout reveal">
+        <div class="install-commands">
+          <div class="command-group"><div class="command-heading"><span>Add the marketplace</span><button class="copy-button" type="button" data-copy="/plugin marketplace add nulllvoid/session-quill" aria-label="Copy marketplace command">Copy</button></div><pre><code><span class="command-prefix">/plugin</span> marketplace add nulllvoid/session-quill</code></pre></div>
+          <div class="command-group"><div class="command-heading"><span>Install the plugin</span><button class="copy-button" type="button" data-copy="/plugin install session-quill@session-quill" aria-label="Copy plugin install command">Copy</button></div><pre><code><span class="command-prefix">/plugin</span> install session-quill@session-quill</code></pre></div>
+          <p class="restart-note">Start a new Claude session to load the plugin, then enable it in your repository:</p>
+          <div class="command-group"><div class="command-heading"><span>Start tracking</span><button class="copy-button" type="button" data-copy="/session-quill:start" aria-label="Copy start command">Copy</button></div><pre><code><span class="command-prefix">/session-quill:start</span></code></pre></div>
+          <div class="command-group"><div class="command-heading"><span>Optional: start the worker at login</span><button class="copy-button" type="button" data-copy="quill worker install" aria-label="Copy worker install command">Copy</button></div><pre><code><span class="command-prefix">quill</span> worker install</code></pre></div>
+          <p class="dashboard-command">Open the dashboard with <code>/session-quill:ui</code>. It signs you in once and stays signed in across worker restarts.</p>
+        </div>
+        <div class="install-notes">
+          <h3>What happens next</h3>
+          <ol class="steps">
+            <li><strong>Quill detects the repository</strong> and registers its main working tree privately. No <code>quill init</code>, no <code>repo add</code>, no config file.</li><li><strong>The worker starts</strong> and captures the current session. A ticket key in your prompt or branch binds the session without a command.</li><li><strong>Add a tracker</strong> when you want one: a <code>[tracker]</code> table and a token variable. Turn on <code>import_assigned</code> to pull your queue in.</li><li><strong>Give a repository a test command</strong> and attempt-fix runs become test-verified.</li>
+          </ol>
+          <div class="install-assurance"><span>Updating from 0.7?</span><a href="https://github.com/nulllvoid/session-quill#terminal-and-advanced-setup">Update instructions</a></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="faq container" aria-labelledby="faq-title"><h2 id="faq-title" class="reveal">A few things worth knowing.</h2><div class="faq-list reveal">
+      <details><summary>Does it clone repositories by itself?<span aria-hidden="true">+</span></summary><p>No. The resolver can tell that a ticket needs a clone and shows the remote, the target folder and the host check. It clones only after you confirm, from the dashboard or with <code>quill repo clone KEY --confirm</code>, and only from hosts in <code>clone_hosts</code>. The same remote is never cloned twice.</p></details>
+      <details><summary>Can my lead run agents on my machine from a shared page?<span aria-hidden="true">+</span></summary><p>They can propose one. A Run agent edit on a two-way artifact page becomes a proposed run on your dashboard, naming the editor and the recipe. It runs when you approve it. You may list editors who can queue read-only recipes without asking; nothing with <code>edit_source</code> is ever auto-run.</p></details>
+      <details><summary>What does "Tests passed (worker)" mean?<span aria-hidden="true">+</span></summary><p>The worker, not the agent, ran your repository's <code>test_command</code> in the run's worktree after the agent finished, and it exited 0. The exit code, duration and output tail are kept on the run. If it failed, the agent got one repair turn and the gate ran again; a second failure produces no suggestion.</p></details>
+      <details><summary>Is there a pre-warmed pool of worktrees?<span aria-hidden="true">+</span></summary><p>Not yet, on purpose. Every run records how long its worktree took to create. Recycling or pre-warming is deferred until those timings show it matters, and the decision is written down as an ADR either way.</p></details>
+      <details><summary>Do I still need quill init and quill repo add?<span aria-hidden="true">+</span></summary><p>Not for the usual path. <code>/session-quill:start</code> and <code>/session-quill:ui</code> set everything up. <code>init</code> keeps the interactive setup and <code>repo add</code> registers extra repositories when you want to do it by hand.</p></details>
+      <details><summary>What leaves my machine?<span aria-hidden="true">+</span></summary><p>Nothing, until you queue a run or publish. A run sends selected ticket content to your configured model provider. A publish sends only the fields of the projects you listed, through the same filter as exports. There is no telemetry.</p></details>
+    </div></section>
+    <section class="closing container reveal"><p>Less setup.<br><span class="accent">More shipped.</span></p><a class="round-link" href="docs/quickstart.html" aria-label="Open the quickstart">→</a></section>

@@ -70,6 +70,28 @@ test('authentication: no cookie 401, bootstrap secret is one-use, cookie is Http
   } finally { await b.w.stop(); }
 });
 
+test('the dashboard without a session answers with a sign-in page; with one it serves the app (ADR 0022)', async () => {
+  const b = await boot();
+  try {
+    const page = await fetch(`${b.base}/`);
+    assert.equal(page.status, 401);
+    assert.match(page.headers.get('content-type'), /text\/html/);
+    assert.match(page.headers.get('content-security-policy'), /default-src 'none'/);
+    const html = await page.text();
+    assert.match(html, /\/session-quill:ui/);
+    assert.match(html, /quill ui/);
+    assert.match(html, /\/ui\/styles\.css/, 'styled with the dashboard tokens');
+    assert.equal((await fetch(`${b.base}/ui/index.html`)).status, 401, 'the page itself is never served without a session');
+    assert.equal((await fetch(`${b.base}/ui/styles.css`)).status, 200, 'static assets stay public; they hold no data');
+    const app = await fetch(`${b.base}/`, { headers: { cookie: b.cookie } });
+    assert.equal(app.status, 200);
+    assert.match(await app.text(), /<script type="module" src="\/ui\/app\.js">/);
+    const api = await fetch(`${b.base}/v1/snapshot`);
+    assert.equal(api.status, 401);
+    assert.equal((await api.json()).error.code, 'unauthenticated', 'the API keeps JSON errors');
+  } finally { await b.w.stop(); }
+});
+
 test('mutations require CSRF and a loopback Origin/Host; cross-origin and wrong-host requests cannot mutate', async () => {
   const b = await boot();
   try {

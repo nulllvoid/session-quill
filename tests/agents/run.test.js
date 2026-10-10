@@ -259,3 +259,19 @@ test('ticket detail shows the description as Goal, Context and Done when, and fl
   assert.equal('description' in sanitizeSnapshot(snap, { fields: ['key', 'title'] }).tickets[0], false, 'not exported without the summary');
   assert.equal(sanitizeSnapshot(snap, { fields: ['key', 'title', 'summary'] }).tickets[0].description.goal, 'Ship the deploy check.');
 });
+
+test('a run that may edit source always self-checks, whatever its recipe says (ADR 0022)', async () => {
+  const repo = makeRepo();
+  const capture = path.join(repo.dir, '..', `capture-${randomUUID()}.json`);
+  const b = await bootWorker({ repo, runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_RESULT: JSON.stringify({ summary: 'Fixed the off-by-one in src.js.', confidence: 'medium', sources: ['src.js:1'] }), FAKE_CLAUDE_CAPTURE: capture } });
+  try {
+    fs.mkdirSync(path.join(b.home, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(b.home, 'agents', 'quick-fix.md'), '---\nname: quick-fix\ndescription: Fix without checking\nmode: attempt-fix\npermissions: { read_source: true, edit_source: true }\noutputs: [summary, changed_files]\nself_check: false\n---\nFix it.\n');
+    const t = b.ticket(T1, 'PROJ-11');
+    const h = await runToDone(b, RID(23), { recipe: 'quick-fix', note: '', permissions: { ...NONE, read_source: true, edit_source: true } }, t);
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.equal(h.result_quality.self_checked, true);
+    const [turn] = fs.readFileSync(`${capture}.resume`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.match(turn.prompt, /check your answer/i);
+  } finally { await b.w.stop(); }
+});

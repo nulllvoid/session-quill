@@ -130,6 +130,34 @@ test('attempt-fix uses an isolated worktree at the base commit, leaves the live 
   } finally { await b.w.stop(); }
 });
 
+test('runs record how long they queued, set up and ran (ADR 0022)', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_EDIT: 'src.js' } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.hext.pause();
+    b.request(RID(30), { target_id: T1, expected_revision: t.revision, payload: analyse });
+    b.advance(3000);
+    b.hext.resume();
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(30)).result.handoff_id;
+    const notes = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return ['done', 'failed'].includes(h.state) ? h : null; });
+    assert.equal(notes.state, 'done', JSON.stringify(notes.error));
+    assert.equal(notes.timings.queue_wait_ms, 3000, 'request to dispatch, on the worker clock');
+    assert.ok(Number.isInteger(notes.timings.agent_ms) && notes.timings.agent_ms >= 0);
+    assert.deepEqual(Object.keys(notes.timings).sort(), ['agent_ms', 'queue_wait_ms'], 'no worktree without source access, and no placeholders');
+    const t2 = b.w.state.tickets.get(T1);
+    b.request(RID(31), { target_id: T1, expected_revision: t2.revision, payload: fix });
+    b.w.tick();
+    const fid = b.w.state.requests.get(RID(31)).result.handoff_id;
+    const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(fid); return ['done', 'failed'].includes(h.state) ? h : null; });
+    assert.equal(done.state, 'done', JSON.stringify(done.error));
+    assert.deepEqual(Object.keys(done.timings).sort(), ['agent_ms', 'queue_wait_ms', 'worktree_ms']);
+    assert.ok(done.timings.worktree_ms >= 0);
+    assert.ok(b.w.liveSnapshot().handoffs.find((h) => h.id === fid).timings, 'timings reach the run projection');
+  } finally { await b.w.stop(); }
+});
+
 test('deadline: a run exceeding the wall-clock cap is killed, marked timed-out, and its log is preserved', async () => {
   const b = await bootWorker({ runtimeAvailable: true, deadlineMs: 400, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000' } });
   try {

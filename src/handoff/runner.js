@@ -255,6 +255,10 @@ function profileTools({ mode, permissions = {} }) {
     allowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash(npm test*)', 'Bash(node --test*)', 'Bash(npx vitest*)', 'Bash(npx jest*)', 'Bash(pytest*)', 'Bash(go test*)', 'Bash(cargo test*)', 'Bash(git add*)');
   } else {
     disallowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit');
+    // A read-only analysis may split a large codebase across Claude Code subagents (ADR 0023).
+    // They run inside this same session, under these same rules, and one reservation still
+    // covers the whole run. A fix stays a single agent.
+    if (mode === 'analyse' || mode === 'analyse-followups') allowed.push('Task', 'Agent');
   }
   if (!permissions.commit) disallowed.push('Bash(git commit*)');
   else allowed.push('Bash(git commit*)');
@@ -323,8 +327,10 @@ export function parseAgentResult(stdout, { outputs = null } = {}) {
 export function killTree(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
-    try { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); } catch { /* ignore */ }
-    try { child.kill(); } catch { /* ignore */ }
+    // The tree is listed from the parent, so the parent is killed only after taskkill has walked
+    // it; killing it first would orphan grandchildren that keep the output pipes open.
+    const last = () => { try { child.kill(); } catch { /* ignore */ } };
+    try { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, last); } catch { last(); }
     return;
   }
   try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* ignore */ } }

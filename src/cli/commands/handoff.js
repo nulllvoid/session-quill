@@ -3,7 +3,7 @@ import path from 'node:path';
 import { loadContext, cliEvent, submitAndWait, findTicketByKey, latestSnapshot } from '../context.js';
 import { validateHandoffRequest, MODES } from '../../handoff/permissions.js';
 import { uuid } from '../../lib/ids.js';
-import { nowIso } from '../../lib/time.js';
+import { nowIso, formatDuration } from '../../lib/time.js';
 import { requestsDir, handoffsDir } from '../../lib/paths.js';
 import { readJsonIfExists, writeJsonAtomic } from '../../lib/atomic-fs.js';
 import { TrackerError } from '../../lib/errors.js';
@@ -62,6 +62,12 @@ async function queue(ctx, io, args, flags) {
   return 0;
 }
 
+// Where a run's time went (ADR 0022), listing only the steps that were measured.
+export function timingsText(t) {
+  if (!t) return '';
+  return [['queue_wait_ms', 'wait'], ['worktree_ms', 'setup'], ['agent_ms', 'agent'], ['test_ms', 'tests']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`).join(', ');
+}
+
 function list(ctx, io, flags) {
   const snap = latestSnapshot(ctx);
   const handoffs = snap ? [...snap.handoffs].sort((a, b) => (a.requested_at < b.requested_at ? 1 : -1)) : [];
@@ -69,12 +75,37 @@ function list(ctx, io, flags) {
   if (!handoffs.length) { io.println('No handoffs.'); return 0; }
   for (const h of handoffs) {
     const t = snap.tickets.find((x) => x.id === h.ticket_id);
-    io.println(`${h.id}  ${h.state.padEnd(10)} ${h.mode.padEnd(18)} ${t ? t.key : h.ticket_id}  requested ${h.requested_at}${h.error && h.error.code ? `  error: ${h.error.code}` : ''}${h.children_ids && h.children_ids.length ? `  children: ${h.children_ids.length}` : ''}`);
+    io.println(`${h.id}  ${h.state.padEnd(10)} ${h.mode.padEnd(18)} ${t ? t.key : h.ticket_id}  requested ${h.requested_at}${h.error && h.error.code ? `  error: ${h.error.code}` : ''}${h.children_ids && h.children_ids.length ? `  children: ${h.children_ids.length}` : ''}${h.batch_id ? `  batch ${h.batch_id.slice(0, 8)}` : ''}${h.timings ? `  (${timingsText(h.timings)})` : ''}`);
   }
   return 0;
 }
 
+// The queued runs of a batch (ADR 0023), named by its id or a prefix of it. Running runs keep
+// their own Cancel; a batch cancel only stops what has not started.
+export function batchCancelTargets(snap, batch) {
+  if (!snap || typeof batch !== 'string' || !batch) return [];
+  return (snap.handoffs ?? []).filter((h) => typeof h.batch_id === 'string' && h.batch_id.startsWith(batch) && h.state === 'queued' && !h.cancel_requested);
+}
+
+async function cancelBatch(ctx, io, batch, flags) {
+  const snap = latestSnapshot(ctx);
+  const ids = new Set((snap ? snap.handoffs : []).filter((h) => typeof h.batch_id === 'string' && h.batch_id.startsWith(batch)).map((h) => h.batch_id));
+  if (ids.size > 1) throw new TrackerError('batch-ambiguous', `${batch} matches ${ids.size} batches; give more of the id`);
+  if (!ids.size) throw new TrackerError('batch-unknown', `no runs in batch ${batch}`);
+  const targets = batchCancelTargets(snap, batch);
+  let cancelled = 0;
+  for (const h of targets) {
+    const ticket = snap.tickets.find((x) => x.id === h.ticket_id);
+    const terminal = await submitCliRequest(ctx, io, { kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticket ? ticket.revision : null, payload: { handoff_id: h.id } }, flags);
+    if (terminal.state === 'applied') cancelled += 1;
+    else io.println(`${h.id}: cancellation ${terminal.state}${terminal.error ? `: ${terminal.error.message}` : ''}`);
+  }
+  io.println(`Cancelled ${cancelled} of ${targets.length} queued run${targets.length === 1 ? '' : 's'} in batch ${[...ids][0]}; running runs continue.`);
+  return 0;
+}
+
 async function cancel(ctx, io, args, flags) {
+  if (typeof flags.batch === 'string') return cancelBatch(ctx, io, flags.batch, flags);
   const [id] = args;
   const snap = latestSnapshot(ctx);
   const h = snap ? snap.handoffs.find((x) => x.id === id || x.id.startsWith(id ?? '')) : null;

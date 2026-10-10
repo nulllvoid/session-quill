@@ -1,4 +1,5 @@
 import { esc, attr, keyEl, icon, normalizeSnapshot, normalizeTicket, accessFieldset } from '../components.js';
+import { testCommandNote } from './agents.js';
 
 export function renderHandoffForm(rawTicket, rawSnapshot, { retryOf = null, prerequisites = {} } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
@@ -24,6 +25,7 @@ ${accessFieldset()}
   <label><input type="checkbox" name="read_source" ${repo ? '' : 'disabled'}> Read source (registered repo on this machine)</label>
   <label><input type="checkbox" name="edit_source" ${repo ? '' : 'disabled'}> Edit source in an isolated checkout <span class="muted small">(requires read source; required for attempt fix)</span></label>
 </fieldset>
+${testCommandNote(repo)}
 <fieldset><legend>Actions (each a separate opt-in)</legend>
   <label><input type="checkbox" name="commit" ${repo ? '' : 'disabled'}> Commit locally <span class="muted small">(requires edit source)</span></label>
   <label><input type="checkbox" name="push_branch" ${repo ? '' : 'disabled'}> Push branch <span class="muted small">(requires commit; never a default or protected branch)</span></label>

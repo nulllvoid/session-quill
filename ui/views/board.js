@@ -1,4 +1,5 @@
 import { esc, attr, ticketCard, filterTickets, STATUS_ORDER, STATUS_LABELS, emptyState, normalizeSnapshot } from '../components.js';
+import { canSelect, renderSelectToggle, selectableCard } from './bulk.js';
 
 export const BOARD_PAGE_SIZE = 40;
 
@@ -7,7 +8,7 @@ export function columnCollapsed(status, toggled) {
   return (status === 'done') !== toggled.has(status);
 }
 
-export function renderBoard(rawSnapshot, filters, { now, layout = 'columns', toggled = new Set(), pages = {}, selected = null }) {
+export function renderBoard(rawSnapshot, filters, { now, layout = 'columns', toggled = new Set(), pages = {}, selected = null, selecting = false, checked = new Set() }) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const tickets = filterTickets(snapshot, filters);
   if (!tickets.length) {
@@ -24,7 +25,8 @@ export function renderBoard(rawSnapshot, filters, { now, layout = 'columns', tog
     const page = pages[status] ?? 0;
     const shown = all.slice(0, (page + 1) * BOARD_PAGE_SIZE);
     const more = all.length - shown.length;
-    const cards = collapsed ? '' : shown.map((t) => ticketCard(t, snapshot, { variant: 'board', now, selected: selected === t.id })).join('');
+    const card = (t) => ticketCard(t, snapshot, { variant: 'board', now, selected: selected === t.id });
+    const cards = collapsed ? '' : shown.map((t) => (selecting ? selectableCard(card(t), t, { checked: checked.has(t.id) }) : card(t))).join('');
     return `<section class="column" data-column="${attr(status)}" data-collapsed="${collapsed ? 'true' : 'false'}" aria-labelledby="col-${attr(status)}">
   <header class="column-head">
     <h3 id="col-${attr(status)}">${esc(STATUS_LABELS[status])} <span class="count" aria-label="${esc(all.length)} ticket${all.length === 1 ? '' : 's'}">${esc(all.length)}</span></h3>
@@ -34,6 +36,7 @@ export function renderBoard(rawSnapshot, filters, { now, layout = 'columns', tog
 </section>`;
   }).join('');
   return `<section class="view view-board" aria-labelledby="tab-board" data-layout="${attr(layout)}">
+${canSelect(snapshot) ? renderSelectToggle({ selecting, count: checked.size }) : ''}
 <p class="section-count">${esc(open)} open ticket${open === 1 ? '' : 's'}${done ? ` · ${esc(done)} done` : ''}${staleCount ? ` · <button type="button" class="link" data-action="toggle-stale" aria-pressed="${filters.stale ? 'true' : 'false'}">${esc(staleCount)} stale</button>` : ''}</p>
 <div class="board">${columns}</div></section>`;
 }

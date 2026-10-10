@@ -8,6 +8,8 @@ import { normalizeTracker } from '../core/external-keys.js';
 
 export const CATEGORIES = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
 export const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+// The dashboard's preferred loopback port (ADR 0022); 0 asks for a random port each start.
+export const DEFAULT_UI_PORT = 47321;
 export const APPROVAL_PHRASES = ['approved', 'lgtm', 'go ahead', 'ship it'];
 
 // Fields that only the user config may set. Repository config can never weaken them
@@ -30,7 +32,7 @@ export function defaultUserConfig() {
     approval_phrases_enabled: false,
     sync_interval_hours: 2,
     stale_days: 5,
-    ui_port: 0,
+    ui_port: DEFAULT_UI_PORT,
     gate: { allow_tools: [], mode: 'nudge' },
     projects: {},
     repos: {},

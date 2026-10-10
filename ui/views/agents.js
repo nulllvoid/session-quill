@@ -1,6 +1,6 @@
 // Agents panel on ticket detail (ADR 0008): the recipes available for the ticket's repository,
 // the permissions each may use, and every run with the suggestions it left.
-import { esc, attr, icon, timeEl, handoffChip, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset } from '../components.js';
+import { esc, attr, icon, timeEl, handoffChip, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset, formatDuration } from '../components.js';
 
 const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 'repository' };
 const ACTIVE = new Set(['pending', 'applying']);
@@ -65,10 +65,28 @@ function runQuality(h) {
   const q = h.result_quality;
   if (q && q.self_checked) parts.push('<span class="chip small" title="The agent checked each claim against its cited source before finishing">Self-checked</span>');
   if (q && q.repaired) parts.push('<span class="chip small" title="The first reply broke the output format and was repaired in a follow-up turn">Repaired reply</span>');
+  const gate = testGateChip(h.test_gate);
+  if (gate) parts.push(gate);
   if (q && (q.problems ?? []).length) parts.push(`<span class="chip warning small" title="${attr(q.problems.join('; '))}">Reply incomplete</span>`);
   const sources = h.result_sources ?? [];
   const list = sources.length ? `<details class="sources small"><summary>${esc(sources.length)} source${sources.length === 1 ? '' : 's'}</summary><ul>${sources.map((x) => `<li><code>${esc(x)}</code></li>`).join('')}</ul></details>` : '';
   return parts.length || list ? `<div class="run-quality">${parts.join(' ')}${list}</div>` : '';
+}
+
+// The worker's own test gate (ADR 0023). Only a real pass is good; a failure links to the output
+// the worker recorded.
+export function testGateChip(g) {
+  if (!g || !g.status) return '';
+  if (g.status === 'passed') return `<span class="chip good small" title="${attr(`The worker ran ${g.command ?? 'the test command'} in the run's checkout and it exited 0${g.repaired ? ' after one repair turn' : ''}`)}">Tests passed (worker)</span>`;
+  if (g.status === 'skipped') return `<span class="chip small" title="${attr(g.reason ?? 'the worker did not run tests')}">Not test-verified</span>`;
+  const label = g.status === 'timeout' ? 'Tests timed out' : 'Tests failed';
+  return `<details class="test-output small"><summary><span class="chip critical small">${label}</span></summary><p class="muted small">${esc(g.command ?? '')}${Number.isInteger(g.exit_code) ? ` exited with code ${esc(g.exit_code)}` : ''}${g.attempts > 1 ? ' after one repair turn' : ''}</p><pre class="preview">${esc(g.tail ?? '')}</pre></details>`;
+}
+
+// The test gate a fix will get, said where a fix is queued.
+export function testCommandNote(repo) {
+  if (!repo) return '';
+  return repo.test_command ? `<p class="small test-command">Fixes are checked with <code>${esc(repo.test_command)}</code>, run by the worker in the fix's checkout; a fix whose tests still fail after one repair turn is not suggested.</p>` : '<p class="small muted test-command">No test command: fixes are not test-verified. Set <code>test_command</code> for this repository in the user config.</p>';
 }
 
 // What a files run changed (ADR 0015), each with an Undo while it still applies.
@@ -84,11 +102,19 @@ function fileEffects(h, ticket, { canEdit, pending }) {
   return `<ul class="file-effects small">${rows}</ul>`;
 }
 
+// Where a run's time went (ADR 0022): only the steps that were measured.
+function runTimings(h) {
+  const t = h.timings;
+  if (!t) return '';
+  const parts = [['queue_wait_ms', 'Queue wait'], ['worktree_ms', 'Setup'], ['agent_ms', 'Agent'], ['test_ms', 'Tests']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`);
+  return parts.length ? `<p class="run-timings small muted">${esc(parts.join(' · '))}</p>` : '';
+}
+
 function runItem(h, ticket, snapshot, { now, tz, caps, pending }) {
   const name = h.recipe ? h.recipe.name : h.mode;
   const suggestions = h.suggestions ?? [];
   const accessChip = h.access === 'full' ? ' <span class="chip warning small">Full access</span>' : h.access === 'settings' ? ' <span class="chip small">My settings</span>' : '';
-  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong>${accessChip} <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${fileEffects(h, ticket, { canEdit: !!caps.edit_tickets, pending })}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${h.result_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(h.result_ref)}" data-generation="${attr(snapshot.generation_id)}">Partial/full result</button>` : ''}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
+  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong>${accessChip} <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${runTimings(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${fileEffects(h, ticket, { canEdit: !!caps.edit_tickets, pending })}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${h.result_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(h.result_ref)}" data-generation="${attr(snapshot.generation_id)}">Partial/full result</button>` : ''}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
 }
 
 export function renderAgentsSection(ticket, rawSnapshot, { now, pending = [] } = {}) {
@@ -131,6 +157,7 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
 <p class="small">${esc(recipe.description)} <span class="muted">(${esc(SOURCE_LABELS[recipe.source] ?? recipe.source)} recipe, mode ${esc(recipe.mode)})</span></p>
 ${boxes.length ? `<fieldset><legend>Permissions for this run</legend>${boxes.join('\n')}<p class="muted small">The recipe allows at most what is listed here. Anything with a side effect stays off unless you tick it.</p></fieldset>` : '<p class="small">This run works from the ticket notes only: no source access and no side effects.</p>'}
 ${recipe.mode === 'files' ? '' : accessFieldset()}
+${fix ? testCommandNote(repo ?? { test_command: null }) : ''}
 <label class="label" for="recipe-note">Note <span class="muted">(max 280)</span></label>
 <textarea id="recipe-note" name="note" maxlength="280" rows="2" placeholder="Anything the agent should focus on?"></textarea>
 <p class="muted small">Capped at ${esc(recipe.timeout_min)} minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>

@@ -71,6 +71,15 @@ session and repository, and starts a missing worker.
 After a reboot, the next Claude session reconnects automatically. You do not need
 to configure Task Scheduler or systemd for ordinary session tracking. Scheduled
 jobs run while the worker is running; opening Claude after downtime starts recovery.
+To have the worker (and the dashboard) running from the moment you log in, run
+`quill worker install` once; `quill worker uninstall` removes it.
+
+The dashboard lives at `http://127.0.0.1:47321/` (set `ui_port` in
+`~/.claude/quill/config.toml` to change it, or `ui_port = 0` for a random port;
+when the port is taken the worker uses a random one). The first visit needs the
+one-use link from `/session-quill:ui`; after that the browser stays signed in for
+7 days from its last use, across worker restarts. A browser that is not signed in
+sees a page telling it how to sign in. `quill ui --revoke` signs every browser out. See [ADR 0022](docs/decisions/0022-always-on-dashboard.md).
 
 Quill keeps your existing store. A first setup uses `~/.claude/quill/store`
 (or `QUILL_HOME/store` when set). To choose a notes folder instead, run
@@ -98,6 +107,8 @@ The Claude commands always locate their bundled CLI automatically.
 quill start                                 # private setup or resume
 quill ui                                    # open dashboard, starting worker if needed
 quill worker stop                           # pause processing and automatic restart
+quill worker install                        # start the worker at login (uninstall to remove)
+quill ui --revoke                           # sign every dashboard browser out
 quill start                                 # resume; captured activity catches up
 quill init --store ~/Documents/Quill --project my-project --project-name "My Project"
 quill repo add ~/src/payments-api
@@ -327,7 +338,7 @@ tools: [Read, Grep, "Bash(git log:*)"]
 timeout_min: 10
 inputs: [ticket, prs, deployments, work]   # also notes, related, history; omit for all
 outputs: [summary, deploy_evidence, next_action]
-self_check: true                   # verify each claim against its source before finishing
+self_check: true                   # verify each claim against its source before finishing (always on with edit_source)
 ---
 For {{ticket.key}} ({{ticket.url}}): for each merged PR {{prs}}, find the deployment evidence...
 ```
@@ -361,6 +372,20 @@ Every run sees the ticket's Notes section, the full latest plan and checkpoint, 
 
 The run dialog shows what a recipe may do before you queue it; anything with a side effect stays off until you tick it, and scheduled runs only ever read. Results from your own recipes and `deploy-check` or `standup` arrive as suggestions on the ticket: accept or dismiss each one. A comment draft is never posted to your tracker.
 
+**Tested fixes.** Give a repository a test command and the worker runs it itself after every fix, in the fix's own checkout, and records the result on the run. If the tests fail, the agent gets one repair turn with the failing output and the tests run again; a fix whose tests still fail (or time out) is not suggested: nothing is committed, pushed or opened, and the run shows the output. Only a real pass is shown as *Tests passed (worker)* and written into a draft PR. Without a test command, fixes are marked *Not test-verified*.
+
+```toml
+[repos.my-repo]
+test_command = "npm test"     # run through your shell in the fix's checkout, with no input
+test_timeout_ms = 600000      # default 10 minutes
+
+[handoff]
+max_concurrent_readonly = 2   # runs that only read (default 2)
+max_concurrent_fix = 1        # runs that edit source (default 1; and one per repository)
+```
+
+**Bulk runs.** On Board or Pick next, press **Select** (or `x` on a focused card; Shift-click selects a range, Esc clears) and choose **Analyze**, **Attempt fix** or **Change status** for every checked ticket. The bulk dialog shows which tickets are ready, already running, have no repository or are not eligible, and asks once for the recipe and access; bulk fixes need an explicit edit-source confirmation. Each ticket gets its own request, so one stale ticket does not stop the rest, and the runs share a batch id with a progress strip and **Cancel batch** for the queued ones (`quill handoff cancel --batch <id>` from a terminal). Bulk status changes keep their 10-second undo, gathered under **Undo all**. Large analyses may split the work across Claude Code subagents inside the one run ([ADR 0023](docs/decisions/0023-bulk-runs-and-test-gate.md)).
+
 ## Example walkthrough
 
 One ticket, `PROJ-123` in Jira, from first prompt to a page your team can see. It assumes `quill init` has run and that `[tracker]` in `~/.claude/quill/config.toml` names your Jira site, prefixes and `environments = ["stage", "prod"]`.
@@ -368,7 +393,7 @@ One ticket, `PROJ-123` in Jira, from first prompt to a page your team can see. I
 1. **Start working.** Open Claude Code in the repository on a branch such as `feat/PROJ-123-retry-flake`, or say "PROJ-123: make the retry test deterministic". The session is linked to `PROJ-123` before Claude's first tool call, and the ticket is created if the store has none. With no `[tracker]` table, run `/session-quill:ticket create "Make the retry test deterministic" --bind` instead.
 2. **Let it capture.** Writes, commits, PR creation, approved plans and end-of-turn checkpoints are recorded against the ticket, and its note in your store updates within 30 seconds. Work done before the session was linked waits under **Unlinked work** on Pick next, where you attach it to a ticket or dismiss it.
 3. **Approve the plan.** `/session-quill:approve` promotes the latest checkpoint to an approved plan. It is a record, never permission to commit, push or deploy.
-4. **Open the dashboard.** `quill ui` prints a one-use owner link (loopback only, valid for 10 minutes) and opens it. Pick next ranks your open tickets; open `PROJ-123` for its timeline, PRs and deployments.
+4. **Open the dashboard.** `quill ui` prints a one-use owner link (loopback only, valid for 10 minutes) and opens it; the browser then stays signed in for 7 days from its last use. Pick next ranks your open tickets; open `PROJ-123` for its timeline, PRs and deployments.
 5. **Ask an agent.** From the ticket's **Agents** panel, or `quill agent run analyse PROJ-123`, a recipe works in an isolated checkout with only the permissions you tick. Its findings arrive as suggestions on the ticket, and you accept or dismiss each one.
 6. **Merge and deploy.** When the PR merges, the next reconciliation records it (**Refresh** in the header, or `quill sync`, runs one now). `PROJ-123` now owes `stage` and `prod` deployments, which show on **Deployments**. Record each one with its evidence as it ships, or mark it N/A. A `deploy-check` recipe can look for the evidence and suggest it. Closing the ticket while a deployment is pending asks you to record, waive or leave it.
 7. **Review the day.** **Today** shows what changed on each ticket today and on each of the last few days. A `digest` schedule writes the same summary into the store's daily note.
@@ -387,17 +412,19 @@ Add the quill segment to your status line (`~/.claude/settings.json`):
 
 If you already have a status line, keep it and run both scripts from a small wrapper so neither replaces the other.
 
+While the worker is healthy, the segment ends with the dashboard address as a clickable link (OSC 8, in terminals that support it). It is only the address, never a sign-in secret, and it disappears when the worker stops.
+
 ## Diagnostics
 
 ```bash
 quill doctor
 ```
 
-Reports Node, Git and Claude versions, store ownership (copies on other machines are read-only), worker lock and heartbeat, ingress backlog, journal health and recent capture gaps. `quill status --json` shows the binding for a session. Logs are under `~/.claude/quill/logs/`.
+Reports Node, Git and Claude versions, store ownership (copies on other machines are read-only), worker lock and heartbeat, whether the worker starts at login, ingress backlog, journal health and recent capture gaps. `quill status --json` shows the binding for a session. Logs are under `~/.claude/quill/logs/`.
 
 ## Uninstall
 
-1. Stop the worker: `quill worker stop` (and remove any OS registration you added).
+1. Stop the worker: `quill worker stop`, and `quill worker uninstall` if you installed the login entry (remove any OS registration you added by hand).
 2. Remove the plugin: `claude plugin uninstall session-quill@session-quill` and `claude plugin marketplace remove session-quill`, or stop passing `--plugin-dir`.
 3. Your markdown store is yours and stays where it is. Quill state (journal, blobs, projections) lives in `~/.claude/quill/`; delete it only after backing it up if you want a clean slate.
 
@@ -407,7 +434,7 @@ Reports Node, Git and Claude versions, store ownership (copies on other machines
 - The gate covers tool calls delivered to its hooks. External processes, disabled hooks and host crashes are outside its guarantee, and a valid binding never bypasses normal Claude Code permissions.
 - Exports are copies: they do not update and cannot be revoked after you share them.
 - Handoffs use your configured model provider; selected ticket content leaves the machine when you queue one. That includes the ticket's Notes section, its full latest plan and checkpoint, its earlier run summaries and, with source access, the diff of its commits.
-- An **attempt-fix** handoff runs the repository's own tests inside the isolated worktree, which means it executes repository code with your user account. Granting `edit_source` is granting that. Push and draft-PR permissions are enforced by removing provider tokens and disabling git prompts from the agent's environment unless you grant them, plus the explicit tool allow-list; treat them as policy you can audit in the handoff log, not as a sandbox. Read-only git commands go through Claude Code's own read-only check instead of an allow rule, so options that write files or run programs (`git log --output=…`, `--ext-diff`) are refused. Programs you configured yourself in git config, such as `diff.external`, still run. Details are in [TRD §Handoff execution](docs/TRD.md#handoff-execution).
+- An **attempt-fix** handoff runs the repository's own tests inside the isolated worktree, which means it executes repository code with your user account. With a `test_command`, the worker also runs that command there itself after the agent finishes. Granting `edit_source` is granting that. Push and draft-PR permissions are enforced by removing provider tokens and disabling git prompts from the agent's environment unless you grant them, plus the explicit tool allow-list; treat them as policy you can audit in the handoff log, not as a sandbox. Read-only git commands go through Claude Code's own read-only check instead of an allow rule, so options that write files or run programs (`git log --output=…`, `--ext-diff`) are refused. Programs you configured yourself in git config, such as `diff.external`, still run. Details are in [TRD §Handoff execution](docs/TRD.md#handoff-execution).
 - Plan mode: the gate identifies a session's plan file by its first `Write` of a Markdown file directly inside `~/.claude/plans` (the host does not report the path). See [ADR 0004](docs/decisions/0004-plan-path-first-claim.md).
 
 ## Development

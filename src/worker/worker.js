@@ -431,6 +431,7 @@ export class Worker {
       recipes: this.recipeInfo ? this.recipeInfo() : [],
       environmentsFor: (repoId) => this.environmentsFor(repoId),
       publishers: this.publishInfo ? this.publishInfo() : [],
+      handoff_limits: this.handoffLimits ? this.handoffLimits() : null,
     };
   }
 

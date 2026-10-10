@@ -51,3 +51,12 @@ test('reduced motion and dark-mode media queries are present and no emoji are us
     assert.equal(/\p{Extended_Pictographic}/u.test(text), false, `${f} contains emoji`);
   }
 });
+
+test('the bulk action bar has its own layer between the bottom nav and the detail panel', () => {
+  const root = /(?:^|\n):root\s*\{([^}]*--z-sticky[^}]*)\}/.exec(css);
+  assert.ok(root, 'z-index tokens block present');
+  const z = Object.fromEntries([...root[1].matchAll(/--(z-[a-z]+)\s*:\s*(\d+)/g)].map((m) => [m[1], Number(m[2])]));
+  assert.equal(z['z-bulk'], 25);
+  assert.ok(z['z-nav'] < z['z-bulk'] && z['z-bulk'] < z['z-panel']);
+  assert.match(css, /\.bulk-bar\s*\{[^}]*z-index:\s*var\(--z-bulk\)/);
+});

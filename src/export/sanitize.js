@@ -87,8 +87,10 @@ function sanitizeSession(s, o) {
 }
 
 function sanitizeHandoff(h, o) {
-  const { worktree_path, result_ref, pr_url, result_summary, result_confidence, result_sources, result_quality, changed_files, log_path, patch_path, suggestions, files, file_effects, ...rest } = h;
+  const { worktree_path, result_ref, pr_url, result_summary, result_confidence, result_sources, result_quality, changed_files, log_path, patch_path, suggestions, files, file_effects, test_gate, ...rest } = h;
   const out = { ...rest };
+  // The test gate's result travels; its command and output (paths, env, secrets) never do.
+  if (test_gate) out.test_gate = Object.fromEntries(Object.entries(test_gate).filter(([k]) => ['status', 'exit_code', 'ms', 'attempts', 'repaired'].includes(k)));
   // File runs (ADR 0015) name absolute paths and trash locations: never exported, only counted.
   out.file_effects = (file_effects ?? []).length;
   // Agent output, like the result summary, is shared only when checkpoints are included.

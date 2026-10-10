@@ -1,0 +1,125 @@
+<!-- page: {"title": "Configuration | Session Quill docs", "description": "Every table Session Quill 1.0 reads from config.toml and .quill.toml: tracker, repos, handoff, gate, schedules, publishers, mirror and the dashboard port.", "nav": "configuration"} -->
+<h1>Configuration</h1>
+<p class="lede">Two files. <code>~/.claude/quill/config.toml</code> is yours. A repository's <code>.quill.toml</code> is shared with the team and can tighten your settings but never loosen them. Secrets go in neither; name an environment variable instead.</p>
+
+<h2 id="files">Which file wins</h2>
+<table>
+  <thead><tr><th scope="col">Table</th><th scope="col">config.toml</th><th scope="col">.quill.toml</th></tr></thead>
+  <tbody>
+    <tr><td>[tracker]</td><td>Yes, including tokens by variable name and write-back</td><td>Yes, field by field; cannot enable write-back or name a token</td></tr>
+    <tr><td>[gate]</td><td>Yes</td><td>May only make the mode stricter</td></tr>
+    <tr><td>[repos.&lt;id&gt;]</td><td>Yes</td><td>Written only with <code>--share-settings</code> or <code>--repo-file</code></td></tr>
+    <tr><td>[handoff]</td><td>Yes</td><td>No</td></tr>
+    <tr><td>[[schedule]]</td><td>Yes</td><td>No; repositories cannot schedule jobs</td></tr>
+    <tr><td>[[publish]]</td><td>Yes</td><td>No</td></tr>
+    <tr><td>[mirror]</td><td>Yes</td><td>No</td></tr>
+    <tr><td>ui_port</td><td>Yes</td><td>No</td></tr>
+  </tbody>
+</table>
+<p>The worker picks up edits to either file within about ten seconds. A <code>.quill.toml</code> that cannot be parsed makes its repository strict with no tracker until it is fixed.</p>
+
+<h2 id="tracker">[tracker]</h2>
+<pre><code>[tracker]
+system           = "jira"                        # jira | linear | github | custom
+domain           = "https://example.atlassian.net"
+url_template     = "{domain}/browse/{key}"       # linear: "{domain}/issue/{key}" · github: "{domain}/{repo}/issues/{number}"
+key_pattern      = '\b([A-Z][A-Z0-9]+-\d+)\b'    # the default; single quotes keep backslashes literal
+prefixes         = ["PROJ", "OPS"]               # empty = any key except common tokens like UTF-8
+sources          = ["prompt", "branch"]
+on_new_key       = "switch"                      # switch | add | ignore
+sync_token_env   = "JIRA_TOKEN"                  # github: GITHUB_TOKEN with repo = "owner/name" · linear: LINEAR_API_KEY
+sync_username_env = "JIRA_EMAIL"                 # Jira Cloud only
+write_back       = false                         # opt-in; quill tracker push previews, --confirm sends
+import_assigned  = false                         # 1.0: tracker-sync imports issues assigned to you (Jira, GitHub)
+auto_clone_dir   = "~/src/quill"                 # 1.0: consented clones land here
+clone_hosts      = ["github.com", "gitlab.com", "bitbucket.org"]
+environments     = ["staging", "production"]     # default environments for repositories without their own
+
+[tracker.status_map]                             # optional, with write_back; defaults: To Do, In Progress, In Review, Done
+review = "Code Review"
+
+[tracker.repo_map]                               # 1.0: the resolver's first rule
+PAY        = "payments-api"                      # a Jira project key or component, or a GitHub owner/repo
+"acme/web" = "https://github.com/acme/web.git"   # a registered repo id or a remote URL</code></pre>
+<h3 id="resolver">How a ticket finds its repository</h3>
+<ol>
+  <li><code>[tracker.repo_map]</code>: the Jira project key or component, or the GitHub <code>owner/repo</code>, mapped to a registered repository id or a remote URL.</li>
+  <li>A registered repository whose <code>origin</code> matches a repository URL in the issue's linked development data (the issue's own repository on GitHub; remote links or the dev panel on Jira).</li>
+  <li>A clone under <code>auto_clone_dir</code> or a known repository root whose origin matches, comparing https and ssh forms as one.</li>
+</ol>
+<p>The result is <em>linked</em>, <em>needs-clone</em> (remote known, no local clone) or <em>none</em>. A needs-clone ticket shows the chip and a <strong>Clone…</strong> button; nothing clones on its own. The owner can tag a ticket <code>quill/no-code</code> to tell the resolver to skip it.</p>
+<div class="callout">Clones are refused for URLs with credentials, hosts outside <code>clone_hosts</code>, <code>file:</code> and <code>ext::</code> transports, and targets outside <code>auto_clone_dir</code>. The same remote is never cloned twice.</div>
+
+<h2 id="gate">[gate]</h2>
+<pre><code>[gate]
+mode = "nudge"            # off | nudge | strict</code></pre>
+<ul>
+  <li><strong>off</strong>: capture only.</li>
+  <li><strong>nudge</strong> (default): nothing is denied. When an unbound session changes files or commits, the next Stop asks Claude once which ticket the work belongs to.</li>
+  <li><strong>strict</strong>: covered mutating tools are denied until the session is bound, and denied whenever the binding snapshot or the worker is unavailable. A mention only binds when <code>prefixes</code> is set.</li>
+</ul>
+
+<h2 id="repos">[repos.&lt;id&gt;]</h2>
+<pre><code>[repos.payments-api]
+provider        = "github"         # github (gh signed in) | bitbucket (with token_env)
+deploy_on       = "merge"          # treat a merged PR as the deployment; omit for per-environment obligations
+test_command    = "npm test"       # 1.0: the worker's test gate for attempt-fix runs
+test_timeout_ms = 600000           # default ten minutes
+
+[repos.billing]
+provider     = "bitbucket"
+token_env    = "BITBUCKET_TOKEN"   # sent as a bearer token; username_env switches to an app password
+# provider_url = "https://bitbucket.example.com"   # Bitbucket Server; omit for bitbucket.org</code></pre>
+<p><code>quill repo add &lt;path&gt;</code>, <code>quill repo list</code> and <code>quill repo remove &lt;id&gt;</code> register repositories and record their path and default branch for you; the id comes from the folder name. Inside a linked git worktree, registration points at the repository's main working tree.</p>
+
+<h2 id="handoff">[handoff]</h2>
+<pre><code>[handoff]
+max_concurrent_readonly = 2
+max_concurrent_fix      = 1</code></pre>
+<p>Read-only runs and runs with <code>edit_source</code> are counted separately; fixes on one repository stay one at a time.</p>
+
+<h2 id="ui">Dashboard port</h2>
+<pre><code>ui_port = 47321           # 1.0 default; 0 keeps a random port</code></pre>
+<p>The server tries the fixed port first and falls back to a random one when it is taken. Host, port and pid are recorded in <code>ui-endpoint.json</code>, which the status line reads.</p>
+
+<h2 id="schedules">[[schedule]]</h2>
+<pre><code>[[schedule]]
+name  = "reconcile"
+job   = "reconcile"       # reconcile | agent | digest | publish | tracker-sync
+every = "2h"              # or 30m, 1d
+
+[[schedule]]
+name = "evening-sync"
+job  = "reconcile"
+cron = "30 19 * * 1-5"    # in the store's time zone</code></pre>
+<p>Without configuration the worker reconciles every two hours. A run missed while the computer was off runs once when the worker starts.</p>
+
+<h2 id="publish">[[publish]]</h2>
+<pre><code>[[publish]]
+name          = "team"
+kind          = "artifact"       # artifact | markdown | html (with path = "...")
+projects      = ["my-project"]
+fields        = ["key", "title", "status", "next", "pr", "deployments", "updated"]
+include_links = false
+on            = ["reconcile"]
+two_way       = true
+
+[publish.team]
+auto_run_editors = ["priya@example.com"]   # 1.0: these editors' Run agent edits queue without approval
+auto_run_recipes = ["analyse", "deploy-check"]   # read-only recipes only</code></pre>
+<p>The first publish to a destination waits for your confirmation. With <code>two_way</code>, editors change status and next action on the page and, from 1.0, pick a recipe under <em>Run agent</em>; each becomes a revision-checked request or a proposed run on your dashboard.</p>
+
+<h2 id="mirror">[mirror]</h2>
+<pre><code>[mirror]
+enabled = true</code></pre>
+<p>The owner's worker keeps a sanitised dashboard and snapshot in <code>&lt;store&gt;/.quill-mirror</code>; <code>quill mirror status|open</code> reads it on any machine.</p>
+
+<h2 id="worker">Worker commands</h2>
+<pre><code>quill worker install      # start at login (Task Scheduler, LaunchAgent or systemd user unit)
+quill worker uninstall
+quill worker stop         # pause processing and automatic restart
+quill start               # resume
+quill ui --revoke         # clear every dashboard session
+quill doctor</code></pre>
+
+<div class="docs-foot"><a href="recipes.html">← Recipe authoring</a><a href="https://github.com/nulllvoid/session-quill#readme">Full README on GitHub</a></div>
