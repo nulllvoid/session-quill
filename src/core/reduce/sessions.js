@@ -15,7 +15,8 @@ export function ticketEffort(ticket) {
 }
 
 function creditActiveTime(state, session, ev) {
-  if (!ACTIVITY.has(ev.kind) || !session.current_ticket_id || !session.last_event_at) return;
+  // Subagents run inside their parent's time; counting them too would double it.
+  if (ev.agent_id || !ACTIVITY.has(ev.kind) || !session.current_ticket_id || !session.last_event_at) return;
   const gap = Date.parse(ev.occurred_at) - Date.parse(session.last_event_at);
   if (!(gap > 0)) return;
   const ticket = state.tickets.get(session.current_ticket_id);

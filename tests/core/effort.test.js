@@ -58,4 +58,8 @@ test('effort: an unbound session and a subagent stop credit no turn', () => {
   ev(state, 'subagent-stop', { complete: false }, { session_id: 's2', occurred_at: '2026-10-02T08:00:30Z' });
   assert.equal(state.tickets.get(t.id).effort.turns, 0);
   assert.equal(state.tickets.get(t.id).effort.active_ms, 30_000);
+  // A subagent's own events run inside the parent's time and add nothing.
+  ev(state, 'subagent-start', { agent_id: 'a1', agent_type: 'Explore', parent_session_id: 's2' }, { session_id: 's2', agent_id: 'a1', occurred_at: '2026-10-02T08:00:40Z' });
+  ev(state, 'pre-tool', { tool_name: 'Read' }, { session_id: 's2', agent_id: 'a1', tool_call_id: 'x', occurred_at: '2026-10-02T08:02:40Z' });
+  assert.equal(state.tickets.get(t.id).effort.active_ms, 30_000);
 });

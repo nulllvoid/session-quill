@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Resume brief: a session that binds to a ticket with history (session start, compaction, a prompt naming its key, `ticket bind`, `ticket work` reusing a task) gets a short brief of the goal, next action or blocker, plan, recent conclusions, changed files, PRs and pending deployments, capped at 1,200 characters.
+- Effort per ticket: active time (gaps of up to 5 minutes between a bound main session's events), turns, and the tokens Claude Code reports for those turns, read by the Stop hook from new transcript lines without keeping text. Shown in ticket detail and `ticket show`.
+- `quill tracker push <KEY>` ([ADR 0018](docs/decisions/0018-tracker-write-back.md)): opt-in (`[tracker] write_back = true` in config.toml only) write of a ticket's status and an optional comment to Jira, GitHub or Linear; previews by default, sends only with `--confirm`, journaled as `tracker-push`.
+- Read-only mirror ([ADR 0019](docs/decisions/0019-read-only-mirror.md)): with `[mirror] enabled = true` the owner's worker keeps a sanitized dashboard and snapshot in `<store>/.quill-mirror`; `quill mirror status|open` reads it on any machine and `quill mirror write` refreshes it.
+- `quill agent install <https git URL | folder>` and `agent uninstall` ([ADR 0020](docs/decisions/0020-shared-recipes.md)): preview of each recipe's permissions, `--confirm` to install, provenance recorded, unchanged-only removal.
+- `quill ticket stale [--apply]`: lists shipped, children-done and idle tickets; `--apply` closes the first two with revision-checked updates (`ticket-update` accepts an optional `expected_revision`).
+- `quill doctor` reports hook latency (p50/p95 of real hook processes), capture gaps and ticket coverage for the last 7 days, computed locally.
+- `scripts/bench-hooks.mjs` (whole-process hook latency) and `scripts/install-smoke.mjs` (timed first run), both in CI.
+
+### Changed
+
+- Plugin hooks run `bin/quill-hook.js`, which loads only the hook path (PreToolUse p95 114 → 104 ms on Windows).
+- The full task-tracking guidance is sent at session start (and after compaction); later prompts get one line naming the bound task.
+- Pick next ranks within the active filters; sidebar badges count what each view shows under the filters; the Board header counts open tickets like its badge; every Board column can be hidden; a link's hash fully decides its filters; `quill ui` help documents `--no-open`.
+- The reducer is split into domain modules under `src/core/reduce/` with no behaviour change.
+
+### Fixed
+
+- `quill … | head` no longer crashes with EPIPE.
+- Host helper agents (empty `agent_type`, no SubagentStart) are no longer captured as checkpoints; one stored the user's predicted next prompt.
+- `/favicon.ico` returns 204 instead of a 404 on every dashboard load.
+
 ## [0.6.0] - 2026-10-07
 
 ### Added
