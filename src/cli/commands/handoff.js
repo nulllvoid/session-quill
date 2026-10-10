@@ -65,7 +65,7 @@ async function queue(ctx, io, args, flags) {
 // Where a run's time went (ADR 0022), listing only the steps that were measured.
 export function timingsText(t) {
   if (!t) return '';
-  return [['queue_wait_ms', 'wait'], ['worktree_ms', 'setup'], ['agent_ms', 'agent']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`).join(', ');
+  return [['queue_wait_ms', 'wait'], ['worktree_ms', 'setup'], ['agent_ms', 'agent'], ['test_ms', 'tests']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`).join(', ');
 }
 
 function list(ctx, io, flags) {

@@ -30,6 +30,7 @@ test('read-only runs and fix runs are counted against separate caps', async () =
     const states = () => Object.fromEntries([...b.w.state.handoffs.values()].map((h) => [h.ticket_id, h.state]));
     await until(() => { b.w.tick(); const s = states(); return s[T1] === 'running' && s[T3] === 'running'; });
     assert.equal(states()[T2], 'queued', 'the second analysis waits for the read-only slot; the fix does not');
+    assert.deepEqual(b.w.liveSnapshot().meta.handoff_limits, { readonly: 1, fix: 1 }, 'the dashboard can show the caps');
     await until(() => { b.w.tick(); return states()[T2] === 'running'; }, { timeoutMs: 15_000 });
   } finally { await b.w.stop(); }
 });

@@ -327,8 +327,10 @@ export function parseAgentResult(stdout, { outputs = null } = {}) {
 export function killTree(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
-    try { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); } catch { /* ignore */ }
-    try { child.kill(); } catch { /* ignore */ }
+    // The tree is listed from the parent, so the parent is killed only after taskkill has walked
+    // it; killing it first would orphan grandchildren that keep the output pipes open.
+    const last = () => { try { child.kill(); } catch { /* ignore */ } };
+    try { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, last); } catch { last(); }
     return;
   }
   try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* ignore */ } }

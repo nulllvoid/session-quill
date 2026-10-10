@@ -7,7 +7,8 @@ import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
-import { buildPrompt, allowedToolsFor, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT } from './runner.js';
+import { buildPrompt, allowedToolsFor, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
+import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
 import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
@@ -26,6 +27,12 @@ export function concurrencyLimits(config = {}) {
   const h = config && config.handoff && typeof config.handoff === 'object' ? config.handoff : {};
   const pick = (v, d) => (Number.isInteger(v) && v > 0 ? v : d);
   return { readonly: pick(h.max_concurrent_readonly, DEFAULT_CONCURRENCY.readonly), fix: pick(h.max_concurrent_fix, DEFAULT_CONCURRENCY.fix) };
+}
+
+// What a draft PR says about tests: "passed (worker)" only after a real pass of the gate.
+export function gateLine(gate) {
+  if (gate && gate.status === 'passed') return `Tests passed (worker): \`${gate.command}\` exited 0${gate.repaired ? ' after one repair turn' : ''}.`;
+  return 'Not test-verified by the worker: no test command is configured for this repository.';
 }
 
 const isFix = (h) => !!(h.permissions && h.permissions.edit_source);
@@ -107,15 +114,21 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const current = worker.state.handoffs.get(h.id);
     if (!current || !['running'].includes(current.state)) { running.delete(h.id); return; }
     let quality = null;
+    let gate = null;
     if (entry && !entry.reason && !outcome.error && outcome.code === 0) {
       const first = outcome;
       ({ outcome, quality } = await improve(worker, entry, outcome));
+      // A run that may edit source is checked by the worker's own test gate (ADR 0023).
+      if (!entry.reason && entry.permissions.edit_source) ({ outcome, gate } = await testGate(worker, entry, current, outcome));
       // A deadline or cancellation during a follow-up keeps the first reply as the partial result.
-      if (entry.reason) outcome = first;
+      if (entry.reason) { outcome = first; gate = null; }
     }
     running.delete(h.id);
-    // Measured, not estimated (ADR 0022): agent time covers every turn, including the self-check.
-    const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.round(performance.now() - entry.spawnedAt) } : null;
+    // Measured, not estimated (ADR 0022): agent time covers every turn, including the self-check
+    // and the test repair turn; the gate's own test runs are test time.
+    const testMs = gate && Number.isFinite(gate.total_ms) ? gate.total_ms : null;
+    const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}) } : null;
+    if (gate) delete gate.total_ms;
     const record = (w, id, parsed, opts) => recordResult(w, id, parsed, timings ? { ...opts, extra: { ...(opts.extra ?? {}), timings } } : opts);
     const reason = entry ? entry.reason : null;
     if (reason === 'timeout') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
@@ -127,7 +140,17 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: outcome.stdout } : parseAgentResult(outcome.stdout, parseOpts);
     if (outcome.code !== 0) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
     if (parsed.is_error) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
-    const extras = await fixExtras(worker, current, { finalize: true });
+    // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
+    // ticket change, only the diff for the owner to inspect and the reason (ADR 0023).
+    if (gate && (gate.status === 'failed' || gate.status === 'timeout')) {
+      const extra = { ...(await fixExtras(worker, current)), test_gate: gate };
+      if (quality) extra.result_quality = { ...quality, problems: explicit ? [] : parsed.problems };
+      const why = gate.status === 'timeout' ? 'did not finish in time' : `exited with code ${gate.exit_code ?? 'unknown'}`;
+      record(worker, h.id, parsed, { state: 'failed', error: { code: gate.status === 'timeout' ? 'tests-timeout' : 'tests-failed', message: `the test command ${why}${gate.attempts > 1 ? ' again after one repair turn' : ' and no repair turn was possible'}; no fix is suggested` }, extra });
+      return;
+    }
+    const extras = await fixExtras(worker, current, { finalize: true, gate });
+    if (gate) extras.test_gate = gate;
     if (quality) extras.result_quality = { ...quality, problems: explicit ? [] : parsed.problems };
     // Only a run that finished cleanly changes files; a failed, cancelled or timed-out one leaves
     // every original untouched.
@@ -140,7 +163,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   }
 
   // For fix runs: collect changed files and a patch; perform explicitly permitted commit/push/PR.
-  async function fixExtras(worker, h, { finalize = false } = {}) {
+  async function fixExtras(worker, h, { finalize = false, gate = null } = {}) {
     const out = {};
     if (!h.worktree_path || !fs.existsSync(h.worktree_path)) return out;
     try {
@@ -162,13 +185,43 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       if (p.push_branch && out.commit_sha) {
         try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
         if (p.open_draft_pr) {
-          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
+          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.\n\n${gateLine(gate)}` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
         }
       }
     } catch (err) {
       out.error = { code: 'commit-failed', message: err.message };
     }
     return out;
+  }
+
+  // ADR 0023: run the repository's tests in the run's checkout; on a failure, one repair turn
+  // with the failing output, then the tests again. Only a real pass is ever reported as one.
+  async function testGate(worker, entry, h, outcome) {
+    const parsed = parseAgentResult(outcome.stdout, { outputs: entry.outputs });
+    if (parsed.is_error || !h.worktree_path) return { outcome, gate: null };
+    let changed = [];
+    try { changed = await changedFiles(h.worktree_path); } catch { /* treated as no diff */ }
+    if (!changed.length) return { outcome, gate: { status: 'skipped', reason: 'no changes to test' } };
+    const { command, timeoutMs } = testGateSettings(ctx.config.repos[h.repo_id]);
+    if (!command) return { outcome, gate: { status: 'skipped', reason: 'no test_command for this repository; the fix is not test-verified' } };
+    const env = childEnvFor(entry.permissions, process.env, entry.env);
+    const once = () => runTestCommand({ command, cwd: h.worktree_path, timeoutMs, env, onChild: (child) => { entry.child = child; } });
+    let total = 0;
+    let attempts = 1;
+    let result = await once();
+    total += result.ms;
+    const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
+    if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
+      const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: 40 });
+      if (entry.reason) return { outcome, gate: null };
+      const repaired = next ? parseAgentResult(next.stdout, { outputs: entry.outputs }) : null;
+      if (repaired && !repaired.is_error && repaired.problems.length <= parsed.problems.length) outcome = next;
+      attempts = 2;
+      result = await once();
+      total += result.ms;
+    }
+    if (entry.reason) return { outcome, gate: null };
+    return { outcome, gate: { status: result.status, command, exit_code: result.exit_code, ms: result.ms, tail: result.tail, attempts, repaired: attempts > 1 && result.status === 'passed', total_ms: total } };
   }
 
   async function dispatch(worker, h) {
@@ -265,6 +318,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     runningIds: () => new Set(running.keys()),
     async onStart(worker) {
       worker.recipeInfo = () => catalogFor(worker).list();
+      worker.handoffLimits = () => ({ ...limits });
       for (const h of [...worker.state.handoffs.values()]) {
         if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
       }

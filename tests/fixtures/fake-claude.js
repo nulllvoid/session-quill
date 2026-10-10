@@ -5,6 +5,8 @@
 //   FAKE_CLAUDE_MODE      — 'ok' (default) | 'crash' | 'garbage' | 'malformed' (a reply without a
 //                           JSON block, wrapped like a real result so it can be resumed)
 //   FAKE_CLAUDE_EDIT      — path of a file to modify inside the cwd before answering
+//   FAKE_CLAUDE_REPAIR_EDIT — path of a file to mark "repaired" when a --resume turn is asked to fix
+//                           failing tests (the worker's test gate repair turn)
 //   FAKE_CLAUDE_RESULT    — JSON to answer with instead of the default structured result
 //   FAKE_CLAUDE_RESUME_RESULT — JSON to answer a --resume turn with (default: FAKE_CLAUDE_RESULT
 //                           or the default result); 'malformed' answers it without a JSON block
@@ -38,6 +40,10 @@ function run() {
     if (process.env.FAKE_CLAUDE_EDIT && !resumed) {
       const file = path.join(process.cwd(), process.env.FAKE_CLAUDE_EDIT);
       fs.writeFileSync(file, `${fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''}\n// edited by fake-claude\n`);
+    }
+    if (process.env.FAKE_CLAUDE_REPAIR_EDIT && resumed && /tests failed/i.test(prompt)) {
+      const file = path.join(process.cwd(), process.env.FAKE_CLAUDE_REPAIR_EDIT);
+      fs.appendFileSync(file, '\n// repaired by fake-claude\n');
     }
     if (mode === 'crash') process.exit(3);
     if (mode === 'garbage') { process.stdout.write('not json at all'); process.exit(0); }
