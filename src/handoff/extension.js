@@ -220,7 +220,9 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     } catch (err) {
       return fail(worker, h, 'spawn-failed', err.message);
     }
-    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck: !!(recipe && recipe.self_check), sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
+    // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
+    const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
+    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
     run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 
