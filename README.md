@@ -262,6 +262,27 @@ quill tracker push PROJ-7 --to "Blocked" --comment "Waiting on infra" --confirm
 
 GitHub issues close for done and reopen otherwise. Each push, or failure, is recorded on the ticket's timeline. Nothing pushes automatically ([ADR 0018](docs/decisions/0018-tracker-write-back.md)).
 
+## Your board on another machine
+
+One machine owns a store and is the only one that writes it. To see the board elsewhere, let the owner keep a read-only mirror inside the store folder and sync that folder with whatever you already use (OneDrive, Dropbox, Syncthing, a private git repository):
+
+```toml
+[mirror]
+enabled = true
+# path = "~/Dropbox/quill-mirror"   # default: <store>/.quill-mirror
+# projects = ["payments"]           # default: all projects
+# include_links = false             # PR and tracker links stay out unless true
+```
+
+On the other machine:
+
+```bash
+quill mirror status --dir "<synced store>/.quill-mirror"   # when it was written, by which machine, how many tickets
+quill mirror open --dir "<synced store>/.quill-mirror"     # opens the read-only dashboard
+```
+
+The mirror uses the same privacy rules as a shared snapshot (no checkpoint text, no local paths or credentials) and refreshes at most once a minute while the owner's worker runs ([ADR 0019](docs/decisions/0019-read-only-mirror.md)).
+
 ## Bitbucket pull requests
 
 Set the repository's provider in `~/.claude/quill/config.toml` and put a token in an environment variable the worker can read. Quill never stores the token, and sends it only to the host you configure.

@@ -41,7 +41,7 @@ export async function collect(env) {
     return { ctx, report };
   }
   const owner = ctx.storeMeta.owner_machine_id === ctx.machineId;
-  add(owner ? 'ok' : 'warn', 'ownership', owner ? 'this machine' : `another machine (${ctx.storeMeta.owner_machine_id}); this copy is read-only until explicitly transferred`);
+  add(owner ? 'ok' : 'warn', 'ownership', owner ? 'this machine' : `another machine (${ctx.storeMeta.owner_machine_id}); this copy is read-only until explicitly transferred. To see the owner's board here, run quill mirror open`);
   add('ok', 'store', `${ctx.storeMeta.store_name} at ${ctx.config.store_path} (store ${ctx.storeMeta.store_id})`);
   const locked = await isLocked(ctx.storeMeta.store_id, ctx.storeMeta.owner_machine_id, env);
   const ws = workerStatus(ctx);
