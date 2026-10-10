@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Always-on dashboard ([ADR 0022](docs/decisions/0022-always-on-dashboard.md)): the dashboard prefers the fixed port 47321 (`ui_port`, falling back to a random port when it is taken; `ui_port = 0` keeps random), and a signed-in browser stays signed in for 7 days from its last use, across worker restarts. Sessions are stored only as hashes. `quill ui --revoke` signs every browser out.
+- A browser without a session gets a sign-in page that says to run `/session-quill:ui` (or `quill ui`) instead of a bare error.
+- `quill status --statusline` ends with the dashboard address as a clickable link while the worker that serves it is healthy. It never carries a secret.
+- `quill worker install` / `quill worker uninstall` register or remove a per-user login entry that runs `quill worker start` once (Task Scheduler on Windows, a LaunchAgent on macOS, a systemd user unit on Linux), with no administrator rights. `quill doctor` and the dashboard's worker health item say when it is installed.
+- Runs record `timings` (queue wait, worktree setup, agent time including follow-up turns), shown on each run in the dashboard and in `quill handoff list`.
+- A copy button on the dashboard address in the top bar.
+
+### Changed
+
+- A run that may edit source (`edit_source`) always self-checks its reply, whatever its recipe's `self_check` says.
+
 ## [0.7.2] - 2026-10-11
 
 ### Fixed

@@ -71,6 +71,15 @@ session and repository, and starts a missing worker.
 After a reboot, the next Claude session reconnects automatically. You do not need
 to configure Task Scheduler or systemd for ordinary session tracking. Scheduled
 jobs run while the worker is running; opening Claude after downtime starts recovery.
+To have the worker (and the dashboard) running from the moment you log in, run
+`quill worker install` once; `quill worker uninstall` removes it.
+
+The dashboard lives at `http://127.0.0.1:47321/` (set `ui_port` in
+`~/.claude/quill/config.toml` to change it, or `ui_port = 0` for a random port;
+when the port is taken the worker uses a random one). The first visit needs the
+one-use link from `/session-quill:ui`; after that the browser stays signed in for
+7 days from its last use, across worker restarts. A browser that is not signed in
+sees a page telling it how to sign in. `quill ui --revoke` signs every browser out. See [ADR 0022](docs/decisions/0022-always-on-dashboard.md).
 
 Quill keeps your existing store. A first setup uses `~/.claude/quill/store`
 (or `QUILL_HOME/store` when set). To choose a notes folder instead, run
@@ -98,6 +107,8 @@ The Claude commands always locate their bundled CLI automatically.
 quill start                                 # private setup or resume
 quill ui                                    # open dashboard, starting worker if needed
 quill worker stop                           # pause processing and automatic restart
+quill worker install                        # start the worker at login (uninstall to remove)
+quill ui --revoke                           # sign every dashboard browser out
 quill start                                 # resume; captured activity catches up
 quill init --store ~/Documents/Quill --project my-project --project-name "My Project"
 quill repo add ~/src/payments-api
@@ -327,7 +338,7 @@ tools: [Read, Grep, "Bash(git log:*)"]
 timeout_min: 10
 inputs: [ticket, prs, deployments, work]   # also notes, related, history; omit for all
 outputs: [summary, deploy_evidence, next_action]
-self_check: true                   # verify each claim against its source before finishing
+self_check: true                   # verify each claim against its source before finishing (always on with edit_source)
 ---
 For {{ticket.key}} ({{ticket.url}}): for each merged PR {{prs}}, find the deployment evidence...
 ```
@@ -368,7 +379,7 @@ One ticket, `PROJ-123` in Jira, from first prompt to a page your team can see. I
 1. **Start working.** Open Claude Code in the repository on a branch such as `feat/PROJ-123-retry-flake`, or say "PROJ-123: make the retry test deterministic". The session is linked to `PROJ-123` before Claude's first tool call, and the ticket is created if the store has none. With no `[tracker]` table, run `/session-quill:ticket create "Make the retry test deterministic" --bind` instead.
 2. **Let it capture.** Writes, commits, PR creation, approved plans and end-of-turn checkpoints are recorded against the ticket, and its note in your store updates within 30 seconds. Work done before the session was linked waits under **Unlinked work** on Pick next, where you attach it to a ticket or dismiss it.
 3. **Approve the plan.** `/session-quill:approve` promotes the latest checkpoint to an approved plan. It is a record, never permission to commit, push or deploy.
-4. **Open the dashboard.** `quill ui` prints a one-use owner link (loopback only, valid for 10 minutes) and opens it. Pick next ranks your open tickets; open `PROJ-123` for its timeline, PRs and deployments.
+4. **Open the dashboard.** `quill ui` prints a one-use owner link (loopback only, valid for 10 minutes) and opens it; the browser then stays signed in for 7 days from its last use. Pick next ranks your open tickets; open `PROJ-123` for its timeline, PRs and deployments.
 5. **Ask an agent.** From the ticket's **Agents** panel, or `quill agent run analyse PROJ-123`, a recipe works in an isolated checkout with only the permissions you tick. Its findings arrive as suggestions on the ticket, and you accept or dismiss each one.
 6. **Merge and deploy.** When the PR merges, the next reconciliation records it (**Refresh** in the header, or `quill sync`, runs one now). `PROJ-123` now owes `stage` and `prod` deployments, which show on **Deployments**. Record each one with its evidence as it ships, or mark it N/A. A `deploy-check` recipe can look for the evidence and suggest it. Closing the ticket while a deployment is pending asks you to record, waive or leave it.
 7. **Review the day.** **Today** shows what changed on each ticket today and on each of the last few days. A `digest` schedule writes the same summary into the store's daily note.
@@ -387,17 +398,19 @@ Add the quill segment to your status line (`~/.claude/settings.json`):
 
 If you already have a status line, keep it and run both scripts from a small wrapper so neither replaces the other.
 
+While the worker is healthy, the segment ends with the dashboard address as a clickable link (OSC 8, in terminals that support it). It is only the address, never a sign-in secret, and it disappears when the worker stops.
+
 ## Diagnostics
 
 ```bash
 quill doctor
 ```
 
-Reports Node, Git and Claude versions, store ownership (copies on other machines are read-only), worker lock and heartbeat, ingress backlog, journal health and recent capture gaps. `quill status --json` shows the binding for a session. Logs are under `~/.claude/quill/logs/`.
+Reports Node, Git and Claude versions, store ownership (copies on other machines are read-only), worker lock and heartbeat, whether the worker starts at login, ingress backlog, journal health and recent capture gaps. `quill status --json` shows the binding for a session. Logs are under `~/.claude/quill/logs/`.
 
 ## Uninstall
 
-1. Stop the worker: `quill worker stop` (and remove any OS registration you added).
+1. Stop the worker: `quill worker stop`, and `quill worker uninstall` if you installed the login entry (remove any OS registration you added by hand).
 2. Remove the plugin: `claude plugin uninstall session-quill@session-quill` and `claude plugin marketplace remove session-quill`, or stop passing `--plugin-dir`.
 3. Your markdown store is yours and stays where it is. Quill state (journal, blobs, projections) lives in `~/.claude/quill/`; delete it only after backing it up if you want a clean slate.
 

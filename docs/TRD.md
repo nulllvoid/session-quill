@@ -174,6 +174,8 @@ Display score = min(100, raw score). Rank by raw score descending, then due asce
 
 `quill ui` opens a dashboard served by the worker on loopback only. It never binds to a LAN/public interface in v1. Initialization starts/supervises the worker via the OS service mechanism; CLI diagnostics expose ownership, backlog and errors. UI loss of connection leaves the last rendered generation visible with an offline banner and disables submissions.
 
+Always-on dashboard ([ADR 0022](decisions/0022-always-on-dashboard.md)): the server prefers port 47321 (`ui_port`) and falls back to a random port when it is taken; owner sessions are stored as hashes with a 7-day sliding expiry so a restart keeps the browser signed in, and `quill ui --revoke` clears them; a browser without a session gets a sign-in page; `quill worker install` registers a per-user login entry that runs `quill worker start` once.
+
 The worker provides versioned JSON endpoints:
 - `GET /v1/snapshot`: complete generation, collections and capabilities.
 - `GET /v1/tickets/<id>?generation=<id>` and `GET /v1/content/<hash>?generation=<id>`: paged detail and full permitted content from that generation; return generation-expired so the client can reload rather than mixing revisions.
