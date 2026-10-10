@@ -1,5 +1,6 @@
 // Pure reducer: journal events -> generated state. Replay never runs tools or remote requests;
 // duplicate event IDs or source identities have exactly one effect (TRD §Durability).
+import { deterministicId } from '../lib/ids.js';
 import { sessionKey, refreshDerived, bumpRevision, repoFor } from './state.js';
 import { stripMarkupTags } from '../lib/text.js';
 import { hasValidDescription } from './description.js';
@@ -247,7 +248,13 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       for (const upd of Array.isArray(p.pr_updates) ? p.pr_updates : []) {
         const ticket = state.tickets.get(upd.ticket_id);
         if (!ticket) continue;
-        const pr = ticket.prs.find((x) => x.id === upd.pr_id || x.url === upd.url);
+        let pr = ticket.prs.find((x) => x.id === upd.pr_id || x.url === upd.url);
+        // A PR found from the branch the ticket's work landed on (ADR 0021).
+        if (!pr && upd.link === true && typeof upd.url === 'string' && !upd.error) {
+          pr = { id: deterministicId(`${ev.event_id}:pr:${ticket.id}:${upd.url}`), provider: upd.provider ?? 'unknown', url: upd.url, state: 'unknown', opened_at: upd.opened_at ?? null, merged_at: null, base_branch: null, head_branch: upd.head_branch ?? null, observed_at: ev.occurred_at, error: null, evidence_id: null };
+          ticket.prs.push(pr);
+          ticket.timeline.push(timelineEntry(ev, 'pr', `PR ${upd.url} linked from branch ${upd.head_branch ?? ''}`.trim()));
+        }
         if (!pr) continue;
         if (upd.error) {
           // Failed poll: keep last known evidence and its age; only record the provider error.
@@ -261,7 +268,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
         pr.evidence_id = evidenceId;
         const repo = repoFor(state, ticket.repo_id);
         if (changedEvidence || before !== `${pr.state}:${pr.merged_at}`) {
-          if (pr.state === 'merged') deriveStatusFromEvidence(ticket, { type: 'pr-merged', seq: ev.sequence ?? 0, evidence_id: evidenceId, pr_id: pr.id, merged_at: pr.merged_at ?? ev.occurred_at, source_event_id: ev.event_id, environments: Array.isArray(upd.environments) ? upd.environments : null }, repo);
+          if (pr.state === 'merged') deriveStatusFromEvidence(ticket, { type: 'pr-merged', seq: ev.sequence ?? 0, evidence_id: evidenceId, pr_id: pr.id, merged_at: pr.merged_at ?? ev.occurred_at, source_event_id: ev.event_id, environments: Array.isArray(upd.environments) ? upd.environments : null, deploy_on: upd.deploy_on === 'merge' ? 'merge' : null }, repo);
           else if (pr.state === 'open') deriveStatusFromEvidence(ticket, { type: 'pr-open', seq: ev.sequence ?? 0, evidence_id: evidenceId }, repo);
           else if (pr.state === 'draft') deriveStatusFromEvidence(ticket, { type: 'pr-draft', seq: ev.sequence ?? 0, evidence_id: evidenceId }, repo);
           ticket.timeline.push(timelineEntry(ev, 'pr', `PR ${pr.url} observed ${pr.state}`));

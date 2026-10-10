@@ -105,6 +105,17 @@ export function recordUnboundWork(session, ev, { writePaths, commit, repo_id }) 
   w.revision += 1;
 }
 
+// Branches a ticket's work landed on (optional `branches` field). Reconciliation looks up their PRs,
+// so a merge closes every ticket whose work it carried, not only the one that opened the PR.
+export const BRANCH_CAP = 20;
+export function recordBranch(ticket, branch, at) {
+  if (!ticket.branches) ticket.branches = [];
+  const existing = ticket.branches.find((b) => b.name === branch);
+  if (existing) { if (at > existing.last_seen) existing.last_seen = at; return; }
+  ticket.branches.push({ name: branch.slice(0, 255), first_seen: at, last_seen: at });
+  if (ticket.branches.length > BRANCH_CAP) ticket.branches.sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1)).length = BRANCH_CAP;
+}
+
 export function handlePostTool(state, ev, result) {
   const session = getOrCreateSession(state, ev);
   session.events_since_checkpoint += 1;
@@ -132,6 +143,7 @@ export function handlePostTool(state, ev, result) {
     return;
   }
   const writePaths = Array.isArray(p.write_paths) ? p.write_paths.filter((x) => typeof x === 'string' && x) : [];
+  if (typeof p.branch === 'string' && p.branch && (writePaths.length || p.commit)) recordBranch(ticket, p.branch, ev.occurred_at);
   if (WRITE_TOOLS.has(p.tool_name) && writePaths.length) {
     for (const rel of writePaths) {
       const existing = ticket.files_touched.find((f) => f.repo_id === (p.repo_id ?? ticket.repo_id) && f.relative_path === rel);

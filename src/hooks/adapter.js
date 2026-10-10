@@ -279,6 +279,12 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
           }
         }
       }
+      // The branch the work landed on, so a PR from that branch can be linked to this ticket even
+      // when no commit line was printed (`git commit -q`). Read from .git, never by running git.
+      if (payload.write_paths.length || payload.commit) {
+        const file = typeof tool_input.file_path === 'string' && path.isAbsolute(tool_input.file_path) ? path.dirname(tool_input.file_path) : null;
+        payload.branch = currentBranch(file ?? input.cwd);
+      }
       if (mode === 'nudge' && !(snapshot && snapshot.ticket_id) && (payload.write_paths.length || payload.commit)) {
         try { markUnboundWork(key, env, occurred_at); } catch { /* best effort; never blocks capture */ }
       }

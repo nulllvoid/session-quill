@@ -24,8 +24,9 @@ async function pollProviders(worker, providers, now) {
   const health = new Map();
   for (const h of state.providerHealth ?? []) health.set(h.provider, { ...h });
   let polled = 0;
+  // Done tickets are polled too: their status never moves back, but a PR shown as open after it
+  // merged is wrong on the board and in the brief.
   for (const ticket of state.tickets.values()) {
-    if (ticket.status === 'done' && !ticket.deployments.some((d) => d.state === 'pending')) continue;
     for (const pr of ticket.prs) {
       if (!NONTERMINAL_PR.has(pr.state)) continue;
       if (polled >= MAX_PR_POLLS_PER_RUN) break;
@@ -48,7 +49,7 @@ async function pollProviders(worker, providers, now) {
           continue;
         }
         // The environments travel with the evidence so replay builds the same obligations (ADR 0009).
-        updates.push({ ticket_id: ticket.id, pr_id: pr.id, url: pr.url, ...result, observed_at: result.observed_at ?? now, error: null, evidence_id: `${pr.url}:${result.state}:${result.merged_at ?? ''}`, ...(result.state === 'merged' && worker.environmentsFor ? { environments: worker.environmentsFor(ticket.repo_id) } : {}) });
+        updates.push({ ticket_id: ticket.id, pr_id: pr.id, url: pr.url, ...result, observed_at: result.observed_at ?? now, error: null, evidence_id: `${pr.url}:${result.state}:${result.merged_at ?? ''}`, ...mergeContext(worker, repo, result) });
       } catch (err) {
         entry.error = err.message;
         updates.push({ ticket_id: ticket.id, pr_id: pr.id, url: pr.url, error: err.message });
@@ -56,7 +57,61 @@ async function pollProviders(worker, providers, now) {
       health.set(provider.name, entry);
     }
   }
+  await linkBranchPrs(worker, providers, now, updates, health);
   return { updates, provider_health: [...health.values()] };
+}
+
+// The environments and the repository's deploy_on travel with merge evidence, so replay builds
+// the same obligations and closes the same tickets (ADR 0009, ADR 0021).
+function mergeContext(worker, repo, result) {
+  if (result.state !== 'merged') return {};
+  return {
+    ...(worker.environmentsFor ? { environments: worker.environmentsFor(repo ? repo.id : null) } : {}),
+    ...(repo && repo.deploy_on === 'merge' ? { deploy_on: 'merge' } : {}),
+  };
+}
+
+export const MAX_BRANCH_LOOKUPS_PER_RUN = 50;
+const BRANCH_MAX_AGE_MS = 30 * 24 * HOUR;
+
+// PRs found by branch (ADR 0021): every open ticket whose captured work landed on a branch gets
+// the PRs whose head is that branch, so one merge closes all the tickets it carried. One lookup
+// per repository and branch per run; default branches are never looked up.
+async function linkBranchPrs(worker, providers, now, updates, health) {
+  const { state } = worker;
+  const found = new Map();
+  let lookups = 0;
+  for (const ticket of state.tickets.values()) {
+    if (ticket.status === 'done' || !Array.isArray(ticket.branches) || !ticket.branches.length) continue;
+    const repo = repoFor(state, ticket.repo_id);
+    if (!repo || !repo.canonical_path) continue;
+    const provider = providers.for(repo);
+    if (typeof provider.findPrs !== 'function') continue;
+    for (const b of ticket.branches) {
+      if ([repo.default_branch, 'main', 'master'].includes(b.name) || Date.parse(now) - Date.parse(b.last_seen) > BRANCH_MAX_AGE_MS) continue;
+      if (ticket.prs.some((p) => p.head_branch === b.name)) continue;
+      const key = `${repo.id}:${b.name}`;
+      if (!found.has(key)) {
+        if (lookups >= MAX_BRANCH_LOOKUPS_PER_RUN) continue;
+        lookups += 1;
+        const entry = health.get(provider.name) ?? { provider: provider.name, last_success_at: null, last_attempt_at: null, error: null };
+        entry.last_attempt_at = now;
+        try {
+          found.set(key, await provider.findPrs(b.name, { cwd: repo.canonical_path }));
+          entry.last_success_at = now;
+          entry.error = null;
+        } catch (err) {
+          entry.error = err.message;
+          found.set(key, []);
+        }
+        health.set(provider.name, entry);
+      }
+      for (const pr of found.get(key)) {
+        if (ticket.prs.some((p) => p.url === pr.url) || updates.some((u) => u.ticket_id === ticket.id && u.url === pr.url)) continue;
+        updates.push({ ticket_id: ticket.id, link: true, provider: provider.name, url: pr.url, ...pr, observed_at: now, error: null, evidence_id: `${pr.url}:${pr.state}:${pr.merged_at ?? ''}`, ...mergeContext(worker, repo, pr) });
+      }
+    }
+  }
 }
 
 export async function runReconciliation(worker, { reason = 'scheduled', providers = defaultProviders(worker.config), run_id = uuid() } = {}) {

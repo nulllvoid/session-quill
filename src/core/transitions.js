@@ -55,7 +55,15 @@ export function deriveStatusFromEvidence(ticket, evidence, repo) {
     if (from === 'todo' || from === 'active') target = 'review';
   } else if (type === 'pr-merged') {
     ensureObligations(ticket, evidence, repo);
-    if (['todo', 'active', 'review'].includes(from) && outstandingObligations(ticket).length) target = 'deploy-pending';
+    // deploy_on = "merge" (ADR 0021): merging is the release, so the merge is this PR's deployment
+    // evidence in every environment and the ticket is done once nothing else is outstanding.
+    if (evidence.deploy_on === 'merge') {
+      for (const d of ticket.deployments) {
+        if (d.pr_id !== evidence.pr_id || d.state !== 'pending') continue;
+        Object.assign(d, { state: 'deployed', deployed_at: evidence.merged_at ?? null, evidence: 'merged (deploy_on = merge)', evidence_kind: 'merge' });
+      }
+      if (['todo', 'active', 'review', 'deploy-pending'].includes(from) && !outstandingObligations(ticket).length) target = 'done';
+    } else if (['todo', 'active', 'review'].includes(from) && outstandingObligations(ticket).length) target = 'deploy-pending';
   } else if (type === 'obligations-cleared') {
     if (from === 'deploy-pending' && ticket.deployments.length && outstandingObligations(ticket).length === 0) target = 'done';
   } else {
