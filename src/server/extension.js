@@ -41,6 +41,7 @@ export function createExtension(ctx, { port, exportHandler = null } = {}) {
       const exporter = exportHandler ?? await loadExportHandler();
       server = createServer(worker, { auth, exportHandler: exporter });
       address = await listen(server, { port: configuredPort });
+      if (configuredPort && address.port !== configuredPort) worker.log(`dashboard port ${configuredPort} is in use; serving on ${address.port} instead`);
       writeJsonAtomic(endpointPath(ctx.env), { host: '127.0.0.1', port: address.port, pid: process.pid, started_at: worker.now() });
     },
     tick(worker) {

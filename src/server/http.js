@@ -132,9 +132,23 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
   return server;
 }
 
-export function listen(server, { host = '127.0.0.1', port = 0 } = {}) {
+function listenOnce(server, host, port) {
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, host, () => resolve(server.address()));
+    const onError = (err) => { server.off('listening', onListening); reject(err); };
+    const onListening = () => { server.off('error', onError); resolve(server.address()); };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, host);
   });
+}
+
+// A fixed port keeps the dashboard address stable across restarts (ADR 0022). When something else
+// holds it (or the OS reserves it), the server takes a random port rather than not starting.
+export async function listen(server, { host = '127.0.0.1', port = 0, fallback = true } = {}) {
+  try {
+    return await listenOnce(server, host, port);
+  } catch (err) {
+    if (!fallback || !port || !['EADDRINUSE', 'EACCES'].includes(err && err.code)) throw err;
+    return listenOnce(server, host, 0);
+  }
 }
