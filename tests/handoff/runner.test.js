@@ -297,3 +297,51 @@ test('a built-in run writes the ticket description only when it has none, and ne
     assert.ok(done.uncertain_effects.some((u) => /description suggestion not applied/.test(u)));
   } finally { await b.w.stop(); }
 });
+
+test('a run that fails after dispatch keeps the timings measured so far (ADR 0022)', async () => {
+  // Source access to a folder that is not a git repository: the checkout cannot be created.
+  const notGit = fs.mkdtempSync(path.join(os.tmpdir(), 'st-notgit-'));
+  const b = await bootWorker({ repo: { dir: notGit, head: null }, runtimeAvailable: true });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.hext.pause();
+    b.request(RID(40), { target_id: T1, expected_revision: t.revision, payload: fix });
+    b.advance(2000);
+    b.hext.resume();
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(40)).result.handoff_id;
+    const failed = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'failed' ? h : null; });
+    assert.match(failed.error.code, /worktree-failed|source-failed/);
+    assert.equal(failed.timings && failed.timings.queue_wait_ms, 2000, 'queue wait survives a setup failure');
+  } finally { await b.w.stop(); }
+});
+
+test('a runtime that cannot be spawned still records queue wait and agent time', async () => {
+  const b = await bootWorker({ runtimeAvailable: true, claudePath: path.join(os.tmpdir(), 'no-such-claude-binary'), claudeArgs: [] });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(41), { target_id: T1, expected_revision: t.revision, payload: analyse });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(41)).result.handoff_id;
+    const failed = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'failed' ? h : null; });
+    assert.match(failed.error.code, /runtime-missing|spawn-failed/);
+    assert.equal(typeof failed.timings.queue_wait_ms, 'number');
+    if (failed.error.code === 'runtime-missing') assert.equal(typeof failed.timings.agent_ms, 'number', 'the spawn attempt is agent time');
+  } finally { await b.w.stop(); }
+});
+
+test('a fix run that cannot self-check records why (ADR 0022)', async () => {
+  const repo = makeRepo();
+  // Under a minute to the deadline once the agent answers: no time for the mandatory self-check.
+  const b = await bootWorker({ repo, runtimeAvailable: true, deadlineMs: 50_000, fakeEnv: { FAKE_CLAUDE_EDIT: 'src.js' } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(42), { target_id: T1, expected_revision: t.revision, payload: fix });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(42)).result.handoff_id;
+    const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return ['done', 'failed'].includes(h.state) ? h : null; });
+    assert.equal(done.state, 'done', JSON.stringify(done.error));
+    assert.equal(done.result_quality.self_checked, false);
+    assert.match(done.result_quality.self_check_skipped, /less than a minute/);
+  } finally { await b.w.stop(); }
+});

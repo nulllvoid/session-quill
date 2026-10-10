@@ -54,7 +54,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   const inUse = (fix) => [...running.values()].filter((e) => e.fix === fix).length;
   let paused = false;
 
-  function fail(worker, h, code, message, extra = {}) {
+  function failRun(worker, h, code, message, extra = {}) {
     recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code, message }, extra });
   }
 
@@ -84,7 +84,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     quality.problems = parsed.problems;
     entry.sessionId = parsed.session_id;
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
-    if (parsed.is_error || !entry.sessionId) return { outcome, quality };
+    if (parsed.is_error || !entry.sessionId) {
+      if (entry.selfCheck) quality.self_check_skipped = parsed.is_error ? 'the agent reported an error' : 'the reply carried no session id to resume';
+      return { outcome, quality };
+    }
     if (parsed.problems.length && timeLeft()) {
       const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: 2 });
       const fixed = next ? parseAgentResult(next.stdout, parseOpts) : null;
@@ -103,7 +106,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       if (checked && !checked.is_error && !checked.problems.length) {
         outcome = next;
         quality.self_checked = true;
-      }
+      } else if (!entry.reason) quality.self_check_skipped = 'the self-check turn did not finish cleanly; the earlier reply stands';
+    } else if (entry.selfCheck) {
+      // Recorded so a fix run without its mandatory check says why (ADR 0022).
+      quality.self_check_skipped = parsed.problems.length ? 'the reply still breaks its output contract' : entry.reason ? 'the run was stopped first' : 'less than a minute left before the deadline';
     }
     return { outcome, quality };
   }
@@ -134,7 +140,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (reason === 'timeout') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'stopped') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
-    if (outcome.error) { fail(worker, current, outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', outcome.error.message); return; }
+    if (outcome.error) { record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
     const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
     const explicit = readJsonIfExists(resultFile);
     const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: outcome.stdout } : parseAgentResult(outcome.stdout, parseOpts);
@@ -225,6 +231,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   }
 
   async function dispatch(worker, h) {
+    // How long the run waited for a slot (worker clock), then each setup step that actually ran.
+    // A run that fails before it starts keeps whatever was measured (ADR 0022).
+    const timings = { queue_wait_ms: Math.max(0, Date.parse(worker.now()) - Date.parse(h.requested_at)) };
+    const fail = (w, run, code, message) => failRun(w, run, code, message, { timings: { ...timings } });
     const ticket = worker.state.tickets.get(h.ticket_id);
     if (!ticket) return fail(worker, h, 'ticket-missing', 'ticket no longer exists');
     const repoCfg = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
@@ -242,8 +252,6 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const available = runtimeAvailable ?? detectRuntime(claudePath);
     if (!available) return fail(worker, h, 'runtime-missing', `Claude Code runtime (${claudePath}) is not installed or not on PATH; install and authenticate it, then retry as a new run`);
     const needsSource = h.permissions && h.permissions.read_source;
-    // How long the run waited for a slot (worker clock), then each setup step that actually ran.
-    const timings = { queue_wait_ms: Math.max(0, Date.parse(worker.now()) - Date.parse(h.requested_at)) };
     let cwd;
     let baseCommit = null;
     let worktreePath = null;
@@ -253,8 +261,9 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
         baseCommit = await headCommit(repoCfg.canonical_path);
         worktreePath = path.join(handoffsDir(worker.env), 'worktrees', h.id);
         const worktreeStarted = performance.now();
-        await createWorktree({ repoPath: repoCfg.canonical_path, baseCommit, dir: worktreePath });
-        timings.worktree_ms = Math.round(performance.now() - worktreeStarted);
+        try {
+          await createWorktree({ repoPath: repoCfg.canonical_path, baseCommit, dir: worktreePath });
+        } finally { timings.worktree_ms = Math.round(performance.now() - worktreeStarted); }
       } catch (err) {
         return fail(worker, h, err.code === 'worktree-failed' ? 'worktree-failed' : 'source-failed', err.message);
       }
@@ -336,7 +345,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
         const fix = isFix(h);
         if (inUse(fix) >= (fix ? limits.fix : limits.readonly)) continue;
         running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null, fix });
-        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); fail(worker, h, 'dispatch-failed', err.message); });
+        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); });
       }
     },
     async onStop(worker, { abandonRuns = false } = {}) {
