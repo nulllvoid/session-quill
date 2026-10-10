@@ -17,6 +17,18 @@ import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
 
 export const HANDOFF_DEADLINE_MS = 20 * MINUTE;
+export const DEFAULT_CONCURRENCY = { readonly: 2, fix: 1 };
+
+// How many runs may execute at once (ADR 0023): runs that may edit source count against
+// `[handoff] max_concurrent_fix`, every other run against `max_concurrent_readonly`. A value that
+// is not a positive integer keeps the default.
+export function concurrencyLimits(config = {}) {
+  const h = config && config.handoff && typeof config.handoff === 'object' ? config.handoff : {};
+  const pick = (v, d) => (Number.isInteger(v) && v > 0 ? v : d);
+  return { readonly: pick(h.max_concurrent_readonly, DEFAULT_CONCURRENCY.readonly), fix: pick(h.max_concurrent_fix, DEFAULT_CONCURRENCY.fix) };
+}
+
+const isFix = (h) => !!(h.permissions && h.permissions.edit_source);
 
 function detectRuntime(claudePath) {
   try {
@@ -27,8 +39,12 @@ function detectRuntime(claudePath) {
   }
 }
 
-export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = HANDOFF_DEADLINE_MS, maxConcurrent = 2, runtimeAvailable, model = null } = {}) {
-  const running = new Map(); // handoff id -> { child, done, reason }
+export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = HANDOFF_DEADLINE_MS, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null } = {}) {
+  const running = new Map(); // handoff id -> { child, done, reason, fix }
+  // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
+  const configured = concurrencyLimits(ctx.config);
+  const limits = { readonly: maxReadonly ?? maxConcurrent ?? configured.readonly, fix: maxFix ?? maxConcurrent ?? configured.fix };
+  const inUse = (fix) => [...running.values()].filter((e) => e.fix === fix).length;
   let paused = false;
 
   function fail(worker, h, code, message, extra = {}) {
@@ -231,7 +247,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const spawnedAt = performance.now();
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
-    running.set(h.id, { child: run.child, done: run.done, reason: null, deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, spawnedAt });
+    running.set(h.id, { child: run.child, done: run.done, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, spawnedAt });
     run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 
@@ -262,10 +278,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       for (const [id, entry] of running) {
         if (entry.reason === null && entry.deadlineAt && now >= entry.deadlineAt) killWithReason(id, 'timeout');
       }
-      if (running.size >= maxConcurrent) return;
       for (const h of nextDispatchable(worker.state, { running: new Set(running.keys()) })) {
-        if (running.size >= maxConcurrent) break;
-        running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null });
+        const fix = isFix(h);
+        if (inUse(fix) >= (fix ? limits.fix : limits.readonly)) continue;
+        running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null, fix });
         dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); fail(worker, h, 'dispatch-failed', err.message); });
       }
     },
