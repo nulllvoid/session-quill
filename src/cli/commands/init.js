@@ -11,6 +11,7 @@ import { TrackerError } from '../../lib/errors.js';
 import { collect, MIN_NODE_MAJOR } from './doctor.js';
 import { commandName } from '../context.js';
 import { isGitWorkTree, detectDefaultBranch, repoIdFromPath, samePath, mainWorkTree } from '../../config/repos.js';
+import { mainWorkTreeOf } from '../../lib/git-head.js';
 
 async function ask(io, question, fallback) {
   if (!process.stdin.isTTY) return fallback;
@@ -34,7 +35,10 @@ export async function initialize({ flags, io, env, requireOwner = false }) {
   const yes = flags.yes === true;
   const defaultStore = cfg.store_path || (flags.private ? path.join(quillHome(env), 'store') : path.join(os.homedir(), 'Documents', 'Quill'));
   const storePath = path.resolve(flags.store ?? (yes ? defaultStore : await ask(io, 'Markdown store folder (plain folder or inside an Obsidian vault)', defaultStore)));
-  const repoDir = mainWorkTree(path.resolve(flags.repo ?? process.cwd()));
+  // A linked worktree registers its repository; any other folder keeps the spelling it was given
+  // (git reports /private/var for /var on macOS and long names for RUNNER~1 on Windows).
+  const given = path.resolve(flags.repo ?? process.cwd());
+  const repoDir = mainWorkTreeOf(given) ? mainWorkTree(given) : given;
   const isGit = isGitWorkTree(repoDir);
   if (!isGit && flags.force !== true) throw new TrackerError('repo-not-git', `${repoDir} is not a git work tree; run init from a clone of the repository, pass --repo <path>, or add --force to register it anyway`);
   if (!isGit) io.println(`! ${repoDir} is not a git work tree; registering it anyway (--force)`);

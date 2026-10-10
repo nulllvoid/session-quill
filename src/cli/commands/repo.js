@@ -3,6 +3,7 @@ import path from 'node:path';
 import { loadUserConfig, saveUserConfig, loadRepoConfig, saveRepoConfig } from '../../config/config.js';
 import { isGitWorkTree, detectDefaultBranch, repoIdFromPath, samePath, repoStatus, REPO_STATUS_TEXT, mainWorkTree } from '../../config/repos.js';
 import { loadContext, latestSnapshot } from '../context.js';
+import { mainWorkTreeOf } from '../../lib/git-head.js';
 import { TrackerError } from '../../lib/errors.js';
 import fs from 'node:fs';
 
@@ -15,8 +16,8 @@ function add(io, args, flags, env) {
   let dir = path.resolve(target);
   if (!fs.existsSync(dir)) throw new TrackerError('repo-path-missing', `${dir} does not exist`);
   if (!isGitWorkTree(dir)) throw new TrackerError('repo-not-git', `${dir} is not a git work tree; register a clone of the repository`);
-  const main = mainWorkTree(dir);
-  if (!samePath(main, dir)) {
+  const main = mainWorkTreeOf(dir) ? mainWorkTree(dir) : null;
+  if (main && !samePath(main, dir)) {
     io.println(`${dir} is a worktree of ${main}; registering the repository itself (work in its worktrees is attributed to it).`);
     dir = main;
   }
