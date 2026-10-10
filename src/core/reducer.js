@@ -8,7 +8,7 @@ import { heuristicApprovalEligible } from './approval.js';
 import { timelineEntry, touch } from './reduce/common.js';
 import { getOrCreateSession, bindSession, recomputeUnpromoted, approveCheckpoint } from './reduce/sessions.js';
 import { applyTicketFields, createTicket, bindExternal, relinkTicket } from './reduce/tickets.js';
-import { applyTrackerSync, applyArtifactComment, applyPublishRun, applyScheduleRun } from './reduce/integrations.js';
+import { applyTrackerSync, applyTrackerPush, applyArtifactComment, applyPublishRun, applyScheduleRun } from './reduce/integrations.js';
 import { resolveAttribution, sweepDeferred, handlePostTool, handleStop } from './reduce/capture.js';
 import { handleRequest, handleRequestTx, handleHandoffTx } from './reduce/requests.js';
 
@@ -231,6 +231,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       break;
     case 'publish-run': Object.assign(result, applyPublishRun(state, ev)); break;
     case 'tracker-sync': Object.assign(result, applyTrackerSync(state, ev, result)); break;
+    case 'tracker-push': Object.assign(result, applyTrackerPush(state, ev, result)); break;
     case 'artifact-comment': Object.assign(result, applyArtifactComment(state, ev, result)); break;
     case 'schedule-run':
       Object.assign(result, applyScheduleRun(state, ev));

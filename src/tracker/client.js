@@ -1,6 +1,7 @@
-// Read-only tracker clients for the tracker-sync job (ADR 0011): one issue per call, from the host
-// the owner configured (or the tracker's fixed API host), with a token from a named environment
-// variable. Nothing here writes to a tracker; Linear's API is GraphQL, so it is a POST of a query.
+// Tracker clients: one issue per call, from the host the owner configured (or the tracker's fixed
+// API host), with a token from a named environment variable. The tracker-sync job only reads
+// (ADR 0011). The write methods exist for `quill tracker push`, which the owner opts into and
+// confirms per ticket (ADR 0018); nothing calls them on a schedule.
 import { TrackerError } from '../lib/errors.js';
 
 const KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
@@ -21,12 +22,40 @@ export function syncSettings(rawTracker = {}) {
   return { token_env: typeof t.sync_token_env === 'string' && t.sync_token_env ? t.sync_token_env : null, username_env: typeof t.sync_username_env === 'string' && t.sync_username_env ? t.sync_username_env : null };
 }
 
+// Remote status names a Quill status maps to when no --to is given. Statuses without a default
+// (blocked, deploy-pending) need an explicit target; [tracker.status_map] overrides these.
+export const DEFAULT_STATUS_MAP = {
+  jira: { todo: 'To Do', active: 'In Progress', review: 'In Review', done: 'Done' },
+  linear: { todo: 'Todo', active: 'In Progress', review: 'In Review', done: 'Done' },
+  github: { todo: 'open', active: 'open', review: 'open', 'deploy-pending': 'open', blocked: 'open', done: 'closed' },
+};
+
+// Write-back is read only from the user's config.toml (ADR 0018): a repository's .quill.toml
+// cannot turn it on or change where a status goes.
+export function writeSettings(rawTracker = {}) {
+  const t = rawTracker && typeof rawTracker === 'object' ? rawTracker : {};
+  const map = {};
+  if (t.status_map && typeof t.status_map === 'object' && !Array.isArray(t.status_map)) {
+    for (const [k, v] of Object.entries(t.status_map)) if (typeof v === 'string' && v.trim() && v.length <= 80) map[k] = v.trim();
+  }
+  return { enabled: t.write_back === true, status_map: map };
+}
+
+export function targetStatus(system, quillStatus, settings) {
+  return (settings.status_map && settings.status_map[quillStatus]) ?? (DEFAULT_STATUS_MAP[system] ?? {})[quillStatus] ?? null;
+}
+
 // Whether tracker-sync may read this ticket's issue: an open ticket whose key belongs to the user's
 // tracker and whose link, if any, is on its host. A GitHub key is only a number, so its link must
 // name the configured repository and that number; otherwise another repository's issue would be read.
 export function syncable(ticket, tracker) {
+  return !!ticket && ticket.status !== 'done' && linkedTo(ticket, tracker);
+}
+
+// Whether the ticket's external key is an issue on this tracker (any status).
+export function linkedTo(ticket, tracker) {
   const ext = ticket && ticket.external;
-  if (!ext || !ext.key || ticket.status === 'done' || !tracker || ext.system !== tracker.system) return false;
+  if (!ext || !ext.key || !tracker || ext.system !== tracker.system) return false;
   let link = null;
   if (ext.url) { try { link = new URL(ext.url); } catch { return false; } }
   if (tracker.system === 'github') {
@@ -64,11 +93,85 @@ export function createTrackerClient({ tracker, settings = {}, env = process.env,
     if (!res.ok) throw fail(`${system} returned HTTP ${res.status}${res.status === 401 || res.status === 403 ? ` (check ${tokenEnv})` : ''}`);
     const text = await res.text();
     if (text.length > MAX_BODY) throw fail(`${system} response is too large`);
+    if (!text) return null; // e.g. Jira's 204 after a transition
     try { return JSON.parse(text); } catch { throw fail(`${system} returned malformed JSON`); }
   }
 
+  function githubIssueUrl(key) {
+    if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(tracker.repo ?? '')) throw fail('tracker.repo must be owner/name for GitHub issues');
+    const base = origin(tracker.domain || 'https://github.com');
+    if (!base) throw fail('tracker.domain must be an https:// address');
+    const api = base === 'https://github.com' ? 'https://api.github.com' : `${base}/api/v3`;
+    return `${api}/repos/${tracker.repo}/issues/${/(\d+)$/.exec(key)[1]}`;
+  }
+
+  function jiraBase() {
+    const base = origin(tracker.domain);
+    if (!base) throw fail('tracker.domain must be the https:// address of your Jira site');
+    return base;
+  }
+
+  async function linear(query, variables) {
+    const json = await request('https://api.linear.app/graphql', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ query, variables }) });
+    if (json && Array.isArray(json.errors) && json.errors.length) throw fail(`linear refused the request: ${String(json.errors[0].message ?? 'unknown error').slice(0, 200)}`);
+    return json && json.data;
+  }
+
+  const checkKey = (key) => { if (typeof key !== 'string' || !KEY_RE.test(key)) throw fail(`${key} is not a tracker key`); };
+  const same = (a, b) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+
+  // Write-back (ADR 0018): only called for one ticket the owner confirmed. Each method changes
+  // exactly one thing on one issue and reports what the issue looked like before.
+  const writer = {
+    // The remote states this issue can move to, by name; null means "any name is accepted".
+    async targets(key) {
+      checkKey(key);
+      if (system === 'jira') {
+        const json = await request(`${jiraBase()}/rest/api/2/issue/${encodeURIComponent(key)}/transitions`, { method: 'GET' });
+        return (json && json.transitions ? json.transitions : []).map((t) => ({ id: String(t.id), name: (t.to && t.to.name) ?? t.name }));
+      }
+      if (system === 'github') return [{ id: 'open', name: 'open' }, { id: 'closed', name: 'closed' }];
+      if (system === 'linear') {
+        const data = await linear('query States($id: String!) { issue(id: $id) { id team { states { nodes { id name } } } } }', { id: key });
+        const issue = data && data.issue;
+        if (!issue) throw fail('linear has no such issue', 'not-found');
+        return ((issue.team && issue.team.states && issue.team.states.nodes) ?? []).map((s) => ({ id: s.id, name: s.name, issue_id: issue.id }));
+      }
+      throw fail(`write-back does not support ${system ?? 'this'} trackers; use jira, github or linear`);
+    },
+
+    async setStatus(key, target) {
+      checkKey(key);
+      const options = await writer.targets(key);
+      const match = options.find((o) => same(o.name, target));
+      if (!match) throw fail(`${key} cannot move to "${target}" on ${system}; available: ${options.map((o) => o.name).join(', ') || 'none'}`, 'transition-unavailable');
+      if (system === 'jira') await request(`${jiraBase()}/rest/api/2/issue/${encodeURIComponent(key)}/transitions`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ transition: { id: match.id } }) });
+      else if (system === 'github') await request(githubIssueUrl(key), { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: match.id }) });
+      else if (system === 'linear') {
+        const data = await linear('mutation Move($id: String!, $state: String!) { issueUpdate(id: $id, input: { stateId: $state }) { success } }', { id: match.issue_id, state: match.id });
+        if (!(data && data.issueUpdate && data.issueUpdate.success)) throw fail('linear did not confirm the state change');
+      }
+      return { status: match.name };
+    },
+
+    async addComment(key, body) {
+      checkKey(key);
+      const text = String(body ?? '').slice(0, 4000);
+      if (!text.trim()) throw fail('a comment needs text');
+      if (system === 'jira') await request(`${jiraBase()}/rest/api/2/issue/${encodeURIComponent(key)}/comment`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body: text }) });
+      else if (system === 'github') await request(`${githubIssueUrl(key)}/comments`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body: text }) });
+      else if (system === 'linear') {
+        const options = await writer.targets(key);
+        const data = await linear('mutation Note($id: String!, $body: String!) { commentCreate(input: { issueId: $id, body: $body }) { success } }', { id: options[0] ? options[0].issue_id : key, body: text });
+        if (!(data && data.commentCreate && data.commentCreate.success)) throw fail('linear did not confirm the comment');
+      } else throw fail(`write-back does not support ${system ?? 'this'} trackers`);
+      return { commented: true };
+    },
+  };
+
   return {
     system,
+    ...writer,
     async fetchIssue(key) {
       if (typeof key !== 'string' || !KEY_RE.test(key)) throw fail(`${key} is not a tracker key`);
       if (system === 'jira') {

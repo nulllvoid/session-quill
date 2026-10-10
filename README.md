@@ -18,7 +18,7 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Agent recipes.** Analyse, analyse with follow-ups, attempt a fix, check deployments or write a standup, or add your own recipes as Markdown files. Each runs in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions that the recipe caps, and its suggestions wait for you to accept them.
 - **Environments and Today.** Each merged PR owes a deployment per environment, shown as a PR-by-environment matrix with the evidence for each. Today lists what happened on each day of the last week, and a digest job writes the same summary into your daily note.
 - **Publishers.** Share a roll-up note, a read-only HTML copy or a live claude.ai artifact page. Each sends only the fields and projects you list, and only after you confirm the destination.
-- **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear without ever writing to them. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline.
+- **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear on a schedule; sync never writes. Opt in to push one ticket's status back yourself, previewed and confirmed. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline.
 
 ## Documentation
 
@@ -243,6 +243,25 @@ every = "6h"
 
 GitHub (`GITHUB_TOKEN`, with `repo = "owner/name"`) and Linear (`LINEAR_API_KEY`) work the same way. The token is sent only to the tracker in your own config, never to one a repository names.
 
+### Pushing a status back (opt-in)
+
+Sync never writes. To copy a ticket's status to its issue yourself, turn on write-back in your own `config.toml` (a repository's `.quill.toml` cannot) and push one ticket at a time:
+
+```toml
+[tracker]
+write_back = true                    # the token needs write scope
+[tracker.status_map]                 # optional; defaults: To Do, In Progress, In Review, Done
+review = "Code Review"
+```
+
+```bash
+quill tracker push PROJ-7                          # preview: current remote status and the change; sends nothing
+quill tracker push PROJ-7 --confirm                # sends it
+quill tracker push PROJ-7 --to "Blocked" --comment "Waiting on infra" --confirm
+```
+
+GitHub issues close for done and reopen otherwise. Each push, or failure, is recorded on the ticket's timeline. Nothing pushes automatically ([ADR 0018](docs/decisions/0018-tracker-write-back.md)).
+
 ## Bitbucket pull requests
 
 Set the repository's provider in `~/.claude/quill/config.toml` and put a token in an environment variable the worker can read. Quill never stores the token, and sends it only to the host you configure.
@@ -305,7 +324,7 @@ One ticket, `PROJ-123` in Jira, from first prompt to a page your team can see. I
 6. **Merge and deploy.** When the PR merges, the next reconciliation records it (**Refresh** in the header, or `quill sync`, runs one now). `PROJ-123` now owes `stage` and `prod` deployments, which show on **Deployments**. Record each one with its evidence as it ships, or mark it N/A. A `deploy-check` recipe can look for the evidence and suggest it. Closing the ticket while a deployment is pending asks you to record, waive or leave it.
 7. **Review the day.** **Today** shows what changed on each ticket today and on each of the last few days. A `digest` schedule writes the same summary into the store's daily note.
 8. **Share it.** Add a `[[publish]]` entry (see [Publishing](#publishing)). For a markdown or HTML publisher, `quill publish team --confirm` confirms the destination and publishes. For a live artifact, run `/session-quill:publish team` in a Claude Code session and confirm when it asks; it prints the page's claude.ai link. Share the page from claude.ai. With `two_way = true`, people you let edit the page can change a ticket's status or next action. Each change comes back on the next publish as an edit that applies unless you changed the ticket since, and comments that name a ticket appear on its timeline.
-9. **See the tracker's view.** With `sync_token_env` set and a `tracker-sync` schedule (see [Tracker sync](#tracker-sync)), the ticket shows Jira's status, assignee and fix version, and warns if the key does not exist. Quill never writes to Jira.
+9. **See the tracker's view.** With `sync_token_env` set and a `tracker-sync` schedule (see [Tracker sync](#tracker-sync)), the ticket shows Jira's status, assignee and fix version, and warns if the key does not exist. Quill writes to Jira only when you opt in and run `quill tracker push <KEY> --confirm`.
 
 Other commands: `/session-quill:status`, `/session-quill:handoff <KEY>`, `/session-quill:agent`, `/session-quill:ui`; from a terminal `quill ticket list`, `quill ticket set <KEY> --status active --next "…" --repo <id>` (edit a ticket after creation or migration), `quill publish list`, `quill export`, `quill replay --into <dir>`, `quill import <note.md>`, `quill note restore <KEY>`, `quill migrate --source <dir> --dry-run` (add `--profile <path.json>` for a legacy tracker with other field names; see [TRD §Migration](docs/TRD.md#migration-and-rollout)), and `quill help` for the rest.
 

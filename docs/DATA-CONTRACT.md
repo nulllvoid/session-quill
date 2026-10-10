@@ -186,6 +186,10 @@ Digest schedule fields: to (vault-daily and/or file), path (required for file), 
 
 `tracker-sync` payload: system, synced_at, results[] (ticket_id, key, validation (valid, not-found, or null on an error), remote (nullable), error (nullable)).
 
+`tracker-push` payload (ADR 0018): ticket_id, system, key, from (nullable), to (nullable; null when only a comment was sent), comment (boolean), ok, error (nullable). It adds a `tracker` timeline entry and, when ok with a status, sets `external.remote.status`; it never changes the ticket's own fields or revision.
+
+`ticket-update` payload may carry `expected_revision` (integer); when present and different from the ticket's revision, the update is rejected with `revision-conflict`. Events without it apply as before.
+
 `artifact-comment` payload: publisher, ticket_id, key, thread_id, comment_id, author (an opaque viewer id), text, at. It adds a `comment` timeline entry (one line, marked as from a page viewer); its source identity is `artifact-comment:<publisher>:<comment_id>`, so a comment is recorded once.
 
 Two-way artifact rows also carry `_quill.revision` (the ticket revision at publish) and `_edits.<field>` { by, at } for page edits. A page edit to status or next becomes a set-status or set-next-action request with actor `artifact:<publisher>`, expected_revision = `_quill.revision` and an id derived from the edit (publisher, ticket, field, value, revision, `_edits.<field>.at`). An executor read step reports `complete: true` once it has listed every document.

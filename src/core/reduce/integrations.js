@@ -5,8 +5,6 @@ export const SCHEDULE_HISTORY = 20;
 
 export const PUBLISH_HISTORY = 20;
 
-// One finished publish of one publisher (ADR 0010). `confirmed` records the owner's consent to that
-// destination, which later publishes to the same destination rely on.
 // Remote tracker data for linked tickets (ADR 0011). Recorded beside the ticket, never in its own
 // fields, and without a revision bump, so a sync can never make an owner's edit conflict.
 export function applyTrackerSync(state, ev, result) {
@@ -25,6 +23,20 @@ export function applyTrackerSync(state, ev, result) {
   return {};
 }
 
+// A confirmed write to the ticket's tracker issue (ADR 0018), or its failure. Only the timeline
+// records it: the ticket's own fields and revision are untouched.
+export function applyTrackerPush(state, ev, result) {
+  const p = ev.payload;
+  const t = p && state.tickets.get(p.ticket_id);
+  if (!t) return { rejected: 'ticket-unknown' };
+  const what = [p.to ? `status ${p.from ? `${p.from} → ` : ''}${p.to}` : null, p.comment ? 'a comment' : null].filter(Boolean).join(' and ');
+  const text = p.ok ? `Pushed ${what} to ${p.system} ${p.key}` : `Push to ${p.system} ${p.key} failed: ${String(p.error ?? 'unknown error').slice(0, 160)}`;
+  t.timeline.push(timelineEntry(ev, 'tracker', text));
+  if (p.ok && p.to && t.external && t.external.key === p.key) t.external = { ...t.external, remote: { ...(t.external.remote ?? {}), status: p.to, fetched_at: ev.occurred_at } };
+  result.changed.add(t.id);
+  return {};
+}
+
 // A comment left on a two-way artifact page, matched to a ticket by its key (ADR 0011). It joins the
 // ticket's timeline as data; the journal's source identity keeps each comment to one entry.
 export function applyArtifactComment(state, ev, result) {
@@ -39,6 +51,8 @@ export function applyArtifactComment(state, ev, result) {
   return {};
 }
 
+// One finished publish of one publisher (ADR 0010). `confirmed` records the owner's consent to that
+// destination, which later publishes to the same destination rely on.
 export function applyPublishRun(state, ev) {
   const p = ev.payload;
   if (!p || typeof p.publisher !== 'string' || typeof p.run_id !== 'string' || typeof p.outcome !== 'string') return { rejected: 'publish-invalid' };
