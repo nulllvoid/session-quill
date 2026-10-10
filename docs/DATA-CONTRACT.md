@@ -188,6 +188,8 @@ Digest schedule fields: to (vault-daily and/or file), path (required for file), 
 
 Tickets may carry `effort` { active_ms, turns, tokens { input, output, cache_read, cache_write } }. Active time adds, for each prompt, tool or stop event of a session bound to the ticket, the gap since that session's previous event, capped at 5 minutes. A `stop` event adds a turn and, when its payload carries `usage` (the same four token counts, summed by the Stop hook from the transcript lines appended since its last read; no text is kept), those tokens. Tickets without `effort` have none recorded.
 
+Tickets may carry `branches` [{ name, first_seen, last_seen }] (at most 20), from the `branch` field of attributed `post-tool` payloads that wrote files or committed. A `reconcile` payload's `pr_updates` entry with `link: true` adds a PR (provider, url, head_branch) to a ticket that does not have it yet, then applies its state like any poll. Merge updates may carry `deploy_on: "merge"`, which records the merge as deployed (`evidence_kind: "merge"`) in every environment of that PR and moves the ticket to done when nothing else is outstanding (ADR 0021).
+
 `tracker-push` payload (ADR 0018): ticket_id, system, key, from (nullable), to (nullable; null when only a comment was sent), comment (boolean), ok, error (nullable). It adds a `tracker` timeline entry and, when ok with a status, sets `external.remote.status`; it never changes the ticket's own fields or revision.
 
 `ticket-update` payload may carry `expected_revision` (integer); when present and different from the ticket's revision, the update is rejected with `revision-conflict`. Events without it apply as before.

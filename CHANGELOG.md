@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-11
+
+### Added
+
+- A merged PR closes every ticket whose work it carried ([ADR 0021](docs/decisions/0021-pr-closes-its-tickets.md)): hooks record the branch each write or commit landed on, reconciliation finds that branch's GitHub PRs with `gh pr list --head` and links them to each ticket, and `deploy_on = "merge"` on a repository makes the merge its deployment so tickets go straight to done.
+
+### Fixed
+
+- PR state on done tickets is refreshed; a merged PR no longer shows as open on the board and in resume briefs.
+
 ## [0.7.0] - 2026-10-11
 
 ### Added
@@ -164,7 +174,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/nulllvoid/session-quill/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nulllvoid/session-quill/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nulllvoid/session-quill/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/nulllvoid/session-quill/compare/v0.4.0...v0.5.0

@@ -289,6 +289,18 @@ quill mirror open --dir "<synced store>/.quill-mirror"     # opens the read-only
 
 The mirror uses the same privacy rules as a shared snapshot (no checkpoint text, no local paths or credentials) and refreshes at most once a minute while the owner's worker runs ([ADR 0019](docs/decisions/0019-read-only-mirror.md)).
 
+## GitHub pull requests and automatic closing
+
+Set the repository's provider to GitHub (`gh` must be signed in). Reconciliation then follows each linked PR, and links the PRs whose head is a branch a ticket's work landed on, so one merge moves every ticket it carried. If merging is your release (a plugin or a library), say so and merged tickets close straight away instead of waiting in deploy-pending:
+
+```toml
+[repos.my-repo]
+provider = "github"
+deploy_on = "merge"     # omit to keep per-environment deployment obligations
+```
+
+Work committed directly on the default branch is never matched by branch; open a PR for it or set its status yourself ([ADR 0021](docs/decisions/0021-pr-closes-its-tickets.md)).
+
 ## Bitbucket pull requests
 
 Set the repository's provider in `~/.claude/quill/config.toml` and put a token in an environment variable the worker can read. Quill never stores the token, and sends it only to the host you configure.
