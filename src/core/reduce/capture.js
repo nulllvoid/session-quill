@@ -3,7 +3,7 @@ import { deterministicId } from '../../lib/ids.js';
 import { sessionKey, repoFor, registerCheckpoint } from '../state.js';
 import { deriveStatusFromEvidence } from '../transitions.js';
 import { WRITE_TOOLS, timelineEntry, touch, UNBOUND_FILE_CAP, UNBOUND_COMMIT_CAP } from './common.js';
-import { getOrCreateSession, bindSession, recomputeUnpromoted, approveCheckpoint } from './sessions.js';
+import { getOrCreateSession, bindSession, recomputeUnpromoted, approveCheckpoint, ticketEffort } from './sessions.js';
 import { createTicket } from './tickets.js';
 
 // Owner-confirmed attachment of a session's unlinked work (ADR 0006). Unlike automatic binding
@@ -171,6 +171,12 @@ export function handleStop(state, ev, result) {
   session.events_since_checkpoint = 0;
   recomputeUnpromoted(state, session);
   const ticket = cp.ticket_id ? state.tickets.get(cp.ticket_id) : null;
+  if (ticket && ev.kind === 'stop') {
+    const effort = ticketEffort(ticket);
+    effort.turns += 1;
+    const u = p.usage;
+    if (u && typeof u === 'object') for (const k of ['input', 'output', 'cache_read', 'cache_write']) if (Number.isFinite(u[k]) && u[k] > 0) effort.tokens[k] += u[k];
+  }
   if (ticket) {
     if (complete) {
       for (const text of Array.isArray(p.conclusions) ? p.conclusions : []) {

@@ -236,7 +236,18 @@ export function filterTickets(snapshot, filters) {
   return snapshot.tickets.filter((t) => matchesFilters(t, filters, snapshot));
 }
 
-export const EMPTY_FILTERS = { project: '', category: '', tag: '', repo: '', machine: '', stale: false, q: '' };
+// "2 h 10 min active · 14 turns · 1.2M tokens (36k output)"; null when nothing was measured.
+export function effortText(effort) {
+  if (!effort || (!effort.active_ms && !effort.turns)) return null;
+  const mins = Math.round((effort.active_ms ?? 0) / 60_000);
+  const time = mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`;
+  const t = effort.tokens ?? {};
+  const total = (t.input ?? 0) + (t.output ?? 0) + (t.cache_read ?? 0) + (t.cache_write ?? 0);
+  const n = (x) => (x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}k` : String(x));
+  return [`${time} active`, effort.turns ? `${effort.turns} turn${effort.turns === 1 ? '' : 's'}` : null, total ? `${n(total)} tokens (${n(t.output ?? 0)} output)` : null].filter(Boolean).join(' · ');
+}
+
+export const EMPTY_FILTERS ={ project: '', category: '', tag: '', repo: '', machine: '', stale: false, q: '' };
 
 // A hash that names a view is the whole state: a shared or bookmarked link opens exactly what
 // it says, never with a filter left over from earlier navigation.

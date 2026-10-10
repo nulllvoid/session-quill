@@ -3,6 +3,25 @@ import { deterministicId } from '../../lib/ids.js';
 import { sessionKey, newSession, registerSession } from '../state.js';
 import { timelineEntry, touch } from './common.js';
 
+// Effort per ticket (optional `effort` field): active time is the sum of gaps between a bound
+// session's consecutive activity events, each capped so a pause or a night does not count. It
+// depends only on event times, so replay gives the same numbers.
+export const ACTIVE_GAP_CAP_MS = 5 * 60_000;
+const ACTIVITY = new Set(['prompt', 'pre-tool', 'post-tool', 'tool-failure', 'stop', 'subagent-stop']);
+
+export function ticketEffort(ticket) {
+  if (!ticket.effort) ticket.effort = { active_ms: 0, turns: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
+  return ticket.effort;
+}
+
+function creditActiveTime(state, session, ev) {
+  if (!ACTIVITY.has(ev.kind) || !session.current_ticket_id || !session.last_event_at) return;
+  const gap = Date.parse(ev.occurred_at) - Date.parse(session.last_event_at);
+  if (!(gap > 0)) return;
+  const ticket = state.tickets.get(session.current_ticket_id);
+  if (ticket) ticketEffort(ticket).active_ms += Math.min(gap, ACTIVE_GAP_CAP_MS);
+}
+
 export function getOrCreateSession(state, ev, { source = 'startup', cwd = null, parent_session_id = null } = {}) {
   const key = sessionKey(ev);
   let session = state.sessions.get(key);
@@ -11,6 +30,7 @@ export function getOrCreateSession(state, ev, { source = 'startup', cwd = null, 
     state.sessions.set(key, session);
     registerSession(state, session);
   }
+  creditActiveTime(state, session, ev);
   if (ev.occurred_at > session.last_event_at) session.last_event_at = ev.occurred_at;
   if (source !== 'resume' && cwd) session.cwd = cwd;
   if (session.ended_at && ['session-start', 'bind', 'pre-tool', 'post-tool', 'stop', 'prompt'].includes(ev.kind)) {

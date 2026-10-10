@@ -126,6 +126,12 @@ blocker, the approved plan, recent conclusions, recently changed files, PRs and 
 deployments. It is read from the ticket's projection, capped at 1,200 characters, and
 absent for a ticket nothing has happened on yet.
 
+Each ticket also tracks effort: active time (gaps of up to 5 minutes between its
+sessions' events), turns, and the tokens Claude Code reports for those turns. The
+Stop hook reads only the numeric usage of the newest transcript lines; no text is
+kept. The ticket's detail panel and `ticket show` display it, for example
+`2 h 10 min active · 14 turns · 1.2M tokens (36k output)`.
+
 Every ticket Claude creates has a description in one format, which the dashboard shows and agent runs read as context ([ADR 0014](docs/decisions/0014-ticket-descriptions.md)):
 
 ```markdown

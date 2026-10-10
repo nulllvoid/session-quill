@@ -19,6 +19,7 @@ import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
 import { ensureDir, removeIfExists } from '../lib/atomic-fs.js';
 import { nowIso } from '../lib/time.js';
 import { resumeBrief } from '../core/brief.js';
+import { collectTurnUsage } from './usage.js';
 import {
   sanitizeTitle, writePathsFor, commitFromBash, prFromBash, planFromExitPlanMode, extractConclusions, preview,
 } from './payload.js';
@@ -313,9 +314,13 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
           result.stderr += `Session Quill: capture gap — checkpoint blob not stored (${err.message})\n`;
         }
       }
+      let usage = null;
+      if (eventName === 'Stop') {
+        try { usage = collectTurnUsage(input.transcript_path, key, env); } catch { usage = null; /* effort is best effort; capture never fails on it */ }
+      }
       const nudge = eventName === 'Stop' && mode === 'nudge' && !(snapshot && snapshot.ticket_id) && input.stop_hook_active !== true && shouldNudge(key, env);
       const ev = makeEvent({ ...base, kind: eventName === 'Stop' ? 'stop' : 'subagent-stop', payload: {
-        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge,
+        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge, ...(usage ? { usage } : {}),
       }, source_identity: `${eventName === 'Stop' ? 'stop' : 'subagent-stop'}:${key}:${content_ref ?? 'missing'}:${occurred_at}` });
       persist(ev, env, result);
       if (nudge) {

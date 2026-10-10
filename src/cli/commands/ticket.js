@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { loadContext, sessionFromFlags, cliEvent, submitAndWait, latestSnapshot, latestTicketDetail, findTicketByKey, effectiveDefaults, commandName } from '../context.js';
 import { resumeBrief } from '../../core/brief.js';
+// One formatter for the dashboard and the CLI; ui/ cannot import from src/, so it lives there.
+import { effortText } from '../../../ui/components.js';
 import { validateKey } from '../../core/keys.js';
 import { CATEGORIES, PRIORITIES, loadRepoConfig, resolveTracker } from '../../config/config.js';
 import { renderUrl, isSafeExternalUrl, TRACKER_SYSTEMS } from '../../core/external-keys.js';
@@ -102,6 +104,8 @@ function show(ctx, io, flags) {
     if (ticket.next_action) io.println(`  next action: ${ticket.next_action}`);
     if (ticket.blocker) io.println(`  blocker: ${ticket.blocker}`);
     io.println(`  files touched: ${ticket.files_touched_count}  plans: ${ticket.plans_count}  sessions: ${ticket.session_ids.length}`);
+    const effort = effortText(ticket.effort);
+    if (effort) io.println(`  effort: ${effort}`);
   }
   return 0;
 }
