@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
-import { buildPrompt, allowedToolsFor, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
+import { buildPrompt, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
@@ -101,7 +101,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     }
     if (entry.selfCheck && !parsed.problems.length && !entry.reason && timeLeft()) {
       // The check re-reads sources; it never edits, whatever the run was allowed to do.
-      const readOnly = allowedToolsFor({ mode: 'analyse', permissions: { read_source: !!entry.permissions.read_source } });
+      const readOnly = selfCheckTools(entry.permissions);
       const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: 12, permissionMode: 'dontAsk' });
       const checked = next ? parseAgentResult(next.stdout, parseOpts) : null;
       if (checked && !checked.is_error && !checked.problems.length) {

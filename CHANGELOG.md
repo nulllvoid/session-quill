@@ -26,6 +26,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Fix runs could reach Claude Code subagents (`Task`/`Agent`) under `settings` or `full` access, and a fix run's self-check turn was given them. Only read-only `analyse` and `analyse-followups` runs get subagents now, under every access level, and the self-check never does.
 - Worker test gate: a passing test command that leaves a background process holding its output is recorded as passed, not as a timeout. The exit code decides; the gate then waits 2 s for the output to close and kills the leftover tree (the process group on POSIX, `taskkill /T` on Windows), also after a cancellation or deadline. Stopping the worker during the gate waits for it, so the run ends as stopped rather than interrupted.
 - Runs that fail during setup or cannot spawn the runtime keep the timings measured so far (queue wait, setup, agent time) instead of dropping them. A run whose self-check was skipped or did not finish records why in `result_quality.self_check_skipped`.
 - When the dashboard port is taken, `ui-endpoint.json` records `configured_port`, `quill ui` warns that bookmarks to it do not reach the dashboard, and the status line ends with "⚠ port 47321 taken; using N". The host and port read from that file are validated (loopback host, port 1-65535) before they reach a URL or the status line's OSC 8 sequence.

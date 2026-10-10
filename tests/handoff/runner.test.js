@@ -345,3 +345,24 @@ test('a fix run that cannot self-check records why (ADR 0022)', async () => {
     assert.match(done.result_quality.self_check_skipped, /less than a minute/);
   } finally { await b.w.stop(); }
 });
+
+test('the mandatory self-check of a fix run gets neither edit tools nor subagents (ADR 0023)', async () => {
+  const repo = makeRepo();
+  const capture = path.join(os.tmpdir(), `capture-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  const b = await bootWorker({ repo, runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_EDIT: 'src.js', FAKE_CLAUDE_CAPTURE: capture } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(43), { target_id: T1, expected_revision: t.revision, payload: fix });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(43)).result.handoff_id;
+    const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return ['done', 'failed'].includes(h.state) ? h : null; });
+    assert.equal(done.state, 'done', JSON.stringify(done.error));
+    assert.equal(done.result_quality.self_checked, true);
+    const turn = fs.readFileSync(`${capture}.resume`, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).find((x) => /check your answer/i.test(x.prompt));
+    assert.ok(turn, 'the self-check ran');
+    const at = turn.args.indexOf('--disallowedTools');
+    const allowed = turn.args.slice(turn.args.indexOf('--allowedTools') + 1, at);
+    const denied = turn.args.slice(at + 1);
+    for (const tool of ['Task', 'Agent']) { assert.equal(allowed.includes(tool), false, tool); assert.ok(denied.includes(tool), tool); }
+  } finally { await b.w.stop(); }
+});

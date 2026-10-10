@@ -199,17 +199,31 @@ function forRuntime({ allowed, disallowed }, permissions) {
 //   they would prompt for is refused. Edits inside the checkout are accepted for fix runs, and the
 //   run's own side-effect permissions still gate commit, push, draft PRs and merges.
 // - full: no permission checks (`bypassPermissions`), and git credentials stay available.
+// Claude Code subagents (ADR 0023): only a read-only analyse or analyse-followups run may fan out,
+// whatever its access level. Anything that may edit source stays a single agent.
+const SUBAGENT_TOOLS = ['Task', 'Agent'];
+export const mayFanOut = ({ mode, permissions = {} }) => (mode === 'analyse' || mode === 'analyse-followups') && !permissions.edit_source;
+
 export function runtimeAccess({ access = 'standard', mode, permissions = {}, tools = null }) {
-  if (access === 'full') return { permissionMode: 'bypassPermissions', allowed: [], disallowed: [], keepCredentials: true };
+  const noFanOut = mayFanOut({ mode, permissions }) ? [] : SUBAGENT_TOOLS;
+  if (access === 'full') return { permissionMode: 'bypassPermissions', allowed: [], disallowed: [...noFanOut], keepCredentials: true };
   if (access === 'settings') {
     const disallowed = ['Bash(git push --force*)', 'Bash(gh pr merge*)', 'Bash(git merge*)', 'Bash(git checkout main*)', 'Bash(git checkout master*)'];
     if (!permissions.commit) disallowed.push('Bash(git commit*)');
     if (!permissions.push_branch) disallowed.push('Bash(git push*)');
     if (!permissions.open_draft_pr) disallowed.push('Bash(gh pr create*)');
     if (!permissions.edit_source) disallowed.push('Edit', 'Write', 'MultiEdit', 'NotebookEdit');
+    disallowed.push(...noFanOut);
     return { permissionMode: permissions.edit_source ? 'acceptEdits' : 'default', allowed: [], disallowed, keepCredentials: false };
   }
   return { permissionMode: 'dontAsk', ...allowedToolsFor({ mode, permissions, tools }), keepCredentials: false };
+}
+
+// The self-check turn (ADR 0013) re-reads sources only: no edits and no subagents, whatever the
+// run itself was allowed.
+export function selfCheckTools(permissions = {}) {
+  const t = allowedToolsFor({ mode: 'analyse', permissions: { read_source: !!permissions.read_source } });
+  return { allowed: t.allowed.filter((x) => !SUBAGENT_TOOLS.includes(x)), disallowed: [...new Set([...t.disallowed, ...SUBAGENT_TOOLS])] };
 }
 
 export function allowedToolsFor({ mode, permissions = {}, tools = null }) {
@@ -258,8 +272,9 @@ function profileTools({ mode, permissions = {} }) {
     // A read-only analysis may split a large codebase across Claude Code subagents (ADR 0023).
     // They run inside this same session, under these same rules, and one reservation still
     // covers the whole run. A fix stays a single agent.
-    if (mode === 'analyse' || mode === 'analyse-followups') allowed.push('Task', 'Agent');
+    if (mayFanOut({ mode, permissions })) allowed.push(...SUBAGENT_TOOLS);
   }
+  if (!allowed.includes('Task')) disallowed.push(...SUBAGENT_TOOLS);
   if (!permissions.commit) disallowed.push('Bash(git commit*)');
   else allowed.push('Bash(git commit*)');
   return { allowed, disallowed };
