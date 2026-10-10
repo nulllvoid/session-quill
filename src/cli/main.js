@@ -44,7 +44,8 @@ Usage: quill <command> [options]
   worker run | start | stop | status
   sync [--notes]                            replay --into <dir> [--switch]
   import <note.md>                          note restore <KEY>
-  ui [--static <out.html>] [--open]         export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
+  ui [--no-open] | ui --static <out.html> [--open]
+                                            export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
   handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access standard|settings|full]
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
   agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full]

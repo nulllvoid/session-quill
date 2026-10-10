@@ -70,7 +70,7 @@ test('overview follows filters and a zero-result search offers a reset', () => {
 });
 
 test('renderBoard groups six statuses in order, collapses done, shows counts, stale badge and escapes titles', () => {
-  const html = renderBoard(snapshot(), noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} });
+  const html = renderBoard(snapshot(), noFilters, { now: NOW, layout: 'columns', toggled: new Set(), pages: {} });
   const order = ['todo', 'active', 'review', 'deploy-pending', 'blocked', 'done'].map((s) => html.indexOf(`data-column="${s}"`));
   assert.deepEqual([...order].sort((a, b) => a - b), order);
   assert.match(html, /data-column="done"[^>]*data-collapsed="true"/);
@@ -82,9 +82,9 @@ test('renderBoard groups six statuses in order, collapses done, shows counts, st
 test('renderBoard pages columns beyond 40 cards and reports zero filter results', () => {
   const s = snapshot();
   for (let i = 10; i < 60; i += 1) s.tickets.push({ ...s.tickets[0], id: `${String(i).padStart(8, '0')}-0000-4000-8000-000000000000`, key: `LOCAL-many-${i}`, title: `Many ${i}` });
-  const html = renderBoard(s, noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} });
+  const html = renderBoard(s, noFilters, { now: NOW, layout: 'columns', toggled: new Set(), pages: {} });
   assert.match(html, /Show 11 more/);
-  const none = renderBoard(s, { ...noFilters, q: 'zzzz-no-match' }, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} });
+  const none = renderBoard(s, { ...noFilters, q: 'zzzz-no-match' }, { now: NOW, layout: 'columns', toggled: new Set(), pages: {} });
   assert.match(none, /No tickets match the current filters/);
 });
 
@@ -187,8 +187,8 @@ test('every view renders a field-restricted sanitized export without throwing', 
   assert.equal(t.tags, undefined, 'fixture really omits tags');
   const outputs = [
     renderPickNext(s, noFilters, { now: NOW }),
-    renderBoard(s, noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} }),
-    renderBoard(s, { ...noFilters, q: 'ticket' }, { now: NOW, layout: 'list', expanded: new Set(), pages: {} }),
+    renderBoard(s, noFilters, { now: NOW, layout: 'columns', toggled: new Set(), pages: {} }),
+    renderBoard(s, { ...noFilters, q: 'ticket' }, { now: NOW, layout: 'list', toggled: new Set(), pages: {} }),
     renderTree(s, noFilters, { root: null }),
     renderSessions(s, noFilters, { now: NOW, page: 0 }),
     renderDeployments(s, noFilters, { now: NOW }),
@@ -242,7 +242,7 @@ test('external key chips open the tracker in a new tab and copy the key; only ht
 test('cards and the detail header use key chips; local keys offer Link to external only to the owner', () => {
   const snap = snapshot();
   snap.tickets.push(ticket(24, { key: 'PMLA-24', status: 'active', external: { system: 'linear', key: 'PMLA-24', url: 'https://linear.app/acme/issue/PMLA-24', validation: 'pending' } }));
-  assert.match(renderBoard(snap, noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} }), /href="https:\/\/linear\.app\/acme\/issue\/PMLA-24"/);
+  assert.match(renderBoard(snap, noFilters, { now: NOW, layout: 'columns', toggled: new Set(), pages: {} }), /href="https:\/\/linear\.app\/acme\/issue\/PMLA-24"/);
   const local = renderDetail(snap.tickets[0], snap, { now: NOW });
   assert.match(local, /data-action="link-external" data-ticket="[^"]+"/);
   const linked = renderDetail(snap.tickets.at(-1), snap, { now: NOW });
@@ -314,7 +314,7 @@ test('the attach dialog suggests open tickets or takes a new key; the link dialo
 test('empty states point at mentioning a key, and the sessions table flags unlinked work', () => {
   const empty = { ...snapshot(), tickets: [], picknext: [], blocked: [], meta: { ...snapshot().meta, key_example: 'PMLA-123' } };
   assert.match(renderPickNext(empty, noFilters, { now: NOW, pending: [] }), /Mention a ticket key such as <code>PMLA-123<\/code>/);
-  assert.match(renderBoard(empty, noFilters, { now: NOW, layout: 'columns', expanded: new Set(), pages: {} }), /Mention a ticket key such as <code>PMLA-123<\/code>/);
+  assert.match(renderBoard(empty, noFilters, { now: NOW, layout: 'columns', toggled: new Set(), pages: {} }), /Mention a ticket key such as <code>PMLA-123<\/code>/);
   assert.match(renderSessions(inboxSnapshot(), noFilters, { now: NOW }), /Unlinked work · 7 files/);
 });
 

@@ -1,5 +1,5 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
-import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot } from './components.js';
+import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash } from './components.js';
 import { renderHeader, renderSidebar, renderPageHeading } from './views/header.js';
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
@@ -22,13 +22,13 @@ const appState = {
   snapshot: null,
   online: true,
   view: 'picknext',
-  filters: { project: '', category: '', tag: '', repo: '', machine: '', stale: false, q: '' },
+  filters: { ...EMPTY_FILTERS },
   selected: null,
   requests: new Map(),
   refresh: null,
   dialog: null,
   theme: null,
-  boardExpanded: new Set(),
+  boardToggled: new Set(),
   blockedExpanded: false,
   editingNext: null,
   boardPages: {},
@@ -70,8 +70,7 @@ function readHash() {
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const view = params.get('view');
   if (VIEWS.includes(view)) appState.view = view;
-  for (const k of ['project', 'category', 'tag', 'repo', 'machine', 'q']) if (params.has(k)) appState.filters[k] = params.get(k);
-  appState.filters.stale = params.get('stale') === '1';
+  appState.filters = filtersFromHash(location.hash, appState.filters, VIEWS);
   appState.selected = params.get('ticket') || null;
   appState.treeRoot = params.get('root') || null;
 }
@@ -123,7 +122,7 @@ function render() {
   const scroll = main.scrollTop;
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
-  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online }));
+  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters }));
   // Keep the provider-error popover open across the header's per-minute re-render.
   const healthOpen = !!document.querySelector('#header .health-pop[open]');
   setMarkup($('#header'), renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt }));
@@ -134,7 +133,7 @@ function render() {
   const opts = { now, pending, selected: appState.selected };
   let html = '';
   if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, { ...opts, blockedExpanded: appState.blockedExpanded });
-  else if (appState.view === 'board') html = renderBoard(s, appState.filters, { ...opts, layout: layoutMode() === 'desktop' ? 'columns' : 'list', expanded: appState.boardExpanded, pages: appState.boardPages });
+  else if (appState.view === 'board') html = renderBoard(s, appState.filters, { ...opts, layout: layoutMode() === 'desktop' ? 'columns' : 'list', toggled: appState.boardToggled, pages: appState.boardPages });
   else if (appState.view === 'tree') html = renderTree(s, appState.filters, { root: appState.treeRoot });
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
@@ -147,7 +146,7 @@ function render() {
   renderDialog();
   motion?.update({
     view: appState.view,
-    results: JSON.stringify([appState.filters, appState.sessionsPage, appState.boardPages, [...appState.boardExpanded], appState.treeRoot]),
+    results: JSON.stringify([appState.filters, appState.sessionsPage, appState.boardPages, [...appState.boardToggled], appState.treeRoot]),
     detail: appState.selected,
     receipt: appState.receipt ? JSON.stringify(appState.receipt) : null,
   });
@@ -383,7 +382,7 @@ function handleAction(el) {
     }
     case 'run-job': submit({ kind: 'run-job', target_id: null, expected_revision: null, payload: { schedule: el.dataset.schedule } }, { announceText: `Running ${el.dataset.schedule} now` }); break;
     case 'waive-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'waive', deploymentId: el.dataset.deployment ?? null }; render(); break;
-    case 'toggle-column': if (appState.boardExpanded.has('done')) appState.boardExpanded.delete('done'); else appState.boardExpanded.add('done'); render(); break;
+    case 'toggle-column': { const c = el.dataset.column; if (appState.boardToggled.has(c)) appState.boardToggled.delete(c); else appState.boardToggled.add(c); render(); break; }
     case 'column-page': appState.boardPages[el.dataset.column] = Number(el.dataset.page); render(); break;
     case 'toggle-stale': appState.filters.stale = !appState.filters.stale; render(); break;
     case 'sessions-page': appState.sessionsPage = Number(el.dataset.page); render(); break;

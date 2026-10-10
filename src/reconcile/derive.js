@@ -17,7 +17,8 @@ export function derive(state, nowIso) {
   }
   outstanding.sort((a, b) => (a.merged_at < b.merged_at ? -1 : a.merged_at > b.merged_at ? 1 : a.ticket_key < b.ticket_key ? -1 : 1));
   return {
-    picknext: rankPickNext(tickets, { nowIso, timezone: state.meta.timezone }),
+    // Every eligible ticket in rank order: the dashboard ranks within its filters and shows the top five.
+    picknext: rankPickNext(tickets, { nowIso, timezone: state.meta.timezone, limit: Infinity }),
     blocked: blockedList(tickets),
     deployments_outstanding: outstanding,
     today: buildToday(state, { nowIso }),

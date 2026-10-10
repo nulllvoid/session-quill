@@ -1,4 +1,4 @@
-import { esc, attr, icon, timeEl, STATUS_ORDER, normalizeSnapshot } from '../components.js';
+import { esc, attr, icon, timeEl, STATUS_ORDER, normalizeSnapshot, viewCounts } from '../components.js';
 import { freshness, relativeTime } from '../lib/time.js';
 
 const FRESH_LABELS = { 'never-synced': 'Never synced', fresh: 'Fresh', ageing: 'Ageing', stale: 'Stale' };
@@ -23,17 +23,10 @@ export function logoSvg() {
   return '<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" fill="none" aria-hidden="true"><rect width="32" height="32" rx="9" fill="var(--accent-fill)"/><path d="M22.5 7.5c-6 1-10.5 5.5-12 13l-1 4 3.2-2.6c6.8-1.4 10.3-6.2 9.8-14.4Z" fill="var(--accent-fg)"/><path d="M9.5 24.5l6-8" stroke="var(--accent-fill)" stroke-width="1.4" stroke-linecap="round"/></svg>';
 }
 
-export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null, online = true } = {}) {
+export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null, online = true, filters = {} } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const meta = snapshot ? snapshot.meta : null;
-  const counts = snapshot ? {
-    picknext: (snapshot.picknext ?? []).length,
-    board: snapshot.tickets.filter((t) => t.status !== 'done').length,
-    tree: snapshot.tickets.filter((t) => !t.parent_id).length,
-    sessions: snapshot.sessions.filter((s) => s.state === 'live' || s.state === 'idle').length,
-    deployments: (snapshot.deployments_outstanding ?? []).length,
-    today: snapshot.today && snapshot.today.days.length && snapshot.today.days[0].date === snapshot.today.generated_for ? snapshot.today.days[0].tickets.length : 0,
-  } : {};
+  const counts = snapshot ? viewCounts(snapshot, filters) : {};
   const isStatic = !!(meta && meta.exported_at);
   const conn = isStatic ? 'snapshot' : online ? 'online' : 'offline';
   return `<div class="sidebar-brand">${logoSvg()}<div class="brand-text"><span class="brand-name">Session Quill</span><span class="brand-sub">${isStatic ? 'Snapshot' : 'Local'}${meta ? ` · v${esc(meta.tracker_version)}` : ''}</span></div></div>

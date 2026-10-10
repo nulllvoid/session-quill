@@ -66,6 +66,8 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
         return send(res, 302, '', { Location: '/', 'Set-Cookie': auth.cookieHeader(token) });
       }
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/ui/'))) return serveStatic(res, uiDir, url.pathname);
+      // The page ships an inline SVG icon; answer the browser's automatic probe without a console error.
+      if (req.method === 'GET' && url.pathname === '/favicon.ico') return send(res, 204, '');
       if (!url.pathname.startsWith('/v1/')) return fail(res, 404, 'not-found', 'not found');
 
       const token = auth.tokenFromRequest(req);

@@ -175,8 +175,13 @@ export function repoName(snapshot, repoId) {
   return r ? r.display_name : repoId;
 }
 
+const ticketIndexes = new WeakMap();
+
 export function ticketById(snapshot, id) {
-  return (snapshot.tickets ?? []).find((t) => t.id === id) ?? null;
+  const tickets = snapshot.tickets ?? [];
+  let index = ticketIndexes.get(tickets);
+  if (!index) { index = new Map(tickets.map((t) => [t.id, t])); ticketIndexes.set(tickets, index); }
+  return index.get(id) ?? null;
 }
 
 const TICKET_ARRAYS = ['aliases', 'children_ids', 'session_ids', 'tags', 'files_touched', 'plans', 'conclusions', 'timeline', 'prs', 'deployments', 'handoff_ids', 'validation_issues'];
@@ -229,6 +234,59 @@ export function matchesFilters(ticket, filters, snapshot) {
 
 export function filterTickets(snapshot, filters) {
   return snapshot.tickets.filter((t) => matchesFilters(t, filters, snapshot));
+}
+
+export const EMPTY_FILTERS = { project: '', category: '', tag: '', repo: '', machine: '', stale: false, q: '' };
+
+// A hash that names a view is the whole state: a shared or bookmarked link opens exactly what
+// it says, never with a filter left over from earlier navigation.
+export function filtersFromHash(hash, current, views) {
+  const params = new URLSearchParams(String(hash).replace(/^#/, ''));
+  const filters = views.includes(params.get('view')) ? { ...EMPTY_FILTERS } : { ...current };
+  for (const k of ['project', 'category', 'tag', 'repo', 'machine', 'q']) if (params.has(k)) filters[k] = params.get(k);
+  filters.stale = params.get('stale') === '1';
+  return filters;
+}
+
+export const PICKNEXT_SIZE = 5;
+
+// The worker publishes every eligible ticket in rank order; Pick next ranks within the filtered
+// set, so a filter never empties the list while matching work exists.
+export function pickNextEntries(snapshot, filters) {
+  const out = [];
+  for (const entry of snapshot.picknext ?? []) {
+    const ticket = ticketById(snapshot, entry.ticket_id);
+    if (!ticket || !matchesFilters(ticket, filters, snapshot)) continue;
+    out.push({ entry: { ...entry, rank: out.length + 1 }, ticket });
+    if (out.length === PICKNEXT_SIZE) break;
+  }
+  return out;
+}
+
+export function filterSessions(snapshot, filters) {
+  let sessions = snapshot.sessions;
+  if (filters.machine) sessions = sessions.filter((s) => s.machine_name === filters.machine);
+  if (filters.project) sessions = sessions.filter((s) => (s.project_ids ?? []).includes(filters.project) || s.ticket_ids.some((id) => (ticketById(snapshot, id) ?? {}).project_id === filters.project));
+  if (filters.q) {
+    const q = filters.q.toLowerCase();
+    sessions = sessions.filter((s) => `${s.host_session_id} ${s.title ?? ''} ${s.machine_name} ${s.ticket_ids.map((id) => (ticketById(snapshot, id) ?? {}).key ?? '').join(' ')}`.toLowerCase().includes(q));
+  }
+  return sessions;
+}
+
+// Sidebar badges count what each view shows under the current filters.
+export function viewCounts(snapshot, filters = {}) {
+  const tickets = filterTickets(snapshot, filters);
+  const ids = new Set(tickets.map((t) => t.id));
+  const today = snapshot.today && snapshot.today.days.length && snapshot.today.days[0].date === snapshot.today.generated_for ? snapshot.today.days[0] : null;
+  return {
+    picknext: pickNextEntries(snapshot, filters).length,
+    board: tickets.filter((t) => t.status !== 'done').length,
+    tree: tickets.filter((t) => !t.parent_id).length,
+    sessions: filterSessions(snapshot, filters).filter((s) => s.state === 'live' || s.state === 'idle').length,
+    deployments: snapshot.deployments_outstanding.filter((o) => ids.has(o.ticket_id)).length,
+    today: today ? today.tickets.filter((t) => ids.has(t.ticket_id) || !ticketById(snapshot, t.ticket_id)).length : 0,
+  };
 }
 
 export function ticketCard(ticket, snapshot, { variant = 'board', now, selected = false, showHandoff = false, entry = null } = {}) {
