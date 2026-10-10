@@ -12,10 +12,21 @@ All notable changes to this project are documented here. The format follows [Kee
 - `quill worker install` / `quill worker uninstall` register or remove a per-user login entry that runs `quill worker start` once (Task Scheduler on Windows, a LaunchAgent on macOS, a systemd user unit on Linux), with no administrator rights. `quill doctor` and the dashboard's worker health item say when it is installed.
 - Runs record `timings` (queue wait, worktree setup, agent time including follow-up turns), shown on each run in the dashboard and in `quill handoff list`.
 - A copy button on the dashboard address in the top bar.
+- Bulk runs ([ADR 0023](docs/decisions/0023-bulk-runs-and-test-gate.md)): a **Select** mode on Board and Pick next (`x` toggles the focused card, Shift-click selects a range, Esc clears) with a bulk action bar for Analyze, Attempt fix, Change status and Clear. Bulk runs are one request per ticket sharing a `batch_id`, with per-ticket outcomes, a progress strip per batch and **Cancel batch**; bulk status changes undo together with **Undo all**.
+- `handoff` requests accept an optional `batch_id`, stored on the run; `quill handoff cancel --batch <id>` cancels a batch's queued runs, and `quill handoff list` shows the batch.
+- Worker test gate: with `test_command` (and `test_timeout_ms`, default 10 minutes) on a repository, the worker runs the tests itself after each fix and records `test_gate` and `timings.test_ms` on the run. A failure gets one repair turn with the failing output; a fix whose tests still fail is not suggested (no commit, push or PR). Runs show *Tests passed (worker)*, *Tests failed* with the output, or *Not test-verified*, and draft PR bodies say "Tests passed (worker)" only after a real pass.
+- `[handoff] max_concurrent_readonly` (default 2) and `max_concurrent_fix` (default 1) cap read-only and fix runs separately.
+- Read-only analyse runs with source access may use Claude Code subagents, and the built-in analyse recipes split large analyses by module and merge the results.
 
 ### Changed
 
 - A run that may edit source (`edit_source`) always self-checks its reply, whatever its recipe's `self_check` says.
+- At most one run that edits source executes at a time by default (it was any two runs of either kind); set `max_concurrent_fix` to allow more.
+- `agent_ms` no longer includes the worker's test runs, which are `test_ms`.
+
+### Fixed
+
+- Cancelling or timing out a run on Windows kills its whole process tree; the parent was killed before `taskkill` walked the tree, which could leave children running and holding the run open.
 
 ## [0.7.2] - 2026-10-11
 
