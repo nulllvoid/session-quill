@@ -13,6 +13,8 @@ import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderH
 import { createApi, uuidv4 } from './lib/api.js';
 import { createDashboardMotion } from './lib/motion.js';
 import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
+import { renderBulkActionBar, renderBulkHandoffForm, renderBulkResults, renderBulkStatusDialog, renderBatchStrips } from './views/bulk.js';
+import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, activeBatches } from './lib/bulk.js';
 
 const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today'];
 const POLL_VISIBLE_MS = 2000;
@@ -40,7 +42,15 @@ const appState = {
   error: null,
   receipt: null,
   endpoint: typeof location !== 'undefined' && location.host ? location.host : null,
+  // Bulk selection (ADR 0023). `checked` is the bulk selection; `selected` stays the open ticket.
+  selecting: false,
+  checked: new Set(),
+  checkAnchor: null,
+  batches: [],
+  bulkUndo: [],
 };
+
+const BULK_VIEWS = new Set(['board', 'picknext']);
 
 function setReceipt(text, tone = 'neutral') {
   appState.receipt = { text, tone, at: nowIso() };
@@ -132,12 +142,15 @@ function render() {
   const pending = [...appState.requests.values()];
   const opts = { now, pending, selected: appState.selected };
   let html = '';
-  if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, { ...opts, blockedExpanded: appState.blockedExpanded });
-  else if (appState.view === 'board') html = renderBoard(s, appState.filters, { ...opts, layout: layoutMode() === 'desktop' ? 'columns' : 'list', toggled: appState.boardToggled, pages: appState.boardPages });
+  const bulk = { selecting: appState.selecting, checked: appState.checked };
+  if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, { ...opts, ...bulk, blockedExpanded: appState.blockedExpanded });
+  else if (appState.view === 'board') html = renderBoard(s, appState.filters, { ...opts, ...bulk, layout: layoutMode() === 'desktop' ? 'columns' : 'list', toggled: appState.boardToggled, pages: appState.boardPages });
   else if (appState.view === 'tree') html = renderTree(s, appState.filters, { root: appState.treeRoot });
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
+  if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
+  renderBulkBar(s);
   setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
   main.scrollTop = renderedView === appState.view ? scroll : 0;
   renderedView = appState.view;
@@ -151,6 +164,83 @@ function render() {
     receipt: appState.receipt ? JSON.stringify(appState.receipt) : null,
   });
   writeHash();
+}
+
+// The bulk action bar shows on Board and Pick next while cards are checked or a bulk edit can
+// still be undone.
+function renderBulkBar(s) {
+  const host = $('#bulk');
+  if (!host) return;
+  const visible = new Set((s.tickets ?? []).map((t) => t.id));
+  for (const id of appState.checked) if (!visible.has(id)) appState.checked.delete(id);
+  const undo = pendingUndo(appState.requests, appState.bulkUndo).length;
+  const show = BULK_VIEWS.has(appState.view) && (appState.checked.size > 0 || undo > 0);
+  setMarkup(host, show ? renderBulkActionBar({ count: appState.checked.size, undo }) : '');
+  document.body.dataset.bulk = show ? 'on' : 'off';
+}
+
+function setChecked(next, { anchor } = {}) {
+  const before = appState.checked.size;
+  appState.checked = next;
+  if (anchor !== undefined) appState.checkAnchor = anchor;
+  if (next.size) appState.selecting = true;
+  if (next.size !== before) announce(next.size ? `${next.size} selected` : 'Selection cleared');
+  render();
+}
+
+function visibleCheckIds() {
+  return [...document.querySelectorAll('#main [data-check]')].map((el) => el.dataset.check);
+}
+
+// One request per ticket (ADR 0023): a bulk action is a fan-out of ordinary requests, not a
+// transaction. Results are read back from each request as it settles.
+async function submitBulkHandoff(form) {
+  const fd = new FormData(form);
+  const ids = String(form.dataset.ids ?? '').split(',').filter(Boolean);
+  const mode = String(fd.get('mode') ?? 'analyse');
+  if (mode === 'attempt-fix' && fd.get('confirm_edit') !== 'on') { appState.dialog = { ...appState.dialog, error: 'Confirm that these runs may edit source.' }; render(); return; }
+  const entries = bulkEntries(appState.snapshot, ids, { mode });
+  const batchId = uuidv4();
+  const bodies = bulkRequests(entries, { mode, access: String(fd.get('access') || 'settings'), note: String(fd.get('note') ?? '').trim(), batchId });
+  const rows = entries.map((e) => ({ ticketId: e.ticket.id, requestId: null, reason: e.state === 'running' ? 'Already running' : e.state === 'no-repo' ? 'No repo' : e.state === 'not-eligible' ? 'Not eligible' : null }));
+  appState.batches = [...appState.batches, batchId];
+  appState.dialog = { type: 'bulk-results', batchId, rows };
+  render();
+  for (const body of bodies) {
+    const row = rows.find((r) => r.ticketId === body.target_id);
+    row.requestId = uuidv4();
+    appState.dialog = { type: 'bulk-results', batchId, rows: rows.map((r) => ({ ...r })) };
+    await submit({ ...body, id: row.requestId }, { announceText: `${mode} queued for ${appState.snapshot.tickets.find((t) => t.id === body.target_id)?.key ?? 'a ticket'}` });
+  }
+  announce(`${bodies.length} run${bodies.length === 1 ? '' : 's'} requested as one batch`);
+  appState.checked = new Set();
+  render();
+}
+
+function submitBulkStatus(form) {
+  const fd = new FormData(form);
+  const status = String(fd.get('status') ?? '');
+  const blocker = String(fd.get('blocker') ?? '').trim();
+  if (status === 'blocked' && !blocker) { appState.dialog = { ...appState.dialog, error: 'Blocked needs a blocker.' }; render(); return; }
+  const { bodies, skipped } = bulkStatusRequests(appState.snapshot, [...appState.checked], { status, blocker });
+  closeDialog();
+  const ids = [];
+  for (const { original, ...body } of bodies) {
+    const id = uuidv4();
+    ids.push(id);
+    submit({ ...body, id }, { original, announceText: `Status change queued; undo within 10 seconds` });
+  }
+  appState.bulkUndo = ids;
+  announce(`${bodies.length} status change${bodies.length === 1 ? '' : 's'} queued; Undo all within 10 seconds${skipped.length ? `; ${skipped.length} skipped` : ''}`);
+  if (skipped.length) setReceipt(`Skipped ${skipped.length}: ${skipped.map((x) => `${ticketById(appState.snapshot, x.ticketId)?.key ?? x.ticketId} (${x.reason})`).join(', ')}`, 'neutral');
+  render();
+}
+
+function cancelBatch(batchId) {
+  const s = appState.snapshot;
+  const queued = (s.handoffs ?? []).filter((h) => h.batch_id === batchId && h.state === 'queued' && !h.cancel_requested);
+  for (const h of queued) submit({ kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticketRevision(h.ticket_id), payload: { handoff_id: h.id } }, { announceText: 'Cancelling a queued run of the batch' });
+  announce(`Cancelling ${queued.length} queued run${queued.length === 1 ? '' : 's'}`);
 }
 
 function renderFilterBar(s) {
@@ -216,11 +306,15 @@ function renderDialog() {
     const recipe = t ? effectiveRecipes(s, t.repo_id).find((r) => r.name === d.recipe && !r.error) : null;
     if (!recipe) { appState.dialog = null; return renderDialog(); }
     html = renderRecipeRunDialog(recipe, t, s, { retryOf: d.retryOf });
-  } else if (d.type === 'publishers') html = renderPublishDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
+  } else if (d.type === 'bulk-handoff') html = renderBulkHandoffForm(s, d.ids, { mode: d.mode });
+  else if (d.type === 'bulk-results') html = renderBulkResults(s, { batchId: d.batchId, rows: d.rows, requests: [...appState.requests.values()] });
+  else if (d.type === 'bulk-status') html = renderBulkStatusDialog(appState.checked.size);
+  else if (d.type === 'publishers') html = renderPublishDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
   else if (d.type === 'schedules') html = renderSchedulesDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
   // The Schedules panel follows live state: it re-renders only when what it shows changes, and keeps
   // focus and any open run history across that re-render.
-  const key = d.type === 'schedules' ? `${JSON.stringify(d)}:${schedulesDialogKey(s, appState.requests.values())}` : d.type === 'publishers' ? `${JSON.stringify(d)}:${publishDialogKey(s, appState.requests.values())}` : JSON.stringify(d);
+  const bulkKey = d.type === 'bulk-results' ? d.rows.map((r) => (r.requestId ? appState.requests.get(r.requestId)?.state ?? '-' : '-')).join(',') : '';
+  const key = d.type === 'schedules' ? `${JSON.stringify(d)}:${schedulesDialogKey(s, appState.requests.values())}` : d.type === 'publishers' ? `${JSON.stringify(d)}:${publishDialogKey(s, appState.requests.values())}` : `${JSON.stringify(d)}${bulkKey}`;
   if (host.dataset.key !== key) {
     const live = host.open && (d.type === 'schedules' || d.type === 'publishers') && host.dataset.key && host.dataset.key.startsWith(JSON.stringify(d));
     const active = live && host.contains(document.activeElement) ? document.activeElement : null;
@@ -419,6 +513,23 @@ function handleAction(el) {
       if (h) submit({ kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticketRevision(h.ticket_id), payload: { handoff_id: h.id } }, { announceText: 'Handoff cancellation requested' });
       break;
     }
+    case 'toggle-select': {
+      appState.selecting = !appState.selecting;
+      if (!appState.selecting && appState.checked.size) { appState.checked = new Set(); announce('Selection cleared'); }
+      render();
+      break;
+    }
+    case 'bulk-clear': setChecked(new Set(), { anchor: null }); break;
+    case 'bulk-handoff': appState.dialog = { type: 'bulk-handoff', mode: el.dataset.mode === 'attempt-fix' ? 'attempt-fix' : 'analyse', ids: [...appState.checked] }; render(); break;
+    case 'bulk-status': appState.dialog = { type: 'bulk-status' }; render(); break;
+    case 'bulk-undo-all': {
+      const ids = pendingUndo(appState.requests, appState.bulkUndo);
+      for (const id of ids) cancelRequest(id);
+      announce(`Undoing ${ids.length} change${ids.length === 1 ? '' : 's'}`);
+      break;
+    }
+    case 'cancel-batch': cancelBatch(el.dataset.batch); break;
+    case 'dismiss-batch': appState.batches = appState.batches.filter((b) => b !== el.dataset.batch); render(); break;
     case 'load-content': {
       const hash = el.dataset.hash;
       api.getContent(hash, el.dataset.generation).then((text) => { appState.content[hash] = text ?? '(content unavailable: capture incomplete)'; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
@@ -565,6 +676,10 @@ function handleSubmit(form) {
     const url = String(fd.get('url') ?? '').trim();
     closeDialog();
     submit({ kind: 'link-external', target_id: ticketId, expected_revision: revision, payload: url ? { key, url } : { key } }, { announceText: `Linking to ${key}; undo within 10 seconds` });
+  } else if (kind === 'bulk-handoff') {
+    submitBulkHandoff(form);
+  } else if (kind === 'bulk-status') {
+    submitBulkStatus(form);
   } else if (kind === 'export') {
     const d = appState.dialog;
     api.exportRun({ ...(d.params ?? exportParams(form)) }).then((res) => { announce(`Snapshot saved to ${res.path}`); appState.dialog = { ...d, saved: res.path, error: null }; closeDialog(); appState.error = null; alert(`Saved read-only snapshot to ${res.path}. Share the file yourself; it will not update.`); }).catch((err) => { appState.dialog = { ...d, error: err.message }; render(); });
@@ -580,6 +695,7 @@ function onKey(e) {
     if (pop) { e.preventDefault(); pop.open = false; pop.querySelector('summary')?.focus(); return; }
     if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
     if (appState.selected && !inInput) { e.preventDefault(); closeDetail(); return; }
+    if (!dialogOpen && selectionKey('Escape', { checkedSize: appState.checked.size }) && (!inInput || target.dataset.check)) { e.preventDefault(); setChecked(new Set(), { anchor: null }); return; }
     if (inInput && target.form && target.form.dataset.form === 'next-action') { target.value = ticketById(appState.snapshot, target.form.dataset.ticket).next_action; target.blur(); appState.editingNext = null; render(); return; }
   }
   if (inInput || dialogOpen) {
@@ -591,6 +707,13 @@ function onKey(e) {
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
+  const bulkKey = BULK_VIEWS.has(appState.view) && appState.snapshot && appState.snapshot.capabilities && (appState.snapshot.capabilities.handoff || appState.snapshot.capabilities.edit_tickets) ? selectionKey(e.key, { focusedId: card ? card.dataset.ticket : null, checkedSize: appState.checked.size }) : null;
+  if (bulkKey && bulkKey.type === 'toggle') {
+    e.preventDefault();
+    setChecked(toggleChecked(appState.checked, bulkKey.id), { anchor: bulkKey.id });
+    $(`#main [data-ticket="${CSS.escape(bulkKey.id)}"][role=button]`)?.focus();
+    return;
+  }
   if (card && e.key === 'h' && card.querySelector('[data-action="handoff"]')) { e.preventDefault(); appState.lastFocus = card; appState.dialog = { type: 'handoff', ticket: card.dataset.ticket }; render(); return; }
   if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && target && target.dataset && target.dataset.action === 'detail-nav' && appState.selected) {
     e.preventDefault();
@@ -604,6 +727,13 @@ function onClick(e) {
   for (const pop of document.querySelectorAll('.health-pop[open]')) if (!pop.contains(e.target)) pop.open = false;
   const copy = e.target.closest('[data-copy]');
   if (copy && navigator.clipboard) { navigator.clipboard.writeText(copy.dataset.copy).then(() => announce(`Copied ${copy.dataset.copyLabel ?? copy.dataset.copy}`)).catch(() => {}); e.stopPropagation(); return; }
+  const check = e.target.closest('#main [data-check]');
+  if (check) {
+    const id = check.dataset.check;
+    setChecked(e.shiftKey ? selectRange(appState.checked, visibleCheckIds(), appState.checkAnchor, id) : toggleChecked(appState.checked, id), { anchor: id });
+    $(`#main [data-check="${CSS.escape(id)}"]`)?.focus();
+    return;
+  }
   const open = e.target.closest('[data-open]');
   if (open) { e.preventDefault(); openDetail(open.dataset.open, open); return; }
   const action = e.target.closest('[data-action]');

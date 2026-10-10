@@ -74,3 +74,17 @@ test('interrupted exits resolve without unhandled animation rejections', async (
   assert.equal(h.calls[0].animation.cancelled, true);
   h.motion.destroy();
 });
+
+test('the bulk bar slides in only without a reduced-motion preference, and on narrow layouts sits above the bottom nav and hides behind an open detail panel', async () => {
+  const fs = await import('node:fs');
+  const css = fs.readFileSync('ui/styles.css', 'utf8');
+  const animated = [...css.matchAll(/\.bulk-bar[^{]*\{[^}]*animation\s*:/g)];
+  assert.ok(animated.length, 'the bar has an entrance');
+  for (const m of animated) {
+    const before = css.slice(0, m.index);
+    const open = before.lastIndexOf('@media (prefers-reduced-motion: no-preference)');
+    assert.ok(open >= 0 && open > before.lastIndexOf('}\n}'), 'the entrance sits inside a no-preference media query');
+  }
+  assert.match(css, /\.bulk-bar\s*\{[^}]*bottom:\s*calc\(56px \+ env\(safe-area-inset-bottom\)\)/);
+  assert.match(css, /body\[data-detail="open"\] \.bulk-bar\s*\{[^}]*display:\s*none/);
+});
