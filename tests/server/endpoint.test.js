@@ -86,8 +86,8 @@ test('a signed-in browser stays signed in across a worker restart, and quill ui 
   const h = home(0);
   cliHome(h);
   let { w, sext } = await boot(h);
-  const cookie = await signIn(sext);
-  await w.stop();
+  let cookie;
+  try { cookie = await signIn(sext); } finally { await w.stop(); }
   ({ w, sext } = await boot(h));
   const timer = setInterval(() => { try { w.tick(); } catch { /* ignore */ } }, 20);
   try {
@@ -104,8 +104,8 @@ test('quill ui --revoke without a running worker clears stored sessions and pend
   const h = home(0);
   cliHome(h);
   const { w, sext } = await boot(h);
-  const cookie = await signIn(sext);
-  await w.stop();
+  let cookie;
+  try { cookie = await signIn(sext); } finally { await w.stop(); }
   fs.mkdirSync(secretsDir(h.env), { recursive: true });
   fs.writeFileSync(path.join(secretsDir(h.env), 'abc.json'), JSON.stringify({ hash: hashSecret('x'), expires_at: '2999-01-01T00:00:00Z' }));
   const r = await cli(['ui', '--revoke'], h.env);

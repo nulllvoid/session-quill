@@ -37,3 +37,26 @@ export async function cli(argv, env, { stdin = '' } = {}) {
 
 // A valid ticket description (ADR 0014) for tests that create tickets through the CLI.
 export const DESC = '**Goal:** Exercise the ticket under test end to end.\n\n**Context:** Created by an automated test.\n\n**Done when:**\n- the test passes';
+
+// Tests that let the CLI spawn a real background worker: a random dashboard port, so they never
+// contend for the fixed one (or the user's own worker on it).
+export function seedSpawnConfig(env) {
+  fs.mkdirSync(env.QUILL_HOME, { recursive: true });
+  const file = path.join(env.QUILL_HOME, 'config.toml');
+  if (!fs.existsSync(file)) fs.writeFileSync(file, 'ui_port = 0\n');
+}
+
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; } };
+
+// Cleanup for those tests: ask the worker to stop, then kill whatever pid this home's heartbeat
+// or start attempt names if it is still alive after the deadline, so no test leaves one behind.
+export async function stopSpawnedWorker(env, { deadlineMs = 6000 } = {}) {
+  const read = (...p) => { try { return JSON.parse(fs.readFileSync(path.join(env.QUILL_HOME, ...p), 'utf8')); } catch { return null; } };
+  const pids = new Set([read('state', 'heartbeat.json')?.pid, read('run', 'worker-start-attempt.json')?.pid].filter((p) => Number.isInteger(p) && p > 0 && p !== process.pid));
+  try {
+    if (fs.existsSync(path.join(env.QUILL_HOME, 'config.toml'))) await cli(['worker', 'stop'], env);
+  } catch { /* fall through to the kill */ }
+  const until = Date.now() + deadlineMs;
+  while ([...pids].some(alive) && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+  for (const pid of pids) if (alive(pid)) { try { process.kill(pid); } catch { /* already gone */ } }
+}

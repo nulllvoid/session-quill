@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { cli } from './helpers.js';
+import { cli, seedSpawnConfig, stopSpawnedWorker } from './helpers.js';
 import { loadContext, latestSnapshot, workerStatus, effectiveDefaults } from '../../src/cli/context.js';
 import { ensureReady, pausePath } from '../../src/runtime/readiness.js';
 import { loadUserConfig } from '../../src/config/config.js';
@@ -19,14 +19,16 @@ function fixture() {
   const repo = path.join(root, 'sample-app');
   fs.mkdirSync(repo);
   execFileSync('git', ['init', repo], { stdio: 'ignore', windowsHide: true });
-  return { root, repo, env: { QUILL_HOME: path.join(root, 'private') } };
+  const env = { QUILL_HOME: path.join(root, 'private') };
+  seedSpawnConfig(env);
+  return { root, repo, env };
 }
 async function stop(fx) {
   if (loadUserConfig(fx.env).store_path) await cli(['worker', 'stop'], fx.env);
 }
 
 test('fresh enable privately registers the git root, captures this session, and is repeatable', async (t) => {
-  const fx = fixture(); t.after(() => stop(fx));
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
   const sub = path.join(fx.repo, 'src'); fs.mkdirSync(sub);
   const r = await cli(['start', '--repo', sub, '--session', 'first-session'], fx.env);
   assert.equal(r.code, 0, r.err);
@@ -47,7 +49,7 @@ test('fresh enable privately registers the git root, captures this session, and 
 });
 
 test('dashboard bootstraps a fresh home and an explicit stop stays paused until start', async (t) => {
-  const fx = fixture(); t.after(() => stop(fx));
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
   const result = await cli(['ui', '--repo', fx.repo, '--no-open'], fx.env);
   assert.equal(result.code, 0, result.err);
   assert.match(result.out, /http:\/\/127\.0\.0\.1:\d+\/auth\?secret=/);
@@ -68,7 +70,7 @@ test('dashboard bootstraps a fresh home and an explicit stop stays paused until 
 });
 
 test('session startup recovers a missing worker without waiting for readiness; concurrent callers share it', async (t) => {
-  const fx = fixture(); t.after(() => stop(fx));
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
   assert.equal((await cli(['start', '--repo', fx.repo], fx.env)).code, 0);
   await stop(fx);
   fs.rmSync(pausePath(fx.env));
@@ -83,7 +85,7 @@ test('session startup recovers a missing worker without waiting for readiness; c
 });
 
 test('recent failed launches are throttled, and another machine cannot start or reconfigure the store', async (t) => {
-  const fx = fixture(); t.after(() => stop(fx));
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
   await cli(['start', '--repo', fx.repo], fx.env);
   await stop(fx);
   fs.rmSync(pausePath(fx.env));
@@ -114,7 +116,7 @@ test('unconfigured hooks quietly expose the enable action without blocking norma
 });
 
 test('sharing settings is opt-in and existing strict policy survives enable', async (t) => {
-  const fx = fixture(); t.after(() => stop(fx));
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
   fs.writeFileSync(path.join(fx.repo, '.quill.toml'), '[gate]\nmode = "strict"\n');
   const before = fs.readFileSync(path.join(fx.repo, '.quill.toml'), 'utf8');
   assert.equal((await cli(['start', '--repo', fx.repo], fx.env)).code, 0);
@@ -129,7 +131,7 @@ test('sharing settings is opt-in and existing strict policy survives enable', as
 
 
 test('private registration supplies ticket defaults and concurrent enables keep both repositories', async (t) => {
-  const fx = fixture(); t.after(() => stop(fx));
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
   const other = path.join(fx.root, 'other-app');
   fs.mkdirSync(other); execFileSync('git', ['init', other], { stdio: 'ignore', windowsHide: true });
   const results = await Promise.all([
@@ -146,7 +148,7 @@ test('private registration supplies ticket defaults and concurrent enables keep 
 });
 
 test('dashboard attaches the current session and repository to an existing store', async (t) => {
-  const fx = fixture(); t.after(() => stop(fx));
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
   assert.equal((await cli(['start', '--repo', fx.repo], fx.env)).code, 0);
   const other = path.join(fx.root, 'dashboard-app');
   fs.mkdirSync(other); execFileSync('git', ['init', other], { stdio: 'ignore', windowsHide: true });
@@ -163,7 +165,7 @@ test('dashboard attaches the current session and repository to an existing store
 // macOS reports /var temp folders as /private/var and Windows CI as RUNNER~1; a link reproduces
 // both here: the repository is registered under one spelling and used under another.
 test('a repository reached through a link or another spelling of its path keeps its scope and defaults', async (t) => {
-  const fx = fixture(); t.after(() => stop(fx));
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
   const link = path.join(fx.root, 'linked-app');
   fs.symlinkSync(fx.repo, link, process.platform === 'win32' ? 'junction' : 'dir');
   fs.writeFileSync(path.join(fx.repo, '.quill.toml'), '[gate]\nmode = "strict"\n');
