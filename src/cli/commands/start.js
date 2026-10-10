@@ -1,9 +1,8 @@
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { initialize } from './init.js';
 import { ensureReady } from '../../runtime/readiness.js';
 import { loadContext } from '../context.js';
-import { samePath } from '../../config/repos.js';
+import { samePath, mainWorkTree } from '../../config/repos.js';
 import { runHook } from '../../hooks/adapter.js';
 import { quillHome } from '../../lib/paths.js';
 import { acquireLock } from '../../worker/lock.js';
@@ -24,8 +23,8 @@ export async function run(options) {
 
 async function enable({ flags, io, env }) {
   const requested = path.resolve(flags.repo ?? process.cwd());
-  let repo = requested;
-  try { repo = execFileSync('git', ['-C', requested, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }).trim(); } catch { /* initialize reports an actionable error */ }
+  // A linked worktree registers its repository's main working tree (initialize reports a non-git folder).
+  const repo = mainWorkTree(requested);
   const before = loadContext(env, { requireStore: false });
   if (before.initialized && before.storeMeta.owner_machine_id !== before.machineId) throw new TrackerError('not-owner', 'This store belongs to another machine. Its local copy remains read-only.');
   if (before.initialized && flags.store && !samePath(flags.store, before.config.store_path)) throw new TrackerError('store-change', 'Quill already has a store. Use quill init --store to explicitly change it.');

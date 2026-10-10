@@ -1,8 +1,9 @@
 // `quill repo add|list|remove` (issue #5): register repositories without re-running init or touching the worker.
 import path from 'node:path';
 import { loadUserConfig, saveUserConfig, loadRepoConfig, saveRepoConfig } from '../../config/config.js';
-import { isGitWorkTree, detectDefaultBranch, repoIdFromPath, samePath, repoStatus, REPO_STATUS_TEXT } from '../../config/repos.js';
+import { isGitWorkTree, detectDefaultBranch, repoIdFromPath, samePath, repoStatus, REPO_STATUS_TEXT, mainWorkTree } from '../../config/repos.js';
 import { loadContext, latestSnapshot } from '../context.js';
+import { mainWorkTreeOf } from '../../lib/git-head.js';
 import { TrackerError } from '../../lib/errors.js';
 import fs from 'node:fs';
 
@@ -12,9 +13,14 @@ const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 function add(io, args, flags, env) {
   const [target] = args;
   if (!target) throw new TrackerError('usage', USAGE);
-  const dir = path.resolve(target);
+  let dir = path.resolve(target);
   if (!fs.existsSync(dir)) throw new TrackerError('repo-path-missing', `${dir} does not exist`);
   if (!isGitWorkTree(dir)) throw new TrackerError('repo-not-git', `${dir} is not a git work tree; register a clone of the repository`);
+  const main = mainWorkTreeOf(dir) ? mainWorkTree(dir) : null;
+  if (main && !samePath(main, dir)) {
+    io.println(`${dir} is a worktree of ${main}; registering the repository itself (work in its worktrees is attributed to it).`);
+    dir = main;
+  }
   const cfg = loadUserConfig(env);
   const projectId = typeof flags.project === 'string' ? flags.project : cfg.default_project || Object.keys(cfg.projects ?? {})[0];
   if (!projectId || !cfg.projects?.[projectId]) throw new TrackerError('project-unknown', `unknown project ${projectId ?? '(none)'}; known: ${Object.keys(cfg.projects ?? {}).join(', ') || 'none'} (create one with quill init)`);

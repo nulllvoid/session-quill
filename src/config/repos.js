@@ -8,6 +8,18 @@ function git(dir, args) {
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
+// The folder to register for `dir`: the repository's main working tree, even when `dir` is inside
+// a linked worktree. Registering a worktree would point the repository at a folder that is
+// usually deleted once its branch merges. Without git, `dir` is returned as given.
+export function mainWorkTree(dir) {
+  const top = git(dir, ['rev-parse', '--show-toplevel']);
+  if (top === null) return path.resolve(dir);
+  const gitDir = git(dir, ['rev-parse', '--path-format=absolute', '--git-dir']);
+  const common = git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (gitDir && common && !samePath(gitDir, common) && path.basename(common) === '.git') return path.resolve(path.dirname(common));
+  return path.resolve(top);
+}
+
 export function isGitWorkTree(dir) {
   if (!fs.existsSync(dir)) return false;
   const inside = git(dir, ['rev-parse', '--is-inside-work-tree']);
