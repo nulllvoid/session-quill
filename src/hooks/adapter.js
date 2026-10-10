@@ -27,8 +27,19 @@ export const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'P
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 const bundledCli = fileURLToPath(new URL('../../bin/quill.js', import.meta.url)).replaceAll('\\', '/');
 
+const DESCRIPTION_FORMAT = '"**Goal:** <one sentence: what the task achieves>\\n\\n**Context:** <why it matters and where: files, components, constraints>\\n\\n**Done when:**\\n- <a checkable condition>\\n- <another, such as the test that must pass>"';
+
+// The full guidance is sent at SessionStart, which the host also fires after compaction. Later
+// prompts get one line, so a long session does not pay for the whole text on every turn.
 function taskContext(session_id) {
-  return `Session Quill task tracking: tickets represent tasks, not sessions or individual prompts. Before substantive work on a distinct task, inspect existing tickets with node ${JSON.stringify(bundledCli)} ticket list --json. Reuse the matching task with ticket bind <KEY> --session ${session_id}, or run ticket work "<concise task title>" --description "<description>" --session ${session_id} to reuse/create and bind an open task. The description is required, in Markdown, in this format: "**Goal:** <one sentence: what the task achieves>\\n\\n**Context:** <why it matters and where: files, components, constraints>\\n\\n**Done when:**\\n- <a checkable condition>\\n- <another, such as the test that must pass>". Write it from what the user asked and what you know; keep it under 4000 characters. Use --category feature for FEAT or --category bugfix for FIX; other tasks use DEV. Keep follow-up questions, corrections, retries, and approvals on the same task. Switch bindings before working on another task; switching never moves earlier activity. A task can span multiple sessions. Do not create tickets just for session startup, greetings, or status questions. Do not ask the user to do routine local ticket setup. Never treat a binding as permission to commit, push, or deploy.`;
+  return `Session Quill task tracking: tickets represent tasks, not sessions or individual prompts. Before substantive work on a distinct task, inspect existing tickets with node ${JSON.stringify(bundledCli)} ticket list --json. Reuse the matching task with ticket bind <KEY> --session ${session_id}, or run ticket work "<concise task title>" --description "<description>" --session ${session_id} to reuse/create and bind an open task. The description is required, in Markdown, in this format: ${DESCRIPTION_FORMAT}. Write it from what the user asked and what you know; keep it under 4000 characters. Use --category feature for FEAT or --category bugfix for FIX; other tasks use DEV. Keep follow-up questions, corrections, retries, and approvals on the same task. Switch bindings before working on another task; switching never moves earlier activity. A task can span multiple sessions. Do not create tickets just for session startup, greetings, or status questions. Do not ask the user to do routine local ticket setup. Never treat a binding as permission to commit, push, or deploy.`;
+}
+
+function taskReminder(bound, session_id) {
+  if (bound && bound.ticket_id) {
+    return `Session Quill: working on ${bound.ticket_key}. Keep follow-ups, corrections and retries on it; if this prompt starts a distinct task, switch with ticket work or ticket bind --session ${session_id} as described at session start.`;
+  }
+  return `Session Quill: this session is not linked to a task. Before substantive work, reuse or create one with ticket work --session ${session_id} as described at session start; skip this for greetings and status questions.`;
 }
 
 function denyOutput(reason) {
@@ -197,12 +208,12 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
           context.push(`Session Quill session: ${session_id}. Linked to ${plan.key}${was} because the prompt mentions it; captured work is attributed to it from now on.`);
         }
       }
-      if (!handoff) context.push(taskContext(session_id));
+      const bound = readBindingSnapshot(key, env);
+      if (!handoff) context.push(snapshot ? taskReminder(bound, session_id) : taskContext(session_id));
       // A ticket created without an agent (tracker key, migration, dashboard) still owes a
       // description; the session working on it writes one (ADR 0014).
-      const bound = readBindingSnapshot(key, env);
       if (!handoff && bound && bound.ticket_id && bound.ticket_has_description === false) {
-        context.push(`Session Quill: ticket ${bound.ticket_key} has no valid description. During this turn, write one from what you know with node ${JSON.stringify(bundledCli)} ticket set ${bound.ticket_key} --description "<description>", in the Goal / Context / Done when format above. Do not ask the user to do this.`);
+        context.push(`Session Quill: ticket ${bound.ticket_key} has no valid description. During this turn, write one from what you know with node ${JSON.stringify(bundledCli)} ticket set ${bound.ticket_key} --description "<description>", in this format: ${DESCRIPTION_FORMAT}. Do not ask the user to do this.`);
       }
       if (context.length) result.stdout = contextOutput('UserPromptSubmit', context.join(' '));
       return result;

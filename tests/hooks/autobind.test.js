@@ -88,11 +88,19 @@ test('SessionStart links from the branch name when unbound and never switches an
 test('a session the worker has never seen gets its session id on the first prompt', () => {
   const fx = setup();
   assert.match(context(hook(fx, 'UserPromptSubmit', { prompt: 'hello' })), /Session Quill session: s1\..*Mention a ticket key \(for example PMLA-123\)/);
+  assert.match(context(hook(fx, 'UserPromptSubmit', { prompt: 'hello' })), /tickets represent tasks/, 'no SessionStart seen: full guidance');
+});
+
+test('full task guidance is sent at SessionStart; later prompts get one short line', () => {
   const bound = setup({ bound: 'PMLA-1' });
-  const guidance = context(hook(bound, 'UserPromptSubmit', { prompt: 'hello' }));
-  assert.match(guidance, /tickets represent tasks/);
-  assert.match(guidance, /follow-up questions, corrections, retries, and approvals on the same task/);
-  assert.match(guidance, /ticket work/);
+  const start = context(hook(bound, 'SessionStart', { source: 'compact' }));
+  assert.match(start, /tickets represent tasks/);
+  assert.match(start, /follow-up questions, corrections, retries, and approvals on the same task/);
+  const reminder = context(hook(bound, 'UserPromptSubmit', { prompt: 'hello' }));
+  assert.doesNotMatch(reminder, /tickets represent tasks/);
+  assert.match(reminder, /working on PMLA-1\. Keep follow-ups, corrections and retries on it/);
+  assert.match(reminder, /ticket work or ticket bind --session s1/);
+  assert.ok(reminder.length < 400, `reminder is ${reminder.length} characters`);
 });
 
 test('if the bind event cannot be persisted the provisional snapshot is rolled back', () => {
