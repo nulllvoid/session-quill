@@ -51,6 +51,7 @@ Usage: quill <command> [options]
                                             export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
   mirror status|open [--dir <folder>] [--json] | mirror write   (read-only copy for other machines)
   handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access standard|settings|full]
+  handoff list                              handoff cancel <run-id> | handoff cancel --batch <batch-id>  (queued runs of a batch)
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
   agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>

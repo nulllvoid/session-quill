@@ -9,6 +9,8 @@ export const NOTE_MAX = 280;
 // `settings` the owner's own Claude Code permission rules and connectors, `full` no permission
 // checks at all. A request that names none stays standard, as schedules and older requests do.
 export const ACCESS = ['standard', 'settings', 'full'];
+// Runs queued together from the dashboard share a client-chosen batch id (ADR 0023).
+export const BATCH_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
 
 export function isProtectedBranch(branch, repo) {
@@ -27,6 +29,8 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   const access = payload.access ?? 'standard';
   if (!ACCESS.includes(access)) throw new TrackerError('access-invalid', `access must be one of ${ACCESS.join(', ')}`);
   if (access !== 'standard' && mode === 'files') throw new TrackerError('access-invalid', 'a files run always uses standard access: its staging and undo rely on the agent never reaching the originals');
+  if (payload.batch_id !== undefined && payload.batch_id !== null && !(typeof payload.batch_id === 'string' && BATCH_ID_RE.test(payload.batch_id))) throw new TrackerError('batch-invalid', 'batch_id must be 1 to 64 letters, digits, dots, colons, underscores or dashes');
+  const batch = typeof payload.batch_id === 'string' ? { batch_id: payload.batch_id } : {};
   const raw = payload.permissions ?? {};
   const permissions = {};
   for (const k of PERMISSION_KEYS) permissions[k] = raw[k] === true;
@@ -58,7 +62,7 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   }
   if ((permissions.read_source || permissions.edit_source) && !repo) throw new TrackerError('repo-required', 'source access requires a registered repository on the owner machine');
   if (recipe) {
-    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}) };
+    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}), ...batch };
   }
-  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null };
+  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...batch };
 }
