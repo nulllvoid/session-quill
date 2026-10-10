@@ -4,7 +4,7 @@
 // Sessions are kept as hashes with a sliding expiry, so a worker restart keeps the browser
 // signed in without a plain token ever reaching the disk (ADR 0022).
 import fs from 'node:fs';
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readJsonIfExists, writeJsonAtomic } from '../lib/atomic-fs.js';
 
 export const COOKIE_NAME = 'st_owner';
@@ -102,8 +102,10 @@ export function createAuth({ clock = Date.now, sessionsPath = null, revokePath =
       const token = cookies[COOKIE_NAME];
       return this.verifyToken(token) ? token : null;
     },
+    // Max-Age matches the sliding session, and the server re-sends the cookie on authenticated
+    // responses, so the browser keeps it for 7 days from its last use, as the session does.
     cookieHeader(token) {
-      return `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/`;
+      return `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`;
     },
     // Keyed by the session token itself, so an open page's CSRF token stays valid across a
     // worker restart; it is as unguessable as the HttpOnly cookie it is bound to.
@@ -111,7 +113,11 @@ export function createAuth({ clock = Date.now, sessionsPath = null, revokePath =
       return createHmac('sha256', String(token)).update('quill-csrf-v1').digest('hex');
     },
     verifyCsrf(token, provided) {
-      return typeof provided === 'string' && provided.length === 64 && this.csrfFor(token) === provided;
+      if (typeof provided !== 'string') return false;
+      const expected = Buffer.from(this.csrfFor(token), 'utf8');
+      const given = Buffer.from(provided, 'utf8');
+      // timingSafeEqual needs equal lengths; the length of a CSRF token is no secret.
+      return given.length === expected.length && timingSafeEqual(given, expected);
     },
     checkOrigin(req, port) {
       const host = hostOf(req.headers.host);

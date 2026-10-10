@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { loadContext, latestSnapshot, workerStatus, liveEndpoint } from '../context.js';
+import { loadContext, latestSnapshot, workerStatus, liveEndpoint, validEndpoint, portFallbackNote } from '../context.js';
 import { hashSecret } from '../../server/auth.js';
 import { endpointPath, secretsDir, sessionsPath, revokePath } from '../../server/extension.js';
 import { readJsonIfExists, writeJsonAtomic, ensureDir, listFiles, removeIfExists } from '../../lib/atomic-fs.js';
@@ -26,7 +26,7 @@ export async function openInBrowser(url) {
 // Issues a one-use bootstrap secret: only its hash reaches the worker; the raw secret lives in the
 // URL the browser opens and is redirected away immediately (TRD §Local dashboard).
 export async function issueOwnerUrl(ctx, { ttlMs = 10 * MINUTE } = {}) {
-  const endpoint = readJsonIfExists(endpointPath(ctx.env));
+  const endpoint = validEndpoint(readJsonIfExists(endpointPath(ctx.env)));
   if (!endpoint || !workerStatus(ctx).healthy) throw new TrackerError('worker-unavailable', 'the worker is not serving the dashboard; start it with `quill worker start`');
   const secret = randomBytes(32).toString('hex');
   const nonce = randomBytes(8).toString('hex');
@@ -35,7 +35,7 @@ export async function issueOwnerUrl(ctx, { ttlMs = 10 * MINUTE } = {}) {
   const started = Date.now();
   while (Date.now() - started < 5000 && fs.existsSync(path.join(secretsDir(ctx.env), `${nonce}.json`))) await sleep(100);
   if (fs.existsSync(path.join(secretsDir(ctx.env), `${nonce}.json`))) throw new TrackerError('worker-unavailable', 'the worker did not accept the bootstrap secret within 5 s');
-  return { url: `http://${endpoint.host}:${endpoint.port}/auth?secret=${secret}`, base: `http://${endpoint.host}:${endpoint.port}/`, ttlMs };
+  return { url: `http://${endpoint.host}:${endpoint.port}/auth?secret=${secret}`, base: `http://${endpoint.host}:${endpoint.port}/`, ttlMs, fallback: portFallbackNote(endpoint) };
 }
 
 // Signs every browser out (ADR 0022): outstanding one-use links die, stored session hashes are
@@ -84,8 +84,9 @@ export async function run({ flags, io, env }) {
     await start({ flags, io: { ...io, println() {} }, env });
     ctx = loadContext(env);
   }
-  const { url, base } = await issueOwnerUrl(ctx);
+  const { url, base, fallback } = await issueOwnerUrl(ctx);
   io.println(`Dashboard: ${base}`);
+  if (fallback) io.println(`! ${fallback}: another program holds the configured port, so bookmarks to it do not reach this dashboard (and could reach that program). Free the port and restart the worker, or set ui_port.`);
   io.println('Private access link (open on this machine):');
   io.println(url);
   if (flags['no-open'] !== true) {

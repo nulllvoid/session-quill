@@ -97,7 +97,11 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
       if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/ui/'))) {
         // Scripts, styles and fonts hold no data; the page itself needs an owner session.
         const page = url.pathname === '/' || url.pathname.endsWith('.html');
-        if (page && !auth.tokenFromRequest(req)) return send(res, 401, SIGN_IN_PAGE, { 'Content-Type': TYPES['.html'], 'Content-Security-Policy': CSP });
+        if (page) {
+          const pageToken = auth.tokenFromRequest(req);
+          if (!pageToken) return send(res, 401, SIGN_IN_PAGE, { 'Content-Type': TYPES['.html'], 'Content-Security-Policy': CSP });
+          res.setHeader('Set-Cookie', auth.cookieHeader(pageToken));
+        }
         return serveStatic(res, uiDir, url.pathname);
       }
       // The page ships an inline SVG icon; answer the browser's automatic probe without a console error.
@@ -106,6 +110,8 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
 
       const token = auth.tokenFromRequest(req);
       if (!token) return fail(res, 401, 'unauthenticated', 'owner session required; open the dashboard with `quill ui`');
+      // The session slid forward on this request; so does the cookie's Max-Age (ADR 0022).
+      res.setHeader('Set-Cookie', auth.cookieHeader(token));
 
       if (req.method === 'GET') {
         if (url.pathname === '/v1/csrf') return json(res, 200, { csrf: auth.csrfFor(token) });

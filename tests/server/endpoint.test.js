@@ -8,7 +8,7 @@ import { Worker } from '../../src/worker/worker.js';
 import { createStoreMeta, writeStoreMeta } from '../../src/config/store.js';
 import { defaultUserConfig, saveUserConfig } from '../../src/config/config.js';
 import { createExtension as serverExt, endpointPath, secretsDir, revokePath, sessionsPath } from '../../src/server/extension.js';
-import { revokeSessions } from '../../src/cli/commands/ui.js';
+import { revokeSessions, issueOwnerUrl } from '../../src/cli/commands/ui.js';
 import { loadContext } from '../../src/cli/context.js';
 import { hashSecret } from '../../src/server/auth.js';
 import { cli } from '../cli/helpers.js';
@@ -52,6 +52,7 @@ test('the server takes the configured port when it is free and records it in ui-
     assert.equal(ep.port, port);
     assert.equal(ep.host, '127.0.0.1');
     assert.equal(ep.pid, process.pid);
+    assert.equal(ep.configured_port, undefined, 'no fallback, nothing to warn about');
   } finally { await w.stop(); }
 });
 
@@ -65,7 +66,9 @@ test('a taken port falls back to a random one instead of failing the worker', as
     const port = sext.address().port;
     assert.notEqual(port, taken);
     assert.ok(port > 0);
-    assert.equal(JSON.parse(fs.readFileSync(endpointPath(h.env), 'utf8')).port, port);
+    const ep = JSON.parse(fs.readFileSync(endpointPath(h.env), 'utf8'));
+    assert.equal(ep.port, port);
+    assert.equal(ep.configured_port, taken, 'the fallback is recorded so quill ui and the status line can say so');
   } finally {
     await w.stop();
     await new Promise((r) => blocker.close(r));
@@ -137,4 +140,23 @@ test('a worker that does not confirm the revoke in time keeps the marker and nev
     w.tick();
     assert.equal(fs.existsSync(revokePath(h.env)), false);
   } finally { await w.stop(); }
+});
+
+test('quill ui says when the configured port was taken and which one serves instead', async () => {
+  const blocker = http.createServer();
+  await new Promise((r) => blocker.listen(0, '127.0.0.1', r));
+  const taken = blocker.address().port;
+  const h = home(taken);
+  cliHome(h);
+  const { w, sext } = await boot(h);
+  const timer = setInterval(() => { try { w.tick(); } catch { /* ignore */ } }, 20);
+  try {
+    const { base, fallback } = await issueOwnerUrl(loadContext(h.env));
+    assert.equal(base, `http://127.0.0.1:${sext.address().port}/`);
+    assert.equal(fallback, `port ${taken} taken; using ${sext.address().port}`);
+  } finally {
+    clearInterval(timer);
+    await w.stop();
+    await new Promise((r) => blocker.close(r));
+  }
 });

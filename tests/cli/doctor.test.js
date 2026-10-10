@@ -80,6 +80,16 @@ test('the status line links the dashboard only while the worker that serves it i
     const linked = await line();
     assert.ok(linked.includes('\u001b]8;;http://127.0.0.1:47321/\u001b\\http://127.0.0.1:47321/\u001b]8;;\u001b\\'), JSON.stringify(linked));
     assert.doesNotMatch(linked, /secret|auth\?/);
+    fs.writeFileSync(endpoint, JSON.stringify({ host: '127.0.0.1', port: 50123, configured_port: 47321, pid: process.pid, started_at: '2026-10-11T00:00:00Z' }));
+    const fallback = await line();
+    assert.ok(fallback.includes('http://127.0.0.1:50123/'), JSON.stringify(fallback));
+    assert.match(fallback, /port 47321 taken; using 50123/);
+    for (const bad of [{ host: 'evil.example', port: 47321 }, { host: '127.0.0.1\u0007x', port: 47321 }, { host: '127.0.0.1', port: 70000 }, { host: '127.0.0.1', port: '47321\u001b]8;;x' }, { host: '127.0.0.1', port: 1.5 }]) {
+      fs.writeFileSync(endpoint, JSON.stringify({ ...bad, pid: process.pid, started_at: '2026-10-11T00:00:00Z' }));
+      assert.doesNotMatch(await line(), /http|\u001b/, `rejected ${JSON.stringify(bad)}`);
+    }
+    fs.writeFileSync(endpoint, JSON.stringify({ host: 'localhost', port: 47321, pid: process.pid, started_at: '2026-10-11T00:00:00Z' }));
+    assert.match(await line(), /http:\/\/localhost:47321\//, 'localhost is loopback');
     fs.writeFileSync(endpoint, JSON.stringify({ host: '127.0.0.1', port: 47321, pid: 999999, started_at: '2026-10-11T00:00:00Z' }));
     assert.doesNotMatch(await line(), /http/, 'a stale pid prints nothing');
     fs.writeFileSync(endpoint, JSON.stringify({ host: '127.0.0.1', port: 47321, pid: process.pid, started_at: '2026-10-11T00:00:00Z' }));

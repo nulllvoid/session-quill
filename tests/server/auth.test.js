@@ -121,3 +121,15 @@ test('while a revoke marker is waiting, no session verifies and none is written 
   const stored = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).sessions : [];
   assert.deepEqual(stored, [], 'the revoked hash is never re-saved');
 });
+
+test('verifyCsrf accepts only the exact token, whatever the length of a wrong one', () => {
+  const auth = createAuth({ clock: () => NOW });
+  const token = signIn(auth, NOW);
+  const good = auth.csrfFor(token);
+  assert.equal(auth.verifyCsrf(token, good), true);
+  assert.equal(auth.verifyCsrf(token, good.slice(0, 63) + (good[63] === 'a' ? 'b' : 'a')), false);
+  assert.equal(auth.verifyCsrf(token, good.slice(0, 10)), false);
+  assert.equal(auth.verifyCsrf(token, `${good}00`), false);
+  assert.equal(auth.verifyCsrf(token, 'é'.repeat(32)), false, 'multi-byte input of the same character length');
+  assert.equal(auth.verifyCsrf(token, undefined), false);
+});

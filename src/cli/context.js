@@ -84,10 +84,29 @@ export function workerStatus(ctx) {
 
 // The dashboard endpoint, only while the worker that wrote it is the healthy one: a file left by a
 // crashed worker or another process never yields a link (ADR 0022).
+const LOOPBACK_ENDPOINT_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const validPort = (p) => Number.isInteger(p) && p >= 1 && p <= 65535;
+
+// ui-endpoint.json is a file on disk; its host and port reach URLs and the status line's OSC 8
+// sequence, so only a loopback host and an integer port pass (anything else is ignored).
+export function validEndpoint(endpoint) {
+  if (!endpoint || typeof endpoint !== 'object') return null;
+  const host = endpoint.host ?? '127.0.0.1';
+  if (typeof host !== 'string' || !LOOPBACK_ENDPOINT_HOSTS.has(host) || !validPort(endpoint.port)) return null;
+  return { ...endpoint, host: host === '::1' ? '[::1]' : host, configured_port: validPort(endpoint.configured_port) ? endpoint.configured_port : undefined };
+}
+
+// The configured port was taken, so the worker serves elsewhere: bookmarks to the configured
+// port do not reach it (and could reach whatever holds that port).
+export function portFallbackNote(endpoint) {
+  if (!endpoint || !endpoint.configured_port || endpoint.configured_port === endpoint.port) return null;
+  return `port ${endpoint.configured_port} taken; using ${endpoint.port}`;
+}
+
 export function liveEndpoint(ctx) {
   if (!ctx.initialized) return null;
-  const endpoint = readJsonIfExists(path.join(stateDir(ctx.env), 'ui-endpoint.json'));
-  if (!endpoint || !endpoint.port) return null;
+  const endpoint = validEndpoint(readJsonIfExists(path.join(stateDir(ctx.env), 'ui-endpoint.json')));
+  if (!endpoint) return null;
   const ws = workerStatus(ctx);
   return ws.healthy && ws.pid === endpoint.pid ? endpoint : null;
 }
