@@ -51,17 +51,40 @@ function mergeDefaults(base, loaded) {
   return out;
 }
 
+// Written into every saved user config. A file without it predates the stable dashboard port:
+// those releases saved every default, so their `ui_port = 0` was the old default, not a choice.
+export const CONFIG_VERSION = 1;
+
+// One-time migration of a pre-marker file (ADR 0022): drop a stored `ui_port = 0` so the fixed
+// port applies, and stamp the marker so a 0 the user sets later is kept. Only keys already in the
+// file are written back. A file that cannot be rewritten is still migrated in memory.
+function migrate(parsed, text, file) {
+  if (parsed.config_version !== undefined) return parsed;
+  const out = { config_version: CONFIG_VERSION, ...parsed };
+  if (out.ui_port === 0) delete out.ui_port;
+  try { writeFileAtomic(file, stringifyToml(out, { preserve: text })); } catch { /* read-only home */ }
+  return out;
+}
+
 export function loadUserConfig(env = process.env) {
-  const text = readTextIfExists(configPath(env));
+  const file = configPath(env);
+  const text = readTextIfExists(file);
   const defaults = defaultUserConfig();
   if (text === null) return defaults;
-  return mergeDefaults(defaults, parseToml(text));
+  return mergeDefaults(defaults, migrate(parseToml(text), text, file));
 }
 
 export function saveUserConfig(cfg, env = process.env) {
   const file = configPath(env);
-  const previous = readTextIfExists(file) ?? '# Session Quill user configuration\n# Secrets never belong here; use your credential store or environment.\n';
-  writeFileAtomic(file, stringifyToml(cfg, { preserve: previous }));
+  const existing = readTextIfExists(file);
+  const previous = existing ?? '# Session Quill user configuration\n# Secrets never belong here; use your credential store or environment.\n';
+  const { config_version: _version, ...rest } = cfg;
+  const out = { config_version: CONFIG_VERSION, ...rest };
+  // An untouched default port is not pinned, so a later release can move the default.
+  let wroteBefore = false;
+  try { wroteBefore = existing !== null && parseToml(existing).ui_port !== undefined; } catch { /* unparsable: rewrite */ }
+  if (out.ui_port === DEFAULT_UI_PORT && !wroteBefore) delete out.ui_port;
+  writeFileAtomic(file, stringifyToml(out, { preserve: previous }));
   return file;
 }
 

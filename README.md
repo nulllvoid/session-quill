@@ -75,7 +75,8 @@ To have the worker (and the dashboard) running from the moment you log in, run
 `quill worker install` once; `quill worker uninstall` removes it.
 
 The dashboard lives at `http://127.0.0.1:47321/` (set `ui_port` in
-`~/.claude/quill/config.toml` to change it, or `ui_port = 0` for a random port;
+`~/.claude/quill/config.toml` to change it, or `ui_port = 0` for a random port; a `ui_port = 0` saved by a release before
+the fixed port is treated as unset once;
 when the port is taken the worker uses a random one). The first visit needs the
 one-use link from `/session-quill:ui`; after that the browser stays signed in for
 7 days from its last use, across worker restarts. A browser that is not signed in

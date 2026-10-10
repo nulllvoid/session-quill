@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { Worker } from '../../src/worker/worker.js';
 import { createStoreMeta, writeStoreMeta } from '../../src/config/store.js';
-import { defaultUserConfig, saveUserConfig } from '../../src/config/config.js';
+import { defaultUserConfig, saveUserConfig, CONFIG_VERSION } from '../../src/config/config.js';
 import { main } from '../../src/cli/main.js';
 
 export const MACHINE = '22222222-2222-4222-8222-222222222222';
@@ -43,7 +43,7 @@ export const DESC = '**Goal:** Exercise the ticket under test end to end.\n\n**C
 export function seedSpawnConfig(env) {
   fs.mkdirSync(env.QUILL_HOME, { recursive: true });
   const file = path.join(env.QUILL_HOME, 'config.toml');
-  if (!fs.existsSync(file)) fs.writeFileSync(file, 'ui_port = 0\n');
+  if (!fs.existsSync(file)) fs.writeFileSync(file, `config_version = ${CONFIG_VERSION}\nui_port = 0\n`);
 }
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; } };

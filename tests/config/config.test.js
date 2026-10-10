@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import {
-  loadUserConfig, saveUserConfig, loadRepoConfig, resolveConfig, defaultUserConfig, resolveGateMode, resolveTracker,
+  loadUserConfig, saveUserConfig, loadRepoConfig, resolveConfig, defaultUserConfig, resolveGateMode, resolveTracker, CONFIG_VERSION,
 } from '../../src/config/config.js';
 import { buildRuntimeIdentity } from '../../src/config/runtime.js';
 import { ensureMachineId, loadStoreMeta, writeStoreMeta, createStoreMeta } from '../../src/config/store.js';
@@ -146,10 +146,43 @@ test('buildRuntimeIdentity resolves per-repository scopes and reports invalid co
   assert.match(warnings.join('\n'), /api: .*backtracking/);
 });
 
-test('the dashboard port defaults to a fixed port, and 0 still means random (ADR 0022)', () => {
+test('the dashboard port defaults to a fixed port, and 0 set after the migration still means random (ADR 0022)', () => {
   assert.equal(defaultUserConfig().ui_port, 47321);
   const env = tmpHome();
   fs.mkdirSync(env.QUILL_HOME, { recursive: true });
-  fs.writeFileSync(path.join(env.QUILL_HOME, 'config.toml'), 'ui_port = 0\n');
+  fs.writeFileSync(path.join(env.QUILL_HOME, 'config.toml'), `config_version = ${CONFIG_VERSION}\nui_port = 0\n`);
   assert.equal(loadUserConfig(env).ui_port, 0);
+  const env2 = tmpHome();
+  saveUserConfig({ ...loadUserConfig(env2), ui_port: 0 }, env2);
+  assert.equal(loadUserConfig(env2).ui_port, 0, 'a deliberate 0 saved now is kept');
+});
+
+test('a config written before the stable port, which stored the old default 0, moves to 47321 once (ADR 0022)', () => {
+  const env = tmpHome();
+  const file = path.join(env.QUILL_HOME, 'config.toml');
+  fs.writeFileSync(file, '# mine\nstore_path = "/tmp/q"\nui_port = 0\nstale_days = 9\n');
+  const cfg = loadUserConfig(env);
+  assert.equal(cfg.ui_port, 47321);
+  assert.equal(cfg.stale_days, 9);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /^# mine/, 'comments kept');
+  assert.match(text, new RegExp(`config_version = ${CONFIG_VERSION}`));
+  assert.doesNotMatch(text, /ui_port/);
+  assert.equal(loadUserConfig(env).ui_port, 47321);
+  const custom = tmpHome();
+  fs.writeFileSync(path.join(custom.QUILL_HOME, 'config.toml'), 'ui_port = 5000\n');
+  assert.equal(loadUserConfig(custom).ui_port, 5000, 'any other port is a real choice');
+});
+
+test('saving does not pin an untouched default port, so the default can follow later releases', () => {
+  const env = tmpHome();
+  const file = path.join(env.QUILL_HOME, 'config.toml');
+  saveUserConfig({ ...defaultUserConfig(), store_path: '/tmp/q' }, env);
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /ui_port/);
+  assert.match(fs.readFileSync(file, 'utf8'), /config_version = /);
+  saveUserConfig({ ...loadUserConfig(env), ui_port: 47321 }, env);
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /ui_port/);
+  fs.writeFileSync(file, `config_version = ${CONFIG_VERSION}\nui_port = 47321\n`);
+  saveUserConfig(loadUserConfig(env), env);
+  assert.match(fs.readFileSync(file, 'utf8'), /ui_port = 47321/, 'a port the user wrote stays written');
 });
