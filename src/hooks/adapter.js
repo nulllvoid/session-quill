@@ -128,7 +128,10 @@ function autoBind({ plan, source, titleHint, base, key, snapshot, scope, identit
   return false;
 }
 
-export function runHook(eventName, input, { env = process.env, now } = {}) {
+// `elapsedMs`, when given, reports how long this hook process has run so far (start-up included);
+// tool events carry it so `quill doctor` can show real hook latency without telemetry.
+export function runHook(eventName, input, { env = process.env, now, elapsedMs = null } = {}) {
+  const hookMs = () => (elapsedMs ? Math.round(elapsedMs()) : undefined);
   const result = { exitCode: 0, stdout: '', stderr: '', persisted: null };
   const occurred_at = now ?? nowIso();
   if (!input || typeof input !== 'object') {
@@ -242,7 +245,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
         ...base, kind: 'pre-tool', tool_call_id,
         ticket_id: snapshot && snapshot.ticket_id ? snapshot.ticket_id : null,
         binding_revision: snapshot ? snapshot.binding_revision ?? null : null,
-        payload: { tool_name, denied, gate_reason: gate.reason && !denied ? gate.reason : null, write_target: summarizeTarget(tool_name, input.tool_input), gate_enabled: gateEnabled, gate_mode: mode },
+        payload: { tool_name, denied, gate_reason: gate.reason && !denied ? gate.reason : null, write_target: summarizeTarget(tool_name, input.tool_input), gate_enabled: gateEnabled, gate_mode: mode, hook_ms: hookMs() },
         source_identity: tool_call_id ? `pre-tool:${key}:${tool_call_id}` : undefined,
       });
       if (denied) result.stdout = denyOutput(reason);
@@ -277,6 +280,7 @@ export function runHook(eventName, input, { env = process.env, now } = {}) {
       if (!handoff && snapshot && snapshot.ticket_id && isWorkTool(tool_name)) {
         try { markTicketWork(key, env, snapshot.ticket_id, occurred_at); } catch { /* best effort */ }
       }
+      payload.hook_ms = hookMs();
       const ev = makeEvent({ ...base, kind: 'post-tool', tool_call_id, payload, source_identity: tool_call_id ? `post-tool:${key}:${tool_call_id}` : undefined });
       persist(ev, env, result);
       return result;

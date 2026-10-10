@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import { loadContext, workerStatus, commandName } from '../context.js';
+import { loadContext, workerStatus, commandName, latestSnapshot } from '../context.js';
+import { usageStats, usageItems, readJournalTail } from '../../core/usage.js';
+import { nowIso } from '../../lib/time.js';
 import { isLocked } from '../../worker/lock.js';
 import { Journal } from '../../core/journal.js';
 import { journalPath, ingressDir } from '../../lib/paths.js';
@@ -65,6 +67,10 @@ export async function collect(env) {
     const status = repoStatus(repo);
     if (status !== 'ok') add('warn', `repo ${id}`, `${repo.canonical_path ?? ''} ${REPO_STATUS_TEXT[status]} (fix the path with quill repo add, or quill repo remove ${id})`.trim());
   }
+  // Usage health stays on this machine; warnings here never fail the doctor.
+  const snap = latestSnapshot(ctx);
+  report.usage = usageStats({ events: readJournalTail(journalPath(env)), healthErrors: readHealthErrors(env, { limit: 5000 }), sessions: snap ? snap.sessions : [], nowIso: nowIso() });
+  for (const item of usageItems(report.usage)) report.items.push(item);
   return { ctx, report };
 }
 
