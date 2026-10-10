@@ -10,7 +10,7 @@ import { quillHome, ingressDir, blobsDir, stateDir, projectionsDir } from '../..
 import { TrackerError } from '../../lib/errors.js';
 import { collect, MIN_NODE_MAJOR } from './doctor.js';
 import { commandName } from '../context.js';
-import { isGitWorkTree, detectDefaultBranch, repoIdFromPath, samePath } from '../../config/repos.js';
+import { isGitWorkTree, detectDefaultBranch, repoIdFromPath, samePath, mainWorkTree } from '../../config/repos.js';
 
 async function ask(io, question, fallback) {
   if (!process.stdin.isTTY) return fallback;
@@ -34,7 +34,7 @@ export async function initialize({ flags, io, env, requireOwner = false }) {
   const yes = flags.yes === true;
   const defaultStore = cfg.store_path || (flags.private ? path.join(quillHome(env), 'store') : path.join(os.homedir(), 'Documents', 'Quill'));
   const storePath = path.resolve(flags.store ?? (yes ? defaultStore : await ask(io, 'Markdown store folder (plain folder or inside an Obsidian vault)', defaultStore)));
-  const repoDir = path.resolve(flags.repo ?? process.cwd());
+  const repoDir = mainWorkTree(path.resolve(flags.repo ?? process.cwd()));
   const isGit = isGitWorkTree(repoDir);
   if (!isGit && flags.force !== true) throw new TrackerError('repo-not-git', `${repoDir} is not a git work tree; run init from a clone of the repository, pass --repo <path>, or add --force to register it anyway`);
   if (!isGit) io.println(`! ${repoDir} is not a git work tree; registering it anyway (--force)`);
@@ -63,10 +63,12 @@ export async function initialize({ flags, io, env, requireOwner = false }) {
   const layout = storeLayout(storePath);
   for (const dir of [layout.tickets, layout.sessions, layout.handoffs, layout.authored]) ensureDir(dir);
 
-  // A second repository of the same project gets an id from its folder instead of overwriting the first.
+  // A second repository of the same project gets an id from its folder instead of overwriting the
+  // first. An id read from a .quill.toml (possibly a parent folder's) never takes over a repository
+  // registered at another path either; only an explicit --repo-id does.
   let repoId = flags['repo-id'] ?? existingRepo.repo_id ?? projectId;
   const taken = (id) => cfg.repos[id] && cfg.repos[id].canonical_path && !samePath(cfg.repos[id].canonical_path, repoDir);
-  if (!flags['repo-id'] && !existingRepo.repo_id && taken(repoId)) {
+  if (!flags['repo-id'] && taken(repoId)) {
     repoId = repoIdFromPath(repoDir);
     if (taken(repoId)) throw new TrackerError('repo-id-taken', `repository ids ${projectId} and ${repoId} are already registered for other paths; pass --repo-id <id>`);
   }

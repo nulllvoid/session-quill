@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Running `start`, `init`, `ui --session` or `repo add` inside a linked git worktree registers the repository's main working tree instead of the worktree, which is usually deleted once its branch merges.
+- A `repo_id` read from a `.quill.toml` (including a parent folder's) no longer overwrites a repository registered at another path; the new folder gets its own id unless `--repo-id` is given.
+- Hooks attribute work done in a worktree outside the repository's folder to that repository.
+
 ## [0.7.1] - 2026-10-11
 
 ### Added
