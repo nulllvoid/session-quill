@@ -6,8 +6,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { Worker } from '../../src/worker/worker.js';
 import { createStoreMeta, writeStoreMeta } from '../../src/config/store.js';
-import { defaultUserConfig } from '../../src/config/config.js';
-import { createExtension as serverExt, endpointPath } from '../../src/server/extension.js';
+import { defaultUserConfig, saveUserConfig } from '../../src/config/config.js';
+import { createExtension as serverExt, endpointPath, secretsDir } from '../../src/server/extension.js';
+import { hashSecret } from '../../src/server/auth.js';
+import { cli } from '../cli/helpers.js';
 
 const MACHINE = '22222222-2222-4222-8222-222222222222';
 
@@ -66,4 +68,51 @@ test('a taken port falls back to a random one instead of failing the worker', as
     await w.stop();
     await new Promise((r) => blocker.close(r));
   }
+});
+
+async function signIn(sext) {
+  const secret = 'f'.repeat(64);
+  sext.acceptSecretHash(hashSecret(secret), Date.now() + 600_000);
+  const res = await fetch(`http://127.0.0.1:${sext.address().port}/auth?secret=${secret}`, { redirect: 'manual' });
+  return res.headers.get('set-cookie').split(';')[0];
+}
+
+function cliHome(h) {
+  saveUserConfig(h.config, h.env);
+  fs.writeFileSync(path.join(h.env.QUILL_HOME, 'machine.json'), JSON.stringify({ machine_id: MACHINE, machine_name: 'test' }));
+}
+
+test('a signed-in browser stays signed in across a worker restart, and quill ui --revoke signs it out', async () => {
+  const h = home(0);
+  cliHome(h);
+  let { w, sext } = await boot(h);
+  const cookie = await signIn(sext);
+  await w.stop();
+  ({ w, sext } = await boot(h));
+  const timer = setInterval(() => { try { w.tick(); } catch { /* ignore */ } }, 20);
+  try {
+    const base = `http://127.0.0.1:${sext.address().port}`;
+    assert.equal((await fetch(`${base}/v1/snapshot`, { headers: { cookie } })).status, 200, 'still signed in after the restart');
+    const r = await cli(['ui', '--revoke'], h.env);
+    assert.equal(r.code, 0, r.out + r.err);
+    assert.match(r.out, /signed out/i);
+    assert.equal((await fetch(`${base}/v1/snapshot`, { headers: { cookie } })).status, 401);
+  } finally { clearInterval(timer); await w.stop(); }
+});
+
+test('quill ui --revoke without a running worker clears stored sessions and pending secrets', async () => {
+  const h = home(0);
+  cliHome(h);
+  const { w, sext } = await boot(h);
+  const cookie = await signIn(sext);
+  await w.stop();
+  fs.mkdirSync(secretsDir(h.env), { recursive: true });
+  fs.writeFileSync(path.join(secretsDir(h.env), 'abc.json'), JSON.stringify({ hash: hashSecret('x'), expires_at: '2999-01-01T00:00:00Z' }));
+  const r = await cli(['ui', '--revoke'], h.env);
+  assert.equal(r.code, 0, r.out + r.err);
+  assert.deepEqual(fs.readdirSync(secretsDir(h.env)), []);
+  const again = await boot(h);
+  try {
+    assert.equal((await fetch(`http://127.0.0.1:${again.sext.address().port}/v1/snapshot`, { headers: { cookie } })).status, 401);
+  } finally { await again.w.stop(); }
 });

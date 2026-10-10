@@ -47,7 +47,7 @@ Usage: quill <command> [options]
   worker run | start | stop | status
   sync [--notes]                            replay --into <dir> [--switch]
   import <note.md>                          note restore <KEY>
-  ui [--no-open] | ui --static <out.html> [--open]
+  ui [--no-open] | ui --static <out.html> [--open] | ui --revoke  (sign every browser out)
                                             export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
   mirror status|open [--dir <folder>] [--json] | mirror write   (read-only copy for other machines)
   handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access standard|settings|full]

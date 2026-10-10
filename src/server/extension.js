@@ -1,5 +1,6 @@
 // Worker extension: hosts the loopback API, applies due requests each tick, accepts bootstrap
 // secret hashes dropped by `quill ui`, and recovers `applying` requests after a restart.
+import fs from 'node:fs';
 import path from 'node:path';
 import { createAuth } from './auth.js';
 import { createServer, listen } from './http.js';
@@ -13,6 +14,16 @@ export function endpointPath(env) {
 
 export function secretsDir(env) {
   return path.join(stateDir(env), 'control', 'ui-secrets');
+}
+
+// Hashed owner sessions with their expiry (ADR 0022); never a plain token.
+export function sessionsPath(env) {
+  return path.join(stateDir(env), 'ui-sessions.json');
+}
+
+// Dropped by `quill ui --revoke`; the running worker signs every browser out when it sees it.
+export function revokePath(env) {
+  return path.join(stateDir(env), 'control', 'ui-revoke.json');
 }
 
 export function createExtension(ctx, { port, exportHandler = null } = {}) {
@@ -31,12 +42,21 @@ export function createExtension(ctx, { port, exportHandler = null } = {}) {
     }
   }
 
+  function applyRevoke(worker) {
+    const file = revokePath(ctx.env);
+    if (!fs.existsSync(file)) return;
+    auth.revokeAll();
+    removeIfExists(file);
+    worker.log('dashboard sessions revoked');
+  }
+
   return {
     name: 'server',
     address: () => address,
     acceptSecretHash: (hash, expiresAtMs) => auth && auth.acceptSecretHash(hash, expiresAtMs),
     async onStart(worker) {
-      auth = createAuth({ clock: worker.clock });
+      auth = createAuth({ clock: worker.clock, sessionsPath: sessionsPath(ctx.env) });
+      applyRevoke(worker);
       recoverApplying(worker);
       const exporter = exportHandler ?? await loadExportHandler();
       server = createServer(worker, { auth, exportHandler: exporter });
@@ -46,6 +66,7 @@ export function createExtension(ctx, { port, exportHandler = null } = {}) {
     },
     tick(worker) {
       if (!auth) return;
+      applyRevoke(worker);
       acceptPendingSecrets(worker);
       applyDueRequests(worker, worker.now());
     },
