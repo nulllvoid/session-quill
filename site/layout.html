@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="{{description}}">
+  <meta property="og:title" content="{{title}}">
+  <meta property="og:description" content="{{description}}">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="https://nulllvoid.github.io/session-quill/assets/thread-art.jpg">
+  <meta name="theme-color" content="#151b1b" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f7f5" media="(prefers-color-scheme: light)">
+  <title>{{title}}</title>
+  <link rel="icon" href="{{base}}assets/quill.svg" type="image/svg+xml">
+  <link rel="preload" href="{{base}}assets/Geist-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{{base}}assets/GeistMono-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{{base}}styles.css">
+  <script src="{{base}}theme.js"></script>
+{{head}}</head>
+<body class="{{bodyClass}}">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="nav-wrap">
+    <nav class="nav container" aria-label="Main navigation">
+      <a class="brand" href="{{base}}" aria-label="Session Quill home"><img src="{{base}}assets/quill.svg" width="28" height="28" alt=""><span>Session Quill</span><span class="pill">1.0</span></a>
+      <div class="nav-links">
+        <a href="{{base}}#engine">Engine</a>
+        <a href="{{base}}#how">How it works</a>
+        <a href="{{base}}#integrations">Integrations</a>
+        <a href="{{base}}docs/quickstart.html" {{docsCurrent}}>Docs</a>
+        <a href="{{base}}#install">Install</a>
+      </div>
+      <div class="nav-tools">
+        <button class="theme-toggle btn ghost small" type="button" aria-label="Switch theme">Theme</button>
+        <a class="source-link btn small" href="https://github.com/nulllvoid/session-quill">GitHub <svg class="icon" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 11l6-6M6 5h5v5"/></svg></a>
+      </div>
+    </nav>
+  </header>
+  <main id="main" tabindex="-1">
+{{content}}
+  </main>
+  <footer class="container footer">
+    <a class="brand" href="{{base}}"><img src="{{base}}assets/quill.svg" width="24" height="24" alt=""><span>Session Quill</span></a>
+    <p>Local-first orchestration for ticket-bound Claude Code work. No telemetry, no runtime dependencies.</p>
+    <div>
+      <a href="{{base}}docs/quickstart.html">Docs</a>
+      <a href="https://github.com/nulllvoid/session-quill/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/nulllvoid/session-quill/blob/main/LICENSE">MIT License</a>
+      <a href="https://github.com/nulllvoid/session-quill/issues">Issues</a>
+    </div>
+  </footer>
+  <div id="live" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+{{scripts}}</body>
+</html>
