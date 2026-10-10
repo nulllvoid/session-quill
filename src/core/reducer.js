@@ -873,6 +873,9 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'ticket-update': {
       const ticket = state.tickets.get(ev.payload.ticket_id);
       if (!ticket) { result.rejected = 'ticket-unknown'; break; }
+      // Optional: callers that decided from a snapshot (ticket stale --apply) refuse to overwrite a
+      // ticket that changed since. Events without it keep their original meaning on replay.
+      if (Number.isInteger(ev.payload.expected_revision) && ev.payload.expected_revision !== ticket.revision) { result.rejected = 'revision-conflict'; break; }
       try {
         applyTicketFields(state, ticket, ev.payload.fields ?? {}, ev, ev.payload.source ?? 'manual', result);
       } catch (err) {

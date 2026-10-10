@@ -4,10 +4,11 @@ import { validateKey } from '../../core/keys.js';
 import { CATEGORIES, PRIORITIES, loadRepoConfig, resolveTracker } from '../../config/config.js';
 import { renderUrl, isSafeExternalUrl, TRACKER_SYSTEMS } from '../../core/external-keys.js';
 import { uuid } from '../../lib/ids.js';
-import { isDate } from '../../lib/time.js';
+import { isDate, nowIso } from '../../lib/time.js';
 import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
 import { sessionKey, TICKET_STATUSES } from '../../core/state.js';
 import { TrackerError } from '../../lib/errors.js';
+import { cleanupSuggestions, IDLE_DAYS } from '../../core/cleanup.js';
 import { descriptionProblems, descriptionHelp, normalizeDescription } from '../../core/description.js';
 
 function timeout(flags) {
@@ -225,6 +226,37 @@ function list(ctx, io, flags) {
   return 0;
 }
 
+// Tickets whose status drifted from what happened. Listing never changes anything; --apply closes
+// only the mechanical cases (shipped, children done), each refused if the ticket changed since.
+async function stale(ctx, io, flags) {
+  const snap = latestSnapshot(ctx);
+  const idleDays = flags['idle-days'] !== undefined ? Number(flags['idle-days']) : IDLE_DAYS;
+  if (!Number.isInteger(idleDays) || idleDays < 1) throw new TrackerError('usage', '--idle-days must be a whole number of days, at least 1');
+  const suggestions = cleanupSuggestions(snap ? snap.tickets : [], { nowIso: nowIso(), idleDays });
+  if (!flags.apply) {
+    if (flags.json) { io.json(suggestions); return 0; }
+    if (!suggestions.length) { io.println('Nothing to clean up: every open ticket has recent activity or open work.'); return 0; }
+    for (const s of suggestions) {
+      io.println(`${s.key}  ${s.status}${s.idle_days !== null ? `, idle ${s.idle_days}d` : ''}  ${s.title}`);
+      io.println(`  ${s.reason}. ${s.closable ? `Close it: quill ticket set ${s.key} --status done` : `Pick it up, block it (--status blocked --blocker "...") or close it.`}`);
+    }
+    const closable = suggestions.filter((s) => s.closable).length;
+    io.println(`${suggestions.length} suggestion(s)${closable ? `; ${closable} can be closed together with quill ticket stale --apply` : ''}.`);
+    return 0;
+  }
+  const byId = new Map((snap ? snap.tickets : []).map((t) => [t.id, t]));
+  const results = [];
+  for (const s of suggestions.filter((x) => x.closable)) {
+    const ev = cliEvent(ctx, { kind: 'ticket-update', payload: { ticket_id: s.ticket_id, fields: { status: 'done' }, source: 'manual', expected_revision: byId.get(s.ticket_id).revision }, session: null, ticket_id: s.ticket_id });
+    const ack = await submitAndWait(ctx, ev, { timeoutMs: timeout(flags) });
+    results.push({ key: s.key, closed: !ack.rejected, rejected: ack.rejected ?? null });
+  }
+  if (flags.json) { io.json(results); return 0; }
+  if (!results.length) { io.println('Nothing to close. Idle tickets need your decision; see quill ticket stale.'); return 0; }
+  for (const r of results) io.println(r.closed ? `Closed ${r.key}` : `Skipped ${r.key}: ${r.rejected}${r.rejected === 'revision-conflict' ? ' (it changed since the last snapshot; run again)' : ''}`);
+  return results.some((r) => !r.closed) ? 1 : 0;
+}
+
 function children(ctx, io, args, flags) {
   const [key] = args;
   if (!key) throw new TrackerError('key-required', 'usage: ticket children <KEY>');
@@ -261,7 +293,8 @@ export async function run({ args, flags, io, env }) {
     case 'set': return set(ctx, io, rest, flags);
     case 'list': return list(ctx, io, flags);
     case 'children': return children(ctx, io, rest, flags);
+    case 'stale': return stale(ctx, io, flags);
     default:
-      throw new TrackerError('usage', 'usage: ticket work|create|bind|show|set|off|on|relink|list|children');
+      throw new TrackerError('usage', 'usage: ticket work|create|bind|show|set|off|on|relink|list|children|stale');
   }
 }
