@@ -320,6 +320,16 @@ self_check: true                   # verify each claim against its source before
 For {{ticket.key}} ({{ticket.url}}): for each merged PR {{prs}}, find the deployment evidence...
 ```
 
+To use recipes someone else published, install them from a Git repository or a folder. The first command shows what each recipe may do and installs nothing; `--confirm` installs, recording where each came from:
+
+```bash
+quill agent install https://github.com/acme/quill-recipes --ref v1.2
+quill agent install https://github.com/acme/quill-recipes --ref v1.2 --only triage --confirm
+quill agent uninstall triage                       # only while it is unchanged
+```
+
+Installed recipes are ordinary personal recipes: their permissions are still a ceiling and each run still asks ([ADR 0020](docs/decisions/0020-shared-recipes.md)).
+
 Run one from the ticket's Agents panel, with `quill agent run deploy-check PROJ-123`, with `/session-quill:agent run deploy-check PROJ-123`, or on a schedule:
 
 ```toml

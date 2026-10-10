@@ -54,6 +54,7 @@ Usage: quill <command> [options]
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
   agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
+  agent install <https git URL|folder> [--ref r] [--only a,b] [--replace] [--confirm]   agent uninstall <recipe> [--force]
   publish list [--json]                     publish [<name>] [--confirm]
   tracker push <KEY> [--to "<status>"] [--comment text] [--confirm]   (needs [tracker] write_back = true)
   migrate --source <dir> [--profile <name|path.json>] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>
