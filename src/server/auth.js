@@ -3,6 +3,7 @@
 // exchanged for an HttpOnly SameSite cookie; mutations also need a CSRF token bound to it.
 // Sessions are kept as hashes with a sliding expiry, so a worker restart keeps the browser
 // signed in without a plain token ever reaching the disk (ADR 0022).
+import fs from 'node:fs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { readJsonIfExists, writeJsonAtomic } from '../lib/atomic-fs.js';
 
@@ -35,12 +36,22 @@ function hostOf(value) {
   return { host: m[1].toLowerCase(), port: m[2] ? Number(m[2]) : null };
 }
 
-export function createAuth({ clock = Date.now, sessionsPath = null } = {}) {
+export function createAuth({ clock = Date.now, sessionsPath = null, revokePath = null } = {}) {
   const pendingSecrets = new Map(); // hash -> expires_at (ms)
   const sessions = new Map(); // token hash -> { expires: ms, stored: ms }
 
+  // `quill ui --revoke` drops a marker and deletes the stored hashes without waiting for the
+  // worker's next tick. Until the worker consumes the marker, nothing verifies and nothing held
+  // in memory can be written back, so a revoked session never comes back.
+  function revokePending() {
+    if (!revokePath || !fs.existsSync(revokePath)) return false;
+    sessions.clear();
+    pendingSecrets.clear();
+    return true;
+  }
+
   function save() {
-    if (!sessionsPath) return;
+    if (!sessionsPath || revokePending()) return;
     const list = [...sessions].map(([hash, s]) => ({ hash, expires_at: new Date(s.expires).toISOString() }));
     try { writeJsonAtomic(sessionsPath, { version: 1, sessions: list }); } catch { /* sessions still work in memory */ }
     for (const s of sessions.values()) s.stored = s.expires;
@@ -64,6 +75,7 @@ export function createAuth({ clock = Date.now, sessionsPath = null } = {}) {
       pendingSecrets.set(hash, expiresAtMs);
     },
     exchangeSecret(secret) {
+      if (revokePending()) return null;
       const hash = hashSecret(secret ?? '');
       const expires = pendingSecrets.get(hash);
       if (expires === undefined) return null;
@@ -75,7 +87,7 @@ export function createAuth({ clock = Date.now, sessionsPath = null } = {}) {
       return token;
     },
     verifyToken(token) {
-      if (typeof token !== 'string' || !token) return false;
+      if (typeof token !== 'string' || !token || revokePending()) return false;
       const hash = hashSecret(token);
       const s = sessions.get(hash);
       if (!s) return false;
@@ -118,7 +130,7 @@ export function createAuth({ clock = Date.now, sessionsPath = null } = {}) {
     revokeAll() {
       sessions.clear();
       pendingSecrets.clear();
-      save();
+      if (sessionsPath) { try { writeJsonAtomic(sessionsPath, { version: 1, sessions: [] }); } catch { /* nothing left to keep */ } }
     },
   };
 }

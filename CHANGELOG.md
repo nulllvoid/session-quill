@@ -26,6 +26,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- `quill ui --revoke` always leaves the sign-out for the worker (`control/ui-revoke.json`), so a stopped worker applies it at its next start and a slow one on its next tick; until then no session verifies and a running worker can no longer write a revoked session back to `ui-sessions.json`. A worker that does not confirm within 5 s is reported, not treated as an error.
 - Cancelling or timing out a run on Windows kills its whole process tree; the parent was killed before `taskkill` walked the tree, which could leave children running and holding the run open.
 
 ## [0.7.2] - 2026-10-11

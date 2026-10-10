@@ -7,7 +7,9 @@ import os from 'node:os';
 import { Worker } from '../../src/worker/worker.js';
 import { createStoreMeta, writeStoreMeta } from '../../src/config/store.js';
 import { defaultUserConfig, saveUserConfig } from '../../src/config/config.js';
-import { createExtension as serverExt, endpointPath, secretsDir } from '../../src/server/extension.js';
+import { createExtension as serverExt, endpointPath, secretsDir, revokePath, sessionsPath } from '../../src/server/extension.js';
+import { revokeSessions } from '../../src/cli/commands/ui.js';
+import { loadContext } from '../../src/cli/context.js';
 import { hashSecret } from '../../src/server/auth.js';
 import { cli } from '../cli/helpers.js';
 
@@ -110,9 +112,29 @@ test('quill ui --revoke without a running worker clears stored sessions and pend
   fs.writeFileSync(path.join(secretsDir(h.env), 'abc.json'), JSON.stringify({ hash: hashSecret('x'), expires_at: '2999-01-01T00:00:00Z' }));
   const r = await cli(['ui', '--revoke'], h.env);
   assert.equal(r.code, 0, r.out + r.err);
+  assert.match(r.out, /next start/i);
   assert.deepEqual(fs.readdirSync(secretsDir(h.env)), []);
+  assert.ok(fs.existsSync(revokePath(h.env)), 'the sign-out waits for the next worker start');
   const again = await boot(h);
   try {
+    assert.equal(fs.existsSync(revokePath(h.env)), false, 'applied at start');
     assert.equal((await fetch(`http://127.0.0.1:${again.sext.address().port}/v1/snapshot`, { headers: { cookie } })).status, 401);
   } finally { await again.w.stop(); }
+});
+
+test('a worker that does not confirm the revoke in time keeps the marker and never serves the revoked session', async () => {
+  const h = home(0);
+  cliHome(h);
+  const { w, sext } = await boot(h);
+  try {
+    const cookie = await signIn(sext);
+    // The worker is up but not ticking, so it cannot confirm.
+    const result = await revokeSessions(loadContext(h.env), { timeoutMs: 200 });
+    assert.equal(result.confirmed, false);
+    assert.ok(fs.existsSync(revokePath(h.env)), 'left for the worker to apply');
+    assert.equal((await fetch(`http://127.0.0.1:${sext.address().port}/v1/snapshot`, { headers: { cookie } })).status, 401);
+    assert.equal(fs.existsSync(sessionsPath(h.env)) ? JSON.parse(fs.readFileSync(sessionsPath(h.env), 'utf8')).sessions.length : 0, 0);
+    w.tick();
+    assert.equal(fs.existsSync(revokePath(h.env)), false);
+  } finally { await w.stop(); }
 });
