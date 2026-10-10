@@ -53,6 +53,29 @@ test('status --json and --statusline reflect the binding', async () => {
   }
 });
 
+test('the status line links the dashboard only while the worker that serves it is healthy (ADR 0022)', async () => {
+  const fx = makeHome();
+  const endpoint = path.join(fx.home, 'state', 'ui-endpoint.json');
+  const line = async () => (await cli(['status', '--statusline'], fx.env, { stdin: JSON.stringify({ session_id: 'sess-L' }) })).out;
+  const w = await startWorker(fx);
+  try {
+    assert.doesNotMatch(await line(), /http/, 'no endpoint file, no link');
+    fs.writeFileSync(endpoint, JSON.stringify({ host: '127.0.0.1', port: 47321, pid: process.pid, started_at: '2026-10-11T00:00:00Z' }));
+    const linked = await line();
+    assert.ok(linked.includes('\u001b]8;;http://127.0.0.1:47321/\u001b\\http://127.0.0.1:47321/\u001b]8;;\u001b\\'), JSON.stringify(linked));
+    assert.doesNotMatch(linked, /secret|auth\?/);
+    fs.writeFileSync(endpoint, JSON.stringify({ host: '127.0.0.1', port: 47321, pid: 999999, started_at: '2026-10-11T00:00:00Z' }));
+    assert.doesNotMatch(await line(), /http/, 'a stale pid prints nothing');
+    fs.writeFileSync(endpoint, JSON.stringify({ host: '127.0.0.1', port: 47321, pid: process.pid, started_at: '2026-10-11T00:00:00Z' }));
+  } finally {
+    await w.stop();
+  }
+  // The worker is down: its heartbeat ages out, so even a matching pid prints nothing.
+  const hb = path.join(fx.home, 'state', 'heartbeat.json');
+  fs.writeFileSync(hb, JSON.stringify({ ...JSON.parse(fs.readFileSync(hb, 'utf8')), at: '2026-01-01T00:00:00Z' }));
+  assert.doesNotMatch(await line(), /http/);
+});
+
 test('approve promotes the latest checkpoint once and dismiss clears the unpromoted flag', async () => {
   const fx = makeHome();
   const w = await startWorker(fx);

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { loadContext, latestSnapshot, workerStatus } from '../context.js';
+import { loadContext, latestSnapshot, workerStatus, liveEndpoint } from '../context.js';
 import { hashSecret } from '../../server/auth.js';
 import { endpointPath, secretsDir, sessionsPath, revokePath } from '../../server/extension.js';
 import { readJsonIfExists, writeJsonAtomic, ensureDir, listFiles, removeIfExists } from '../../lib/atomic-fs.js';
@@ -36,16 +36,6 @@ export async function issueOwnerUrl(ctx, { ttlMs = 10 * MINUTE } = {}) {
   while (Date.now() - started < 5000 && fs.existsSync(path.join(secretsDir(ctx.env), `${nonce}.json`))) await sleep(100);
   if (fs.existsSync(path.join(secretsDir(ctx.env), `${nonce}.json`))) throw new TrackerError('worker-unavailable', 'the worker did not accept the bootstrap secret within 5 s');
   return { url: `http://${endpoint.host}:${endpoint.port}/auth?secret=${secret}`, base: `http://${endpoint.host}:${endpoint.port}/`, ttlMs };
-}
-
-// The dashboard endpoint, only while the worker that wrote it is the healthy one: a file left by a
-// crashed worker or another process never yields a link (ADR 0022).
-export function liveEndpoint(ctx) {
-  if (!ctx.initialized) return null;
-  const endpoint = readJsonIfExists(endpointPath(ctx.env));
-  if (!endpoint || !endpoint.port) return null;
-  const ws = workerStatus(ctx);
-  return ws.healthy && ws.pid === endpoint.pid ? endpoint : null;
 }
 
 // Signs every browser out (ADR 0022): outstanding one-use links die, stored session hashes are
