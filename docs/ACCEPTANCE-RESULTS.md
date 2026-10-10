@@ -188,4 +188,8 @@ Unit coverage: `tests/core/external-keys.test.js` (validation, bounded scans, no
 
 ## Phase 5 — release evidence
 
-Partially done. Done: license (MIT), repository owner (github.com/nulllvoid/session-quill), Ubuntu/macOS/Windows test matrix in CI, public documentation (README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, architecture guide). Still required: two outside installs under 10 minutes using the README only; WSL run; cold-start hook timings per OS; A04/A06 against a live Claude Code host; a tagged `v0.1.0` release.
+Partially done. Done: license (MIT), repository owner (github.com/nulllvoid/session-quill), Ubuntu/macOS/Windows test matrix in CI, public documentation (README, CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, architecture guide), tagged releases from v0.2.0, A04/A06 partly against a live host (above).
+
+First-run smoke (`node scripts/install-smoke.mjs`, also in CI on every OS): `quill start`, the SessionStart hook, Claude's first `ticket work`, a Write through PreToolUse/PostToolUse, `quill status` and `quill ui --no-open` on a throwaway home and a fresh Git repository. Windows 11, Node 24.19.0, 2026-10-11: 7/7 steps in 2.2 s (start 675 ms, dashboard link 720 ms, each hook about 100 ms). This covers the CLI side of installation only; the `/plugin marketplace add` and `/plugin install` steps need a live host.
+
+Still required: two outside installs under 10 minutes using the README only (needs people); WSL run; hook timings on macOS and Linux (CI now prints them).
