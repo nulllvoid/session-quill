@@ -47,9 +47,38 @@ function serveStatic(res, uiDir, urlPath) {
   let data;
   try { data = fs.readFileSync(file); } catch { return fail(res, 404, 'not-found', 'not found'); }
   const type = TYPES[path.extname(file)] ?? 'application/octet-stream';
-  const csp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-  return send(res, 200, data, { 'Content-Type': type, 'Content-Security-Policy': csp });
+  return send(res, 200, data, { 'Content-Type': type, 'Content-Security-Policy': CSP });
 }
+
+const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+// What a browser without an owner session sees instead of the dashboard (ADR 0022): how to sign
+// in, in the dashboard's own tokens. It carries no data and no script.
+export const SIGN_IN_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Sign in · Session Quill</title>
+<link rel="stylesheet" href="/ui/styles.css">
+<style>
+  .sign-in { max-width: 34rem; margin: 18vh auto 0; padding: 28px 32px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+  .sign-in h1 { font-size: 20px; margin: 0 0 8px; }
+  .sign-in p { color: var(--text-muted); margin: 8px 0; }
+  .sign-in code { color: var(--text); }
+</style>
+</head>
+<body>
+<main class="sign-in">
+  <h1>Sign in to Session Quill</h1>
+  <p>This browser is not signed in to your dashboard, or its sign-in was revoked.</p>
+  <p>In Claude Code, run <code>/session-quill:ui</code>. From a terminal, run <code>quill ui</code>.</p>
+  <p>Either opens a one-use link that signs this browser in for 7 days.</p>
+</main>
+</body>
+</html>
+`;
 
 export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = null } = {}) {
   const server = http.createServer(async (req, res) => {
@@ -65,7 +94,12 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
         // Redirect immediately so the secret leaves the address bar.
         return send(res, 302, '', { Location: '/', 'Set-Cookie': auth.cookieHeader(token) });
       }
-      if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/ui/'))) return serveStatic(res, uiDir, url.pathname);
+      if (req.method === 'GET' && (url.pathname === '/' || url.pathname.startsWith('/ui/'))) {
+        // Scripts, styles and fonts hold no data; the page itself needs an owner session.
+        const page = url.pathname === '/' || url.pathname.endsWith('.html');
+        if (page && !auth.tokenFromRequest(req)) return send(res, 401, SIGN_IN_PAGE, { 'Content-Type': TYPES['.html'], 'Content-Security-Policy': CSP });
+        return serveStatic(res, uiDir, url.pathname);
+      }
       // The page ships an inline SVG icon; answer the browser's automatic probe without a console error.
       if (req.method === 'GET' && url.pathname === '/favicon.ico') return send(res, 204, '');
       if (!url.pathname.startsWith('/v1/')) return fail(res, 404, 'not-found', 'not found');
