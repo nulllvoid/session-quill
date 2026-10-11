@@ -4,9 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createJobs } from '../../src/schedule/jobs.js';
+import { loadUserConfig, saveUserConfig } from '../../src/config/config.js';
 import { buildSnapshot } from '../../src/worker/projections.js';
 import { scenario } from '../acceptance/scenario.js';
 import { makeHome, startWorker, cli, DESC } from '../cli/helpers.js';
+import { track } from './cleanup.js';
 
 const JIRA = { system: 'jira', domain: 'https://example.atlassian.net', url_template: '{domain}/browse/{key}', repo: '', prefixes: ['PROJ'], sync_token_env: 'JIRA_TOKEN' };
 const id = (n) => `cccccccc-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -37,6 +39,7 @@ test('tracker-sync links mapped tickets, marks a linked-but-missing repository N
     'PROJ-5?fields=summary': issue('Write the memo'),
   });
   const s = scenario({ jobOpts: { trackerFetch: r.fetchImpl } });
+  track(s.home);
   const payments = gitRepo(path.join(s.home, 'work', 'payments'), 'git@github.com:acme/payments.git');
   s.config.repos.payments = { project_id: 'demo', display_name: 'payments', canonical_path: payments, default_branch: 'main' };
   s.config.tracker = { ...JIRA, auto_clone_dir: path.join(s.home, 'clones'), repo_map: { 'PROJ/Payments': 'payments' } };
@@ -81,6 +84,7 @@ test('tracker-sync links mapped tickets, marks a linked-but-missing repository N
 
 test('the owner sets and clears quill/no-code through ticket-update, while other quill/ tags stay reserved', async () => {
   const s = scenario();
+  track(s.home);
   await s.start();
   try {
     s.ticket(id(1), 'LOCAL-1');
@@ -89,6 +93,11 @@ test('the owner sets and clears quill/no-code through ticket-update, while other
     let t = s.w.state.tickets.get(id(1));
     assert.deepEqual(t.tags.filter((x) => !x.startsWith('quill/status/') && !x.startsWith('quill/cat/')), ['quill/no-code', 'docs']);
     assert.equal(t.status, 'todo');
+    s.ingest('ticket-update', { ticket_id: id(1), fields: { tags: ['docs', 'later'] } });
+    s.w.tick();
+    t = s.w.state.tickets.get(id(1));
+    assert.ok(t.tags.includes('quill/no-code'), 'a tag list that omits quill/no-code keeps it');
+    assert.ok(t.tags.includes('later') && !t.tags.includes('quill/stale'));
     s.ingest('ticket-update', { ticket_id: id(1), fields: { no_code: false } });
     s.w.tick();
     t = s.w.state.tickets.get(id(1));
@@ -102,6 +111,7 @@ test('the owner sets and clears quill/no-code through ticket-update, while other
 
 test('quill ticket set --no-code yes|no marks a ticket as needing no repository, and the snapshot says No code', async () => {
   const fx = makeHome();
+  track(fx.home);
   const w = await startWorker(fx);
   try {
     const a = await cli(['ticket', 'create', '--description', DESC, 'Write the memo', '--session', 'sess-N'], fx.env);
@@ -128,6 +138,7 @@ test('a ticket whose hints cannot be read is recorded as checked, goes to the ba
     'PROJ-3?fields=summary': issue, 'PROJ-3?fields=project,components': { status: 200, body: { fields: { project: { key: 'PROJ' }, components: [] } } }, 'PROJ-3/remotelink': { status: 200, body: [] },
   });
   const s = scenario({ jobOpts: { trackerFetch: r.fetchImpl } });
+  track(s.home);
   s.config.tracker = { ...JIRA, auto_clone_dir: path.join(s.home, 'clones'), import_assigned: false, repo_map: { OTHER: 'demo' } };
   s.env.JIRA_TOKEN = 'tok';
   await s.start();
@@ -149,5 +160,20 @@ test('a ticket whose hints cannot be read is recorded as checked, goes to the ba
     assert.equal(hintCalls(1), 2, 'asked again once the back-off ended');
     assert.equal(res(1).failures, 2);
     assert.equal(res(1).retry_after, '2026-10-05T08:01:00Z', 'the back-off doubles');
+  } finally { await s.stop(); }
+});
+
+test('a link to a repository registered after the worker last read its config re-reads it before applying', async () => {
+  const s = scenario();
+  track(s.home);
+  await s.start();
+  try {
+    s.ticket(id(1), 'LOCAL-1');
+    const cfg = loadUserConfig(s.env);
+    cfg.repos.fresh = { project_id: 'demo', display_name: 'fresh', canonical_path: path.join(s.home, 'fresh'), default_branch: 'main' };
+    saveUserConfig(cfg, s.env);
+    s.ingest('ticket-update', { ticket_id: id(1), fields: { repo_id: 'fresh' } });
+    s.w.tick();
+    assert.equal(s.w.state.tickets.get(id(1)).repo_id, 'fresh', 'no repo-unknown race with the reload marker');
   } finally { await s.stop(); }
 });

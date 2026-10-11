@@ -41,8 +41,11 @@ export function applyTicketFields(state, ticket, fields, ev, source, result) {
   if (fields.summary !== undefined) ticket.summary = String(fields.summary);
   if (fields.user_notes !== undefined) ticket.user_notes = String(fields.user_notes);
   if (fields.tags !== undefined && Array.isArray(fields.tags)) {
+    // Reserved tags stay; quill/no-code can be added here but only `no_code: false` clears it, so
+    // a tag list that merely omits it (an older client, a page edit) never drops it.
     const explicit = fields.tags.filter((t) => typeof t === 'string' && (!t.startsWith('quill/') || OWNER_TAGS.has(t)));
-    ticket.tags = [...ticket.tags.filter((t) => t.startsWith('quill/') && !OWNER_TAGS.has(t)), ...new Set(explicit)];
+    const kept = ticket.tags.filter((t) => t.startsWith('quill/'));
+    ticket.tags = [...new Set([...kept, ...explicit])];
   }
   // quill/no-code (ADR 0024): the owner says this ticket has no repository, so the resolver skips it.
   if (typeof fields.no_code === 'boolean' && fields.no_code !== ticket.tags.includes(NO_CODE_TAG)) {

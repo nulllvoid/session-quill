@@ -261,6 +261,13 @@ export class Worker {
         removeIngress(entry.name, this.env);
         continue;
       }
+      // A link to a repository registered moments ago (a clone, ADR 0024) must not race the config
+      // reload: an unknown repository id makes the worker re-read config.toml before applying.
+      const linkTo = ev.kind === 'ticket-update' && ev.payload && ev.payload.fields ? ev.payload.fields.repo_id : null;
+      if (typeof linkTo === 'string' && !Object.hasOwn(this.state.meta.repos ?? {}, linkTo)) {
+        removeIfExists(path.join(stateDir(this.env), 'control', 'reload-config.json'));
+        this.reloadConfig();
+      }
       const record = this.journal.append(ev);
       this.applyRecord(record);
       removeIngress(entry.name, this.env);
