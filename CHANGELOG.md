@@ -17,6 +17,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - Worker test gate: with `test_command` (and `test_timeout_ms`, default 10 minutes) on a repository, the worker runs the tests itself after each fix and records `test_gate` and `timings.test_ms` on the run. A failure gets one repair turn with the failing output; a fix whose tests still fail is not suggested (no commit, push or PR). Runs show *Tests passed (worker)*, *Tests failed* with the output, or *Not test-verified*, and draft PR bodies say "Tests passed (worker)" only after a real pass.
 - `[handoff] max_concurrent_readonly` (default 2) and `max_concurrent_fix` (default 1) cap read-only and fix runs separately.
 - Read-only analyse runs with source access may use Claude Code subagents, and the built-in analyse recipes split large analyses by module and merge the results.
+- Onboarding from the tracker ([ADR 0024](docs/decisions/0024-tracker-onboarding.md)): with `[tracker] import_assigned = true`, `tracker-sync` imports the open issues assigned to you (Jira and GitHub) as tickets, once each. `quill tracker import` imports now; `quill init --bootstrap-from-tracker` turns the import on, adds a `tracker-sync` schedule and imports once.
+- Rule-based repository resolver: `tracker-sync` links tickets without a repository through `[tracker.repo_map]` (Jira component or project, GitHub `owner/repo`, to a repository id or remote), a registered repository whose origin matches a repository the issue links to, or a clone already on disk. A remote with no clone shows **Needs clone** on the card and in the snapshot's `repo_state`; no agent runs.
+- Clone with consent: `quill repo clone <KEY>` previews the remote, host check and target folder, and `--confirm` clones into `[tracker] auto_clone_dir` (default `~/quill-repos`), registers the clone and links the ticket. The dashboard's **Clone…** dialog sends the new `repo-clone` request. Only https and ssh remotes on a `[tracker] clone_hosts` host (default github.com, gitlab.com, bitbucket.org) are cloned, without credentials in the address, file/ext transports or submodules, and a remote that already has a clone is linked instead of cloned again.
+- `quill/no-code`: `quill ticket set <KEY> --no-code yes|no` (or `ticket-update` field `no_code`) marks a ticket as needing no repository; it shows **No code** and the resolver skips it.
+- The dashboard's Repo filter has a **Needs clone** value, and cards show **Cloning** while a clone runs.
+- A read-only built-in `workspace-setup` recipe suggests a repository and a `repo_map` line for a ticket the rules could not place.
+- The TOML subset accepts double-quoted keys, so `[tracker.repo_map]` can name `"owner/repo"` and `"PROJ/Component"`.
 
 ### Changed
 

@@ -280,6 +280,38 @@ quill tracker push PROJ-7 --to "Blocked" --comment "Waiting on infra" --confirm
 
 GitHub issues close for done and reopen otherwise. Each push, or failure, is recorded on the ticket's timeline. Nothing pushes automatically ([ADR 0018](docs/decisions/0018-tracker-write-back.md)).
 
+### Start from your assigned issues (opt-in)
+
+Quill can fill the board with the open issues assigned to you and find the repository each one belongs to. Everything here is in your own `config.toml`; a repository's `.quill.toml` cannot turn it on ([ADR 0024](docs/decisions/0024-tracker-onboarding.md)).
+
+```bash
+quill init --bootstrap-from-tracker   # turns on import_assigned, adds a tracker-sync schedule, imports once
+quill tracker import                  # one import now (idempotent)
+```
+
+```toml
+[tracker]
+import_assigned = true                # Jira: assignee = currentUser() AND statusCategory != Done; GitHub: is:open assignee:@me in repo
+auto_clone_dir  = "~/quill-repos"     # where confirmed clones go (default ~/quill-repos)
+clone_hosts     = ["github.com", "gitlab.com", "bitbucket.org"]   # the only hosts Quill clones from (this is the default)
+
+[tracker.repo_map]                    # optional: first match wins
+"PROJ/Payments" = "payments"          # a Jira component -> a registered repository id
+PROJ            = "git@github.com:acme/backend.git"   # a Jira project -> a remote
+"acme/web"      = "web"               # a GitHub repository -> a registered repository id
+```
+
+Each `tracker-sync` run imports new issues as tickets (under their tracker key; an issue already tracked is skipped) and then resolves the repository of tickets that have none, by rules, never by an agent: the `repo_map` entry for the issue's component, project or GitHub repository; else a registered repository whose `origin` is a repository the issue links to (the GitHub issue's own repository, or Jira remote links on a `clone_hosts` forge); else a clone already in `auto_clone_dir` or beside your registered repositories. A match links the ticket. A remote with no clone shows **Needs clone** on the card; nothing is cloned until you confirm:
+
+```bash
+quill repo clone PROJ-12              # preview: remote, host check, target folder; clones nothing
+quill repo clone PROJ-12 --confirm    # clone, register like `quill repo add`, link the ticket
+quill repo clone PROJ-12 --url git@github.com:acme/api.git   # name the remote yourself
+quill ticket set PROJ-14 --no-code yes                      # this ticket needs no repository
+```
+
+The dashboard's **Clone…** button opens the same preview. Quill clones only `https://` and `ssh` remotes on a `clone_hosts` host, refuses addresses with credentials, `file:` and `ext::` transports, and never clones a remote that already has a clone (it links or registers that one instead). The Repo filter has a **Needs clone** value, and the read-only `workspace-setup` recipe can suggest a `repo_map` line for a ticket the rules could not place.
+
 ## Your board on another machine
 
 One machine owns a store and is the only one that writes it. To see the board elsewhere, let the owner keep a read-only mirror inside the store folder and sync that folder with whatever you already use (OneDrive, Dropbox, Syncthing, a private git repository):
@@ -327,7 +359,7 @@ token_env = "BITBUCKET_TOKEN"                       # an access token, sent as a
 
 ## Agent recipes
 
-A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check` and `standup`; add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
+A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check`, `file-task`, `standup` and `workspace-setup`; add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
 
 ```markdown
 ---

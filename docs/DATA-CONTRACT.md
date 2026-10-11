@@ -43,6 +43,8 @@ Control fields: status_source (manual, evidence, migration), status_evidence_id 
 - repo_id resolves through the local repository registry; the UI receives a display repo name, never an implicit filesystem permission.
 - jira: key, url (nullable), validation, validated_at (nullable), error (nullable).
 - external: system (jira, linear, github, custom), key, url (nullable, https only), validation, validated_at (nullable), error (nullable). Set when a ticket is created from or relinked to a tracker key (ADR 0005); jira-system records also fill `jira` for compatibility.
+- tags: `quill/status/*`, `quill/cat/*` and `quill/stale` are derived and cannot be set. `quill/no-code` (ADR 0024) is the one reserved tag the owner sets and clears, through `ticket-update` fields `no_code` (boolean) or `tags`; the repository resolver skips such tickets.
+- repo_resolution (ADR 0024, absent until the resolver has looked): state (linked, needs-clone, none), repo_id (nullable), remote (nullable), existing_path (nullable, local-only: a clone of the remote already on disk), rule (repo_map, issue, scan), via (the repo_map key or issue link that matched), checked_at. Recorded by `tracker-sync`, beside the ticket and without a revision bump.
 - files_touched: repo_id, relative_path, first_seen, last_seen. Counts are deduplicated by repo and path; unknown changes are represented by timeline coverage, not guessed paths.
 - plans: id, session_id, checkpoint_id (nullable), content_ref, preview, approved_at, provenance. Full approved plan text is available through the local detail projection.
 - conclusions: id, session_id, checkpoint_id, content_ref, preview, recorded_at, approved_at (nullable), provenance (nullable).
@@ -142,12 +144,14 @@ PreToolUse stores attribution before execution. A PostToolUse result refers to t
 ## Mutation request
 
 Fields: id, store_id, actor_id, kind, target_id (nullable), expected_revision (nullable), payload, created_at, not_before, state, applied_revision (nullable), error (nullable), result (nullable), retry_of (nullable).
-kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external, run-job, accept-suggestion, dismiss-suggestion, publish.
+kind: set-next-action, set-status, record-deployment, handoff, handoff-cancel, refresh, attach-unbound, dismiss-unbound, link-external, run-job, accept-suggestion, dismiss-suggestion, publish, repo-clone.
 
 - run-job (ADR 0007) has no target and payload { schedule }; it names a configured schedule, has no undo delay and is applied by the scheduler like refresh. A refresh or run-job left applying by a crash fails with code `interrupted` (retryable) on the next start.
 
 - handoff (ADR 0008) payload: recipe (name; optional, defaults to mode), mode, note, permissions, access, branch, batch_id (optional, ADR 0023: 1 to 64 characters from `A-Z a-z 0-9 . _ : -`; runs queued together from the dashboard share one; anything else fails with `batch-invalid`). With a recipe, permissions must be within its frontmatter; the applied request records recipe { name, source, hash }, and dispatch fails with `recipe-changed` if the file no longer has that hash.
 - accept-suggestion and dismiss-suggestion target a ticket and take payload { handoff_id, suggestion_id }; accept requires expected_revision, dismiss does not. Both have the 10 s undo window. A suggestion resolves once.
+
+- repo-clone (ADR 0024) targets a ticket without a repository and not marked `quill/no-code`; payload { url } is the remote the owner confirmed (https, ssh:// or git@host:path; a host outside `[tracker] clone_hosts` fails with `clone-host-refused` unless the ticket's resolution names a clone of it already on disk). expected_revision is optional and there is no undo delay. The worker's onboarding extension runs one at a time: it clones into `auto_clone_dir` (or links or registers an existing clone of that remote), registers the folder in config.toml and links the ticket with `ticket-update`; result { action (clone, register, link), repo_id, remote }. One left applying by a crash fails with `interrupted` (retryable).
 
 - publish (ADR 0010) has no target and payload { publisher (a name, or null for all), confirm }. It has no undo delay and is applied by the scheduler; confirm records consent to the publisher's current destination.
 
@@ -184,7 +188,9 @@ Digest schedule fields: to (vault-daily and/or file), path (required for file), 
 
 `external.remote` (ADR 0011, nullable): title, status, assignee, fix_versions[], fetched_at — what the tracker said at the last `tracker-sync`. `external.validation` becomes valid or not-found. Neither changes the ticket's own fields or revision.
 
-`tracker-sync` payload: system, synced_at, results[] (ticket_id, key, validation (valid, not-found, or null on an error), remote (nullable), error (nullable)).
+`tracker-sync` payload: system, synced_at, results[] (ticket_id, key, validation (valid, not-found, or null on an error), remote (nullable), error (nullable)), resolutions[] (optional, ADR 0024: ticket_id, state, repo_id, remote, existing_path, rule, via). A resolution sets `repo_resolution` and adds a `tracker` timeline entry only when the state, repository or remote changed; a `linked` resolution is followed by a `ticket-update` (source `resolver`) setting repo_id.
+
+Imported tickets (ADR 0024) are ordinary `ticket-create` events with source identity `tracker-import:<KEY>` and id `externalTicketId(store_id, key)`, so an issue is imported once. GitHub issue keys are `<PREFIX>-<number>`, the prefix being the tracker's first `prefixes` entry or the repository name in capitals.
 
 Tickets may carry `effort` { active_ms, turns, tokens { input, output, cache_read, cache_write } }. Active time adds, for each prompt, tool or stop event of a session bound to the ticket, the gap since that session's previous event, capped at 5 minutes. A `stop` event adds a turn and, when its payload carries `usage` (the same four token counts, summed by the Stop hook from the transcript lines appended since its last read; no text is kept), those tokens. Tickets without `effort` have none recorded.
 
@@ -227,7 +233,8 @@ The versioned snapshot contains generation_id, generated_at, capabilities and co
 tickets, sessions, checkpoints, handoffs, requests, picknext, meta. Detail endpoints may page large timeline/content fields but must use the same generation and return unavailable rather than mix generations.
 
 picknext entries: rank, ticket_id, raw_score, score (0–100), reasons[].
-meta: store_id, store_name, tracker_version, schema_version, owner_machine_id, timezone, sync_interval_hours, last_sync (nullable), next_sync_due (nullable), last_capture_at (nullable), oldest_pending_event_at (nullable), worker_seen_at, worker_autostart (boolean, ADR 0022: a login entry from `quill worker install` is registered), capture_health, projection_health, provider_health[], counts_by_status, stale_ticket_count, unresolved_event_count, active_sync_request_id (nullable), handoff_limits (nullable, ADR 0023: { readonly, fix }, the run caps in effect).
+meta: store_id, store_name, tracker_version, schema_version, owner_machine_id, timezone, sync_interval_hours, last_sync (nullable), next_sync_due (nullable), last_capture_at (nullable), oldest_pending_event_at (nullable), worker_seen_at, worker_autostart (boolean, ADR 0022: a login entry from `quill worker install` is registered), capture_health, projection_health, provider_health[], counts_by_status, stale_ticket_count, unresolved_event_count, active_sync_request_id (nullable), handoff_limits (nullable, ADR 0023: { readonly, fix }, the run caps in effect), onboarding (nullable, ADR 0024: { clone_hosts[], auto_clone_dir, import_assigned }; null in exports and mirrors).
+Ticket summaries add repo_state (ADR 0024, nullable): no-code, cloning (a repo-clone request for the ticket is pending or applying), needs-clone, or null.
 capabilities: read, edit_tickets, handoff, refresh, cancel_requests, export (booleans). Static exports set all mutation capabilities false and remove request credentials and endpoints.
 
 Provider health includes provider, last_success_at (nullable), last_attempt_at (nullable) and error. A local sync does not reset provider evidence ages.
