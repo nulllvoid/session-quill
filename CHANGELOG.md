@@ -4,12 +4,27 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Runs** page (shortcut 7): Needs you, Live, Failed and All, grouped by batch, with run detail showing the result, changed files, worker test gate, PR, uncertain effects and the checkout path. Batch summaries survive a reload.
+- A run strip and a Runs tab on every ticket; one **Run agent** dialog with a plain summary of what the run will do and any blockers.
+
 ### Changed
 
+- Navigation is grouped into Work and Track; phones show Pick next, Board, Runs, Activity and More.
+- The top bar is one row: workspace status, refresh and connection details live in one popover; filters sit behind a Filter button; receipts are toasts, and errors stay until dismissed.
+- Proposed runs moved from Activity to Runs → Needs you.
+- Form controls have 3:1 borders; dark-mode faint text is a distinct level.
 - Put Pick next recommendations before the collapsed unlinked-work inbox, with compact workspace statistics and a recent-context section.
 - Group ticket details into Overview, Activity and Delivery, with next action, latest checkpoint and status controls first; add an expanded ticket view and collapsible navigation.
 - Consolidate workspace health details, surface pending run approvals in the header, and add direct checkpoint access from Sessions. Rename Today to Activity and Tree to Relationships.
 - Improve keyboard focus in modal ticket details and responsive layouts; refresh dashboard screenshots.
+
+### Fixed
+
+- Full run results and timeline text now display after loading, and failed loads show Retry.
+- Sessions → View checkpoints opens the ticket the checkpoint was captured on.
+- Static exports bundle every dashboard module; ticket detail and Activity no longer fail in an exported page.
 
 ## [1.0.0] - 2026-10-11
 
