@@ -193,9 +193,18 @@ export class Worker {
     this.publishIdentity();
   }
 
-  // Small control markers written by the CLI: flush now, restore a conflicted note, stop.
+  // Re-reads config.toml now rather than at the next identity check, so a repository registered a
+  // moment ago (a clone, ADR 0024) can be linked to a ticket straight away.
+  reloadConfig() {
+    this.lastIdentityCheckMs = -Infinity;
+    this.identityStampValue = null;
+    this.refreshIdentity();
+  }
+
+  // Small control markers written by the CLI: reload config, flush now, restore a conflicted note, stop.
   processControl() {
     const dir = path.join(stateDir(this.env), 'control');
+    if (removeIfExists(path.join(dir, 'reload-config.json'))) this.reloadConfig();
     if (removeIfExists(path.join(dir, 'flush.json'))) this.flushRequested = true;
     for (const name of listFiles(path.join(dir, 'restore'), (f) => f.endsWith('.json'))) {
       const ticketId = name.replace(/\.json$/, '');

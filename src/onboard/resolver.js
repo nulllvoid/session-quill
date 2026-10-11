@@ -38,7 +38,7 @@ export function createOriginIndex({ repos = {}, autoCloneDir = null, originOf = 
     for (const dir of [autoCloneDir, ...roots].filter(Boolean)) {
       let entries;
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-      for (const e of entries.filter((x) => x.isDirectory()).slice(0, MAX_SCAN_ENTRIES)) {
+      for (const e of entries.filter((x) => x.isDirectory() && !x.name.startsWith('.')).slice(0, MAX_SCAN_ENTRIES)) {
         const sub = path.join(dir, e.name);
         if (!fs.existsSync(path.join(sub, '.git'))) continue;
         let key = null;

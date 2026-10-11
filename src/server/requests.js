@@ -13,15 +13,19 @@ import { scopeFor } from '../hooks/scope.js';
 import { catalogFor } from '../agents/recipes.js';
 import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
+import { parseRemote } from '../onboard/remotes.js';
+import { onboardSettings } from '../onboard/settings.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish'];
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone'];
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
-const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect']);
+// Long-running requests owned by an extension: the scheduler's, and repo-clone (ADR 0024).
+const EXTENSION_KINDS = new Set([...SCHEDULER_KINDS, 'repo-clone']);
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
-const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect']);
+const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone']);
 const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
@@ -98,7 +102,7 @@ function findSuggestion(state, ticket, payload) {
   return { h, sug };
 }
 
-export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null } = {}) {
+export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
   const payload = body.payload ?? {};
@@ -169,6 +173,17 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'refresh':
       normalized = {};
       break;
+    case 'repo-clone': {
+      // Consent covers the remote the dialog showed, so the request names it (ADR 0024).
+      if (target.repo_id) throw new TrackerError('repo-linked', `${target.key} already belongs to repository ${target.repo_id}`);
+      if ((target.tags ?? []).includes('quill/no-code')) throw new TrackerError('no-code', `${target.key} is marked as needing no code`);
+      if (typeof payload.url !== 'string' || !payload.url.trim()) throw new TrackerError('request-invalid', 'repo-clone needs payload.url, the remote shown to the owner');
+      const parsed = parseRemote(payload.url);
+      if (parsed.error) throw new TrackerError(parsed.error.code, parsed.error.message);
+      if (cloneHosts && !cloneHosts.includes(parsed.host)) throw new TrackerError('clone-host-refused', `${parsed.host} is not in [tracker] clone_hosts`);
+      normalized = { url: payload.url.trim() };
+      break;
+    }
     case 'publish': {
       const name = payload.publisher ?? null;
       if (name !== null && (typeof name !== 'string' || !name)) throw new TrackerError('request-invalid', 'publish payload.publisher must be a publisher name or null for all');
@@ -238,7 +253,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
     if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
     throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
   }
-  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null });
+  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts });
   request.actor_id = actor;
   const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
   if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
@@ -414,7 +429,7 @@ function finish(worker, req, evaluation) {
 export function applyDueRequests(worker, nowIso) {
   let applied = 0;
   for (const req of [...worker.state.requests.values()]) {
-    if (req.state !== 'pending' || SCHEDULER_KINDS.has(req.kind)) continue;
+    if (req.state !== 'pending' || EXTENSION_KINDS.has(req.kind)) continue;
     if (req.not_before > nowIso) continue;
     worker.emit('request-tx', { request_id: req.id, outcome: 'applying' }, { source_identity: `request-tx:${req.id}:applying` });
     finish(worker, req, evaluateRequest(worker, req));
@@ -426,7 +441,7 @@ export function applyDueRequests(worker, nowIso) {
 // After a crash an `applying` request has no terminal transaction: re-evaluate it safely.
 export function recoverApplying(worker) {
   for (const req of [...worker.state.requests.values()]) {
-    if (req.state !== 'applying' || SCHEDULER_KINDS.has(req.kind)) continue;
+    if (req.state !== 'applying' || EXTENSION_KINDS.has(req.kind)) continue;
     finish(worker, req, evaluateRequest(worker, req));
   }
 }
