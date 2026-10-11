@@ -943,3 +943,29 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
   .nav-item .nav-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   body[data-expanded-ticket="true"] .detail-panel { position: fixed; inset: 0; }
 }
+
+/* Runs (spec 2026-10-11 §2–3): tabs, batch groups, one-button rows, run detail evidence. */
+.run-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 0 14px; }
+.run-tabs [role="tab"] { border: 0; background: none; color: var(--text-muted); font: inherit; font-weight: 500; padding: 6px 12px; border-radius: 999px; min-height: 36px; cursor: pointer; }
+.run-tabs [role="tab"][aria-selected="true"] { background: var(--surface-raised); color: var(--text); box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+.run-tabs .count { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-left: 4px; }
+.run-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.run-batch { border-radius: var(--radius); box-shadow: inset 0 0 0 1px var(--hairline); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.run-batch-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.run-batch-head .batch-bar { flex: 1 1 120px; }
+.run-open { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "state ticket time" "state recipe badges" "state facts facts"; gap: 2px 10px; align-items: center; text-align: left; font: inherit; color: var(--text); background: var(--surface); border: 0; border-radius: var(--radius-ctl); padding: 10px 12px; min-height: 44px; cursor: pointer; box-shadow: inset 0 0 0 1px var(--hairline); }
+.run-open:hover, .run-open[aria-pressed="true"] { background: var(--surface-raised); box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+.run-open > .chip { grid-area: state; align-self: start; }
+.run-ticket { grid-area: ticket; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-recipe { grid-area: recipe; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-badges { grid-area: badges; display: inline-flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.run-facts { grid-area: facts; min-width: 0; overflow-wrap: anywhere; }
+.run-time { grid-area: time; white-space: nowrap; }
+.run-row.proposal { padding: 10px 12px; border-radius: var(--radius-ctl); box-shadow: inset 0 0 0 1px var(--hairline); }
+.run-uncertain { display: flex; gap: 8px; padding: 10px 12px; border-radius: var(--radius-ctl); background: var(--status-deploy-bg); color: var(--status-deploy); }
+.run-uncertain ul { margin: 4px 0 0; padding-left: 18px; }
+.run-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 0; }
+@media (max-width: 599px) {
+  .run-open { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "state ticket" "state recipe" "state badges" "state facts" "state time"; }
+  .run-badges { justify-content: flex-start; }
+}

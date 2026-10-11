@@ -2,7 +2,8 @@ import { esc, attr, icon, timeEl, STATUS_ORDER, normalizeSnapshot, viewCounts, o
 import { freshness, relativeTime } from '../lib/time.js';
 
 const FRESH_LABELS = { 'never-synced': 'Never synced', fresh: 'Fresh', ageing: 'Ageing', stale: 'Stale' };
-export const NAV_ITEMS = [['picknext', 'Pick next', 'ticket', '1'], ['board', 'Board', 'machine', '2'], ['tree', 'Relationships', 'branch', '3'], ['sessions', 'Sessions', 'user', '4'], ['deployments', 'Deployments', 'rocket', '5'], ['today', 'Activity', 'clock', '6']];
+export const NAV_ITEMS = [['picknext', 'Pick next', 'ticket', '1'], ['board', 'Board', 'machine', '2'], ['tree', 'Relationships', 'branch', '3'], ['sessions', 'Sessions', 'user', '4'], ['deployments', 'Deployments', 'rocket', '5'], ['today', 'Activity', 'clock', '6'], ['runs', 'Runs', 'play', '7']];
+export const SHORTCUT_VIEWS = { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs' };
 
 export function renderPageHeading(view, snapshot) {
   const label = NAV_ITEMS.find(([id]) => id === view)?.[1] ?? 'Pick next';

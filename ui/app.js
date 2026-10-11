@@ -1,6 +1,8 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
 import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER } from './components.js';
-import { renderHeader, renderSidebar, renderPageHeading } from './views/header.js';
+import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS } from './views/header.js';
+import { renderRuns } from './views/runs.js';
+import { renderRunDetail, renderRunNotFound } from './views/run-detail.js';
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
 import { renderTree } from './views/tree.js';
@@ -17,7 +19,7 @@ import { renderBulkActionBar, bulkBarShape, renderBulkHandoffForm, renderBulkRes
 import { freshProposals, proposalNotice } from './lib/proposals.js';
 import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, mergeUndo, batchDialogUpdate, withoutIds, pruneChecked, activeBatches } from './lib/bulk.js';
 
-const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today'];
+const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today', 'runs'];
 const POLL_VISIBLE_MS = 2000;
 const POLL_HIDDEN_MS = 30000;
 
@@ -27,6 +29,8 @@ const appState = {
   view: 'picknext',
   filters: { ...EMPTY_FILTERS },
   selected: null,
+  runTab: null,
+  selectedRun: null,
   detailTab: 'overview',
   detailExpanded: false,
   sidebarCollapsed: false,
@@ -92,6 +96,8 @@ function readHash() {
   appState.filters = filtersFromHash(location.hash, appState.filters, VIEWS);
   appState.selected = params.get('ticket') || null;
   appState.treeRoot = params.get('root') || null;
+  appState.runTab = params.get('tab') || null;
+  appState.selectedRun = appState.view === 'runs' ? params.get('run') || null : null;
 }
 
 // The drawer belongs to the view it was opened from: switching views closes it.
@@ -100,6 +106,8 @@ function setView(view) {
   appState.view = view;
   appState.treeRoot = null;
   appState.selected = null;
+  appState.selectedRun = null;
+  appState.runTab = null;
   appState.detailTab = 'overview';
   appState.detailExpanded = false;
   appState.editingNext = null;
@@ -113,6 +121,8 @@ function writeHash() {
   if (appState.filters.stale) params.set('stale', '1');
   if (appState.selected) params.set('ticket', appState.selected);
   if (appState.treeRoot) params.set('root', appState.treeRoot);
+  if (appState.view === 'runs' && appState.runTab) params.set('tab', appState.runTab);
+  if (appState.view === 'runs' && appState.selectedRun) params.set('run', appState.selectedRun);
   const next = `#${params.toString()}`;
   if (location.hash !== next) history.replaceState(null, '', next);
 }
@@ -166,6 +176,7 @@ function render() {
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
+  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun });
   if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
   renderBulkBar(s);
   setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
@@ -320,25 +331,32 @@ function renderDetailPanel(now, pending) {
   const panel = $('#detail');
   const s = appState.snapshot;
   const ticket = appState.selected ? ticketById(s, appState.selected) : null;
+  const runId = !ticket && appState.view === 'runs' ? appState.selectedRun : null;
+  const run = runId ? (s.handoffs ?? []).find((h) => h.id === runId) ?? null : null;
+  const open = !!(ticket || runId);
   const mode = layoutMode();
   document.body.dataset.expandedTicket = appState.detailExpanded && ticket ? 'true' : 'false';
-  $('#main').inert = !!(ticket && appState.detailExpanded);
-  panel.hidden = !ticket;
-  document.body.dataset.detail = ticket ? 'open' : 'closed';
-  if (!ticket) { for (const id of ['sidebar', 'header', 'filters', 'bulk']) $(`#${id}`).inert = false; setMarkup(panel, ''); panel.removeAttribute('aria-modal'); renderedDetail = null; return; }
+  panel.hidden = !open;
+  document.body.dataset.detail = open ? 'open' : 'closed';
+  if (!open) { $('#main').inert = false; for (const id of ['sidebar', 'header', 'filters', 'bulk']) $(`#${id}`).inert = false; setMarkup(panel, ''); panel.removeAttribute('aria-modal'); renderedDetail = null; return; }
   const modal = mode !== 'desktop';
-  $('#main').inert = modal || appState.detailExpanded;
+  $('#main').inert = modal || (!!ticket && appState.detailExpanded);
   for (const id of ['sidebar', 'header', 'filters', 'bulk']) $(`#${id}`).inert = modal;
   panel.setAttribute('role', modal ? 'dialog' : 'complementary');
+  panel.setAttribute('aria-label', ticket ? 'Ticket detail' : 'Run detail');
   if (modal) panel.setAttribute('aria-modal', 'true'); else panel.removeAttribute('aria-modal');
   const active = document.activeElement;
   const activeId = active && panel.contains(active) ? active.id || active.dataset.action : null;
   const selectionStart = active && panel.contains(active) && active.tagName === 'TEXTAREA' ? active.selectionStart : null;
   const editing = active && panel.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
   if (editing) return; // never clobber an in-progress edit on poll
-  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded }));
-  // A different ticket starts at its title, not at the previous ticket's scroll offset.
-  if (renderedDetail !== ticket.id) { panel.scrollTop = 0; renderedDetail = ticket.id; }
+  const key = ticket ? ticket.id : `run:${runId}`;
+  const html = ticket
+    ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded })
+    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus }) : renderRunNotFound(runId);
+  setMarkup(panel, html);
+  // A different ticket or run starts at its title, not at the previous one's scroll offset.
+  if (renderedDetail !== key) { panel.scrollTop = 0; renderedDetail = key; }
   if (activeId) { const el = panel.querySelector(`#${CSS.escape(activeId)}`) || panel.querySelector(`[data-action="${CSS.escape(activeId)}"]`); if (el) { el.focus(); if (selectionStart !== null && el.setSelectionRange) el.setSelectionRange(selectionStart, selectionStart); } }
 }
 
@@ -420,7 +438,7 @@ function syncRequests(snap) {
   const proposals = freshProposals(appState.proposalsSeen, snap);
   appState.proposalsSeen = proposals.seen;
   if (proposals.fresh.length) {
-    const text = proposals.fresh.length === 1 ? proposalNotice(proposals.fresh[0]) : `${proposals.fresh.length} runs proposed from shared pages; approve or dismiss them in Today`;
+    const text = proposals.fresh.length === 1 ? proposalNotice(proposals.fresh[0]) : `${proposals.fresh.length} runs proposed from shared pages; approve or dismiss them in Runs`;
     announce(text);
     setReceipt(text, 'neutral');
   }
@@ -529,7 +547,14 @@ function handleAction(el) {
       if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
       break;
     }
-    case 'review-proposals': appState.filters = { ...EMPTY_FILTERS }; setView('today'); render(); break;
+    case 'review-proposals': appState.filters = { ...EMPTY_FILTERS }; setView('runs'); appState.runTab = 'needs'; render(); break;
+    case 'run-tab': appState.runTab = el.dataset.tab; render(); document.querySelector(`#run-tab-${CSS.escape(appState.runTab)}`)?.focus(); break;
+    case 'open-run': openRun(el.dataset.run, el); break;
+    case 'close-run': closeRun(); break;
+    case 'run-prev': stepRun(-1); break;
+    case 'run-next': stepRun(1); break;
+    case 'open-ticket-from-run': { const id = el.dataset.ticket; setView('board'); openDetail(id, null); break; }
+    case 'open-runs': setView('runs'); appState.runTab = el.dataset.tab || null; render(); break;
     case 'toggle-sidebar': appState.sidebarCollapsed = !appState.sidebarCollapsed; try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage may be unavailable */ } render(); document.querySelector('[data-action="toggle-sidebar"]')?.focus(); break;
     case 'expand-detail': appState.detailExpanded = !appState.detailExpanded; render(); break;
     case 'detail-tab':
@@ -686,6 +711,29 @@ function stepDetail(delta) {
   render();
 }
 
+function openRun(id, source) {
+  appState.lastFocus = source ?? document.activeElement;
+  if (appState.view !== 'runs') { setView('runs'); appState.runTab = 'all'; }
+  appState.selected = null;
+  appState.selectedRun = id;
+  render();
+  if (layoutMode() !== 'desktop') $('#detail [data-action="close-run"]')?.focus();
+}
+
+function closeRun() {
+  const id = appState.selectedRun;
+  appState.selectedRun = null;
+  render();
+  const source = appState.lastFocus && document.contains(appState.lastFocus) ? appState.lastFocus : $(`#main [data-run="${CSS.escape(id ?? '')}"]`);
+  source?.focus({ preventScroll: true });
+}
+
+function stepRun(delta) {
+  const ids = [...document.querySelectorAll('#main [data-action="open-run"]')].map((el) => el.dataset.run);
+  const next = ids[ids.indexOf(appState.selectedRun) + delta];
+  if (next) { appState.selectedRun = next; render(); }
+}
+
 function toLocalIso(value) {
   if (!value) return null;
   const d = new Date(value);
@@ -777,7 +825,15 @@ function handleSubmit(form) {
 function onKey(e) {
   const target = e.target;
   const inInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
-  const detailTab = target?.closest('[role="tab"][data-tab]');
+  const runTab = target?.closest('[role="tab"][data-action="run-tab"]');
+  if (runTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault();
+    const tabs = [...document.querySelectorAll('#main [data-action="run-tab"]')].map((b) => b.dataset.tab);
+    const i = tabs.indexOf(runTab.dataset.tab);
+    appState.runTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    render(); document.querySelector(`#run-tab-${CSS.escape(appState.runTab)}`)?.focus(); return;
+  }
+  const detailTab = target?.closest('[role="tab"][data-action="detail-tab"]');
   if (detailTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
     e.preventDefault();
     const tabs = ['overview', 'activity', 'delivery'];
@@ -796,6 +852,7 @@ function onKey(e) {
     if (pop) { e.preventDefault(); pop.open = false; pop.querySelector('summary')?.focus(); return; }
     if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
     if (appState.selected && !inInput) { e.preventDefault(); closeDetail(); return; }
+    if (appState.selectedRun && !inInput) { e.preventDefault(); closeRun(); return; }
     if (!dialogOpen && selectionKey('Escape', { checkedSize: appState.checked.size }) && (!inInput || target.dataset.check)) { e.preventDefault(); setChecked(new Set(), { anchor: null }); return; }
     if (inInput && target.form && target.form.dataset.form === 'next-action') { target.value = ticketById(appState.snapshot, target.form.dataset.ticket).next_action; target.blur(); appState.editingNext = null; render(); return; }
   }
@@ -804,7 +861,7 @@ function onKey(e) {
     return;
   }
   if (e.key === '/') { e.preventDefault(); const s = $('#search'); if (s) s.focus(); return; }
-  if (/^[1-6]$/.test(e.key)) { setView(VIEWS[Number(e.key) - 1]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
+  if (SHORTCUT_VIEWS[e.key]) { setView(SHORTCUT_VIEWS[e.key]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }

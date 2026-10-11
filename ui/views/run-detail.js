@@ -47,7 +47,7 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
 
   const uncertain = (h.uncertain_effects ?? []).length ? `<div class="run-uncertain" role="note">${icon('alert')}<div><strong>The worker could not confirm:</strong><ul>${h.uncertain_effects.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div></div>` : '';
   const delivery = [
-    h.pr_url ? `<p><a href="${attr(h.pr_url)}" target="_blank" rel="noopener noreferrer">${esc(h.pr_url)}</a></p>` : '',
+    h.pr_url ? (/^https?:\/\//i.test(h.pr_url) ? `<p><a href="${attr(h.pr_url)}" target="_blank" rel="noopener noreferrer">${esc(h.pr_url)}</a></p>` : `<p class="small"><code>${esc(h.pr_url)}</code></p>`) : '',
     h.branch ? `<p class="small">Branch <code>${esc(h.branch)}</code></p>` : '',
     uncertain,
   ].join('');
@@ -59,7 +59,7 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
 
   const actions = [];
   if (caps.handoff && ['queued', 'running'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>`);
-  if (caps.handoff && t && ['failed', 'timed-out', 'cancelled'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}" data-recipe="${attr(name)}" data-retry-of="${attr(h.id)}">Retry as new run</button>`);
+  if (caps.handoff && t && !next && ['failed', 'timed-out', 'cancelled'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}" data-recipe="${attr(name)}" data-retry-of="${attr(h.id)}">Retry as new run</button>`);
 
   return `<article class="detail run-detail" data-run="${attr(h.id)}" aria-labelledby="detail-title">
 ${head}

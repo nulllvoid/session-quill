@@ -627,3 +627,12 @@ test('Sessions links the checkpoint to the ticket it was captured on, not the cu
   const missing = { ...base, checkpoints: [] };
   assert.doesNotMatch(renderSessions(missing, noFilters, { now: NOW, page: 0 }), /View checkpoints/);
 });
+
+test('the sidebar lists Runs with shortcut 7 and a live count; 1 to 6 keep their views', async () => {
+  const { renderSidebar, SHORTCUT_VIEWS } = await import('../../ui/views/header.js');
+  const s = snapshot({ handoffs: [{ ...snapshot().handoffs[0], id: 'q1', state: 'queued' }] });
+  const side = renderSidebar(s, { view: 'runs' });
+  assert.match(side, /data-view="runs"[^>]*aria-selected="true"[^>]*aria-keyshortcuts="7"/);
+  assert.match(side, /data-view="runs"[\s\S]*?<span class="badge"[^>]*>1<\/span>/);
+  assert.deepEqual(SHORTCUT_VIEWS, { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs' });
+});

@@ -43,14 +43,18 @@ test('an approval or dismissal on its way hides the buttons', () => {
   assert.doesNotMatch(sending, /cancel-request/, 'nothing to undo before the worker has it');
 });
 
-test('Today lists open proposals above the days; lapsed and resolved ones are not listed', () => {
+test('open proposals exclude lapsed and resolved ones', () => {
   const s = snap([proposal(1), proposal(2, { state: 'expired' }), proposal(3, { state: 'approved' })]);
   assert.deepEqual(openProposals(s).map((p) => p.id), [proposal(1).id]);
-  const html = renderToday(s, EMPTY_FILTERS, { now: NOW });
-  assert.match(html, /<section class="proposals" aria-labelledby="proposals-title"><div class="section-head"><h2 id="proposals-title">Proposed runs<\/h2><span class="section-count">1 waiting for you<\/span>/);
-  assert.match(html, /data-open="[^"]+"/, 'each names its ticket');
-  assert.equal((html.match(/data-action="approve-run"/g) ?? []).length, 1);
-  assert.doesNotMatch(renderToday(snap([]), EMPTY_FILTERS, { now: NOW }), /Proposed runs/);
+});
+
+test('Activity is history only: proposals are no longer listed there', () => {
+  const s = snap([proposal(1)]);
+  assert.doesNotMatch(renderToday(s, EMPTY_FILTERS, { now: NOW }), /data-action="approve-run"/);
+});
+
+test('the proposal notice points at Runs', () => {
+  assert.match(proposalNotice(proposal(1)), /approve or dismiss it in Runs$/);
 });
 
 test('ticket detail lists the ticket\'s open proposals and says when a run is already active', () => {
@@ -68,5 +72,5 @@ test('a new proposal is announced once; the first poll only learns what is there
   assert.deepEqual(second.fresh.map((p) => p.id), [proposal(2).id]);
   assert.deepEqual(freshProposals(second.seen, snap([proposal(1), proposal(2)])).fresh, []);
   assert.deepEqual(freshProposals(second.seen, snap([proposal(5, { state: 'approved' })])).fresh, [], 'only open proposals are news');
-  assert.equal(proposalNotice(proposal(2)), `Run of analyse proposed on ${t1.key} from the team page by u_<b>editor</b>; approve or dismiss it in Today`);
+  assert.equal(proposalNotice(proposal(2)), `Run of analyse proposed on ${t1.key} from the team page by u_<b>editor</b>; approve or dismiss it in Runs`);
 });

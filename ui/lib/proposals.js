@@ -9,5 +9,5 @@ export function freshProposals(seen, snapshot) {
 
 // The live-region and receipt text for a new proposal. Plain text: callers escape when rendering.
 export function proposalNotice(p) {
-  return `Run of ${p.recipe.name} proposed on ${p.ticket_key ?? 'a ticket'} from the ${p.publisher} page${p.editor ? ` by ${p.editor}` : ''}; approve or dismiss it in Today`;
+  return `Run of ${p.recipe.name} proposed on ${p.ticket_key ?? 'a ticket'} from the ${p.publisher} page${p.editor ? ` by ${p.editor}` : ''}; approve or dismiss it in Runs`;
 }

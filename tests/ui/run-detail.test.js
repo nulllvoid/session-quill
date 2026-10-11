@@ -86,3 +86,20 @@ test('a missing ticket and a missing run both render', () => {
   assert.match(nf, /Run not found/);
   assert.match(nf, /data-action="close-run"/);
 });
+
+test('a pr_url that is not http(s) is plain escaped text, never a link', () => {
+  const h = fix({ pr_url: 'javascript:alert(1)' });
+  const html = renderRunDetail(h, snap(h), { now: NOW });
+  assert.doesNotMatch(html, /href="javascript/i);
+  assert.match(html, /<code>javascript:alert\(1\)<\/code>/);
+  assert.match(renderRunDetail(fix(), snap(fix()), { now: NOW }), /<a href="https:\/\/github\.com\/acme\/demo\/pull\/9"/);
+});
+
+test('a run that was already retried or followed by a later run offers no retry', () => {
+  const failed = fix({ state: 'failed', error: { message: 'tests failed' } });
+  const later = fix({ id: 'run-2', state: 'done', requested_at: '2026-10-10T11:00:00Z' });
+  const s = normalizeSnapshot({ ...snapshot(), handoffs: [failed, later] });
+  const html = renderRunDetail(s.handoffs.find((x) => x.id === 'run-1'), s, { now: NOW });
+  assert.doesNotMatch(html, /data-action="run-agent"/);
+  assert.match(html, /Superseded by a later run/);
+});
