@@ -43,7 +43,7 @@ function suggestionText(s) {
   return esc(s.type);
 }
 
-function suggestionItem(s, h, ticket, { canEdit, pending }) {
+export function suggestionItem(s, h, ticket, { canEdit, pending }) {
   const req = pending.find((r) => (r.kind === 'accept-suggestion' || r.kind === 'dismiss-suggestion') && ACTIVE.has(r.state) && r.payload && r.payload.handoff_id === h.id && r.payload.suggestion_id === s.id);
   let controls = '';
   if (s.state !== 'proposed') controls = ` <span class="chip small" data-suggestion-state="${attr(s.state)}">${s.state === 'accepted' ? 'Accepted' : 'Dismissed'}</span>`;
@@ -59,14 +59,14 @@ function suggestionItem(s, h, ticket, { canEdit, pending }) {
 const CONFIDENCE_LABELS = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' };
 
 // How sure the run is, what it relied on, and whether its reply needed repair or a self-check (ADR 0013).
-function runQuality(h) {
+export function runQuality(h, { gate = true } = {}) {
   const parts = [];
   if (h.result_confidence) parts.push(`<span class="chip small" data-confidence="${attr(h.result_confidence)}">${esc(CONFIDENCE_LABELS[h.result_confidence] ?? h.result_confidence)}</span>`);
   const q = h.result_quality;
   if (q && q.self_checked) parts.push('<span class="chip small" title="The agent checked each claim against its cited source before finishing">Self-checked</span>');
   if (q && q.repaired) parts.push('<span class="chip small" title="The first reply broke the output format and was repaired in a follow-up turn">Repaired reply</span>');
-  const gate = testGateChip(h.test_gate);
-  if (gate) parts.push(gate);
+  const gateChip = gate ? testGateChip(h.test_gate) : '';
+  if (gateChip) parts.push(gateChip);
   if (q && (q.problems ?? []).length) parts.push(`<span class="chip warning small" title="${attr(q.problems.join('; '))}">Reply incomplete</span>`);
   const sources = h.result_sources ?? [];
   const list = sources.length ? `<details class="sources small"><summary>${esc(sources.length)} source${sources.length === 1 ? '' : 's'}</summary><ul>${sources.map((x) => `<li><code>${esc(x)}</code></li>`).join('')}</ul></details>` : '';
@@ -105,7 +105,7 @@ export function testCommandNote(repo) {
 }
 
 // What a files run changed (ADR 0015), each with an Undo while it still applies.
-function fileEffects(h, ticket, { canEdit, pending }) {
+export function fileEffects(h, ticket, { canEdit, pending }) {
   const effects = h.file_effects ?? [];
   if (!effects.length) return '';
   const rows = effects.map((e) => {
@@ -118,7 +118,7 @@ function fileEffects(h, ticket, { canEdit, pending }) {
 }
 
 // Where a run's time went (ADR 0022): only the steps that were measured.
-function runTimings(h) {
+export function runTimings(h) {
   const t = h.timings;
   if (!t) return '';
   const parts = [['queue_wait_ms', 'Queue wait'], ['worktree_ms', 'Setup'], ['agent_ms', 'Agent'], ['test_ms', 'Tests']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`);
