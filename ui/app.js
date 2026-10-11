@@ -27,6 +27,9 @@ const appState = {
   view: 'picknext',
   filters: { ...EMPTY_FILTERS },
   selected: null,
+  detailTab: 'overview',
+  detailExpanded: false,
+  sidebarCollapsed: false,
   requests: new Map(),
   refresh: null,
   dialog: null,
@@ -96,6 +99,8 @@ function setView(view) {
   appState.view = view;
   appState.treeRoot = null;
   appState.selected = null;
+  appState.detailTab = 'overview';
+  appState.detailExpanded = false;
   appState.editingNext = null;
   appState.loadedTicket = null;
 }
@@ -113,7 +118,7 @@ function writeHash() {
 
 function layoutMode() {
   const w = window.innerWidth;
-  if (w >= 1280) return 'desktop';
+  if (w - (appState.sidebarCollapsed ? 72 : 224) >= 1100) return 'desktop';
   if (w >= 900) return 'medium';
   return 'narrow';
 }
@@ -134,13 +139,19 @@ function render() {
       : `<div class="skeleton" role="status" aria-label="Waiting for the first snapshot from the worker"><span></span><span></span><span></span></div>`);
     return;
   }
+  document.body.dataset.sidebar = appState.sidebarCollapsed ? 'collapsed' : 'expanded';
+  const disclosures = [...main.querySelectorAll('[data-disclosure][open]')].map((el) => el.dataset.disclosure);
   const scroll = main.scrollTop;
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
-  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters }));
+  const workspaceOpen = $('#sidebar .workspace-details')?.open;
+  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed }));
+  if (workspaceOpen) $('#sidebar .workspace-details').open = true;
+  const connectionOpen = $('#header .connection-details')?.open;
   // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
   const healthOpen = [...document.querySelectorAll('#header .health-pop')].findIndex((p) => p.open);
   setMarkup($('#header'), renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt }));
+  if (connectionOpen) $('#header .connection-details').open = true;
   if (healthOpen >= 0) { const pop = document.querySelectorAll('#header .health-pop')[healthOpen]; if (pop) pop.open = true; }
   if (searchFocused) { const sInput = $('#search'); if (sInput) { sInput.focus(); if (searchPos !== null) sInput.setSelectionRange(searchPos, searchPos); } }
   setMarkup($('#filters'), renderFilterBar(s));
@@ -159,6 +170,7 @@ function render() {
   setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
   main.scrollTop = renderedView === appState.view ? scroll : 0;
   renderedView = appState.view;
+  disclosures.forEach((id) => { const el = main.querySelector(`[data-disclosure="${CSS.escape(id)}"]`); if (el) el.open = true; });
   document.body.dataset.layout = layoutMode();
   renderDetailPanel(now, pending);
   renderDialog();
@@ -292,10 +304,14 @@ function renderDetailPanel(now, pending) {
   const s = appState.snapshot;
   const ticket = appState.selected ? ticketById(s, appState.selected) : null;
   const mode = layoutMode();
+  document.body.dataset.expandedTicket = appState.detailExpanded && ticket ? 'true' : 'false';
+  $('#main').inert = !!(ticket && appState.detailExpanded);
   panel.hidden = !ticket;
   document.body.dataset.detail = ticket ? 'open' : 'closed';
-  if (!ticket) { setMarkup(panel, ''); panel.removeAttribute('aria-modal'); renderedDetail = null; return; }
+  if (!ticket) { for (const id of ['sidebar', 'header', 'filters', 'bulk']) $(`#${id}`).inert = false; setMarkup(panel, ''); panel.removeAttribute('aria-modal'); renderedDetail = null; return; }
   const modal = mode !== 'desktop';
+  $('#main').inert = modal || appState.detailExpanded;
+  for (const id of ['sidebar', 'header', 'filters', 'bulk']) $(`#${id}`).inert = modal;
   panel.setAttribute('role', modal ? 'dialog' : 'complementary');
   if (modal) panel.setAttribute('aria-modal', 'true'); else panel.removeAttribute('aria-modal');
   const active = document.activeElement;
@@ -303,7 +319,7 @@ function renderDetailPanel(now, pending) {
   const selectionStart = active && panel.contains(active) && active.tagName === 'TEXTAREA' ? active.selectionStart : null;
   const editing = active && panel.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
   if (editing) return; // never clobber an in-progress edit on poll
-  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id }));
+  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded }));
   // A different ticket starts at its title, not at the previous ticket's scroll offset.
   if (renderedDetail !== ticket.id) { panel.scrollTop = 0; renderedDetail = ticket.id; }
   if (activeId) { const el = panel.querySelector(`#${CSS.escape(activeId)}`) || panel.querySelector(`[data-action="${CSS.escape(activeId)}"]`); if (el) { el.focus(); if (selectionStart !== null && el.setSelectionRange) el.setSelectionRange(selectionStart, selectionStart); } }
@@ -496,6 +512,13 @@ function handleAction(el) {
       if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
       break;
     }
+    case 'review-proposals': appState.filters = { ...EMPTY_FILTERS }; setView('today'); render(); break;
+    case 'toggle-sidebar': appState.sidebarCollapsed = !appState.sidebarCollapsed; try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage may be unavailable */ } render(); document.querySelector('[data-action="toggle-sidebar"]')?.focus(); break;
+    case 'expand-detail': appState.detailExpanded = !appState.detailExpanded; render(); break;
+    case 'detail-tab':
+      if (!['overview', 'activity', 'delivery'].includes(el.dataset.tab)) break;
+      appState.detailTab = el.dataset.tab; render();
+      document.querySelector(`#detail-tab-${appState.detailTab}`)?.focus(); break;
     case 'cancel-next': appState.editingNext = null; render(); break;
     case 'toggle-blocked': appState.blockedExpanded = !appState.blockedExpanded; render(); break;
     case 'close-dialog': closeDialog(); break;
@@ -600,6 +623,8 @@ function openDetail(id, source) {
   motion?.cancelElement($('#detail'));
   appState.lastFocus = source ?? document.activeElement;
   appState.selected = id;
+  appState.detailTab = 'overview';
+  appState.detailExpanded = false;
   appState.loadedTicket = null;
   appState.editingNext = null;
   render();
@@ -614,6 +639,8 @@ async function closeDetail() {
   await motion?.exit($('#detail'));
   if (version !== detailCloseVersion || appState.selected !== selected) return;
   appState.selected = null;
+  appState.detailTab = 'overview';
+  appState.detailExpanded = false;
   appState.editingNext = null;
   render();
   const source = appState.lastFocus && document.contains(appState.lastFocus) ? appState.lastFocus : $(`#main [data-ticket="${CSS.escape(selected ?? '')}"]`);
@@ -638,6 +665,8 @@ function stepDetail(delta) {
   const next = ids[ids.indexOf(appState.selected) + delta];
   if (!next) return;
   appState.selected = next;
+  appState.detailTab = 'overview';
+  appState.detailExpanded = false;
   appState.loadedTicket = null;
   appState.editingNext = null;
   render();
@@ -734,7 +763,20 @@ function handleSubmit(form) {
 function onKey(e) {
   const target = e.target;
   const inInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
+  const detailTab = target?.closest('[role="tab"][data-tab]');
+  if (detailTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault();
+    const tabs = ['overview', 'activity', 'delivery'];
+    const index = tabs.indexOf(appState.detailTab);
+    appState.detailTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? 2 : (index + (e.key === 'ArrowRight' ? 1 : 2)) % 3];
+    render(); document.querySelector(`#detail-tab-${appState.detailTab}`)?.focus(); return;
+  }
   const dialogOpen = $('#dialog').open;
+  if (e.key === 'Tab' && !dialogOpen && $('#detail').getAttribute('aria-modal') === 'true') {
+    const focusable = [...$('#detail').querySelectorAll('button, a[href], input, select, textarea, summary, [tabindex]')].filter((el) => el.tabIndex >= 0 && !el.disabled && el.getClientRects().length);
+    const first = focusable[0], last = focusable.at(-1);
+    if (first && (e.shiftKey && target === first || !e.shiftKey && target === last)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
+  }
   if (e.key === 'Escape') {
     const pop = document.querySelector('.health-pop[open]');
     if (pop) { e.preventDefault(); pop.open = false; pop.querySelector('summary')?.focus(); return; }
@@ -780,7 +822,7 @@ function onClick(e) {
     return;
   }
   const open = e.target.closest('[data-open]');
-  if (open) { e.preventDefault(); openDetail(open.dataset.open, open); return; }
+  if (open) { e.preventDefault(); openDetail(open.dataset.open, open); if (open.dataset.section === 'activity') { appState.detailTab = 'activity'; render(); $('#detail-tab-activity')?.focus(); } return; }
   const action = e.target.closest('[data-action]');
   if (action && action.dataset.action !== 'detail-nav') { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
   const tab = e.target.closest('[data-view]');
@@ -823,6 +865,7 @@ function startCountdown() {
 
 export function startApp() {
   applyTheme();
+  try { appState.sidebarCollapsed = localStorage.getItem('st-sidebar-collapsed') === 'true'; } catch { /* use expanded navigation */ }
   motion = createDashboardMotion(document, window.matchMedia('(prefers-reduced-motion: reduce)'));
   readHash();
   const staticSnapshot = window.__SNAPSHOT__ ?? null;

@@ -125,7 +125,7 @@ export function requestChip(state) {
 }
 
 export function keyEl(key) {
-  return `<code class="key" data-copy="${attr(key)}" title="Click to copy">${esc(key)}</code>`;
+  return `<code class="key" data-copy="${attr(key)}" title="${attr(key)} · Click to copy">${esc(key)}</code>`;
 }
 
 export const SYSTEM_LABELS = { jira: 'Jira', linear: 'Linear', github: 'GitHub', custom: 'Tracker' };

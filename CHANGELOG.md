@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+
+- Put Pick next recommendations before the collapsed unlinked-work inbox, with compact workspace statistics and a recent-context section.
+- Group ticket details into Overview, Activity and Delivery, with next action, latest checkpoint and status controls first; add an expanded ticket view and collapsible navigation.
+- Consolidate workspace health details, surface pending run approvals in the header, and add direct checkpoint access from Sessions. Rename Today to Activity and Tree to Relationships.
+- Improve keyboard focus in modal ticket details and responsive layouts; refresh dashboard screenshots.
+
 ## [1.0.0] - 2026-10-11
 
 Orchestration-first 1.0: the dashboard is always reachable, runs can be queued in bulk and are verified by the worker's own test run, assigned issues arrive with their repositories resolved, and a shared page can propose (never start) a run.
