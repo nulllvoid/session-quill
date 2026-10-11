@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Submission preparation
+
+- Prepare plugin and package metadata for 1.0.0, matching the orchestration work already on main. This entry does not establish a published tag or GitHub release.
+- Clarify first-use setup, local storage, outbound integrations, retention and directory review considerations; add a repeatable submission preflight.
+- Refresh the website and workflow preview, including responsive layouts and animation controls.
+
 ### Added
 
 - Always-on dashboard ([ADR 0022](docs/decisions/0022-always-on-dashboard.md)): the dashboard prefers the fixed port 47321 (`ui_port`, falling back to a random port when it is taken; `ui_port = 0` keeps random), and a signed-in browser stays signed in for 7 days from its last use, across worker restarts. Sessions are stored only as hashes. `quill ui --revoke` signs every browser out.
