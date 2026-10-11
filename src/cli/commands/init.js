@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline/promises';
-import { loadUserConfig, saveUserConfig, saveRepoConfig, loadRepoConfig, CATEGORIES } from '../../config/config.js';
+import { loadUserConfig, saveUserConfig, saveRepoConfig, loadRepoConfig, resolveTracker, CATEGORIES } from '../../config/config.js';
+import { defaultSchedules } from '../../schedule/config.js';
 import { ensureMachineId, createStoreMeta, writeStoreMeta, loadStoreMeta, storeLayout } from '../../config/store.js';
 import { isValidTimeZone } from '../../lib/time.js';
 import { ensureDir } from '../../lib/atomic-fs.js';
@@ -101,6 +102,10 @@ export async function run({ flags, io, env }) {
     await ensureReady(ctx, { resume: true });
     io.println('worker ready; heartbeat verified');
   }
+  let bootstrapFailed = false;
+  if (flags['bootstrap-from-tracker'] === true) {
+    try { await bootstrapFromTracker(env, io, flags); } catch (err) { bootstrapFailed = true; io.println(`✗ import from tracker: ${err.message}`); }
+  }
   const { report } = await collect(env);
   for (const item of report.items.filter((i) => i.level !== 'ok')) io.println(`${item.level === 'warn' ? '!' : '✗'} ${item.label}: ${item.detail}`);
   io.println('');
@@ -109,5 +114,26 @@ export async function run({ flags, io, env }) {
   io.println(`  2. Create and bind a ticket: ${commandName('ticket')} create "<title>" --bind`);
   io.println('  3. Open the dashboard: quill ui');
   io.println('Quill reconnects automatically when your next Claude session starts.');
-  return report.ok ? 0 : 1;
+  return report.ok && !bootstrapFailed ? 0 : 1;
+}
+
+// `init --bootstrap-from-tracker` (ADR 0024): turn on the assigned-issue import, make sure a
+// tracker-sync schedule runs it, and import once now so the board starts with your work.
+export async function bootstrapFromTracker(env, io, flags = {}, { fetchImpl } = {}) {
+  const cfg = loadUserConfig(env);
+  const tracker = resolveTracker(cfg, null);
+  if (!tracker || !['jira', 'github'].includes(tracker.system)) throw new TrackerError('tracker-unsupported', 'add a [tracker] table with system = "jira" or "github" and domain (and repo for GitHub) to config.toml, set the token variable (tracker.sync_token_env), then run quill tracker import');
+  cfg.tracker = { ...cfg.tracker, import_assigned: true };
+  const schedules = Array.isArray(cfg.schedule) ? cfg.schedule : null;
+  if (!schedules || !schedules.some((s) => s && s.job === 'tracker-sync')) {
+    // Writing a first [[schedule]] replaces the built-in reconcile schedule, so it is written too.
+    const base = schedules ?? defaultSchedules(cfg).map((s) => ({ name: s.name, job: s.job, every: s.every }));
+    cfg.schedule = [...base, { name: 'tracker-sync', job: 'tracker-sync', every: '6h' }];
+    io.println('added a tracker-sync schedule (every 6h) that imports newly assigned issues');
+  }
+  saveUserConfig(cfg, env);
+  io.println('turned on [tracker] import_assigned');
+  const { importNow } = await import('./tracker.js');
+  const { loadContext } = await import('../context.js');
+  return importNow(loadContext(env), io, flags, { fetchImpl });
 }

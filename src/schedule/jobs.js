@@ -15,6 +15,8 @@ import { publishMarkdown, publishHtml } from '../publish/writers.js';
 import { publishArtifact, editRequestId } from '../publish/artifact.js';
 import { createArtifactClient } from '../publish/artifact-client.js';
 import { createTrackerClient, syncSettings, syncable } from '../tracker/client.js';
+import { onboardSettings } from '../onboard/settings.js';
+import { planImport, importProject, storeKeys, importSourceIdentity, IMPORT_LIMIT } from '../onboard/import.js';
 
 const NO_PERMISSIONS = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 
@@ -53,6 +55,21 @@ export function applyFeedback(worker, publisher, done) {
   }
 }
 
+// Creates a ticket for each open issue assigned to the owner that the store does not have yet.
+export async function importAssigned(worker, client, tracker) {
+  const project = importProject(worker.config);
+  if (!project) throw new Error('no project is configured for imported tickets');
+  const issues = await client.searchAssigned({ limit: IMPORT_LIMIT });
+  const plan = planImport(issues, { tracker, keys: storeKeys(worker.state.tickets.values()), storeId: worker.state.meta.store_id, projectId: project.id, projectName: project.name, category: worker.config.default_category || 'research', now: worker.now() });
+  const created = [];
+  for (const ticket of plan.create) {
+    const { result } = worker.emit('ticket-create', { ticket }, { source_identity: importSourceIdentity(ticket.key), ticket_id: ticket.id });
+    if (result.rejected) worker.log(`tracker-sync: import of ${ticket.key} rejected: ${result.rejected}`);
+    else if (!result.duplicate) created.push(ticket);
+  }
+  return { created, existing: plan.existing };
+}
+
 function defaultArtifactClient(publisher, worker) {
   return createArtifactClient({ claudePath: worker.config.claude_path || 'claude', workRoot: path.join(quillHome(worker.env), 'publish', publisher.name, 'runs') });
 }
@@ -66,7 +83,15 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
       const tracker = worker.identity && worker.identity.tracker;
       if (!tracker) throw new Error('tracker-sync needs a [tracker] table with system and domain in config.toml');
       const client = createTrackerClient({ tracker, settings: syncSettings(worker.config.tracker), env: worker.env, fetchImpl: trackerFetch });
-      const tickets = [...worker.state.tickets.values()].filter((t) => syncable(t, tracker))
+      const onboard = onboardSettings(worker.config.tracker);
+      // Assigned-issue import (ADR 0024) comes first, so new tickets are resolved in the same run.
+      let imported = null;
+      let importError = null;
+      if (onboard.import_assigned) {
+        try { imported = await importAssigned(worker, client, tracker); } catch (err) { importError = err.message; worker.log(`tracker-sync: import failed: ${err.message}`); }
+      }
+      const fresh = new Set(imported ? imported.created.map((t) => t.id) : []);
+      const tickets = [...worker.state.tickets.values()].filter((t) => syncable(t, tracker) && !fresh.has(t.id))
         .sort((a, b) => ((a.external.validated_at ?? '') < (b.external.validated_at ?? '') ? -1 : (a.external.validated_at ?? '') > (b.external.validated_at ?? '') ? 1 : a.key < b.key ? -1 : 1))
         .slice(0, settings.limit ?? 100);
       const results = [];
@@ -86,8 +111,10 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
       if (results.length) worker.emit('tracker-sync', { system: tracker.system, synced_at: worker.now(), results });
       worker.markGenerationDirty();
       const parts = [found ? `${found} found` : null, missing ? `${missing} not found` : null, errors ? `${errors} error${errors === 1 ? '' : 's'}` : null].filter(Boolean);
-      if (results.length && errors === results.length) throw new Error(results[0].error);
-      return { summary: `checked ${results.length} tracker key${results.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}` };
+      if (importError && !imported && (!results.length || errors === results.length)) throw new Error(`import failed: ${importError}`);
+      if (results.length && errors === results.length && !imported) throw new Error(results[0].error);
+      const importPart = imported ? `imported ${imported.created.length} assigned issue${imported.created.length === 1 ? '' : 's'}${imported.created.length ? ` (${imported.created.slice(0, 5).map((t) => t.key).join(', ')}${imported.created.length > 5 ? ', …' : ''})` : ''}; ` : importError ? `import failed: ${importError}; ` : '';
+      return { summary: `${importPart}checked ${results.length} tracker key${results.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}` };
     },
     // Runs publishers (ADR 0010). A destination the owner has not confirmed is never sent anything:
     // the run records needs-confirmation until a publish request carries confirm.
