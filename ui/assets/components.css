@@ -1,0 +1,41 @@
+/* Opt-in Quill reference components. Load tokens.css first. No global app layout rules. */
+.q-panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--q-radius-panel); padding: var(--q-space-6); }
+.q-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--q-control-height); padding: 7px 12px; border: 1px solid var(--border-strong); border-radius: var(--q-radius-control); background: var(--surface); color: var(--text); font: 500 13px var(--font); cursor: pointer; text-decoration: none; transition: background-color var(--q-motion-fast), transform var(--q-motion-fast); }
+.q-button:hover { background: var(--surface-inset); }
+.q-button:active:not(:disabled) { transform: translateY(1px); }
+.q-button:focus-visible, .q-input:focus-visible, .q-tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.q-button:disabled { opacity: .5; cursor: not-allowed; }
+.q-button--primary { background: var(--accent-fill); color: var(--accent-fg); border-color: var(--accent-fill); }
+.q-button--primary:hover { background: color-mix(in srgb, var(--accent-fill) 90%, var(--text)); }
+.q-button--quiet { background: transparent; border-color: transparent; }
+.q-button--danger { color: var(--critical); border-color: var(--critical); }
+.q-input { box-sizing: border-box; min-height: var(--q-control-height); width: 100%; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: var(--q-radius-control); background: var(--surface); color: var(--text); font: 14px var(--font); }
+.q-input[aria-invalid="true"] { border-color: var(--critical); }
+.q-field { display: grid; gap: 8px; font-size: 13px; }
+.q-caption { font-size: var(--q-type-caption); color: var(--text-muted); }
+.q-error { color: var(--critical); font-size: 13px; }
+.q-icon { width: 16px; height: 16px; flex: none; vertical-align: -3px; }
+.q-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 7px; border-radius: 5px; font: 500 12px var(--font); color: var(--text-muted); background: var(--surface-inset); white-space: nowrap; }
+.q-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.q-chip[data-tone="active"] { color: var(--status-active); background: var(--status-active-bg); }
+.q-chip[data-tone="review"] { color: var(--status-review); background: var(--status-review-bg); }
+.q-chip[data-tone="warning"] { color: var(--status-deploy); background: var(--status-deploy-bg); }
+.q-chip[data-tone="critical"] { color: var(--status-blocked); background: var(--status-blocked-bg); }
+.q-chip[data-tone="good"] { color: var(--status-done); background: var(--status-done-bg); }
+.q-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+.q-tab { padding: 12px 14px; background: transparent; color: var(--text-muted); border: 0; border-bottom: 2px solid transparent; font: 500 13px var(--font); cursor: pointer; }
+.q-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.q-notice { display: flex; gap: 12px; padding: 14px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); color: var(--text); font-size: 13px; }
+.q-notice[data-tone="critical"] { border-color: var(--critical); background: var(--status-blocked-bg); }
+.q-next-action { padding: 12px 14px; border-radius: 7px; background: var(--accent-soft); color: var(--text); }
+.q-next-action strong { display: block; font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 5px; }
+.q-run-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.q-run-row:last-child { border-bottom: 0; }
+.q-run-row p { margin: 6px 0 0; }
+.q-skeleton { height: 12px; border-radius: 4px; background: var(--surface-inset); }
+.q-empty { text-align: center; padding: 28px 20px; }
+.q-empty img { display: block; width: 160px; max-width: 100%; margin: auto auto 12px; }
+.q-empty h3 { font-size: 16px; margin: 0 0 8px; }
+.q-empty p { font-size: 13px; color: var(--text-muted); margin: 0 auto 16px; max-width: 42ch; }
+@media (pointer: coarse) { .q-button, .q-input, .q-tab { min-height: var(--q-touch-target); } }
+@media (prefers-reduced-motion: reduce) { .q-button { transition: none; } .q-button:active:not(:disabled) { transform: none; } }
