@@ -43,6 +43,7 @@ Usage: quill <command> [options]
   repo add <path> [--id id] [--project id] [--repo-file]   repo list [--json]   repo remove <id>
   repo clone <KEY> [--url <remote>] [--confirm]   (preview, then clone a ticket's repository into [tracker] auto_clone_dir)
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>
+  approve --run [<id>] [--json]             dismiss --run <id>  (runs proposed from a shared page)
   status [--json] [--session <id>] | status --statusline
   doctor
   worker run | start | stop | status       worker install | uninstall  (start the worker at login)

@@ -2,6 +2,7 @@ import { loadContext, sessionFromFlags, cliEvent, submitAndWait, latestSnapshot 
 import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
 import { sessionKey } from '../../core/state.js';
 import { TrackerError } from '../../lib/errors.js';
+import { submitCliRequest } from './handoff.js';
 
 function currentCheckpoint(ctx, session, explicitId) {
   const binding = readBindingSnapshot(sessionKey(session), ctx.env);
@@ -21,8 +22,37 @@ function currentCheckpoint(ctx, session, explicitId) {
   return { cp: eligible[0], binding };
 }
 
+// Runs proposed from a shared page (ADR 0025): `approve --run` lists the open ones, `approve --run
+// <id>` queues one as an ordinary run, and `dismiss --run <id>` dismisses it. A unique id prefix is enough.
+async function proposedRun(ctx, command, flags, io) {
+  const snap = latestSnapshot(ctx);
+  const open = ((snap && snap.run_proposals) || []).filter((p) => p.state === 'proposed').sort((a, b) => (a.proposed_at < b.proposed_at ? -1 : 1));
+  if (flags.run === true) {
+    if (flags.json) { io.json(open); return 0; }
+    if (!open.length) { io.println('No proposed runs. A Run agent pick on a two-way page appears here after its next publish.'); return 0; }
+    for (const p of open) io.println(`${p.id.slice(0, 8)}  ${String(p.ticket_key ?? '?').padEnd(12)} ${p.recipe.name.padEnd(18)} ${p.access.padEnd(9)} ${String(p.editor ?? 'unknown editor').padEnd(16)} ${p.publisher}  ${p.proposed_at}`);
+    io.println('Approve with `quill approve --run <id>`, or dismiss with `quill dismiss --run <id>`.');
+    return 0;
+  }
+  const prefix = String(flags.run).toLowerCase();
+  const matches = open.filter((p) => p.id.startsWith(prefix));
+  if (!matches.length) throw new TrackerError('proposal-unknown', `no open proposed run starts with ${prefix}; list them with \`quill approve --run\``);
+  if (matches.length > 1) throw new TrackerError('proposal-ambiguous', `${prefix} matches ${matches.length} proposed runs; give more of the id`);
+  const p = matches[0];
+  const kind = command === 'approve' ? 'approve-run' : 'dismiss-run';
+  const terminal = await submitCliRequest(ctx, io, { kind, target_id: p.ticket_id, expected_revision: null, payload: { proposal_id: p.id } }, flags);
+  if (terminal.state !== 'applied') {
+    const err = terminal.error ?? {};
+    throw new TrackerError(err.code ?? terminal.state, `${command} ${terminal.state}: ${err.message ?? ''}`);
+  }
+  if (kind === 'approve-run') io.println(`Approved the proposed ${p.recipe.name} run on ${p.ticket_key}; run ${terminal.result.handoff_id.slice(0, 8)} is queued (${p.access} access). Its results arrive as suggestions.`);
+  else io.println(`Dismissed the proposed ${p.recipe.name} run on ${p.ticket_key}.`);
+  return 0;
+}
+
 export async function run({ command, flags, io, env }) {
   const ctx = loadContext(env);
+  if (flags.run !== undefined) return proposedRun(ctx, command, flags, io);
   const session = sessionFromFlags(flags, env);
   const { cp, binding } = currentCheckpoint(ctx, session, flags.checkpoint ?? null);
   if (command === 'approve') {
