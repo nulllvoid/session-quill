@@ -240,25 +240,25 @@ claude -p --output-format stream-json --verbose
 
 ## P0 results (2026-10-12)
 
-claude 2.1.296 (Claude Code), Windows 11, haiku, `node scripts/probe-autonomous.mjs` (exit 0). Setup: `-p --output-format stream-json --verbose --permission-mode dontAsk --permission-prompts none --max-turns 4 --settings <file>` with a PreToolUse hook (`onFailure: "block"`, matcher Bash|PowerShell|Monitor|mcp__.*|Read|Glob|Grep|Edit|Write|MultiEdit|NotebookEdit|Task|Agent) and no allow rules.
+claude 2.1.296 (Claude Code), Windows 11, haiku, `node scripts/probe-autonomous.mjs` (exit 0; fix round 1 revision). Setup: `-p --output-format stream-json --verbose --permission-mode dontAsk --permission-prompts none --max-turns 4 --setting-sources project --settings <file>` with a PreToolUse hook (`onFailure: "block"`, matcher Bash|PowerShell|Monitor|mcp__.*|Read|Glob|Grep|Edit|Write|MultiEdit|NotebookEdit|Task|Agent), no allow rules, and the probe hook denying every `mcp__*` call. Each hook-allow probe has a no-hook control that must be denied, and the hook log must show the tool. The test command is `node -e ...`, which is not in dontAsk's read-only set.
 
 | probe | verdict | note |
 | --- | --- | --- |
-| hookAllowBash | true | ok |
-| hookAllowPowerShell | true | ok |
-| hookAllowEdit | true | Write |
-| hookAllowMonitor | true | ok; Monitor in tools: true; hook saw: true |
+| hookAllowBash | true | hook run: ran=true, hook saw=true; no-hook control: attempted=true ran=false |
+| hookAllowPowerShell | true | hook run: ran=true, hook saw=true; no-hook control: attempted=true ran=false |
+| hookAllowEdit | true | hook run wrote file=true, hook saw Write=true; no-hook control wrote file=false |
+| hookAllowMonitor | true | hook run ran=true saw=true; Monitor in tools=true; control attempted=true ran=false |
 | hookDenyHonoured | true | deny reason reached the model as tool error |
-| onFailureBlock | true | crash w/o onFailure: Read ran=true; with block: Read ran=false |
-| settingsMergeWithPlugin | true | injected hook fired 1x; plugin hook events seen: true |
-| subagentsCarryGuard | true | agent called: true; parent Bash: false; hook saw subagent Bash: 1x |
-| initHasMcpSource | true | sources: plugin,claudeai; 25 servers |
-| credRedirectHonoured | true |  |
+| onFailureBlock | true | crash w/o onFailure: Read ran=true; with block: attempted=true ran=false |
+| settingsMergeWithPlugin | true | injected hook fired 1x; session-quill plugin hook event seen=true |
+| subagentsCarryGuard | true | subagent Bash reached hook and ran on allow=true; hook deny blocked it=true |
+| initHasMcpSource | true | sources: plugin,claudeai; 25 servers (init only; hook denies every mcp__ call) |
+| credRedirectHonoured | true | tested: git; other CLIs unverified (not installed) |
 | disableAutoMemory | true | with flag: 0 memory files; control without flag: 2 |
-| addDirReadable | true | result: PROBE-TOKEN-7731 |
-| maxBudgetFlag | true | flag accepted; cap 0.0005; result subtype "error_max_budget_usd" (0.01 was not exceeded by one short haiku reply) |
-| permissionPromptsNoneFlag | true | exit 0; flag accepted by this CLI |
-| timeoutBlock | true | hook sleep 15s, timeout 2, onFailure block: Read ran=false |
+| addDirReadable | true | with --add-dir read=true; without read=false |
+| maxBudgetFlag | true | cap 0.0005; result subtype "error_max_budget_usd" (0.01 was not exceeded by one short haiku reply) |
+| permissionPromptsNoneFlag | true | flag accepted (run exits 0, init seen); not a claim about prompt behaviour |
+| timeoutBlock | true | hook sleeps 15s, timeout 2, onFailure block: attempted=true ran=false |
 | credRedirectHonoured.kubectl | n/a | CLI not installed on this machine |
 | credRedirectHonoured.aws | n/a | CLI not installed on this machine |
 | credRedirectHonoured.gcloud | n/a | CLI not installed on this machine |
@@ -267,9 +267,12 @@ claude 2.1.296 (Claude Code), Windows 11, haiku, `node scripts/probe-autonomous.
 | credRedirectHonoured.git | true | owner env had one; redirect hid it |
 
 Notes:
-- `--permission-prompts none` exists on 2.1.296 (choices host|none).
-- `onFailureBlock` was tested on a Read inside cwd (which dontAsk would otherwise allow): a crashing hook without `onFailure` let it run, with `onFailure: "block"` it was blocked; a hook sleeping 15 s with `timeout: 2` was also blocked.
-- `subagentsCarryGuard`: a Bash call made by a subagent reached the hook, so `Task`/`Agent` can be allowed when the recipe allows fan-out.
-- Credential redirect: only `git` is installed here (kubectl, aws, gcloud, az, psql absent: n/a). With `GIT_CONFIG_GLOBAL` stub and `GIT_CONFIG_NOSYSTEM=1` the owner's credential helper was hidden. `GIT_CONFIG_NOSYSTEM=1` is needed because Git for Windows sets the helper at system level; spec §4.4 should list it.
+- `--permission-prompts none` exists on 2.1.296 (choices host|none). `permissionPromptsNoneFlag` only means the flag is accepted.
+- `onFailureBlock` uses a Read inside cwd (which dontAsk would allow): a crashing hook without `onFailure` let it run, with `onFailure: "block"` it was blocked; a hook sleeping 15 s with `timeout: 2` was also blocked (the model attempted the Read).
+- `subagentsCarryGuard`: a subagent's Bash call reached the hook, ran when allowed and was blocked (with the deny reason) when the hook denied only Bash.
+- `credRedirectHonoured`: git only; kubectl, aws, gcloud, az, psql are not installed here and are unverified. The redirected env is a copy of the owner env with AWS/Google keys deleted, then the stub paths overlaid. `GIT_CONFIG_NOSYSTEM=1` is needed because Git for Windows sets the helper at system level; spec §4.4 should list it.
+- `settingsMergeWithPlugin` and `initHasMcpSource` ran with all setting sources (user settings and plugins are needed); the hook still denies any MCP call, and none was made.
+- `addDirReadable`: the control without `--add-dir` could not read the file. `disableAutoMemory`: the control without the env var wrote 2 memory files.
 - `maxBudgetFlag`: a 0.01 cap was not reached by one short haiku reply; 0.0005 produced `error_max_budget_usd`.
-- All required hook-allow probes passed, so no P0 fallback to spec §3 is needed.
+- All hook-allow probes passed, so no P0 fallback to spec §3 is needed.
+- Residue: the child env sets `QUILL_HOME` to a temp dir, and the script deletes its temp dir and the probe project dirs (transcripts, memory) it created under ~/.claude/projects. The first (pre-fix) run did not set `QUILL_HOME`, so the session-quill plugin may have captured those probe sessions into the owner's Quill store; its ~/.claude/projects residue was removed, the Quill-store entries were not checked.
