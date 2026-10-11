@@ -2,6 +2,7 @@
 description: Approve (promote) the latest captured checkpoint for the bound ticket, or dismiss it
 argument-hint: [--checkpoint <id>] | dismiss [--checkpoint <id>] | --run [<id>] | dismiss --run <id>
 allowed-tools: Bash(node *)
+disable-model-invocation: true
 ---
 
 Promote the latest complete checkpoint of this session's bound ticket as an approved plan, or dismiss it.

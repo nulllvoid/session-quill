@@ -12,7 +12,7 @@ const NOW = '2026-10-02T12:30:00Z';
 const t1 = ticket(1);
 const proposal = (n, extra = {}) => ({
   id: `4444444${n}-0000-4000-8000-000000000000`, ticket_id: t1.id, ticket_key: t1.key, publisher: 'team', editor: 'u_<b>editor</b>', edited_at: '2026-10-02T12:00:00Z', recipe: { name: 'analyse', source: 'builtin', hash: 'h' }, mode: 'analyse',
-  permissions: { read_source: true }, access: 'standard', read_only: true, auto: false, proposed_at: '2026-10-02T12:05:00Z', state: 'proposed', resolved_at: null, resolved_by: null, handoff_id: null, ...extra,
+  permissions: { read_source: true }, access: 'standard', read_only: true, proposed_at: '2026-10-02T12:05:00Z', state: 'proposed', resolved_at: null, resolved_by: null, handoff_id: null, ...extra,
 });
 const snap = (proposals, extra = {}) => normalizeSnapshot({ ...snapshot(), run_proposals: proposals, today: { generated_for: '2026-10-02', days: [] }, ...extra });
 
@@ -37,6 +37,10 @@ test('an approval or dismissal on its way hides the buttons', () => {
   const html = proposalItem(s.run_proposals[0], s, { now: NOW, pending });
   assert.doesNotMatch(html, /data-action="approve-run"/);
   assert.match(html, /Approval sent/);
+  const dismissing = proposalItem(s.run_proposals[0], s, { now: NOW, pending: [{ id: 'r2', kind: 'dismiss-run', target_id: t1.id, state: 'pending', payload: { proposal_id: proposal(1).id } }] });
+  assert.match(dismissing, /Dismissal queued <button type="button" class="btn small" data-action="cancel-request" data-request="r2" aria-label="Undo dismissing the analyse run">[^<]*<svg[\s\S]*Undo<\/button>/, 'Today can undo a dismissal in its window');
+  const sending = proposalItem(s.run_proposals[0], s, { now: NOW, pending: [{ id: 'r3', kind: 'dismiss-run', target_id: t1.id, state: 'sending', payload: { proposal_id: proposal(1).id } }] });
+  assert.doesNotMatch(sending, /cancel-request/, 'nothing to undo before the worker has it');
 });
 
 test('Today lists open proposals above the days; lapsed and resolved ones are not listed', () => {
