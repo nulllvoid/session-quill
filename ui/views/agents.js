@@ -1,6 +1,6 @@
 // Agents panel on ticket detail (ADR 0008): the recipes available for the ticket's repository,
 // the permissions each may use, and every run with the suggestions it left.
-import { esc, attr, icon, timeEl, handoffChip, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset, formatDuration } from '../components.js';
+import { esc, attr, icon, timeEl, handoffChip, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset, formatDuration, contentViewer } from '../components.js';
 
 const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 'repository' };
 const ACTIVE = new Set(['pending', 'applying']);
@@ -110,14 +110,14 @@ function runTimings(h) {
   return parts.length ? `<p class="run-timings small muted">${esc(parts.join(' · '))}</p>` : '';
 }
 
-function runItem(h, ticket, snapshot, { now, tz, caps, pending }) {
+function runItem(h, ticket, snapshot, { now, tz, caps, pending, content = {}, contentStatus = {} }) {
   const name = h.recipe ? h.recipe.name : h.mode;
   const suggestions = h.suggestions ?? [];
   const accessChip = h.access === 'full' ? ' <span class="chip warning small">Full access</span>' : h.access === 'settings' ? ' <span class="chip small">My settings</span>' : '';
-  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong>${accessChip} <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${runTimings(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${fileEffects(h, ticket, { canEdit: !!caps.edit_tickets, pending })}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${h.result_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(h.result_ref)}" data-generation="${attr(snapshot.generation_id)}">Partial/full result</button>` : ''}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
+  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong>${accessChip} <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${runTimings(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${fileEffects(h, ticket, { canEdit: !!caps.edit_tickets, pending })}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${contentViewer(h.result_ref, { content, status: contentStatus, generation: snapshot.generation_id, label: h.state === 'done' ? 'Show full result' : 'Show partial result' })}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
 }
 
-export function renderAgentsSection(ticket, rawSnapshot, { now, pending = [] } = {}) {
+export function renderAgentsSection(ticket, rawSnapshot, { now, pending = [], content = {}, contentStatus = {} } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const caps = snapshot.capabilities ?? {};
   const tz = snapshot.meta.timezone;
@@ -129,7 +129,7 @@ export function renderAgentsSection(ticket, rawSnapshot, { now, pending = [] } =
   const busy = runs.some((h) => ['queued', 'running'].includes(h.state));
   return `<section class="detail-section agents"><h3>Agents <span class="count">${esc(runs.length)}</span></h3>
 ${recipes.length ? `<ul class="recipes">${recipes.map((r) => recipeRow(r, ticket, canRun && !busy)).join('')}</ul>${canRun && busy ? '<p class="muted small">One run per ticket: wait for the current run or cancel it.</p>' : ''}` : '<p class="muted small">No recipes found. Add one in <code>.quill/agents/</code> or <code>~/.claude/quill/agents/</code>.</p>'}
-<h4 class="small">Runs</h4>${runs.length ? `<ul class="handoffs">${runs.map((h) => runItem(h, ticket, snapshot, { now, tz, caps, pending })).join('')}</ul>` : '<p class="muted small">No runs yet.</p>'}</section>`;
+<h4 class="small">Runs</h4>${runs.length ? `<ul class="handoffs">${runs.map((h) => runItem(h, ticket, snapshot, { now, tz, caps, pending, content, contentStatus })).join('')}</ul>` : '<p class="muted small">No runs yet.</p>'}</section>`;
 }
 
 export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf = null } = {}) {

@@ -41,6 +41,7 @@ const appState = {
   sessionsPage: 0,
   treeRoot: null,
   content: {},
+  contentStatus: {},
   loadedTicket: null,
   lastFocus: null,
   error: null,
@@ -278,6 +279,22 @@ function cancelBatch(batchId) {
   announce(`Cancelling ${queued.length} queued run${queued.length === 1 ? '' : 's'}`);
 }
 
+// Loads one content ref. A snapshot that moved on is polled and the load retried once with the new
+// generation; any other failure stays visible with Retry.
+async function loadContent(hash, generation, retried = false) {
+  appState.contentStatus[hash] = 'loading';
+  render();
+  try {
+    const text = await api.getContent(hash, generation);
+    delete appState.contentStatus[hash];
+    appState.content[hash] = text ?? '(content unavailable: capture incomplete)';
+  } catch (err) {
+    if (err.code === 'generation-expired' && !retried) { await poll(); return loadContent(hash, appState.snapshot.generation_id, true); }
+    appState.contentStatus[hash] = { error: err.message || 'the request failed' };
+  }
+  render();
+}
+
 function renderFilterBar(s) {
   const f = appState.filters;
   const tokens = [];
@@ -319,7 +336,7 @@ function renderDetailPanel(now, pending) {
   const selectionStart = active && panel.contains(active) && active.tagName === 'TEXTAREA' ? active.selectionStart : null;
   const editing = active && panel.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
   if (editing) return; // never clobber an in-progress edit on poll
-  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded }));
+  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded }));
   // A different ticket starts at its title, not at the previous ticket's scroll offset.
   if (renderedDetail !== ticket.id) { panel.scrollTop = 0; renderedDetail = ticket.id; }
   if (activeId) { const el = panel.querySelector(`#${CSS.escape(activeId)}`) || panel.querySelector(`[data-action="${CSS.escape(activeId)}"]`); if (el) { el.focus(); if (selectionStart !== null && el.setSelectionRange) el.setSelectionRange(selectionStart, selectionStart); } }
@@ -388,7 +405,7 @@ async function poll() {
     appState.online = true;
     appState.error = null;
     syncRequests(snap);
-    if (changed) { appState.content = {}; appState.loadedTicket = null; }
+    if (changed) { appState.content = {}; appState.contentStatus = {}; appState.loadedTicket = null; }
     render();
   } catch (err) {
     if (err.code === 'unauthenticated') { appState.error = err.message; appState.online = false; }
@@ -594,11 +611,8 @@ function handleAction(el) {
     }
     case 'cancel-batch': cancelBatch(el.dataset.batch); break;
     case 'dismiss-batch': appState.batches = appState.batches.filter((b) => b !== el.dataset.batch); render(); break;
-    case 'load-content': {
-      const hash = el.dataset.hash;
-      api.getContent(hash, el.dataset.generation).then((text) => { appState.content[hash] = text ?? '(content unavailable: capture incomplete)'; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
-      break;
-    }
+    case 'load-content': loadContent(el.dataset.hash, el.dataset.generation); break;
+    case 'hide-content': delete appState.content[el.dataset.hash]; render(); break;
     case 'load-ticket': {
       api.getTicket(el.dataset.ticket, el.dataset.generation).then((t) => { appState.loadedTicket = t; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
       break;

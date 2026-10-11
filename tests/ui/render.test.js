@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshness, relativeTime, formatAbsolute } from '../../ui/lib/time.js';
-import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip } from '../../ui/components.js';
+import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip, contentViewer } from '../../ui/components.js';
 import { sanitizeSnapshot } from '../../src/export/sanitize.js';
 import { renderPickNext, renderInbox } from '../../ui/views/picknext.js';
 import { renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from '../../ui/views/dialogs.js';
@@ -586,4 +586,30 @@ test('pick next: one reason per card with the breakdown in the score tooltip; bl
   assert.equal((open.match(/class="blocker-text"/g) ?? []).length, many.blocked.filter((b) => b.blocker).length);
   assert.match(open, /Show fewer/);
   assert.match(open, /<h3>Second /, 'more than one project groups the list');
+});
+
+test('contentViewer shows a load button, loading, the escaped text with Hide, and a failure with Retry', () => {
+  const ref = 'c'.repeat(64);
+  assert.match(contentViewer(ref, { content: {}, status: {}, generation: 'g1', label: 'Show full result' }), /data-action="load-content" data-hash="c{64}" data-generation="g1">Show full result</);
+  const loading = contentViewer(ref, { content: {}, status: { [ref]: 'loading' }, generation: 'g1', label: 'x' });
+  assert.match(loading, /aria-busy="true"/);
+  assert.match(loading, /Loading/);
+  const loaded = contentViewer(ref, { content: { [ref]: '<b>done</b>' }, status: {}, generation: 'g1', label: 'x' });
+  assert.match(loaded, /<pre class="full">&lt;b&gt;done&lt;\/b&gt;<\/pre>/);
+  assert.match(loaded, /data-action="hide-content" data-hash="c{64}"/);
+  const failed = contentViewer(ref, { content: {}, status: { [ref]: { error: 'boom <x>' } }, generation: 'g1', label: 'x' });
+  assert.match(failed, /role="alert"[^>]*>Could not load: boom &lt;x&gt;/);
+  assert.match(failed, /data-action="load-content"[^>]*>Retry</);
+  assert.equal(contentViewer(null, { content: {}, status: {}, generation: 'g1', label: 'x' }), '');
+});
+
+test('a run result and a timeline entry render their loaded full text', () => {
+  const s = snapshot();
+  const ref = 'b'.repeat(64);
+  const t = { ...s.tickets[4], handoff_ids: ['h1'], timeline: [{ id: 'e1', at: '2026-10-02T09:00:00Z', kind: 'plan', text: 'plan text', event_id: 'x', content_ref: 'd'.repeat(64), coverage: 'complete' }], timeline_total: 1 };
+  const content = { [ref]: 'FULL-RESULT-SENTINEL', ['d'.repeat(64)]: 'FULL-TIMELINE-SENTINEL' };
+  const overview = renderDetail(t, s, { now: NOW, pending: [], content, contentStatus: {} });
+  assert.match(overview, /FULL-RESULT-SENTINEL/);
+  const activity = renderDetail(t, s, { now: NOW, pending: [], content, contentStatus: {}, tab: 'activity' });
+  assert.match(activity, /FULL-TIMELINE-SENTINEL/);
 });

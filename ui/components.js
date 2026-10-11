@@ -370,6 +370,17 @@ export function pager(page, pages, { prefix }) {
   return `<nav class="pager" aria-label="Pagination"><button type="button" class="btn small" data-action="${attr(prefix)}-page" data-page="${page - 1}" ${page === 0 ? 'disabled' : ''}>Previous</button><span>Page ${page + 1} of ${pages}</span><button type="button" class="btn small" data-action="${attr(prefix)}-page" data-page="${page + 1}" ${page + 1 >= pages ? 'disabled' : ''}>Next</button></nav>`;
 }
 
+// Loaded text for a content ref (results, timeline entries, plans, checkpoints) with its loading
+// and failure states. A failure always offers Retry; nothing is left silently empty.
+export function contentViewer(ref, { content = {}, status = {}, generation = '', label = 'Full text' } = {}) {
+  if (!ref) return '';
+  if (Object.hasOwn(content, ref)) return `<div class="content-viewer" data-ref="${attr(ref)}"><button type="button" class="link small" data-action="hide-content" data-hash="${attr(ref)}">Hide</button><pre class="full">${esc(content[ref])}</pre></div>`;
+  const st = status[ref];
+  if (st === 'loading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">Loading…</span></div>`;
+  if (st && st.error) return `<div class="content-viewer" data-ref="${attr(ref)}"><span class="small critical" role="alert">Could not load: ${esc(st.error)}</span> <button type="button" class="btn small ghost" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">Retry</button></div>`;
+  return `<button type="button" class="link small" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">${esc(label)}</button>`;
+}
+
 // How much of Claude Code a run may use (ADR 0017). The owner's settings are the default; Full
 // access skips every permission check and says so where it is chosen.
 export function accessFieldset() {
