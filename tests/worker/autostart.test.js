@@ -174,7 +174,7 @@ test('macOS and Linux entries carry the install-time PATH, so claude and node re
 test('Linux: % and $ in paths are escaped for systemd', async () => {
   const t = tmp();
   const fake = fakeOs();
-  const env = { QUILL_HOME: '/home/me/100%$q', PATH: '/p%h/bin' };
+  const env = { QUILL_HOME: path.join(t.env.QUILL_HOME, '100%$q'), PATH: '/p%h/bin' };
   await installAutostart({ platform: 'linux', env, run: fake.run, nodePath: '/opt/n$de%/node', binPath: BIN, home: t.home });
   const unit = fs.readFileSync(path.join(t.home, '.config', 'systemd', 'user', SYSTEMD_UNIT), 'utf8');
   assert.match(unit, /^Environment="QUILL_HOME=[^"]*100%%\$q"$/m, 'specifiers escaped; Environment= does not expand $');
