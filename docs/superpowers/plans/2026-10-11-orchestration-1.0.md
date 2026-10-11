@@ -76,7 +76,7 @@ Done when: a ticket with a mapped but missing repo shows *Needs clone*; confirmi
 ## Phase 4 — remote and scale
 
 Backend
-1. **Remote runs become proposals.** Two-way artifact publishers gain an editable `run` field ("Run agent": a recipe name from a dropdown of read-only recipes plus any the owner allows). `applyFeedback` turns that edit into a **proposed run** on the ticket (journaled; deterministic id from `editRequestId` so repeated reconciles create exactly one), naming the page editor and recipe. Nothing queues until the owner approves on the dashboard or via `quill approve --run <id>` (or the existing approve command extended); dismiss is supported. Optional `[publish.<name>] auto_run_editors = [...]` with `auto_run_recipes` limited to read-only recipes may auto-queue.
+1. **Remote runs become proposals.** Two-way artifact publishers gain an editable `run` field ("Run agent": a recipe name from a dropdown of read-only recipes plus any the owner allows). `applyFeedback` turns that edit into a **proposed run** on the ticket (journaled; deterministic id from `editRequestId` so repeated reconciles create exactly one), naming the page editor and recipe. Nothing queues until the owner approves on the dashboard or via `quill approve --run <id>` (or the existing approve command extended); dismiss is supported. ~~Optional auto-run for allowlisted editors~~ dropped in review: the editor id is page data any editor can forge (ADR 0025).
 2. **Worktree recycling** stays deferred until phase-1 timings show worktree time matters (document in the ADR).
 
 UI (UI plan phase 4)

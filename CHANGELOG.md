@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-11
+
+Orchestration-first 1.0: the dashboard is always reachable, runs can be queued in bulk and are verified by the worker's own test run, assigned issues arrive with their repositories resolved, and a shared page can propose (never start) a run.
+
 ### Added
 
 - Always-on dashboard ([ADR 0022](docs/decisions/0022-always-on-dashboard.md)): the dashboard prefers the fixed port 47321 (`ui_port`, falling back to a random port when it is taken; `ui_port = 0` keeps random), and a signed-in browser stays signed in for 7 days from its last use, across worker restarts. Sessions are stored only as hashes. `quill ui --revoke` signs every browser out.
@@ -34,13 +38,13 @@ All notable changes to this project are documented here. The format follows [Kee
 - `agent_ms` no longer includes the worker's test runs, which are `test_ms`.
 
 ### Fixed
+
 - Onboarding ([ADR 0024](docs/decisions/0024-tracker-onboarding.md)): an assigned issue counts as imported only when a ticket points at that very issue; a key another ticket holds is reported as a collision and skipped. The fallback GitHub key prefix drops separators (`WEBAPP-12`, not `WEB_APP-12`) so it matches the key pattern.
 - The repository resolver records a failed read of an issue's hints and moves the ticket to the back of its queue; after a 404 or 403 it waits a day, doubling to a week. Origins are read without blocking the worker, four at a time, and cached until a folder's git config changes.
 - Clones also disable Git LFS filters (`GIT_LFS_SKIP_SMUDGE=1`) and HTTP redirects, kill git's whole process tree on timeout or cancel (Windows too), and register a folder of the target name that already holds the remote instead of cloning beside it. The worker removes unfinished `.*.partial-*` clone folders when it starts. Folder names are cleaned again after the 64-character cut and never a Windows device name with an extension.
 - `[tracker.repo_map]` remotes carrying credentials are ignored with a warning; remotes are stored and shown without userinfo.
 - `quill/no-code` is no longer dropped by a `tags` update that omits it; only `no_code: false` clears it.
 - Linking a ticket to a just-registered repository no longer races the worker's config reload, and registering a clone re-reads `config.toml` right before writing, keeping a `quill repo add` made meanwhile.
-
 - Dashboard bulk selection: a bulk run no longer reopens its results dialog after you close it or overwrite another batch's, and clears only the tickets it submitted. **Undo all** also covers changes still being sent and keeps earlier bulk changes inside their window. Changing filters drops checked tickets they hide. `x` with ctrl, meta or alt is left to the browser. The bulk bar is a labelled group and updates its count in place, keeping focus and not replaying its entrance.
 - Queued runs of a built-in recipe no longer fail with `recipe-changed` after an upgrade changes the built-in's text; they run the current built-in. Personal and repository recipes still must match the hash that was reviewed.
 - `quill handoff cancel --batch` without a value no longer cancels the first run it finds; it, an empty batch id, and `quill handoff cancel` without a run id are usage errors.
@@ -232,7 +236,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/nulllvoid/session-quill/compare/v0.7.2...v1.0.0
 [0.7.2]: https://github.com/nulllvoid/session-quill/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nulllvoid/session-quill/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nulllvoid/session-quill/compare/v0.6.0...v0.7.0

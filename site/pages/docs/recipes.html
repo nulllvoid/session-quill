@@ -73,7 +73,7 @@ max_concurrent_fix      = 1     # anything with edit_source</code></pre>
 
 <h2 id="batches">Batches and proposals</h2>
 <p>A handoff request may carry a <code>batch_id</code> (up to 64 characters). The dashboard's bulk action bar uses one per selection so a batch has a progress strip and a <em>Cancel batch</em> that cancels every queued run in it; <code>quill handoff cancel --batch &lt;id&gt;</code> does the same from the CLI.</p>
-<p>A <em>Run agent</em> edit on a two-way artifact page becomes a proposed run on the ticket, with a deterministic id so repeated reconciles create exactly one. It runs when you approve it on the dashboard or with <code>quill approve --run &lt;id&gt;</code>. <code>[publish.&lt;name&gt;] auto_run_editors</code> and <code>auto_run_recipes</code> may auto-queue read-only recipes for named editors; nothing with <code>edit_source</code> is ever auto-run.</p>
+<p>A <em>Run agent</em> edit on a two-way artifact page becomes a proposed run on the ticket, with a deterministic id so repeated reconciles create exactly one. It runs when you approve it on the dashboard or with <code>quill approve --run &lt;id&gt;</code>. Nothing is ever queued without you: page editors are identified only by data the page itself carries, so there is no auto-approval.</p>
 
 <h2 id="run">Run a recipe</h2>
 <pre><code>quill agent run deploy-check PROJ-123
