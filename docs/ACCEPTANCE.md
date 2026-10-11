@@ -135,7 +135,7 @@ All Must scenarios must pass, with exceptions explicitly removed from the advert
 | ID | Requirement | Scenario and expected outcome |
 | --- | --- | --- |
 | A69 | FR-11, FR-16 | A Run agent pick on a two-way page offering only read-only recipes appears as exactly one proposal after two publishes, naming the editor, recipe and standard access; nothing is queued until the owner approves on the dashboard, and approval queues an ordinary run |
-| A70 | FR-16 | A pick the page does not offer makes no proposal; a recipe that edits source is never auto-queued, even when listed; an allowlisted editor's read-only allowlisted pick is approved by the publisher's auto-run |
+| A70 | FR-16 | A pick the page does not offer makes no proposal; old auto-run settings are ignored, so every proposal, read-only or not, waits for the owner and nothing is queued |
 
 ## Review resolution traceability
 

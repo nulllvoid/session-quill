@@ -243,7 +243,7 @@ fields   = ["key", "title", "status", "next", "pr", "deployments", "updated"]
 
 Only those fields of those projects are sent, through the same filter as exports (no local paths, links only with `include_links = true`). The first publish to a destination waits for you to confirm it, from **Publish** in the dashboard header or with `quill publish team --confirm`. A live artifact is published from a Claude Code session, which has the Artifact tools: run `/session-quill:publish team`. Later publishes update each row in place and keep anything someone edited on the page. Add `on = ["reconcile"]` to republish a note or copy after every reconciliation. With `two_way = true`, people you let edit the page can change a ticket's status or next action there; the next publish turns each change into an edit that applies unless the ticket changed since, and comments that name a ticket appear on its timeline.
 
-Add `run_agent = true` to a two-way publisher to give page editors a **Run agent** select. It offers read-only recipes (analyse, analyse-followups, deploy-check, standup, workspace-setup and your personal read-only ones), plus any you list in `run_recipes`. A pick never starts a run. The next publish turns it into a **proposed run**, shown in Today and on the ticket, with the editor as the page reported them, the recipe and the access it would get (always standard, never commit, push or a PR). Approve or dismiss it there, or with `quill approve --run` (lists them), `quill approve --run <id>` and `quill dismiss --run <id>`. An approved run is an ordinary run whose results arrive as suggestions; if the ticket already has a run, Approve says so. Open proposals lapse after 7 days or when the ticket is done. To let trusted editors skip the click for read-only recipes, list them:
+Add `run_agent = true` to a two-way publisher to give page editors a **Run agent** select. It offers read-only recipes (analyse, analyse-followups, deploy-check, standup, workspace-setup and your personal read-only ones), plus any built-in or personal recipe you list in `run_recipes`. A repository recipe that shadows the offered one is refused. A pick never starts a run. The next publish turns it into a **proposed run**, shown in Today and on the ticket, with the editor as the page reported them, the recipe and the access it would get (always standard, never commit, push or a PR). Approve or dismiss it there, or with `quill approve --run` (lists them), `quill approve --run <id>` and `quill dismiss --run <id>`. An approved run is an ordinary run whose results arrive as suggestions; if the ticket already has a run, Approve says so. Open proposals lapse after 7 days or once the ticket is done. Every proposal needs your approval: the editor id comes from the page, and anyone who can edit the page can write it, so there is no auto-approval.
 
 ```toml
 [[publish]]
@@ -252,8 +252,6 @@ kind = "artifact"
 two_way = true
 run_agent = true
 run_recipes = ["attempt-fix"]          # also offered; still needs your Approve
-auto_run_editors = ["user_01HZX4J7Q2"] # editor ids as shown on a proposal
-auto_run_recipes = ["analyse"]         # read-only recipes only; edits are never auto-queued
 ```
 
 ## Tracker sync
