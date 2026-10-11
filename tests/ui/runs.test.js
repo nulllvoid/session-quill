@@ -82,6 +82,27 @@ test('queued facts state occupancy only; repository busy only for a queued fix',
   for (const f of [...runFacts(s, queuedRead, NOW), ...runFacts(s2, queuedFix, NOW)]) assert.doesNotMatch(f, /\b(eta|minutes? left|because)\b/i);
 });
 
+test('machine is Sessions-only, so it does not drop runs; project filters through the ticket', () => {
+  const onTicket = run({ ticket_id: TID(1) });
+  const orphan = run({ ticket_id: 'gone' });
+  const s = snap([onTicket, orphan]);
+  const byMachine = ids(runTabs(s, { ...EMPTY_FILTERS, machine: 'laptop' }, NOW).all);
+  assert.ok(byMachine.includes(orphan.id) && byMachine.includes(onTicket.id));
+  const byProject = ids(runTabs(s, { ...EMPTY_FILTERS, project: 'demo' }, NOW).all);
+  assert.ok(byProject.includes(onTicket.id));
+  assert.equal(byProject.includes(orphan.id), false);
+});
+
+test('a run with no requested_at stays in All instead of vanishing', () => {
+  const undated = run({ requested_at: undefined });
+  assert.ok(ids(runTabs(snap([undated]), EMPTY_FILTERS, NOW).all).includes(undated.id));
+});
+
+test('a running run without a started_at says Running, with no elapsed time', () => {
+  const r = run({ state: 'running', started_at: null });
+  assert.deepEqual(runFacts(snap([r]), r, NOW), ['Running']);
+});
+
 test('running facts never claim an agent or test phase', () => {
   const r = run({ state: 'running', started_at: '2026-10-10T11:58:00Z', timings: { queue_wait_ms: 1000, worktree_ms: 4000 } });
   const facts = runFacts(snap([r]), r, NOW);

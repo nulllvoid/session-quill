@@ -51,6 +51,7 @@ export function needsYou(snapshot, h, now) {
   return !supersededBy(snapshot, h);
 }
 
+// Mirrors the ticket filters matchesFilters applies (machine is Sessions-only, so it is not one here).
 function hasFilters(f = {}) {
   return !!(f.project || f.category || f.tag || f.repo || f.stale || f.q);
 }
@@ -67,7 +68,7 @@ export function runTabs(snapshot, filters, now) {
     needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed'), ...runs.filter((x) => needsYou(snapshot, x.run, now))],
     live: runs.filter((x) => LIVE.has(x.run.state)),
     failed: runs.filter((x) => FAILED.has(x.run.state)),
-    all: [...proposals, ...runs.filter((x) => nowMs - Date.parse(x.at) <= ALL_WINDOW_MS)],
+    all: [...proposals, ...runs.filter((x) => !Number.isFinite(Date.parse(x.at)) || nowMs - Date.parse(x.at) <= ALL_WINDOW_MS)],
   };
   for (const k of RUN_TABS) tabs[k].sort(newestFirst);
   return tabs;
@@ -105,7 +106,7 @@ export function runFacts(snapshot, h, now) {
     if (Number.isInteger(cap) && running.length >= cap) facts.push(`${fix ? 'fix' : 'read-only'} slots ${running.length}/${cap} in use`);
     if (fix && h.repo_id && running.some((x) => x.repo_id === h.repo_id)) facts.push('repository busy');
   } else if (h.state === 'running') {
-    facts.push(h.started_at ? `Running for ${formatDuration(Math.max(0, Date.parse(now) - Date.parse(h.started_at)))}` : 'Running');
+    facts.push(Number.isFinite(Date.parse(h.started_at)) ? `Running for ${formatDuration(Math.max(0, Date.parse(now) - Date.parse(h.started_at)))}` : 'Running');
     if (h.timings && Number.isFinite(h.timings.worktree_ms)) facts.push(`setup ${formatDuration(h.timings.worktree_ms)}`);
   } else if (h.state === 'done') {
     const open = openSuggestions(h).length;
