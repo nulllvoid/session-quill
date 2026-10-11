@@ -2,6 +2,17 @@
 (() => {
 const { root, reduced, announce } = window.quillSite;
 let paused = false;
+const pauseButton = document.querySelector('[data-pause]');
+function updatePause() {
+  root.dataset.motion = paused ? 'paused' : 'playing';
+  pauseButton.textContent = paused ? 'Resume animation' : 'Pause animation';
+  pauseButton.setAttribute('aria-pressed', String(paused));
+}
+pauseButton?.addEventListener('click', () => {
+  paused = !paused;
+  heroTimeline?.paused(paused);
+  updatePause();
+});
 
 /* Hero: five cards selected, one batch queued, two read-only runs at a time, every run self-checked. */
 const hero = {
@@ -50,13 +61,13 @@ function heroPlay() {
       setCard(card, 'checked');
       hero.count.textContent = String(index + 1);
       hero.receipt.textContent = `${index + 1} selected`;
-      if (index === 0) { hero.bulkbar.hidden = false; gsap.fromTo(hero.bulkbar, { y: 10, opacity: 0, x: '-50%' }, { y: 0, opacity: 1, x: '-50%', duration: .35, ease: 'power3.out' }); }
+      if (index === 0) { hero.bulkbar.hidden = false; gsap.fromTo(hero.bulkbar, { y: 10, opacity: 0 }, { y: 0, opacity: 1, duration: .35, ease: 'power3.out' }); }
     }, null, .35 * index);
   });
   tl.call(() => hero.analyze.classList.add('pressed'), null, '+=.6');
   tl.call(() => hero.analyze.classList.remove('pressed'), null, '+=.2');
   tl.call(() => {
-    gsap.to(hero.bulkbar, { opacity: 0, y: 8, x: '-50%', duration: .25, onComplete: () => { hero.bulkbar.hidden = true; hero.bulkbar.style.cssText = ''; } });
+    gsap.to(hero.bulkbar, { opacity: 0, y: 8, duration: .25, onComplete: () => { hero.bulkbar.hidden = true; hero.bulkbar.style.cssText = ''; } });
     hero.cards.forEach((card) => setCard(card, 'queued'));
     hero.strip.hidden = false;
     gsap.fromTo(hero.strip, { opacity: 0, y: 6 }, { opacity: 1, y: 0, duration: .35 });
@@ -72,7 +83,7 @@ function heroPlay() {
   });
   heroTimeline = tl;
 }
-document.querySelector('[data-replay]')?.addEventListener('click', () => { if (reduced.matches) return; paused = false; root.dataset.motion = 'playing'; heroPlay(); });
+document.querySelector('[data-replay]')?.addEventListener('click', () => { if (reduced.matches) return; paused = false; updatePause(); heroPlay(); });
 
 /* Scroll reveals */
 let motionContext;
@@ -88,7 +99,14 @@ function setupMotion() {
 }
 reduced.addEventListener('change', () => { setupMotion(); heroPlay(); });
 setupMotion();
-heroPlay();
+// Start the demonstration when it is visible, not while the visitor reads the hero.
+const previewObserver = new IntersectionObserver((entries) => {
+  if (entries.some((entry) => entry.isIntersecting)) {
+    heroPlay();
+    previewObserver.disconnect();
+  }
+}, { threshold: .2 });
+previewObserver.observe(document.querySelector('.hero-visual'));
 window.addEventListener('pagehide', () => { motionContext?.revert(); heroTimeline?.kill(); });
 window.addEventListener('pageshow', (event) => { if (event.persisted) { setupMotion(); heroPlay(); } });
 })();

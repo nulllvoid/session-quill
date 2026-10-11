@@ -59,6 +59,13 @@ bulk action bar) rather than screenshots, so they stay current with the tokens. 
 is feedback only: the hero sequence plays once, reveals play once, and everything
 switches off under `prefers-reduced-motion`.
 
+The landing page pairs a concise editorial headline with the original ribbon artwork,
+then introduces the terminal and dashboard in a separate workflow section. The demo
+starts when it enters the viewport and supports pause, resume and replay. Its controls
+are disabled illustrations, not a connection to a running Quill instance. Feature
+sections are numbered; documentation links use a two-column index. Both themes and
+phone layouts share the same typography and surface tokens.
+
 Fonts and their OFL license are copied from `ui/fonts`. GSAP and its license notices
 and README are bundled from the pinned npm dependency.
 

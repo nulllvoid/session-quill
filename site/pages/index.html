@@ -1,9 +1,10 @@
 <!-- page: {"title": "Session Quill | The orchestration engine for ticket-bound AI coding", "description": "Session Quill runs quietly in the background: it syncs your tracker, prepares each repository, and runs self-verifying Claude agents on your tickets while you stay in the editor. A local-first Claude Code plugin with zero runtime dependencies.", "scripts": ["vendor/gsap.min.js", "vendor/ScrollTrigger.min.js", "app.js"], "bodyClass": "landing"} -->
     <section class="hero container" aria-labelledby="hero-title">
       <div class="hero-copy">
-        <p class="eyebrow hero-enter">Session Quill 1.0 for Claude Code</p>
-        <h1 id="hero-title"><span class="line"><span>The orchestration engine</span></span><span class="line"><span>for ticket-bound</span></span><span class="line accent"><span>AI coding.</span></span></h1>
-        <p class="hero-description hero-enter">Session Quill runs quietly in the background. It syncs your tracker, prepares each repository, and runs self-verifying Claude agents on your tickets while you stay in the editor.</p>
+        <p class="eyebrow hero-enter"><span class="release-mark">1.0</span> Your local orchestration engine</p>
+        <h1 id="hero-title"><span class="line"><span>From ticket.</span></span><span class="line"><span>To tested.</span></span><span class="line accent"><span>In your flow.</span></span></h1>
+        <p class="hero-description hero-enter">Keep your focus. Quill connects your tickets, prepares your repositories, and runs self-checking Claude agents. All from your machine.</p>
+        <div class="hero-actions hero-enter"><a class="btn primary" href="#install">Start with Quill <span aria-hidden="true">→</span></a><a class="text-link" href="#preview">See it in action <span aria-hidden="true">↓</span></a></div>
         <div class="hero-install hero-enter">
           <div class="command-group" data-copy-group>
             <div class="command-heading"><span>Install inside Claude Code</span><button class="copy-button" type="button" data-copy="claude plugin marketplace add nulllvoid/session-quill
@@ -11,11 +12,22 @@ claude plugin install session-quill@session-quill" aria-label="Copy install comm
             <pre><code><span class="command-prefix">claude</span> plugin marketplace add nulllvoid/session-quill
 <span class="command-prefix">claude</span> plugin install session-quill@session-quill</code></pre>
           </div>
-          <div class="hero-actions"><a class="btn primary" href="#install">Set it up in two minutes</a><a class="text-link" href="docs/quickstart.html">Read the documentation <span aria-hidden="true">→</span></a></div>
           <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
         </div>
       </div>
-      <div class="hero-visual hero-enter" aria-label="Claude Code beside the Session Quill dashboard dispatching five analyse runs">
+      <figure class="hero-art hero-enter">
+        <div class="art-label"><span class="dot"></span> Many sessions. One continuous thread.</div>
+        <img src="assets/thread-art.jpg" width="1536" height="1024" alt="Fine mint filaments fold into a continuous ribbon, connecting individual strands into one form" fetchpriority="high">
+        <figcaption><span>Built for Claude Code</span><span>Local by design <span aria-hidden="true">→</span></span></figcaption>
+      </figure>
+    </section>
+
+    <div class="principles container" aria-label="Project facts"><span><strong>Local-first</strong> Your machine. Your control.</span><span><strong>Zero dependencies</strong> Node 22 + the standard library.</span><span><strong>Explicit consent</strong> At every trust boundary.</span><span><strong>Open source</strong> MIT licensed. Yours to inspect.</span></div>
+
+    <section class="product-preview container" id="preview" aria-labelledby="preview-title">
+      <div class="preview-heading"><div><p class="eyebrow">A quieter way to work</p><h2 id="preview-title">Stay in your editor.<br><span class="muted">Keep the whole picture.</span></h2></div><p>Your conversation on the left.<br>Your work moving forward on the right.</p></div>
+      <div class="workflow-rail" aria-label="Workflow"><span><b>01</b> Connect your tickets</span><span><b>02</b> Queue the work</span><span><b>03</b> Review the evidence</span></div>
+      <div class="hero-visual" aria-label="Illustrative workflow: Claude Code beside the Session Quill dashboard dispatching five analyse runs">
         <div class="split-pane">
           <div class="pane terminal" aria-label="Claude Code terminal">
             <div class="pane-head"><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span>claude · payments-api</span></div>
@@ -37,33 +49,31 @@ claude plugin install session-quill@session-quill" aria-label="Copy install comm
             <div class="mini-statusline"><span class="health-item" data-connection="online"><span class="dot"></span>Worker: <strong>connected</strong></span><span class="health-item" data-freshness="fresh"><span class="dot"></span>Jira: <strong>fresh</strong></span><span class="receipt" data-receipt>Select mode on</span></div>
             <div class="mini-board" data-board>
               <div class="mini-column"><h4>Todo <span class="count">3</span></h4>
-                <label class="mini-card" data-card="1"><input type="checkbox" aria-label="Select PAY-412"><span class="k">PAY-412</span><span class="t">Refund webhook retries exhaust the queue</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
-                <label class="mini-card" data-card="2"><input type="checkbox" aria-label="Select PAY-418"><span class="k">PAY-418</span><span class="t">Partial refunds round to the wrong cent</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
-                <label class="mini-card" data-card="3"><input type="checkbox" aria-label="Select PAY-420"><span class="k">PAY-420</span><span class="t">Chargeback import skips EU merchants</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+                <label class="mini-card" data-card="1"><input type="checkbox" disabled aria-label="Select PAY-412"><span class="k">PAY-412</span><span class="t">Refund webhook retries exhaust the queue</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+                <label class="mini-card" data-card="2"><input type="checkbox" disabled aria-label="Select PAY-418"><span class="k">PAY-418</span><span class="t">Partial refunds round to the wrong cent</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+                <label class="mini-card" data-card="3"><input type="checkbox" disabled aria-label="Select PAY-420"><span class="k">PAY-420</span><span class="t">Chargeback import skips EU merchants</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
               </div>
               <div class="mini-column"><h4>Active <span class="count">2</span></h4>
-                <label class="mini-card" data-card="4"><input type="checkbox" aria-label="Select PAY-431"><span class="k">PAY-431</span><span class="t">Ledger export times out over 50k rows</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
-                <label class="mini-card" data-card="5"><input type="checkbox" aria-label="Select PAY-437"><span class="k">PAY-437</span><span class="t">Reconcile report shows stale FX rate</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+                <label class="mini-card" data-card="4"><input type="checkbox" disabled aria-label="Select PAY-431"><span class="k">PAY-431</span><span class="t">Ledger export times out over 50k rows</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
+                <label class="mini-card" data-card="5"><input type="checkbox" disabled aria-label="Select PAY-437"><span class="k">PAY-437</span><span class="t">Reconcile report shows stale FX rate</span><span class="chips"><span class="chip handoff" data-state="queued" hidden>Queued</span><span class="chip" hidden>Self-checked</span></span></label>
               </div>
             </div>
             <div class="bulkbar" role="toolbar" aria-label="Bulk actions" data-bulkbar hidden>
               <span class="count"><b data-count>0</b> selected</span><span class="sep"></span>
-              <button class="btn small primary" type="button" data-analyze>Analyze</button>
-              <button class="btn small" type="button" tabindex="-1">Attempt fix</button>
-              <button class="btn small" type="button" tabindex="-1">Change status</button>
-              <span class="sep"></span><button class="btn small ghost" type="button" tabindex="-1">Clear <kbd>Esc</kbd></button>
+              <button class="btn small primary" type="button" disabled data-analyze>Analyze</button>
+              <button class="btn small" type="button" disabled tabindex="-1">Attempt fix</button>
+              <button class="btn small" type="button" disabled tabindex="-1">Change status</button>
+              <span class="sep"></span><button class="btn small ghost" type="button" disabled tabindex="-1">Clear <kbd>Esc</kbd></button>
             </div>
-            <div class="batch-strip" data-strip hidden><span class="chip handoff" data-state="running"><span class="dot pulse"></span><span data-strip-text>5 queued</span></span><span class="muted">batch 7f3a · 2 read-only runs at a time</span><button class="btn small ghost" type="button" tabindex="-1">Cancel batch</button></div>
+            <div class="batch-strip" data-strip hidden><span class="chip handoff" data-state="running"><span class="dot pulse"></span><span data-strip-text>5 queued</span></span><span class="muted">batch 7f3a · 2 read-only runs at a time</span><button class="btn small ghost" type="button" disabled tabindex="-1">Cancel batch</button></div>
           </div>
         </div>
-        <div class="visual-foot"><span>A real workflow, drawn with the dashboard's own components.</span><button class="motion-toggle" type="button" data-replay>Replay</button></div>
+        <div class="visual-foot"><span><span class="dot"></span> Illustrative workflow · No agents run in this preview</span><div class="demo-controls"><button class="motion-toggle" type="button" data-pause aria-pressed="false">Pause animation</button><button class="motion-toggle" type="button" data-replay>Replay <span aria-hidden="true">↻</span></button></div></div>
       </div>
     </section>
 
-    <div class="principles container" aria-label="Project facts"><span>Zero runtime dependencies. Node 22 and the standard library.</span><span>Local-first. Loopback only.</span><span>Consent at every trust boundary.</span><span>Open source. MIT licensed.</span></div>
-
     <section class="engine container" id="engine" aria-labelledby="engine-title">
-      <div class="section-heading reveal"><p class="eyebrow">The orchestration engine</p><h2 id="engine-title">Three things the worker now does<br><span class="muted">before you ask.</span></h2><p>1.0 turns the background worker from a recorder into a runner. It still never acts past a trust boundary without you.</p></div>
+      <div class="section-heading reveal"><p class="eyebrow">Less coordination. More concentration.</p><h2 id="engine-title">The work around your work.<br><span class="muted">Taken care of.</span></h2><p>From your assigned queue to a verified result, one local worker keeps the pieces connected. You decide what runs.</p></div>
 
       <article class="feature reveal" id="workspace" aria-labelledby="f1-title">
         <div class="feature-copy">
@@ -77,7 +87,7 @@ claude plugin install session-quill@session-quill" aria-label="Copy install comm
         <div class="feature-visual">
           <div class="ui-stack">
             <div class="ui-frame">
-              <div class="card static"><div class="card-head"><span class="key">PAY-442</span><span class="card-title">Settlement file rejects negative adjustments</span></div><div class="card-status"><span class="chip warning">Needs clone</span><span class="chip category">imported from Jira 4 min ago</span></div><div class="card-meta"><span class="meta-item">acme/settlements</span><span class="meta-item">assigned to you</span></div><div class="card-actions"><button class="btn small primary" type="button" tabindex="-1">Clone…</button><button class="btn small ghost" type="button" tabindex="-1">No code</button></div></div>
+              <div class="card static"><div class="card-head"><span class="key">PAY-442</span><span class="card-title">Settlement file rejects negative adjustments</span></div><div class="card-status"><span class="chip warning">Needs clone</span><span class="chip category">imported from Jira 4 min ago</span></div><div class="card-meta"><span class="meta-item">acme/settlements</span><span class="meta-item">assigned to you</span></div><div class="card-actions"><button class="btn small primary" type="button" disabled tabindex="-1">Clone…</button><button class="btn small ghost" type="button" disabled tabindex="-1">No code</button></div></div>
             </div>
             <div class="ui-frame dialog-frame">
               <h4>Clone acme/settlements?</h4>
@@ -87,7 +97,7 @@ claude plugin install session-quill@session-quill" aria-label="Copy install comm
                 <div><dt>Host check</dt><dd><span class="chip good">github.com allowed</span></dd></div>
                 <div><dt>Then</dt><dd>register as <code>settlements</code>, link PAY-442</dd></div>
               </dl>
-              <div class="dialog-foot"><button class="btn small ghost" type="button" tabindex="-1">Cancel</button><button class="btn small primary" type="button" tabindex="-1">Confirm clone</button></div>
+              <div class="dialog-foot"><button class="btn small ghost" type="button" disabled tabindex="-1">Cancel</button><button class="btn small primary" type="button" disabled tabindex="-1">Confirm clone</button></div>
             </div>
             <div class="ui-frame term-frame"><pre class="term small-term"><span class="dim">$</span> quill worker install
 <span class="dim">Registered "Session Quill worker (quill)" to run at login.</span>
@@ -136,12 +146,12 @@ quill · PAY-442 · worker ok · <u>Dashboard: http://127.0.0.1:47321</u></pre><
                   <div class="mini-card is-checked"><span class="box" aria-hidden="true"></span><span class="k">PAY-420</span><span class="t">Chargeback import skips EU merchants</span></div>
                 </div>
               </div>
-              <div class="bulkbar floating" role="toolbar" aria-label="Bulk actions"><span class="count"><b>3</b> selected</span><span class="sep"></span><button class="btn small primary" type="button" tabindex="-1">Analyze</button><button class="btn small" type="button" tabindex="-1">Attempt fix</button><button class="btn small" type="button" tabindex="-1">Change status</button><span class="sep"></span><button class="btn small ghost" type="button" tabindex="-1">Clear</button></div>
+              <div class="bulkbar floating" role="toolbar" aria-label="Bulk actions"><span class="count"><b>3</b> selected</span><span class="sep"></span><button class="btn small primary" type="button" disabled tabindex="-1">Analyze</button><button class="btn small" type="button" disabled tabindex="-1">Attempt fix</button><button class="btn small" type="button" disabled tabindex="-1">Change status</button><span class="sep"></span><button class="btn small ghost" type="button" disabled tabindex="-1">Clear</button></div>
             </div>
             <div class="ui-frame proposals">
               <h4>Proposed runs <span class="pill">2</span></h4>
-              <div class="proposal"><div><span class="key">PAY-431</span> <span class="recipe">analyse</span><span class="muted">proposed by Priya from the Payments board page</span></div><div class="card-actions"><button class="btn small primary" type="button" tabindex="-1">Approve</button><button class="btn small ghost" type="button" tabindex="-1">Dismiss</button></div></div>
-              <div class="proposal"><div><span class="key">PAY-437</span> <span class="recipe">deploy-check</span><span class="muted">proposed by Priya · read-only</span></div><div class="card-actions"><button class="btn small primary" type="button" tabindex="-1">Approve</button><button class="btn small ghost" type="button" tabindex="-1">Dismiss</button></div></div>
+              <div class="proposal"><div><span class="key">PAY-431</span> <span class="recipe">analyse</span><span class="muted">proposed by Priya from the Payments board page</span></div><div class="card-actions"><button class="btn small primary" type="button" disabled tabindex="-1">Approve</button><button class="btn small ghost" type="button" disabled tabindex="-1">Dismiss</button></div></div>
+              <div class="proposal"><div><span class="key">PAY-437</span> <span class="recipe">deploy-check</span><span class="muted">proposed by Priya · read-only</span></div><div class="card-actions"><button class="btn small primary" type="button" disabled tabindex="-1">Approve</button><button class="btn small ghost" type="button" disabled tabindex="-1">Dismiss</button></div></div>
             </div>
           </div>
         </div>
