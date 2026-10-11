@@ -662,6 +662,7 @@ function openDetail(id, source) {
   motion?.cancelElement($('#detail'));
   appState.lastFocus = source ?? document.activeElement;
   appState.selected = id;
+  appState.selectedRun = null;
   appState.detailTab = 'overview';
   appState.detailExpanded = false;
   appState.loadedTicket = null;
@@ -718,6 +719,7 @@ function openRun(id, source) {
   appState.selectedRun = id;
   render();
   if (layoutMode() !== 'desktop') $('#detail [data-action="close-run"]')?.focus();
+  else $(`#main [data-action="open-run"][data-run="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
 }
 
 function closeRun() {
@@ -730,7 +732,9 @@ function closeRun() {
 
 function stepRun(delta) {
   const ids = [...document.querySelectorAll('#main [data-action="open-run"]')].map((el) => el.dataset.run);
-  const next = ids[ids.indexOf(appState.selectedRun) + delta];
+  const at = ids.indexOf(appState.selectedRun);
+  if (at === -1) return;
+  const next = ids[at + delta];
   if (next) { appState.selectedRun = next; render(); }
 }
 
