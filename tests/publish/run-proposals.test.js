@@ -16,11 +16,9 @@ const catalog = (env = { QUILL_HOME: home() }) => createRecipeCatalog({ env, con
 const pub = (extra = {}) => normalizePublishers({ publish: [{ name: 'team', kind: 'artifact', two_way: true, run_agent: true, fields: ['key', 'status', 'next'], ...extra }] });
 
 test('run_agent is opt-in on two-way artifact publishers, and turning it on asks for consent again', () => {
-  const { publishers } = pub({ run_recipes: ['attempt-fix'], auto_run_editors: ['u_lead'], auto_run_recipes: ['analyse'] });
+  const { publishers } = pub({ run_recipes: ['attempt-fix'] });
   assert.equal(publishers[0].run_agent, true);
   assert.deepEqual(publishers[0].run_recipes, ['attempt-fix']);
-  assert.deepEqual(publishers[0].auto_run_editors, ['u_lead']);
-  assert.deepEqual(publishers[0].auto_run_recipes, ['analyse']);
   const off = normalizePublishers({ publish: [{ name: 'team', kind: 'artifact', two_way: true, fields: ['key', 'status', 'next'] }] }).publishers[0];
   assert.equal(off.run_agent, false);
   assert.deepEqual(off.run_recipes, []);
@@ -29,9 +27,20 @@ test('run_agent is opt-in on two-way artifact publishers, and turning it on asks
   const oneWay = normalizePublishers({ publish: [{ name: 'team', kind: 'artifact', run_agent: true }] });
   assert.equal(oneWay.publishers[0].run_agent, false);
   assert.match(oneWay.warnings.join(' '), /run_agent needs two_way/);
-  const bad = normalizePublishers({ publish: [{ name: 'team', kind: 'artifact', two_way: true, run_agent: true, auto_run_editors: 'u_lead' }] });
+  const bad = normalizePublishers({ publish: [{ name: 'team', kind: 'artifact', two_way: true, run_agent: true, run_recipes: 'analyse' }] });
   assert.equal(bad.publishers.length, 0);
-  assert.match(bad.warnings.join(' '), /auto_run_editors must be a list/);
+  assert.match(bad.warnings.join(' '), /run_recipes must be a list/);
+});
+
+test('auto-run settings from an earlier build are ignored with a warning: every proposal needs the owner', () => {
+  const { publishers, warnings } = pub({ auto_run_editors: ['u_lead'], auto_run_recipes: ['analyse'] });
+  assert.equal(publishers.length, 1);
+  assert.equal('auto_run_editors' in publishers[0], false);
+  assert.equal('auto_run_recipes' in publishers[0], false);
+  assert.match(warnings.join(' '), /auto_run_editors and auto_run_recipes are ignored/);
+  const c = catalog();
+  const out = proposalFromEdit(publishers[0], { ticket_id: 't1', key: 'PROJ-1', field: 'run', value: 'analyse', expected_revision: 1, by: 'u_lead', at: 'a' }, { recipes: c, ticket: { id: 't1', repo_id: null } });
+  assert.equal('auto' in out.proposal, false);
 });
 
 test('the page offers read-only recipes by default, plus the ones the owner allows', () => {
@@ -86,7 +95,6 @@ test('a page edit becomes a proposal with a deterministic id, the editor, the re
   assert.equal(out.proposal.recipe.source, 'builtin');
   assert.equal(out.proposal.access, 'standard');
   assert.equal(out.proposal.read_only, true);
-  assert.equal(out.proposal.auto, false);
   assert.deepEqual(out.proposal.permissions, { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false, edit_files: false, delete_files: false });
   assert.equal(proposalFromEdit(p, e, { recipes: c, ticket: { id: 't1', repo_id: 'demo' }, repoRegistered: true }).proposal.permissions.read_source, true);
   assert.match(proposalFromEdit(p, { ...e, value: 'attempt-fix' }, { recipes: c, ticket: { id: 't1' } }).error, /not offered/);
@@ -105,16 +113,32 @@ test('an owner-allowed recipe that edits never gets push, commit or a PR from a 
   assert.deepEqual(out.proposal.permissions, { read_source: true, edit_source: true, commit: false, push_branch: false, open_draft_pr: false, edit_files: false, delete_files: false });
 });
 
-test('auto-queue needs an allowlisted editor and an allowlisted read-only recipe, and never covers a recipe that edits', () => {
-  const c = catalog();
-  const e = (by, value) => ({ ticket_id: 't1', key: 'PROJ-1', field: 'run', value, expected_revision: 1, by, at: 'a' });
-  const p = pub({ run_recipes: ['attempt-fix'], auto_run_editors: ['u_lead'], auto_run_recipes: ['analyse', 'attempt-fix'] }).publishers[0];
-  const opts = { recipes: c, ticket: { id: 't1', repo_id: 'demo' }, repoRegistered: true };
-  assert.equal(proposalFromEdit(p, e('u_lead', 'analyse'), opts).proposal.auto, true);
-  assert.equal(proposalFromEdit(p, e('u_other', 'analyse'), opts).proposal.auto, false, 'editor not allowlisted');
-  assert.equal(proposalFromEdit(p, e('u_lead', 'standup'), opts).proposal.auto, false, 'recipe not allowlisted');
-  assert.equal(proposalFromEdit(p, e('u_lead', 'attempt-fix'), opts).proposal.auto, false, 'edit_source is never auto-queued');
-  assert.equal(proposalFromEdit(p, e(null, 'analyse'), opts).proposal.auto, false, 'an unknown editor is never allowlisted');
+test('a repository recipe that shadows the one the page offers is refused, and run_recipes cannot name a repository-only recipe', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'st-shadow-'));
+  fs.mkdirSync(path.join(repo, '.quill', 'agents'), { recursive: true });
+  const body = (name) => `---\nname: ${name}\ndescription: Repository ${name}\nmode: analyse\npermissions: { read_source: true }\n---\nDo the repository thing for {{ticket.key}}.\n`;
+  fs.writeFileSync(path.join(repo, '.quill', 'agents', 'analyse.md'), body('analyse'));
+  fs.writeFileSync(path.join(repo, '.quill', 'agents', 'repo-only.md'), body('repo-only'));
+  const c = createRecipeCatalog({ env: { QUILL_HOME: home() }, config: { repos: { demo: { canonical_path: repo } } }, ttlMs: 0 });
+  const p = pub({ run_recipes: ['repo-only'] }).publishers[0];
+  assert.equal(runChoices(c, p).includes('repo-only'), false, 'only built-in and personal recipes are offered');
+  const e = { ticket_id: 't1', key: 'PROJ-1', field: 'run', value: 'analyse', expected_revision: 1, by: 'u_a', at: 'a' };
+  const out = proposalFromEdit(p, e, { recipes: c, ticket: { id: 't1', repo_id: 'demo' }, repoRegistered: true });
+  assert.match(out.error, /repository's own analyse recipe shadows the one the page offers/);
+  const elsewhere = proposalFromEdit(p, e, { recipes: c, ticket: { id: 't1', repo_id: null } });
+  assert.equal(elsewhere.proposal.recipe.source, 'builtin');
+  assert.equal(elsewhere.proposal.recipe.hash, c.get('analyse').hash, 'the offered recipe is recorded by source and hash');
+});
+
+test('a row whose only page edit is a Run agent pick does not hold back its revision stamp', () => {
+  const local = { 'PROJ-1': { key: 'PROJ-1', status: 'active', run: '', _ticket: { id: 't1', revision: 7 } } };
+  const last = { 'PROJ-1': { key: 'PROJ-1', status: 'active', run: '' } };
+  const remote = { 'PROJ-1': { version: 4, data: { key: 'PROJ-1', status: 'active', run: 'analyse', _quill: { in_scope: true, revision: 5 }, _edits: { run: { by: 'u', at: 'a' } } } } };
+  const { edits, writes } = planRowWrites({ local, last, remote, now: 'n', editable: ['status', 'run'] });
+  assert.equal(edits.length, 1);
+  assert.deepEqual(writes.map((w) => w.data._quill.revision), [7], 'the stamp moves to the current revision');
+  const both = { 'PROJ-1': { version: 4, data: { ...remote['PROJ-1'].data, status: 'review', _edits: { run: { by: 'u', at: 'a' }, status: { by: 'u', at: 'a' } } } } };
+  assert.equal(planRowWrites({ local, last, remote: both, now: 'n', editable: ['status', 'run'] }).writes.length, 0, 'a status edit still keeps the revision its editor saw');
 });
 
 test('an open proposal expires after seven days or once its ticket is done; resolved ones keep their state', () => {
@@ -124,4 +148,5 @@ test('an open proposal expires after seven days or once its ticket is done; reso
   assert.equal(proposalState(p, null, '2026-10-02T00:00:00Z'), 'expired');
   assert.equal(proposalState(p, { status: 'todo' }, new Date(Date.parse(p.proposed_at) + PROPOSAL_TTL_MS + 1000).toISOString()), 'expired');
   assert.equal(proposalState({ ...p, state: 'approved' }, { status: 'done' }, '2026-10-30T00:00:00Z'), 'approved');
+  assert.equal(proposalState({ ...p, lapsed_at: '2026-10-01T01:00:00Z' }, { status: 'active' }, '2026-10-02T00:00:00Z'), 'expired', 'done once after the pick lapses it for good, even reopened');
 });

@@ -9,7 +9,7 @@ import { heuristicApprovalEligible } from './approval.js';
 import { timelineEntry, touch } from './reduce/common.js';
 import { getOrCreateSession, bindSession, recomputeUnpromoted, approveCheckpoint } from './reduce/sessions.js';
 import { applyTicketFields, createTicket, bindExternal, relinkTicket } from './reduce/tickets.js';
-import { applyTrackerSync, applyTrackerPush, applyArtifactComment, applyPublishRun, applyScheduleRun, applyRunProposal } from './reduce/integrations.js';
+import { applyTrackerSync, applyTrackerPush, applyArtifactComment, applyPublishRun, applyScheduleRun, applyRunProposal, lapseProposals } from './reduce/integrations.js';
 import { resolveAttribution, sweepDeferred, handlePostTool, handleStop } from './reduce/capture.js';
 import { handleRequest, handleRequestTx, handleHandoffTx } from './reduce/requests.js';
 
@@ -283,5 +283,6 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     default:
       result.rejected = 'kind-unknown';
   }
+  if (result.changed.size) lapseProposals(state, ev, result);
   return result;
 }

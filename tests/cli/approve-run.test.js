@@ -11,7 +11,7 @@ const P1 = '44444444-0000-4000-8000-0000000000c1';
 const P2 = '55555555-0000-4000-8000-0000000000c2';
 const proposal = (id, recipe) => ({
   id, ticket_id: T1, publisher: 'team', editor: 'u_editor', edited_at: '2026-10-11T09:00:00Z', recipe: { name: recipe, source: 'builtin', hash: null }, mode: 'analyse',
-  access: 'standard', read_only: true, auto: false, expected_revision: 1, permissions: { read_source: false },
+  access: 'standard', read_only: true, expected_revision: 1, permissions: { read_source: false },
 });
 
 test('quill approve --run lists open proposals, approves one by id prefix, and dismiss --run dismisses another', async () => {

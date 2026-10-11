@@ -123,7 +123,7 @@ if (!fs.existsSync(path.join(home, 'seeded.flag'))) {
   ev('ticket-update', { ticket_id: T(22), fields: { no_code: true }, source: 'manual' }, { at: ago(3400e3) });
   // Remote runs (ADR 0025): a Run agent pick on a shared page, waiting in Today for Approve.
   const proposalId = '7e57a9e0-0000-4000-8000-000000000025';
-  ev('run-proposal', { id: proposalId, ticket_id: T(2), publisher: 'team', editor: 'user_01HZX4J7Q2', edited_at: ago(900e3), recipe: { name: 'analyse', source: 'builtin', hash: null }, mode: 'analyse', permissions: { read_source: true }, access: 'standard', read_only: true, auto: false, expected_revision: null }, { at: ago(840e3), source_identity: `run-proposal:${proposalId}` });
+  ev('run-proposal', { id: proposalId, ticket_id: T(2), publisher: 'team', editor: 'user_01HZX4J7Q2', edited_at: ago(900e3), recipe: { name: 'analyse', source: 'builtin', hash: null }, mode: 'analyse', permissions: { read_source: true }, access: 'standard', read_only: true, expected_revision: null }, { at: ago(840e3), source_identity: `run-proposal:${proposalId}` });
   fs.writeFileSync(path.join(home, 'seeded.flag'), '1');
 }
 w.tick();

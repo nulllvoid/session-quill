@@ -106,12 +106,24 @@ export function applyRunProposal(state, ev, result) {
   const permissions = Object.fromEntries(PERMISSION_KEYS.map((k) => [k, !!(p.permissions && p.permissions[k] === true)]));
   state.runProposals.set(p.id, {
     id: p.id, ticket_id: t.id, publisher: p.publisher, editor, edited_at: typeof p.edited_at === 'string' ? p.edited_at : null,
-    recipe: { name: p.recipe.name, source: p.recipe.source ?? null, hash: p.recipe.hash ?? null }, mode: p.mode ?? null, permissions, access: 'standard', read_only: p.read_only === true, auto: p.auto === true,
-    expected_revision: Number.isInteger(p.expected_revision) ? p.expected_revision : null, proposed_at: ev.occurred_at, state: 'proposed', resolved_at: null, resolved_by: null, request_id: null, handoff_id: null,
+    recipe: { name: p.recipe.name, source: p.recipe.source ?? null, hash: p.recipe.hash ?? null }, mode: p.mode ?? null, permissions, access: 'standard', read_only: p.read_only === true,
+    expected_revision: Number.isInteger(p.expected_revision) ? p.expected_revision : null, proposed_at: ev.occurred_at, lapsed_at: null, state: 'proposed', resolved_at: null, resolved_by: null, request_id: null, handoff_id: null,
   });
-  t.timeline.push(timelineEntry(ev, 'proposal', `Run of ${p.recipe.name} proposed on the ${p.publisher} page${editor ? ` by ${editor}` : ''}; it waits for your approval`));
+  // The editor id stays on the proposal, out of the timeline and so out of digests and prompts.
+  t.timeline.push(timelineEntry(ev, 'proposal', `Run of ${p.recipe.name} proposed on the ${p.publisher} page; it waits for your approval`));
   result.changed.add(t.id);
   return {};
+}
+
+// A ticket that becomes done lapses its open proposals for good (ADR 0025): reopening it later does
+// not bring a stale page pick back.
+export function lapseProposals(state, ev, result) {
+  if (!state.runProposals || !state.runProposals.size) return;
+  for (const p of state.runProposals.values()) {
+    if (p.state !== 'proposed' || p.lapsed_at || !result.changed.has(p.ticket_id)) continue;
+    const t = state.tickets.get(p.ticket_id);
+    if (t && t.status === 'done') p.lapsed_at = ev.occurred_at;
+  }
 }
 
 // One finished publish of one publisher (ADR 0010). `confirmed` records the owner's consent to that

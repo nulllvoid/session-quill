@@ -64,8 +64,8 @@ test('A69 a Run agent pick on a two-way page appears as one proposal after two p
   } finally { await s.stop(); }
 });
 
-test('A70 a pick the page does not offer is refused; an allowlisted editor auto-queues only a read-only allowlisted recipe', async () => {
-  const { s, publish, pick } = await twoWay({ run_recipes: ['attempt-fix'], auto_run_editors: ['u_lead'], auto_run_recipes: ['analyse', 'attempt-fix'] });
+test('A70 a pick the page does not offer makes no proposal, and with no auto-run an allowlist-style config still queues nothing', async () => {
+  const { s, publish, pick } = await twoWay({ run_recipes: ['attempt-fix'], auto_run_editors: ['u_lead'], auto_run_recipes: ['analyse'] });
   try {
     await publish();
     pick('file-task', 'u_lead', '2026-10-02T08:30:00Z');
@@ -74,16 +74,14 @@ test('A70 a pick the page does not offer is refused; an allowlisted editor auto-
     pick('attempt-fix', 'u_lead', '2026-10-02T08:31:00Z');
     await publish();
     const fix = [...s.w.state.runProposals.values()].find((p) => p.recipe.name === 'attempt-fix');
-    assert.equal(fix.state, 'proposed', 'an edit_source recipe is never auto-queued, even when listed');
+    assert.equal(fix.state, 'proposed');
     assert.equal(fix.permissions.push_branch, false);
-    assert.equal(s.w.state.handoffs.size, 0);
     pick('analyse', 'u_lead', '2026-10-02T08:32:00Z');
     await publish();
+    s.advance(60_000);
     await s.settle();
-    const auto = [...s.w.state.runProposals.values()].find((p) => p.recipe.name === 'analyse');
-    assert.equal(auto.auto, true);
-    assert.equal(auto.state, 'approved');
-    assert.equal(auto.resolved_by, 'auto-run:team');
-    assert.equal([...s.w.state.handoffs.values()].filter((h) => h.state === 'queued').length, 1);
+    const analyse = [...s.w.state.runProposals.values()].find((p) => p.recipe.name === 'analyse');
+    assert.equal(analyse.state, 'proposed', 'every proposal waits for the owner');
+    assert.equal(s.w.state.handoffs.size, 0);
   } finally { await s.stop(); }
 });

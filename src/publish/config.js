@@ -73,16 +73,19 @@ export function normalizePublishers(config = {}) {
     const twoWay = p.kind === 'artifact' && p.two_way === true;
     // Run agent (ADR 0025): page editors may propose runs; the owner approves each one.
     const lists = {};
-    for (const k of ['run_recipes', 'auto_run_editors', 'auto_run_recipes']) {
+    for (const k of ['run_recipes']) {
       const v = p[k] ?? [];
       if (!Array.isArray(v) || v.some((x) => typeof x !== 'string' || !x.trim() || x.length > 200)) { warnings.push(`${where}: ${k} must be a list of names`); return; }
       lists[k] = [...new Set(v.map((x) => x.trim()))];
     }
-    const badRecipe = [...lists.run_recipes, ...lists.auto_run_recipes].find((x) => !RECIPE_NAME_RE.test(x));
+    const badRecipe = lists.run_recipes.find((x) => !RECIPE_NAME_RE.test(x));
+    // Auto-run shipped in no release and is gone (ADR 0025): the page reports who edited, and any
+    // editor can write that, so every proposed run waits for the owner.
+    if (p.auto_run_editors !== undefined || p.auto_run_recipes !== undefined) warnings.push(`${where}: auto_run_editors and auto_run_recipes are ignored; every run proposed from a page needs your approval`);
     if (badRecipe) { warnings.push(`${where}: "${badRecipe.slice(0, 40)}" is not a recipe name`); return; }
     if (p.run_agent === true && !twoWay) warnings.push(`${where}: run_agent needs two_way = true on an artifact publisher; ignored`);
     const runAgent = twoWay && p.run_agent === true;
-    publishers.push({ name: p.name, kind: p.kind, fields, projects: projects && projects.length ? [...projects] : null, include_links: p.include_links === true, path: target, url, title, after_reconcile: on.includes('reconcile'), executor, two_way: twoWay, run_agent: runAgent, run_recipes: runAgent ? lists.run_recipes : [], auto_run_editors: runAgent ? lists.auto_run_editors : [], auto_run_recipes: runAgent ? lists.auto_run_recipes : [] });
+    publishers.push({ name: p.name, kind: p.kind, fields, projects: projects && projects.length ? [...projects] : null, include_links: p.include_links === true, path: target, url, title, after_reconcile: on.includes('reconcile'), executor, two_way: twoWay, run_agent: runAgent, run_recipes: runAgent ? lists.run_recipes : [] });
     names.add(p.name);
   });
   return { publishers, warnings };

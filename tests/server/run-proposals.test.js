@@ -3,21 +3,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { scenario, T1, T2 } from '../acceptance/scenario.js';
 import { submitRequest } from '../../src/server/requests.js';
 
 const PID = '44444444-0000-4000-8000-000000000001';
 const proposal = (extra = {}) => ({
   id: PID, ticket_id: T1, publisher: 'team', editor: 'u_editor', edited_at: '2026-10-02T07:59:00Z',
-  recipe: { name: 'analyse', source: 'builtin', hash: null }, mode: 'analyse', access: 'standard', read_only: true, auto: false, expected_revision: 1,
+  recipe: { name: 'analyse', source: 'builtin', hash: null }, mode: 'analyse', access: 'standard', read_only: true, expected_revision: 1,
   permissions: { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false, edit_files: false, delete_files: false },
   ...extra,
 });
 const propose = (s, extra = {}) => s.w.emit('run-proposal', proposal(extra), { source_identity: `run-proposal:${extra.id ?? PID}` });
 const approve = (s, extra = {}, opts) => submitRequest(s.w, { id: randomUUID(), kind: 'approve-run', target_id: T1, expected_revision: null, payload: { proposal_id: PID }, ...extra }, opts);
 
-async function started() {
-  const s = scenario({ withServer: true });
+async function started(opts = {}) {
+  const s = scenario({ withServer: true, ...opts });
   await s.start();
   s.ticket(T1, 'PROJ-1');
   return s;
@@ -37,7 +40,8 @@ test('a proposal is journaled once, joins the ticket timeline, and queues nothin
     assert.equal(s.w.state.handoffs.size, 0, 'nothing runs until the owner approves');
     const t = s.w.state.tickets.get(T1);
     assert.equal(t.revision, before, 'a proposal never makes an owner edit conflict');
-    assert.match(t.timeline.at(-1).text, /Run of analyse proposed on the team page by u_editor/);
+    assert.match(t.timeline.at(-1).text, /Run of analyse proposed on the team page; it waits for your approval/);
+    assert.doesNotMatch(t.timeline.at(-1).text, /u_editor/, 'the editor id stays out of the timeline and the digest');
     const snap = s.w.liveSnapshot();
     assert.deepEqual(snap.run_proposals.map((x) => [x.id, x.state, x.ticket_key]), [[PID, 'proposed', 'PROJ-1']]);
   } finally { await s.stop(); }
@@ -69,7 +73,8 @@ test('approving queues an ordinary suggest-only handoff with the recorded recipe
     assert.equal(h.access, 'standard');
     assert.equal(h.permissions.edit_source, false);
     assert.equal(h.proposal_id, PID);
-    assert.match(h.note, /proposed on the team page by u_editor/);
+    assert.equal(h.note, '', 'page text never becomes the owner note');
+    assert.deepEqual(h.proposal, { id: PID, publisher: 'team', editor: 'u_editor', recipe: 'analyse' });
     const p = s.w.state.runProposals.get(PID);
     assert.equal(p.state, 'approved');
     assert.equal(p.handoff_id, h.id);
@@ -111,17 +116,45 @@ test('a page, or anything acting for one, can never approve', async () => {
   } finally { await s.stop(); }
 });
 
-test('an auto proposal is approved under its publisher\'s auto-run actor only', async () => {
+test('there is no auto-run: a proposal claiming auto is recorded without it and still needs the owner', async () => {
   const s = await started();
   try {
     propose(s, { auto: true });
-    const other = approve(s, {}, { actor: 'auto-run:elsewhere' });
-    s.w.tick();
-    assert.equal(s.w.state.requests.get(other.request.id).error.code, 'approval-refused');
+    assert.equal('auto' in s.w.state.runProposals.get(PID), false);
     const { request } = approve(s, {}, { actor: 'auto-run:team' });
     s.w.tick();
-    assert.equal(s.w.state.requests.get(request.id).state, 'applied');
-    assert.equal(s.w.state.runProposals.get(PID).resolved_by, 'auto-run:team');
+    assert.equal(s.w.state.requests.get(request.id).error.code, 'approval-refused');
+    assert.equal(s.w.state.runProposals.get(PID).state, 'proposed');
+  } finally { await s.stop(); }
+});
+
+test('a proposal lapses for good once its ticket is done, even if the ticket is reopened', async () => {
+  const s = await started();
+  try {
+    propose(s);
+    s.ingest('ticket-update', { ticket_id: T1, fields: { status: 'done' }, source: 'manual' });
+    s.w.tick();
+    s.ingest('ticket-update', { ticket_id: T1, fields: { status: 'active' }, source: 'manual' });
+    s.w.tick();
+    assert.equal(s.w.liveSnapshot().run_proposals[0].state, 'expired');
+    assert.throws(() => approve(s), (e) => e.code === 'proposal-expired');
+  } finally { await s.stop(); }
+});
+
+test('approval is refused when a repository recipe now shadows the one the page offered', async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'st-shadow-'));
+  const s = await started({ repos: { demo: { project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: ['production'], canonical_path: repo } } });
+  try {
+    propose(s);
+    fs.mkdirSync(path.join(repo, '.quill', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.quill', 'agents', 'analyse.md'), '---\nname: analyse\ndescription: Repository analyse\nmode: analyse\npermissions: { read_source: true }\n---\nDo the repository thing for {{ticket.key}}.\n');
+    const { request } = approve(s);
+    s.w.tick();
+    const req = s.w.state.requests.get(request.id);
+    assert.equal(req.state, 'failed');
+    assert.equal(req.error.code, 'recipe-shadowed');
+    assert.match(req.error.message, /repository's own analyse recipe shadows the one the page offers/);
+    assert.equal(s.w.state.handoffs.size, 0);
   } finally { await s.stop(); }
 });
 

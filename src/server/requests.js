@@ -15,7 +15,7 @@ import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
 import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
-import { proposalState, proposalNote } from '../publish/run-proposals.js';
+import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
 
 export const EDIT_DELAY_MS = 10_000;
 export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run'];
@@ -113,12 +113,10 @@ function findProposal(state, ticket, payload, now) {
   return p;
 }
 
-// Only the owner approves: the dashboard (actor owner) or the CLI. An auto proposal may also be
-// approved by its own publisher's auto-run, which the owner turned on in config. Page edits and
-// anything else acting for a page or a schedule are refused.
+// Only the owner approves or dismisses: the dashboard (actor owner) or the CLI. There is no
+// auto-approval (ADR 0025); page edits, schedules and anything else acting for them are refused.
 function approvalRefusal(actor, p, kind) {
   if (actor === 'owner' || actor === 'cli') return null;
-  if (kind === 'approve-run' && p.auto === true && actor === `auto-run:${p.publisher}`) return null;
   return `${kind === 'approve-run' ? 'approving' : 'dismissing'} a proposed run needs the owner, on the dashboard or with quill approve --run`;
 }
 
@@ -414,9 +412,14 @@ export function evaluateRequest(worker, req) {
       const refusal = approvalRefusal(req.actor_id, p, req.kind);
       if (refusal) return { outcome: 'failed', error: { code: 'approval-refused', message: refusal, retryable: false, current_revision: ticket.revision } };
       if (req.kind === 'dismiss-run') return { outcome: 'applied', mutation: { type: 'run-proposal-dismiss', proposal_id: p.id }, result: { proposal_id: p.id } };
+      // The recipe this ticket would run must still be the one the page offered (same layer and
+      // text); a repository recipe of that name shadows it and is refused.
+      const shadow = shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
+      if (shadow) return { outcome: 'failed', error: { code: shadow.code, message: shadow.message, retryable: false, current_revision: ticket.revision } };
       // Approval queues an ordinary run through the same checks and reservation as the Run dialog.
-      // It suggests rather than applies: whoever proposed it, the owner reviews what it found.
-      const evaluation = evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: proposalNote(p), permissions: p.permissions, access: p.access, suggest: true });
+      // It suggests rather than applies: whoever proposed it, the owner reviews what it found. Page
+      // text never becomes the owner's note; where the run came from travels as `proposal`.
+      const evaluation = evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
       if (evaluation.outcome !== 'applied') {
         if (evaluation.error && evaluation.error.code === 'handoff-reserved') {
           const existing = state.handoffs.get(evaluation.result.existing_handoff_id);
@@ -426,6 +429,7 @@ export function evaluateRequest(worker, req) {
       }
       evaluation.mutation.proposal_id = p.id;
       evaluation.mutation.handoff.proposal_id = p.id;
+      evaluation.mutation.handoff.proposal = proposalProvenance(p);
       evaluation.result.proposal_id = p.id;
       return evaluation;
     }

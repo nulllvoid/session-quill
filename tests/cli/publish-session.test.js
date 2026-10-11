@@ -8,6 +8,7 @@ import { createExtension as schedulerExt } from '../../src/reconcile/extension.j
 import { saveUserConfig } from '../../src/config/config.js';
 import { makeHome, cli } from './helpers.js';
 import { applyDueRequests } from '../../src/server/requests.js';
+import { repoFor } from '../../src/core/state.js';
 
 const FAKE = path.resolve('tests/fixtures/fake-artifact-claude.js');
 const T1 = 'eeeeeeee-0000-4000-8000-000000000001';
@@ -68,10 +69,10 @@ async function waitFor(fn) {
   return fn();
 }
 
-test('through a session publish, a Run agent pick comes back as one proposal, and an allowlisted read-only pick is approved by its auto-run', async () => {
+test('through a session publish, a Run agent pick comes back as one proposal that waits for the owner, and a refused pick is reported', async () => {
   const fx = makeHome();
   const store = path.join(fx.home, 'remote.json');
-  fx.config.publish = [{ name: 'team', kind: 'artifact', two_way: true, run_agent: true, auto_run_editors: ['u_lead'], auto_run_recipes: ['standup'], fields: ['key', 'title', 'status'] }];
+  fx.config.publish = [{ name: 'team', kind: 'artifact', two_way: true, run_agent: true, fields: ['key', 'title', 'status'] }];
   saveUserConfig(fx.config, fx.env);
   const w = new Worker({ config: fx.config, storeMeta: fx.meta, env: fx.env });
   const ext = schedulerExt({ env: fx.env, config: fx.config }, { providers: { for: () => ({ name: 'github', fetchPr: async () => { throw new Error('offline'); } }) } });
@@ -79,15 +80,17 @@ test('through a session publish, a Run agent pick comes back as one proposal, an
   await w.start();
   w.emit('ticket-create', { ticket: { id: T1, key: 'PROJ-1', title: 'Retry flake', project_id: 'demo', project_name: 'Demo', category: 'feature', priority: 'P2', parent_id: null, repo_id: 'demo', due: null, jira: null } });
   w.publishGeneration();
-  const timer = setInterval(() => { try { w.tick(); } catch (err) { console.error(err); } }, 20);
+  const timer = setInterval(() => { try { w.tick(); applyDueRequests(w, w.now()); } catch (err) { console.error(err); } }, 20);
   const publishOnce = async () => {
     let out = await cli(['publish', 'team', '--plan', '--confirm'], fx.env);
     assert.equal(out.code, 0, out.err);
+    let text = '';
     for (;;) {
       const dir = /Run directory: (.+)/.exec(out.out)[1].trim();
       out = await cli(['publish', 'team', '--result', executeAsSession(dir, store)], fx.env);
       assert.equal(out.code, 0, out.err);
-      if (!/Next plan/.test(out.out)) return out;
+      text += out.out;
+      if (!/Next plan/.test(out.out)) return text;
     }
   };
   const pick = (run, by, at) => {
@@ -100,20 +103,18 @@ test('through a session publish, a Run agent pick comes back as one proposal, an
   try {
     await publishOnce();
     assert.match(JSON.parse(fs.readFileSync(store, 'utf8')).page, /RUN_RECIPES = \["analyse"/);
+    pick('file-task', 'u_editor', '2026-10-11T08:59:00Z');
+    assert.match(await publishOnce(), /Run agent pick on PROJ-1 refused: file-task is not offered on the team page/);
     pick('analyse', 'u_editor', '2026-10-11T09:00:00Z');
-    await publishOnce();
+    assert.match(await publishOnce(), /analyse on PROJ-1 proposed from the page/);
     await publishOnce();
     const proposals = await until(() => (w.state.runProposals.size ? [...w.state.runProposals.values()] : null));
     assert.equal(proposals.length, 1);
     assert.equal(proposals[0].state, 'proposed');
     assert.equal(proposals[0].editor, 'u_editor');
-    assert.equal(w.state.handoffs.size, 0);
-    pick('standup', 'u_lead', '2026-10-11T09:05:00Z');
-    await publishOnce();
-    // Requests apply on the server extension's tick; this worker has none, so apply them here.
-    const auto = await until(() => { applyDueRequests(w, w.now()); return [...w.state.runProposals.values()].find((p) => p.recipe.name === 'standup' && p.state === 'approved'); });
-    assert.equal(auto.resolved_by, 'auto-run:team');
-    assert.equal(w.state.handoffs.size, 1);
+    assert.equal(proposals[0].permissions.read_source, !!repoFor(w.state, 'demo'), 'repository registration as the worker sees it');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(w.state.handoffs.size, 0, 'nothing runs without the owner');
   } finally { clearInterval(timer); await w.stop(); }
 });
 

@@ -13,7 +13,7 @@ import { normalizePublishers, consentId, KIND_LABELS } from '../publish/config.j
 import { rowsFor } from '../publish/content.js';
 import { publishMarkdown, publishHtml } from '../publish/writers.js';
 import { publishArtifact, editRequestId } from '../publish/artifact.js';
-import { proposalFromEdit, runChoices, autoApprovalId } from '../publish/run-proposals.js';
+import { proposalFromEdit, runChoices } from '../publish/run-proposals.js';
 import { createArtifactClient } from '../publish/artifact-client.js';
 import { createTrackerClient, syncSettings, syncable } from '../tracker/client.js';
 import { onboardSettings } from '../onboard/settings.js';
@@ -41,9 +41,8 @@ function previousDate(date) {
   return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
 }
 
-// A Run agent pick (ADR 0025) becomes a proposal and nothing more. Only when the owner allowlisted
-// both the editor and a read-only recipe for this publisher is it approved at once, under the
-// publisher's auto-run actor, through the same request path as the dashboard's Approve.
+// A Run agent pick (ADR 0025) becomes a proposal and nothing more: only the owner approves it, on
+// the dashboard or with `quill approve --run`.
 export function proposeRun(worker, publisher, e) {
   const ticket = worker.state.tickets.get(e.ticket_id);
   if (!ticket) { worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} names an unknown ticket`); return; }
@@ -51,14 +50,7 @@ export function proposeRun(worker, publisher, e) {
   if (out.skip) return;
   if (out.error) { worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} refused: ${out.error}`); return; }
   const { result } = worker.emit('run-proposal', out.proposal, { source_identity: `run-proposal:${out.proposal.id}`, ticket_id: ticket.id });
-  if (result.rejected) { worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} not recorded: ${result.rejected}`); return; }
-  // A retry after a crash between the two steps still approves it: the request id is per proposal.
-  if (!out.proposal.auto || (worker.state.runProposals.get(out.proposal.id) ?? {}).state !== 'proposed') return;
-  try {
-    submitRequest(worker, { id: autoApprovalId(out.proposal.id), kind: 'approve-run', target_id: ticket.id, expected_revision: null, payload: { proposal_id: out.proposal.id } }, { actor: `auto-run:${publisher.name}` });
-  } catch (err) {
-    worker.log(`publish ${publisher.name}: auto-run of ${out.proposal.recipe.name} on ${e.key} refused: ${err.message}`);
-  }
+  if (result.rejected) worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} not recorded: ${result.rejected}`);
 }
 
 // Two-way artifacts (ADR 0011): page edits become revision-checked requests with the normal undo
