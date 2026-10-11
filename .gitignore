@@ -8,3 +8,6 @@
 Thumbs.db
 node_modules/
 test-results.tap
+
+# Screenshots and other exports Claude sessions drop beside the checkout
+Claude outputs/
