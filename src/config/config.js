@@ -153,7 +153,8 @@ export function resolveGateMode(user = {}, repo = null) {
 // `environments` is deployment config, not key recognition (ADR 0009): a table holding only it is no tracker.
 function bindingTable(t) {
   if (!t || typeof t !== 'object' || Array.isArray(t)) return t ?? null;
-  const { environments, sync_token_env, sync_username_env, ...rest } = t;
+  // Onboarding settings (ADR 0024) are not key recognition either.
+  const { environments, sync_token_env, sync_username_env, import_assigned, auto_clone_dir, clone_hosts, repo_map, ...rest } = t;
   return Object.keys(rest).length ? rest : null;
 }
 
