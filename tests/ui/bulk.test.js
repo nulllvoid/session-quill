@@ -63,7 +63,7 @@ test('the bulk action bar is a labelled group with the count and the four action
     assert.match(html, new RegExp(`data-action="${action}"[^>]*>(<svg[\\s\\S]*?</svg>)?${label}<`), label);
   }
   assert.doesNotMatch(html, /Undo all/);
-  assert.match(renderBulkActionBar({ count: 0, undo: 3 }), /data-action="bulk-undo-all"[^>]*>(<svg[\s\S]*?<\/svg>)?Undo all \(<span class="bulk-undo-count">3<\/span>\)/);
+  assert.match(renderBulkActionBar({ count: 0, undo: 3 }), /data-action="bulk-undo-all"[^>]*>(<svg[\s\S]*?<\/svg>)?<span class="bulk-undo-label">Undo all \(<span class="bulk-undo-count">3<\/span>\)<\/span>/);
   assert.doesNotMatch(renderBulkActionBar({ count: 0, undo: 3 }), /data-action="bulk-handoff"/, 'no actions on an empty selection');
 });
 

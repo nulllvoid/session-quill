@@ -820,11 +820,25 @@ body[data-bulk="on"] .main { padding-bottom: 96px; }
 }
 @keyframes bulk-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @media (max-width: 899px) {
-  .bulk-bar { bottom: calc(56px + env(safe-area-inset-bottom)); }
+  /* The bottom nav is 61px tall here (52px items, 8px padding, 1px border): the bar clears it with a gap. */
+  .bulk-bar { bottom: calc(68px + env(safe-area-inset-bottom)); }
+  /* A popover anchored to its summary runs off the right edge on a phone; pin it to the viewport instead. */
+  .health-pop { position: static; }
+  .health-pop .popover { position: fixed; left: 16px; right: 16px; top: auto; width: auto; margin-top: 8px; }
 }
+/* In select mode the wrapper is the grid child, so the top card's full-width row moves to it. */
+.picknext-grid > .card-pick:first-child { grid-column: 1 / -1; }
 .bulk-entries { list-style: none; margin: 8px 0 12px; padding: 0; max-height: 240px; overflow: auto; display: grid; gap: 4px; }
-.bulk-entry, .bulk-result { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
-.bulk-entry-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 32ch; }
+/* The chip stays on the ticket's line; a long title truncates rather than pushing it down. */
+.bulk-entry, .bulk-result { display: flex; flex-wrap: nowrap; align-items: center; gap: 6px; font-size: 13px; min-width: 0; }
+.bulk-entry > *, .bulk-result > * { flex: none; }
+.bulk-entry-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 899px) {
+  /* Long keys have no room beside the chip on a phone: the rows wrap there, the title reads in full and a long key may break. */
+  .bulk-entry, .bulk-result { flex-wrap: wrap; }
+  .bulk-entry-title { flex: 1 0 auto; max-width: 100%; white-space: normal; }
+  .bulk-entry .key, .bulk-result .key { flex: 0 1 auto; min-width: 0; }
+}
 .bulk-entry[data-state="ready"] .chip { background: var(--status-done-bg); color: var(--status-done); }
 .bulk-entry .chip[data-entry="waits"], .bulk-result[data-tone="warning"] .chip { background: var(--stale-bg); color: var(--stale); }
 .bulk-form label.danger { color: var(--critical); }

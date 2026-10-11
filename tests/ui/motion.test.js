@@ -85,6 +85,7 @@ test('the bulk bar slides in only without a reduced-motion preference, and on na
     const open = before.lastIndexOf('@media (prefers-reduced-motion: no-preference)');
     assert.ok(open >= 0 && open > before.lastIndexOf('}\n}'), 'the entrance sits inside a no-preference media query');
   }
-  assert.match(css, /\.bulk-bar\s*\{[^}]*bottom:\s*calc\(56px \+ env\(safe-area-inset-bottom\)\)/);
+  // The bottom nav is 61px tall at narrow widths (52px items, 8px padding, 1px border); the bar sits above it.
+  assert.match(css, /\.bulk-bar\s*\{[^}]*bottom:\s*calc\(68px \+ env\(safe-area-inset-bottom\)\)/);
   assert.match(css, /body\[data-detail="open"\] \.bulk-bar\s*\{[^}]*display:\s*none/);
 });

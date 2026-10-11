@@ -30,7 +30,8 @@ export function renderBulkActionBar({ count = 0, undo = 0 } = {}) {
   <button type="button" class="btn small" data-action="bulk-handoff" data-mode="attempt-fix">${icon('play')}Attempt fix</button>
   <button type="button" class="btn small" data-action="bulk-status">Change status</button>
   <button type="button" class="btn small ghost" data-action="bulk-clear">Clear</button>` : '';
-  const undoBtn = undo ? `<button type="button" class="btn small" data-action="bulk-undo-all">${icon('undo')}Undo all (<span class="bulk-undo-count">${esc(undo)}</span>)</button>` : '';
+  // One label span: the button is a flex row with a gap, which would otherwise space out "Undo all (", the count and ")".
+  const undoBtn = undo ? `<button type="button" class="btn small" data-action="bulk-undo-all">${icon('undo')}<span class="bulk-undo-label">Undo all (<span class="bulk-undo-count">${esc(undo)}</span>)</span></button>` : '';
   return `<div class="bulk-bar" role="group" aria-label="Bulk actions" data-shape="${bulkBarShape({ count, undo })}">${count ? `<span class="bulk-count">${esc(count)} selected</span>` : ''}${actions}${undoBtn}</div>`;
 }
 
