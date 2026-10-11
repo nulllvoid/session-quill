@@ -1,12 +1,16 @@
 {
   "name": "session-quill",
-  "owner": { "name": "Shivam Shah" },
-  "metadata": { "description": "Session Quill: ticket-bound Claude Code sessions with local capture and a loopback dashboard." },
+  "owner": {
+    "name": "Shivam Shah"
+  },
+  "metadata": {
+    "description": "Session Quill: local-first ticket tracking and agent workflows for Claude Code."
+  },
   "plugins": [
     {
       "name": "session-quill",
       "source": "./",
-      "description": "Ticket-bound Claude Code sessions: zero-command linking, durable local capture to markdown or Obsidian, a loopback dashboard, agent recipes, per-environment deployments and Today, publishers and tracker sync."
+      "description": "Connect Claude Code sessions to tickets, preserve local work history, and run agents in isolated worktrees with worker-run test checks."
     }
   ]
 }

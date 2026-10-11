@@ -12,7 +12,8 @@ Include what you observed, how to reproduce it (a failing test under `tests/` is
 
 | Version | Supported |
 | --- | --- |
-| 0.1.x (main) | Yes |
+| Current version on `main` | Yes |
+| Older versions | Update to the current version before requesting a fix |
 
 ## What counts
 

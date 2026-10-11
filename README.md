@@ -6,6 +6,10 @@
 
 A Claude Code plugin that binds development sessions to tickets, keeps a durable local record of what each session did, and gives you a loopback dashboard that answers "what should I pick next?", "where was I?" and "what still needs deployment?".
 
+Connect your coding sessions to Jira or GitHub tickets, resume with the previous work in view, and run agents in isolated worktrees. Configure a repository test command to have the worker check a fix before suggesting it.
+
+[Get started](#get-started-inside-claude-code) · [Product website](https://nulllvoid.github.io/session-quill/) · [Data handling](docs/DATA-HANDLING.md)
+
 ![Pick next dashboard with workspace stats and unlinked session work](docs/images/dashboard-pick-next.jpg)
 
 - **Zero-command tracking.** Mention a ticket key such as `PROJ-123` in a prompt, or start on a branch like `feat/PROJ-123-...`, and the session is linked to that ticket. Any tracker works through a URL template; no tracker host is built in.
@@ -68,6 +72,20 @@ Open your dashboard whenever you need it:
 
 The dashboard command also sets up Quill if needed, attaches your current Claude
 session and repository, and starts a missing worker.
+
+### Try one task first
+
+No tracker token is needed for this first workflow:
+
+1. Run `/session-quill:start` inside a Git repository.
+2. Ask Claude: "Create a Quill task to add a short setup section to this repository's README, then work on it."
+3. Open `/session-quill:ui`. Confirm the task, bound session and changed file appear.
+4. Start a new session and ask Claude to resume that same task. Check its previous work and next action before continuing.
+
+This exercises local tracking. Agent recipes are a separate, optional step and use your configured model provider. A fix is only test-verified when a configured test command actually passes.
+
+### Worker and dashboard lifecycle
+
 After a reboot, the next Claude session reconnects automatically. You do not need
 to configure Task Scheduler or systemd for ordinary session tracking. Scheduled
 jobs run while the worker is running; opening Claude after downtime starts recovery.
@@ -429,6 +447,8 @@ Reports Node, Git and Claude versions, store ownership (copies on other machines
 3. Your markdown store is yours and stays where it is. Quill state (journal, blobs, projections) lives in `~/.claude/quill/`; delete it only after backing it up if you want a clean slate.
 
 ## Privacy and limits
+
+See [Data handling](docs/DATA-HANDLING.md) for storage, external destinations, retention and removal. Ticket text and work records can contain personal or confidential information even though Quill has no telemetry.
 
 - No telemetry. Hooks capture tool metadata and selected assistant content, not full prompts, environments or command output.
 - The gate covers tool calls delivered to its hooks. External processes, disabled hooks and host crashes are outside its guarantee, and a valid binding never bypasses normal Claude Code permissions.
