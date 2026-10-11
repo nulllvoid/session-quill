@@ -687,7 +687,7 @@ test('the top bar is one row with a status button; receipts are toasts; filters 
   assert.match(html, /<summary class="btn small ghost status-button"[^>]*><span class="dot"[^>]*><\/span><span class="status-label">1 provider error<\/span>/);
   assert.match(html, /class="popover status-popover"[\s\S]*Refresh[\s\S]*127\.0\.0\.1:4321/);
   assert.match(html, /class="receipt toast"[\s\S]*Receipt: next action applied[\s\S]*data-action="dismiss-receipt"/);
-  assert.deepEqual(statusLabel(s, { now: NOW, online: false }), { text: 'Offline', tone: 'critical' });
+  assert.deepEqual(statusLabel(s, { now: NOW, online: false }), { text: 'Offline · 1 provider error', tone: 'critical' });
   assert.equal(receiptLifetime('critical'), null);
   assert.equal(receiptLifetime('good'), 6000);
   assert.equal(activeFilterCount({ project: 'demo', category: '', tag: '', repo: 'demo', machine: '', stale: true, q: '' }), 3);
@@ -695,4 +695,17 @@ test('the top bar is one row with a status button; receipts are toasts; filters 
   assert.match(bar, /<details class="filter-pop health-pop"><summary class="btn small ghost">[\s\S]*Filter · 1<\/summary>/);
   assert.match(bar, /data-filter="category"/);
   assert.match(bar, /data-action="clear-filter" data-filter="category"/);
+});
+
+test('statusLabel: offline without errors, plural errors, needs attention', async () => {
+  const { statusLabel } = await import('../../ui/views/header.js');
+  const clean = snapshot(); clean.meta.provider_health = [];
+  assert.deepEqual(statusLabel(clean, { now: NOW, online: false }), { text: 'Offline', tone: 'critical' });
+  const two = snapshot(); two.meta.provider_health = [{ provider: 'github', error: 'x' }, { provider: 'bitbucket', error: 'y' }];
+  assert.deepEqual(statusLabel(two, { now: NOW, online: true }), { text: '2 provider errors', tone: 'critical' });
+  assert.equal(statusLabel(two, { now: NOW, online: false }).text, 'Offline · 2 provider errors');
+  const warn = snapshot(); warn.meta.provider_health = []; warn.meta.capture_health = { status: 'degraded' };
+  assert.deepEqual(statusLabel(warn, { now: NOW, online: true }), { text: 'Needs attention', tone: 'warning' });
+  const snap = snapshot(); snap.meta.exported_at = NOW;
+  assert.deepEqual(statusLabel(snap, { now: NOW, online: false }), { text: 'Read-only snapshot', tone: 'muted' });
 });

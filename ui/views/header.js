@@ -134,9 +134,10 @@ export function renderRefreshControl(snapshot, { online, refresh }) {
 export function statusLabel(snapshot, { now, online }) {
   const meta = snapshot.meta;
   if (meta.exported_at) return { text: 'Read-only snapshot', tone: 'muted' };
-  if (!online) return { text: 'Offline', tone: 'critical' };
   const failing = (meta.provider_health ?? []).filter((p) => p.error).length;
-  if (failing) return { text: failing === 1 ? '1 provider error' : `${failing} provider errors`, tone: 'critical' };
+  const errors = failing === 1 ? '1 provider error' : `${failing} provider errors`;
+  if (!online) return { text: failing ? `Offline · ${errors}` : 'Offline', tone: 'critical' };
+  if (failing) return { text: errors, tone: 'critical' };
   if ((meta.capture_health && meta.capture_health.status !== 'ok') || meta.unresolved_event_count) return { text: 'Needs attention', tone: 'warning' };
   return { text: meta.last_sync ? `Updated ${relativeTime(meta.last_sync, now)}` : 'Not synced yet', tone: 'good' };
 }
@@ -191,9 +192,9 @@ export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters
   </div></details>`; })()}
   <div class="topbar-actions">
     ${openProposals(snapshot).length ? `<button type="button" class="btn small attention-button" data-action="review-proposals" aria-label="${openProposals(snapshot).length} awaiting approval">${icon('alert')}${openProposals(snapshot).length}<span class="action-label"> awaiting approval</span></button>` : ''}
-    ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small ghost" data-action="schedules">${icon('clock')}<span class="action-label">Schedules</span></button>` : ''}
-    ${(snapshot.publishers ?? []).length && !isStatic ? `<button type="button" class="btn small ghost" data-action="publishers" data-publish-state="${snapshot.publishers.some((p) => p.last_outcome === 'failed' || !p.confirmed) ? 'attention' : 'ok'}">${icon('download')}<span class="action-label">Publish</span></button>` : ''}
-    ${caps.export ? `<button type="button" class="btn small ghost" data-action="export">${icon('download')}<span class="action-label">Export</span></button>` : ''}
+    ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small ghost" data-action="schedules" aria-label="Schedules">${icon('clock')}<span class="action-label">Schedules</span></button>` : ''}
+    ${(snapshot.publishers ?? []).length && !isStatic ? `<button type="button" class="btn small ghost" data-action="publishers" aria-label="Publish" data-publish-state="${snapshot.publishers.some((p) => p.last_outcome === 'failed' || !p.confirmed) ? 'attention' : 'ok'}">${icon('download')}<span class="action-label">Publish</span></button>` : ''}
+    ${caps.export ? `<button type="button" class="btn small ghost" data-action="export" aria-label="Export">${icon('download')}<span class="action-label">Export</span></button>` : ''}
     <button type="button" class="btn small ghost icon-only" data-action="theme" aria-label="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" title="Theme">${icon(theme === 'dark' ? 'sun' : 'moon')}</button>
     <button type="button" class="btn small ghost icon-only" data-action="help" aria-label="Keyboard shortcuts" title="Help (?)">${icon('help')}</button>
   </div>
