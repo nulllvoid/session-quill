@@ -2123,10 +2123,15 @@ Make sure `icon` is in the board.js components import. Note the class order in t
 Run: `npm test`
 Expected: PASS. If an older test matched `>Hide<` on the board, change it to the `aria-label="Hide …"` form.
 
+- [ ] **Step 6b: Regenerate the design-system token snapshot** — `ui/assets/tokens.css`, `tokens.json` and `manifest.json` are generated from `ui/styles.css`; never hand-edit them.
+
+Run: `node scripts/build-ui-assets.mjs` then `node scripts/build-ui-assets.mjs --check`
+Expected: the second command prints `Verified … Quill assets.` and exits 0. `git status` shows only the regenerated `ui/assets/` files changing besides this task's files.
+
 - [ ] **Step 7: Commit**
 
 ```bash
-git add ui/styles.css ui/components.js ui/views/board.js tests/ui/tokens.test.js tests/ui/render.test.js
+git add ui/styles.css ui/components.js ui/views/board.js tests/ui/tokens.test.js tests/ui/render.test.js ui/assets
 git commit -m "fix(ui): 3:1 control borders, a distinct faint text level, short card keys
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
@@ -2262,11 +2267,107 @@ Expected: PASS, 0 failures.
 Run: `git diff --check`
 Expected: no output.
 
+Run: `node scripts/build-ui-assets.mjs --check`
+Expected: exits 0 (`Verified … Quill assets.`). If it reports stale files, a `ui/styles.css` token changed after Task 12: run `node scripts/build-ui-assets.mjs` and include `ui/assets` in this commit.
+
 - [ ] **Step 8: Commit**
 
 ```bash
 git add ui/styles.css docs/images CHANGELOG.md
 git commit -m "fix(ui): fit every view to phone widths; refresh dashboard screenshots
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 14: Update the Fieldnotes design system to the shipped runs-first design
+
+The design system (`306ca3f`, merged in `a08a41c`) was written before this plan. It describes the Runs workspace as a proposal, with example copy that claims run phases and wait reasons the worker does not record. The owner ruled that the plan's design is authoritative: update the design system to describe what Tasks 1–13 shipped. Documentation and reference page only; no production code changes.
+
+**Files:**
+- Modify: `docs/design-system/CLAUDE-DESIGN-SYSTEM.md` (§3, §4, §5, §6, §7, §8, §10)
+- Modify: `docs/design-system/index.html` (the `#orchestration` specimen only)
+- Modify: `DESIGN.md`, `CLAUDE.md`
+- Modify: `docs/AGENT-HANDOVER-ORCHESTRATION-1.0.md` (add a status section at the top; do not rewrite the original sections)
+- Regenerate: `docs/design-system/preview-light.png`, `preview-dark.png`
+- Test: `node scripts/build-ui-assets.mjs --check` and the stale-copy grep in Step 9
+
+**Interfaces:**
+- Consumes: everything Tasks 1–13 shipped. Before writing, read the final `ui/views/runs.js`, `ui/views/run-detail.js`, `ui/views/run-dialog.js`, `ui/views/header.js`, `ui/lib/runs.js` and the Runs CSS in `ui/styles.css`. Describe the code as it is, not as this plan says it should be; where they differ, the code wins and the report names the difference.
+
+- [ ] **Step 1: §3 Foundation tokens** — update the token table from the current `ui/assets/tokens.json` (Task 12 regenerated it): `--text-faint` dark is `#8a9992`; `--border-strong` is `#6f8277` dark and `#7f8f86` light (add a row for each). Add one sentence after the table: "Form controls (inputs, selects, textareas) draw their boundary with `--border-strong`, which meets 3:1 against `--bg` and `--surface` in both themes; `tests/ui/tokens.test.js` enforces it."
+
+- [ ] **Step 2: §4 Assets** — add under the Illustrations bullet: "Production views do not reference `/ui/assets/…` images. Static exports inline the stylesheet and bundle the scripts and must not contain `src=\"/ui/` URLs (`tests/export/static.test.js`), so dashboard empty states are text with a next step. Use illustrations only on surfaces that are never exported, or inline the SVG."
+
+- [ ] **Step 3: §5 Component contract** — replace the `Run row`, `Batch summary` and `Toast/receipt` rows, and add the new rows, keeping the table's three columns:
+
+| Component | Required anatomy | States and behavior |
+| --- | --- | --- |
+| Run row | One `<button>` per run: state chip, ticket key (middle-ellipsised, full key in `title`) and title, recipe or mode, access badge (Read-only / Edits source / Full access), worker test-gate badge, one fact line, requested time | The fact line states only recorded facts: queued → "Queued" plus slot occupancy from `meta.handoff_limits`, and "repository busy" for a queued fix whose repository has a running fix; running → "Running for …" and "setup …" when measured; done → suggestions to review, files changed, draft PR; failed → the error plus "Retried as a new run" or "Superseded by a later run". Nothing interactive nests inside the row button |
+| Batch summary | Batch short id, recipe or "mixed", outcome counts across the whole batch, progress bar, "Cancel queued (n)" | Derived from run records, so it survives a reload; cancelling names only queued members and never claims running ones stopped |
+| Run strip | Under the ticket title: the current run (else the latest) with state, recipe, test-gate badge, suggestions to review and time; opens run detail | "No agent runs yet · Run agent" when there are none (owner only) |
+| Run detail | Header (state, recipe and source, mode, access, test gate, measured timings, batch, retry relationship); Result; Changes; Delivery (PR link, branch, uncertain effects); Where it is (owner-only checkout path as text with copy, never a link); Suggestions; actions | Sections absent from the record or stripped by an export are omitted, never rendered empty; uncertain effects use warning styling, never success; a stale link shows "Run not found" |
+| Run agent dialog | Step 1 recipe cards (reads/edits marker, time cap); step 2 permissions with side effects under Advanced, a plain summary of what the run will do, prerequisite blockers and warnings | Queue is disabled while a blocker applies and says why; a missing test command is a warning ("Not test-verified"), not a pass |
+| Status button | One top-bar button: dot and short label (Updated …, provider errors, Offline, Needs attention) opening a popover with connection, health and Refresh | Errors and offline colour the dot and label; never hidden behind the popover |
+| Toast/receipt | Action and confirmed outcome, LIVE chip, dismiss | Neutral and good receipts clear after 6 s; critical receipts stay until dismissed; never imply queued work has completed |
+| Filter button | "Filter · n" opening a popover of the existing filters; active filters stay visible as removable tokens | Same hash parameters as before |
+| Navigation | Grouped Work (Pick next, Board, Runs) and Track (Activity, Sessions, Deployments, Relationships); phones show Pick next, Board, Runs, Activity and More | The Runs badge counts live runs; a separate attention dot means "needs you"; shortcuts 1–6 unchanged, 7 opens Runs |
+
+- [ ] **Step 4: §6 Honest state language** — replace the "Use explicit copy:" example list with examples the shipped UI produces, followed by the rule that motivated them:
+
+```markdown
+- "Queued · read-only slots 2/2 in use" — occupancy, not a claimed cause.
+- "Queued · fix slots 1/1 in use · repository busy" — only for a queued fix.
+- "Running for 2 min · setup 4 s" — the worker records agent and test time only when a run finishes, so a running row never names a phase.
+- "Tests passed (worker)" / "Not test-verified" / "Tests failed".
+- "2 suggestions to review".
+- "Retried as a new run" / "Superseded by a later run".
+- "Cancel queued (3)" when running members are unaffected.
+
+A row or chip states only what the snapshot records. When the worker starts projecting live phases or wait reasons, add them here first, then to the UI.
+```
+
+- [ ] **Step 5: §7 Orchestration information architecture** — replace the **Shipped** and **Proposed** paragraphs with:
+
+```markdown
+**Shipped:** Pick next, Board, Runs, Activity, Sessions, Deployments, Relationships. Runs (`#view=runs`, shortcut 7) has Needs you, Live, Failed and All tabs (`tab=`), rows grouped by batch, and run detail in the side panel (`run=`). Needs you holds open proposals, finished runs with suggestions to decide, and failed or timed-out runs from the last 7 days on open tickets that no later run superseded; cancelled runs never need you; exports have no Needs you. Ticket detail has Overview, Runs, Activity and Delivery tabs (`section=`) and a run strip under the title. Proposed runs live in Runs → Needs you and the ticket's Runs tab; Activity is history only. Internal route names `tree` and `today` remain.
+
+**Not yet built:** worker-projected phases and wait reasons, readiness checks the snapshot cannot answer, prewarmed worktrees, nested run groups.
+```
+
+Keep the existing "Recommended Runs workflow" list; it matches what shipped.
+
+- [ ] **Step 6: §8 and §10** — in §8 add: "Runs rows and the run detail panel must fit 390px with no document overflow (the runs-first browser check asserts it)." In §10 add: "Run `node scripts/build-ui-assets.mjs --check` after any `ui/styles.css` token change; regenerate with `node scripts/build-ui-assets.mjs` when it reports drift."
+
+- [ ] **Step 7: Reference specimen** — in `docs/design-system/index.html`, change only the `#orchestration` section so it mirrors the shipped Runs page:
+  - tabs Needs you / Live / Failed, keeping the existing `q-tabs` / `q-tab` / `data-panel` markup that `reference.js` drives (update `id`, `aria-controls` and `data-panel` values consistently);
+  - row captions use only the Step 4 copy — no "Phase: worker tests", no "another fix holds the checkout slot", no agent time on a running row;
+  - the lede "Proposed pattern, not a shipped Runs view." becomes "The shipped Runs page, with example data.", and the "Reference pattern" chip text becomes "Example data".
+
+- [ ] **Step 8: DESIGN.md, CLAUDE.md, handover**
+  - `DESIGN.md`: replace "The reference kit is opt-in. It does not change dashboard styles or create a production Runs view." with "The reference kit is opt-in; the production dashboard keeps its own stylesheet. The Runs page and run detail are shipped (see §7 of the contract)."
+  - `CLAUDE.md`: replace "Do not claim to have implemented a Runs workspace merely by adding assets or a reference-page example." with "The Runs page, run detail, ticket Runs tab and Run agent dialog are shipped; their contract is §5–§7 of the design system. Asset or specimen changes alone do not change that behaviour."
+  - `docs/AGENT-HANDOVER-ORCHESTRATION-1.0.md`: insert directly under the title a `## Status (runs-first dashboard)` section listing which handover items the branch resolved — P1 full results, P1 Sessions checkpoint link, P2 batch history after reload, the Runs surface, run detail evidence, ticket run discovery, dispatch consolidation, attention dot, mobile navigation — and which remain (authoritative wait reasons and phases, worker readiness projections, filter-scope labelling beyond the approvals button). Leave the original sections untouched.
+
+- [ ] **Step 9: Regenerate previews and check**
+
+Run: `node scripts/build-ui-assets.mjs --check` — expected exit 0.
+
+Start `node scripts/preview-design-system.mjs --port 0` in the background, capture the reference page at 1440×900 in light and dark with Playwright (same runtime path as Task 13) over `docs/design-system/preview-light.png` and `preview-dark.png` (the page's theme button toggles `data-theme`), then stop the server.
+
+Run: `git grep -n -e "Phase: worker tests" -e "another fix holds the checkout slot" -e "not a shipped Runs view" -e "create a production Runs view" -- docs DESIGN.md CLAUDE.md`
+Expected: no output (the plan and spec under `docs/superpowers` do not contain these strings).
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add docs/design-system DESIGN.md CLAUDE.md docs/AGENT-HANDOVER-ORCHESTRATION-1.0.md
+git commit -m "docs(design): describe the shipped runs-first dashboard in Fieldnotes
+
+The Runs page, run detail, ticket Runs tab, Run agent dialog, grouped
+navigation, status popover and toasts are now part of the contract;
+example copy states only what the worker records.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
