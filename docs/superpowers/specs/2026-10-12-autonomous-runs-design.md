@@ -26,7 +26,7 @@ Owner decisions this design follows (2026-10-12): read-only credentials obtainab
 | --- | --- | --- | --- | --- | --- |
 | `standard` | unchanged (`dontAsk` + profile list) | Quill's allow list | no | tokens stripped | — |
 | `settings` | unchanged | owner's settings | owner's settings | as today | — |
-| **`autonomous`** | `dontAsk` + `--permission-prompts none` | **the guard hook** (allow on `local`/`read`), plus a small static allow list for built-in local tools | denied → critical change | read-only profile for every configured system; git/tracker tokens stripped unless a git scope is granted | **enforce, fail-closed** |
+| **`autonomous`** | `dontAsk` + `--permission-prompts none` | **the guard hook** (allow on `local`/`read`), plus a small static allow list for built-in local tools | denied → critical change | every credential location redirected (§4.4): read-only profile where configured, empty stub otherwise; tokens stripped | **enforce, fail-closed** |
 | `autonomous` + scopes | same | same | allowed only for granted `scope[:target]` | elevated profile for each granted scope only | enforce, granted scopes removed from the deny set |
 | `full` | `bypassPermissions` | nobody (all allowed) | **allowed** | owner's normal environment | **off** (observe-only ledger of prod effects) |
 
@@ -49,6 +49,7 @@ Why `dontAsk` with a hook that allows, rather than `bypassPermissions` with a ho
 - **MCP:** read when the tool name's verb is `get|list|search|fetch|read|query|describe|lookup|view` or the server marks `readOnlyHint: true`; write when it is `create|update|edit|delete|send|post|transition|add|schedule|share|trash|merge|sync|apply|rollback|…`; otherwise `unknown` → denied and reported "unavailable for policy" so the owner can classify it (owner classifications persist in machine memory and the scope catalog). `slack_send_message_draft` counts as read-safe.
 - **Bash/PowerShell:** unwrap `sh -c`, `bash -c`, `cmd /c`, `powershell -Command`, `& exe`, `.exe`/`.cmd` shims, `$env:X=…;` and `VAR=… ` prefixes, `&&`/`;`/`|` chains (classify each segment; the strictest wins). Recognised prod binaries (`kubectl`, `helm`, `k9s`, `aws`, `gcloud`, `az`, `argocd`, `psql`, `mysql`, `mongosh`, `redis-cli`, `terraform`, `gh`, `git`, `curl`/`Invoke-WebRequest` to configured tracker/Argo/Kibana hosts) use per-binary read-verb lists (report 01 §R-2); **an unknown verb of a recognised prod binary is a write**. `kubectl exec|cp|port-forward|debug|proxy` and reading secrets count as `k8s.write`. SQL passed by `-c`/stdin is read only if every statement is `SELECT|SHOW|EXPLAIN|DESCRIBE|WITH … SELECT`; `-f <file>` is `unknown-prod`. Repo scripts whose names match `deploy|release|apply|migrate|rollout` are `unknown-prod`. Everything else is `local`.
 - **Git:** `git push` to a non-default branch requires `git.push`; push to the default branch, `--force`, `git merge` into the default branch and `gh pr merge` require `git.merge`; `gh pr create` requires `git.pr`.
+- **File edits:** Edit/Write/MultiEdit/NotebookEdit, and shell redirects or `rm`/`mv`/`Remove-Item` that the tokenizer can resolve to a path, are allowed only when the run has `edit_source` (attempt-fix) or `edit_files` (files mode), and only for paths inside the run's checkout or sandbox; temp files under the run dir and the OS temp dir are always allowed. Everything else is denied with "outside this run's writable area". Writes to the context snapshot are allowed but never read back.
 - **Self-protection (autonomous only):** deny writes targeting `quillHome`, `~/.claude/settings*.json`, `CLAUDE_PLUGIN_ROOT`, and `.claude/settings*.json` in the worktree; paths compared case-insensitively after resolve on Windows.
 - Deny reason format, seen by the model: `QUILL_CRITICAL_CHANGE scope=<scope> target=<target>: not granted for this run. Record it in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.`
 
@@ -61,6 +62,22 @@ Configured in `config.toml` under `[scopes.<name>]`; built-in defaults ship for:
 Each entry holds: MCP tool-name patterns, Bash matchers, the credential env to inject when granted (e.g. `KUBECONFIG=<rw path>`, `AWS_PROFILE=<rw>`), and a fingerprint (hash of the table) recorded on proposals.
 
 Read-only profiles live under `[prod.readonly]`: `kubeconfig`, `aws_profile`, `gcloud_config`, `azure_config_dir`, `db_env` (env file with a SELECT-only DSN), `argocd_auth_token_env`, `kibana_api_key_env`. A system without a read-only profile is reachable in `autonomous` only through its MCP connector (if any); its CLI reads are `unknown-prod` and denied, reported as "no read-only credentials configured".
+
+### 4.4 Credential isolation (autonomous and autonomous + scopes)
+
+CLIs read default credential files even when no env var is set (`~/.kube/config`, `~/.aws/credentials`, gcloud and az config dirs, `~/.pgpass`), and a "local" script the guard allows (e.g. `npm run x` that shells out to kubectl) inherits whatever the child env resolves to. Adding read-only profiles is therefore not enough; the worker **redirects every credential location** in the child env so the owner's normal credentials are unreachable:
+
+| System | Child env in autonomous | When the system's write scope is granted |
+| --- | --- | --- |
+| Kubernetes | `KUBECONFIG=<prod.readonly.kubeconfig>` or an empty stub file in the run dir | `KUBECONFIG=<scope's rw kubeconfig>` |
+| AWS | `AWS_CONFIG_FILE` / `AWS_SHARED_CREDENTIALS_FILE` → a run-dir file containing only the read-only profile (or empty); `AWS_PROFILE` set to it; `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` removed | files containing only the scope's profile |
+| GCP | `CLOUDSDK_CONFIG` → read-only config dir or empty run-dir dir; `GOOGLE_APPLICATION_CREDENTIALS` removed or set to the read-only key | scope's config dir |
+| Azure | `AZURE_CONFIG_DIR` → read-only dir or empty run-dir dir | scope's dir |
+| Databases | `PGPASSFILE`, `PGSERVICEFILE` → empty stubs; `PG*`, `DATABASE_URL`, `MYSQL_*`, `MONGO*`, `REDIS_URL` removed; the read-only `db_env` file's variables added | scope's env file |
+| Argo / Kibana / trackers | `ARGOCD_AUTH_TOKEN`, `ARGOCD_SERVER` from read-only env names; `GH_TOKEN`, `GITHUB_TOKEN`, `GITLAB_TOKEN`, `BITBUCKET_*`, `JIRA_*`, `ATLASSIAN_*`, `SLACK_*` and any other `*_TOKEN`/`*_API_KEY`/`*_SECRET` removed (as today's `childEnvFor`, extended) | the scope's token only |
+| Git | `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=echo`, `GIT_CONFIG_GLOBAL` → run-dir file without credential helpers | owner's git config and helper |
+
+Stubs and filtered files are written per run under `handoffs/runs/<id>/env/` and removed with the run. The redaction list is a denylist **plus** an allowlist check: any remaining env var whose name matches `(?i)(token|secret|password|passwd|api_?key|credential)` is removed unless it is in `[handoff] keep_env`. `full` access keeps the owner's environment unchanged (R7). `quill doctor` shows, per system, "read-only profile: configured / missing" and whether a stub is in effect.
 
 ## 5. Run method, budgets and result contract
 
@@ -190,7 +207,7 @@ DATA-CONTRACT gains: `access: autonomous`, `scopes[]` on requests/records, new r
 
 ## 11. Testing
 
-- Unit: classifier fixtures (≥150 cases incl. Windows forms, wrappers, chains, SQL, git, MCP names); guard decisions per tier and scope; grant hash tamper; fail-closed paths; filing trust/dedupe/contradiction/quarantine; memory budget fill order; result parsing caps; critical-change emission determinism and replay; proposal origin spoofing from page ingress rejected; scope fingerprint change rejected.
+- Unit: classifier fixtures (≥150 cases incl. Windows forms, wrappers, chains, SQL, git, MCP names); guard decisions per tier and scope; grant hash tamper; fail-closed paths; credential redirection (`childEnvFor` output per tier: no owner kubeconfig/AWS/gcloud/az/PG paths or secret-like vars reachable in autonomous; scope grants inject only their own profile; full unchanged); edit-path confinement; filing trust/dedupe/contradiction/quarantine; memory budget fill order; result parsing caps; critical-change emission determinism and replay; proposal origin spoofing from page ingress rejected; scope fingerprint change rejected.
 - Integration: stream-json parsing and reconciliation with recorded fixtures; interrupted run resume; worktree cleanup.
 - Privacy sentinel test (§9.4); existing `tests/ui/*` and `tests/export/*`.
 - Perf: guard p95 with 1,000 mixed calls; existing hook perf tests stay green.
@@ -201,7 +218,7 @@ DATA-CONTRACT gains: `access: autonomous`, `scopes[]` on requests/records, new r
 
 | Phase | Scope |
 | --- | --- |
-| P0 | Probes: `--settings` hook merges with plugin hooks; subagents inherit the guard; `onFailure: block` behaviour on timeout; `CLAUDE_CODE_DISABLE_AUTO_MEMORY` under `-p`; `--add-dir` readability; `--max-budget-usd` and `--permission-prompts none` on 2.1.296. Results appended to research 03. |
+| P0 | Probes: a PreToolUse `allow` lets **Bash and PowerShell** through in `dontAsk` with no allow rule (report 03 proved it only for an MCP read), and an Edit inside the checkout; kubectl/aws/gcloud/az/psql honour the redirected credential locations of §4.4 with no fallback to defaults; `--settings` hook merges with plugin hooks; subagents inherit the guard; `onFailure: block` behaviour on timeout; `CLAUDE_CODE_DISABLE_AUTO_MEMORY` under `-p`; `--add-dir` readability; `--max-budget-usd` and `--permission-prompts none` on 2.1.296. Results appended to research 03. |
 | P1 | Privacy allow-lists; METHOD and recipe rewrites; budgets; stream-json + ledger + reconciliation; `attempts`/`verification`/`stage_reached`; docs map; `claude_path`; branch base; worktree cleanup |
 | P2 | `autonomous` tier, classifier, guard, grant file, read-only profiles, inventory, dialog/CLI default; ADR 0026 |
 | P3 | Memory events, projections, filing, delivery, Memory page, CLI, Needs you items; ADR 0027 |
