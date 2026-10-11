@@ -1,8 +1,15 @@
 import { esc, attr, icon, timeEl, STATUS_ORDER, normalizeSnapshot, viewCounts, openProposals } from '../components.js';
 import { freshness, relativeTime } from '../lib/time.js';
+import { needsYouCount } from '../lib/runs.js';
 
 const FRESH_LABELS = { 'never-synced': 'Never synced', fresh: 'Fresh', ageing: 'Ageing', stale: 'Stale' };
-export const NAV_ITEMS = [['picknext', 'Pick next', 'ticket', '1'], ['board', 'Board', 'machine', '2'], ['tree', 'Relationships', 'branch', '3'], ['sessions', 'Sessions', 'user', '4'], ['deployments', 'Deployments', 'rocket', '5'], ['today', 'Activity', 'clock', '6'], ['runs', 'Runs', 'play', '7']];
+export const NAV_ITEMS = [
+  ['picknext', 'Pick next', 'ticket', '1', 'work'], ['board', 'Board', 'machine', '2', 'work'], ['runs', 'Runs', 'play', '7', 'work'],
+  ['today', 'Activity', 'clock', '6', 'track'], ['sessions', 'Sessions', 'user', '4', 'track'], ['deployments', 'Deployments', 'rocket', '5', 'track'], ['tree', 'Relationships', 'branch', '3', 'track'],
+];
+// The phone bottom bar holds these four plus More (at most five items).
+export const PHONE_PRIMARY = new Set(['picknext', 'board', 'runs', 'today']);
+const GROUP_LABELS = { work: 'Work', track: 'Track' };
 export const SHORTCUT_VIEWS = { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs' };
 
 export function renderPageHeading(view, snapshot) {
@@ -14,16 +21,34 @@ export function logoSvg() {
   return '<svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28" fill="none" aria-hidden="true"><rect width="32" height="32" rx="9" fill="var(--accent-fill)"/><path d="M22.5 7.5c-6 1-10.5 5.5-12 13l-1 4 3.2-2.6c6.8-1.4 10.3-6.2 9.8-14.4Z" fill="var(--accent-fg)"/><path d="M9.5 24.5l6-8" stroke="var(--accent-fill)" stroke-width="1.4" stroke-linecap="round"/></svg>';
 }
 
-export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null, online = true, filters = {}, collapsed = false } = {}) {
+function navButton(item, { view, counts, needs }) {
+  const [id, label, ic, key] = item;
+  const badge = counts[id] ?? 0;
+  const dot = id === 'runs' && needs ? `<span class="attention-dot" role="img" aria-label="${attr(`${needs} need${needs === 1 ? 's' : ''} you`)}"></span>` : '';
+  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${esc(label)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}">${icon(ic)}<span class="nav-label">${esc(label)}</span>${dot}<span class="badge" aria-label="${attr(`${badge} ${id === 'runs' ? 'live' : 'items'}, shortcut ${key}`)}" title="Shortcut ${key}">${esc(badge)}</span></button>`;
+}
+
+function navGroups(opts) {
+  return ['work', 'track'].map((g) => `<span class="nav-caption">${GROUP_LABELS[g]}</span>${NAV_ITEMS.filter((n) => n[4] === g).map((n) => navButton(n, opts)).join('')}`).join('');
+}
+
+function moreControl({ view, moreOpen, counts }) {
+  const overflow = NAV_ITEMS.filter(([id]) => !PHONE_PRIMARY.has(id));
+  const current = overflow.some(([id]) => id === view);
+  const sheet = moreOpen ? `<div id="more-sheet" class="more-sheet" role="dialog" aria-label="More views"><button type="button" class="more-backdrop" data-action="toggle-more" aria-label="Close"></button><div class="more-panel">${overflow.map(([id, label, ic]) => `<button type="button" class="nav-item" data-view="${id}"${view === id ? ' aria-current="page"' : ''}>${icon(ic)}<span class="nav-label">${esc(label)}</span><span class="badge">${esc(counts[id] ?? 0)}</span></button>`).join('')}</div></div>` : '';
+  return `<button type="button" class="nav-item nav-more" data-action="toggle-more" aria-expanded="${moreOpen}" aria-controls="more-sheet"${current ? ' aria-current="page"' : ''}>${icon('chevron')}<span class="nav-label">More</span></button>${sheet}`;
+}
+
+export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null, online = true, filters = {}, collapsed = false, now = null, moreOpen = false } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const meta = snapshot ? snapshot.meta : null;
   const counts = snapshot ? viewCounts(snapshot, filters) : {};
   const isStatic = !!(meta && meta.exported_at);
+  const needs = snapshot && now && !isStatic ? needsYouCount(snapshot, now) : 0;
+  const opts = { view, counts, needs, moreOpen };
   const conn = isStatic ? 'snapshot' : online ? 'online' : 'offline';
   return `<div class="sidebar-brand">${logoSvg()}<div class="brand-text"><span class="brand-name">Session Quill</span><span class="brand-sub">${isStatic ? 'Snapshot' : 'Local'}${meta ? ` · v${esc(meta.tracker_version)}` : ''}</span></div></div>
-<button type="button" class="btn small ghost sidebar-toggle" data-action="toggle-sidebar" aria-label="${collapsed ? 'Expand navigation' : 'Collapse navigation'}" aria-expanded="${!collapsed}">${icon('machine')}<span class="nav-label">Collapse navigation</span></button><span class="nav-caption">Your workspace</span><div class="nav" role="tablist" aria-label="Views">
-  ${NAV_ITEMS.map(([id, label, ic, key]) => `<button type="button" role="tab" class="nav-item" title="${esc(label)}" aria-label="${esc(label)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}">${icon(ic)}<span class="nav-label">${esc(label)}</span><span class="badge" aria-label="${attr(`${counts[id] ?? 0} items, shortcut ${key}`)}" title="Shortcut ${key}">${esc(counts[id] ?? key)}</span></button>`).join('')}
-</div>
+<button type="button" class="btn small ghost sidebar-toggle" data-action="toggle-sidebar" aria-label="${collapsed ? 'Expand navigation' : 'Collapse navigation'}" aria-expanded="${!collapsed}">${icon('machine')}<span class="nav-label">Collapse navigation</span></button><div class="nav" role="tablist" aria-label="Views">${navGroups(opts)}</div>${moreControl(opts)}
 ${meta ? `<details class="sidebar-section workspace-details"><summary>Workspace details</summary>
 <dl class="context-list">
   <div><dt>Store</dt><dd title="${attr(meta.store_name)}">${esc(meta.store_name)}</dd></div>

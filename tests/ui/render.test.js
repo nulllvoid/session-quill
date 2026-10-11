@@ -661,3 +661,19 @@ test('ticket detail: a run strip under the title and a Runs tab with runs, propo
   assert.match(none, /No agent runs yet/);
   assert.match(none, /data-action="run-agent" data-ticket="[^"]+">/);
 });
+
+test('navigation is grouped, Runs has a live count and an attention dot, phones get More', async () => {
+  const { renderSidebar, NAV_ITEMS, PHONE_PRIMARY } = await import('../../ui/views/header.js');
+  assert.deepEqual(NAV_ITEMS.map((n) => n[0]), ['picknext', 'board', 'runs', 'today', 'sessions', 'deployments', 'tree']);
+  assert.deepEqual([...PHONE_PRIMARY], ['picknext', 'board', 'runs', 'today']);
+  const base = snapshot();
+  const s = { ...base, handoffs: [{ ...base.handoffs[0], id: 'f', ticket_id: base.tickets[0].id, state: 'failed', finished_at: '2026-10-02T11:00:00Z' }] };
+  const side = renderSidebar(s, { view: 'sessions', now: NOW });
+  assert.match(side, /<span class="nav-caption">Work<\/span>[\s\S]*data-view="runs"[\s\S]*<span class="nav-caption">Track<\/span>/);
+  assert.match(side, /data-view="runs"[\s\S]*?class="attention-dot" role="img" aria-label="1 needs you"/);
+  assert.match(side, /data-view="sessions"[^>]*class="nav-item nav-overflow"|class="nav-item nav-overflow"[^>]*data-view="sessions"/);
+  assert.match(side, /data-action="toggle-more" aria-expanded="false" aria-controls="more-sheet" aria-current="page"/, 'More is current when an overflow view is open');
+  const open = renderSidebar(s, { view: 'board', now: NOW, moreOpen: true });
+  assert.match(open, /id="more-sheet" class="more-sheet" role="dialog" aria-label="More views"/);
+  assert.match(open, /class="more-panel"[\s\S]*data-view="deployments"/);
+});

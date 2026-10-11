@@ -24,6 +24,7 @@ const POLL_VISIBLE_MS = 2000;
 const POLL_HIDDEN_MS = 30000;
 
 const appState = {
+  moreOpen: false,
   snapshot: null,
   online: true,
   view: 'picknext',
@@ -159,7 +160,7 @@ function render() {
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
   const workspaceOpen = $('#sidebar .workspace-details')?.open;
-  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed }));
+  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen }));
   if (workspaceOpen) $('#sidebar .workspace-details').open = true;
   const connectionOpen = $('#header .connection-details')?.open;
   // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
@@ -556,6 +557,7 @@ function handleAction(el) {
     case 'run-next': stepRun(1); break;
     case 'open-ticket-from-run': { const id = el.dataset.ticket; setView('board'); openDetail(id, null); break; }
     case 'open-runs': setView('runs'); appState.runTab = el.dataset.tab || null; render(); break;
+    case 'toggle-more': appState.moreOpen = !appState.moreOpen; render(); break;
     case 'toggle-sidebar': appState.sidebarCollapsed = !appState.sidebarCollapsed; try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage may be unavailable */ } render(); document.querySelector('[data-action="toggle-sidebar"]')?.focus(); break;
     case 'expand-detail': appState.detailExpanded = !appState.detailExpanded; render(); break;
     case 'detail-tab':
@@ -848,6 +850,7 @@ function onKey(e) {
     if (first && (e.shiftKey && target === first || !e.shiftKey && target === last)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
   }
   if (e.key === 'Escape') {
+    if (appState.moreOpen) { e.preventDefault(); appState.moreOpen = false; render(); $('.nav-more')?.focus(); return; }
     const pop = document.querySelector('.health-pop[open]');
     if (pop) { e.preventDefault(); pop.open = false; pop.querySelector('summary')?.focus(); return; }
     if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
@@ -897,7 +900,7 @@ function onClick(e) {
   const action = e.target.closest('[data-action]');
   if (action && action.dataset.action !== 'detail-nav') { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
   const tab = e.target.closest('[data-view]');
-  if (tab) { setView(tab.dataset.view); render(); return; }
+  if (tab) { appState.moreOpen = false; setView(tab.dataset.view); render(); return; }
   const card = e.target.closest('#main [data-ticket][role=button]');
   if (card && !e.target.closest('button, a, [data-copy]')) openDetail(card.dataset.ticket, card);
 }

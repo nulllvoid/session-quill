@@ -982,3 +982,17 @@ button.run-strip:hover { box-shadow: inset 0 0 0 1px var(--hairline-strong); }
 .handoff-form .advanced > summary { cursor: pointer; color: var(--text-muted); font-size: 13px; }
 .run-summary { margin: 12px 0 0; padding: 8px 12px; border-radius: var(--radius-ctl); background: var(--surface-inset); font-size: 13px; }
 .issues li[data-level="blocker"] { color: var(--critical); }
+
+.attention-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warning); flex: none; }
+.nav-more, .more-sheet { display: none; }
+@media (max-width: 899px) {
+  .nav-caption, .nav-overflow { display: none; }
+  .nav-more { display: flex; }
+  .nav-more[aria-current="page"] { color: var(--accent); }
+  .more-sheet { display: block; position: fixed; inset: 0; z-index: calc(var(--z-nav) + 1); }
+  .more-backdrop { position: absolute; inset: 0; border: 0; background: color-mix(in srgb, var(--bg) 60%, transparent); }
+  .more-panel { position: absolute; left: 8px; right: 8px; bottom: calc(64px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 2px; padding: 8px; border-radius: var(--radius-lg); background: var(--surface); box-shadow: inset 0 0 0 1px var(--hairline-strong), var(--shadow); }
+  .more-panel .nav-item { flex-direction: row; font-size: 14px; min-height: 44px; padding: 8px 12px; }
+  .more-panel .nav-item .badge { display: inline; }
+  .nav-item .attention-dot { position: absolute; top: 6px; right: calc(50% - 14px); }
+}
