@@ -24,6 +24,9 @@ All notable changes to this project are documented here. The format follows [Kee
 - The dashboard's Repo filter has a **Needs clone** value, and cards show **Cloning** while a clone runs.
 - A read-only built-in `workspace-setup` recipe suggests a repository and a `repo_map` line for a ticket the rules could not place.
 - The TOML subset accepts double-quoted keys, so `[tracker.repo_map]` can name `"owner/repo"` and `"PROJ/Component"`.
+- Runs proposed from a shared page ([ADR 0025](docs/decisions/0025-remote-run-proposals.md)): `run_agent = true` on a two-way artifact publisher adds a **Run agent** select offering read-only recipes plus `run_recipes`. A pick becomes one proposed run (journaled as `run-proposal`, with an id derived from the edit) naming the editor, recipe and access; nothing runs until you approve it.
+- **Proposed runs** in Today and ticket detail with **Approve** and **Dismiss**, a live-region notice and receipt when a page proposes one, and `quill approve --run [<id>]` / `quill dismiss --run <id>`. Approval queues an ordinary suggest-only run through the normal reservation and says so when the ticket already has one; dismissals are journaled. Open proposals lapse after 7 days or when the ticket is done.
+- `auto_run_editors` and `auto_run_recipes` on a publisher approve allowlisted editors' picks of read-only recipes at once; a recipe that edits source is never auto-queued.
 
 ### Changed
 
