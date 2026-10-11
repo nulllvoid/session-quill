@@ -4,34 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-11
+
+Orchestration-first 1.0: the dashboard is always reachable, runs can be queued in bulk and are verified by the worker's own test run, assigned issues arrive with their repositories resolved, a shared page can propose (never start) a run, and a Runs page brings dispatch, monitoring and review into one place.
+
 ### Added
 
 - **Runs** page (shortcut 7): Needs you, Live, Failed and All, grouped by batch, with run detail showing the result, changed files, worker test gate, PR, uncertain effects and the checkout path. Batch summaries survive a reload.
 - A run strip and a Runs tab on every ticket; one **Run agent** dialog with a plain summary of what the run will do and any blockers.
-
-### Changed
-
-- Navigation is grouped into Work and Track; phones show Pick next, Board, Runs, Activity and More.
-- The top bar is one row: workspace status, refresh and connection details live in one popover; filters sit behind a Filter button; receipts are toasts, and errors stay until dismissed.
-- Proposed runs moved from Activity to Runs → Needs you.
-- Form controls have 3:1 borders; dark-mode faint text is a distinct level.
-- Put Pick next recommendations before the collapsed unlinked-work inbox, with compact workspace statistics and a recent-context section.
-- Group ticket details into Overview, Activity and Delivery, with next action, latest checkpoint and status controls first; add an expanded ticket view and collapsible navigation.
-- Consolidate workspace health details, surface pending run approvals in the header, and add direct checkpoint access from Sessions. Rename Today to Activity and Tree to Relationships.
-- Improve keyboard focus in modal ticket details and responsive layouts; refresh dashboard screenshots.
-
-### Fixed
-
-- Full run results and timeline text now display after loading, and failed loads show Retry.
-- Sessions → View checkpoints opens the ticket the checkpoint was captured on.
-- Static exports bundle every dashboard module; ticket detail and Activity no longer fail in an exported page.
-
-## [1.0.0] - 2026-10-11
-
-Orchestration-first 1.0: the dashboard is always reachable, runs can be queued in bulk and are verified by the worker's own test run, assigned issues arrive with their repositories resolved, and a shared page can propose (never start) a run.
-
-### Added
-
 - Always-on dashboard ([ADR 0022](docs/decisions/0022-always-on-dashboard.md)): the dashboard prefers the fixed port 47321 (`ui_port`, falling back to a random port when it is taken; `ui_port = 0` keeps random), and a signed-in browser stays signed in for 7 days from its last use, across worker restarts. Sessions are stored only as hashes. `quill ui --revoke` signs every browser out.
 - A browser without a session gets a sign-in page that says to run `/session-quill:ui` (or `quill ui`) instead of a bare error.
 - `quill status --statusline` ends with the dashboard address as a clickable link while the worker that serves it is healthy. It never carries a secret.
@@ -55,12 +35,23 @@ Orchestration-first 1.0: the dashboard is always reachable, runs can be queued i
 
 ### Changed
 
+- Navigation is grouped into Work and Track; phones show Pick next, Board, Runs, Activity and More.
+- The top bar is one row: workspace status, refresh and connection details live in one popover; filters sit behind a Filter button; receipts are toasts, and errors stay until dismissed.
+- Proposed runs moved from Activity to Runs → Needs you.
+- Form controls have 3:1 borders; dark-mode faint text is a distinct level.
+- Put Pick next recommendations before the collapsed unlinked-work inbox, with compact workspace statistics and a recent-context section.
+- Group ticket details into Overview, Activity and Delivery, with next action, latest checkpoint and status controls first; add an expanded ticket view and collapsible navigation.
+- Consolidate workspace health details, surface pending run approvals in the header, and add direct checkpoint access from Sessions. Rename Today to Activity and Tree to Relationships.
+- Improve keyboard focus in modal ticket details and responsive layouts; refresh dashboard screenshots.
 - A run that may edit source (`edit_source`) always self-checks its reply, whatever its recipe's `self_check` says.
 - At most one run that edits source executes at a time by default (it was any two runs of either kind); set `max_concurrent_fix` to allow more.
 - `agent_ms` no longer includes the worker's test runs, which are `test_ms`.
 
 ### Fixed
 
+- Full run results and timeline text now display after loading, and failed loads show Retry.
+- Sessions → View checkpoints opens the ticket the checkpoint was captured on.
+- Static exports bundle every dashboard module; ticket detail and Activity no longer fail in an exported page.
 - Onboarding ([ADR 0024](docs/decisions/0024-tracker-onboarding.md)): an assigned issue counts as imported only when a ticket points at that very issue; a key another ticket holds is reported as a collision and skipped. The fallback GitHub key prefix drops separators (`WEBAPP-12`, not `WEB_APP-12`) so it matches the key pattern.
 - The repository resolver records a failed read of an issue's hints and moves the ticket to the back of its queue; after a 404 or 403 it waits a day, doubling to a week. Origins are read without blocking the worker, four at a time, and cached until a folder's git config changes.
 - Clones also disable Git LFS filters (`GIT_LFS_SKIP_SMUDGE=1`) and HTTP redirects, kill git's whole process tree on timeout or cancel (Windows too), and register a folder of the target name that already holds the remote instead of cloning beside it. The worker removes unfinished `.*.partial-*` clone folders when it starts. Folder names are cleaned again after the 64-character cut and never a Windows device name with an extension.
