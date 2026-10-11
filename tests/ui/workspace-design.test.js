@@ -32,7 +32,8 @@ test('recent context follows matching tickets and does not expose an unrelated p
 
 test('compact health keeps an offline warning and disables refresh', () => {
   const html = renderHeader(snapshot(), { now, online: false, theme: 'light' });
-  assert.match(html, /Worker offline/);
+  assert.match(html, /status-label">Offline</);
+  assert.match(html, /Worker: <strong>Offline<\/strong>/);
   assert.match(html, /Changes unavailable until the worker reconnects/);
   assert.match(html, /data-action="refresh" disabled/);
 });

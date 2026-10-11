@@ -1,4 +1,4 @@
-import { esc, attr, icon, timeEl, STATUS_ORDER, normalizeSnapshot, viewCounts, openProposals } from '../components.js';
+import { esc, attr, icon, timeEl, STATUS_ORDER, normalizeSnapshot, viewCounts, openProposals, EMPTY_FILTERS, NEEDS_CLONE_FILTER } from '../components.js';
 import { freshness, relativeTime } from '../lib/time.js';
 import { needsYouCount } from '../lib/runs.js';
 
@@ -131,9 +131,49 @@ export function renderRefreshControl(snapshot, { online, refresh }) {
   return `<span class="health-right">${note}<button type="button" class="btn small" data-action="refresh" ${disabled ? 'disabled' : ''} title="${attr(title)}">${icon('refresh')}${esc(label)}</button></span>`;
 }
 
+export function statusLabel(snapshot, { now, online }) {
+  const meta = snapshot.meta;
+  if (meta.exported_at) return { text: 'Read-only snapshot', tone: 'muted' };
+  if (!online) return { text: 'Offline', tone: 'critical' };
+  const failing = (meta.provider_health ?? []).filter((p) => p.error).length;
+  if (failing) return { text: failing === 1 ? '1 provider error' : `${failing} provider errors`, tone: 'critical' };
+  if ((meta.capture_health && meta.capture_health.status !== 'ok') || meta.unresolved_event_count) return { text: 'Needs attention', tone: 'warning' };
+  return { text: meta.last_sync ? `Updated ${relativeTime(meta.last_sync, now)}` : 'Not synced yet', tone: 'good' };
+}
+
+// Errors stay until dismissed; everything else clears itself (spec §1).
+export function receiptLifetime(tone) {
+  return tone === 'critical' ? null : 6000;
+}
+
+export function activeFilterCount(f = {}) {
+  return ['project', 'category', 'tag', 'repo', 'machine', 'q'].filter((k) => f[k]).length + (f.stale ? 1 : 0);
+}
+
+export function renderFilterBar(rawSnapshot, f = EMPTY_FILTERS) {
+  const s = normalizeSnapshot(rawSnapshot);
+  const tokens = [];
+  for (const [k, v] of Object.entries(f)) {
+    if (!v || k === 'project') continue;
+    tokens.push(`<button type="button" class="token" data-action="clear-filter" data-filter="${attr(k)}" aria-label="Remove filter ${attr(k)}">${esc(k)}: ${esc(k === 'stale' ? 'stale only' : v === NEEDS_CLONE_FILTER ? 'needs clone' : v)} ${icon('x')}</button>`);
+  }
+  const categories = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
+  const repos = s.repos ?? [];
+  const needsClone = s.tickets.some((t) => t.repo_state === 'needs-clone');
+  const tags = [...new Set(s.tickets.flatMap((t) => (t.tags ?? []).filter((x) => !x.startsWith('quill/'))))];
+  const projects = [...new Map(s.tickets.map((t) => [t.project_id, t.project_name])).entries()];
+  const n = activeFilterCount(f);
+  const controls = `<label>Project <select data-filter="project" aria-label="Project filter (applies to every view)"><option value="">All</option>${projects.map(([id, name]) => `<option value="${attr(id)}" ${f.project === id ? 'selected' : ''}>${esc(name ?? id)}</option>`).join('')}</select></label>
+  <label>Category <select data-filter="category"><option value="">All</option>${categories.map((c) => `<option value="${c}" ${f.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+  ${repos.length || needsClone ? `<label>Repo <select data-filter="repo"><option value="">All</option>${repos.map((r) => `<option value="${attr(r.id)}" ${f.repo === r.id ? 'selected' : ''}>${esc(r.display_name)}</option>`).join('')}${needsClone || f.repo === NEEDS_CLONE_FILTER ? `<option value="${NEEDS_CLONE_FILTER}" ${f.repo === NEEDS_CLONE_FILTER ? 'selected' : ''}>Needs clone</option>` : ''}</select></label>` : ''}
+  ${tags.length ? `<label>Tag <select data-filter="tag"><option value="">All</option>${tags.map((t) => `<option value="${attr(t)}" ${f.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
+  <label class="check"><input type="checkbox" data-filter="stale" ${f.stale ? 'checked' : ''}> Stale only</label>`;
+  return `<details class="filter-pop health-pop"><summary class="btn small ghost">${icon('search')}Filter${n ? ` · ${n}` : ''}</summary><div class="popover filter-popover" role="group" aria-label="Filters">${controls}</div></details>${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
+}
+
 export function renderReceipt(receipt, { online }) {
   if (!receipt) return '';
-  return `<div class="receipt" data-tone="${attr(receipt.tone ?? 'neutral')}" title="${attr(receipt.at ?? '')}">${icon(receipt.tone === 'critical' ? 'alert' : 'check')}<span class="receipt-text">Receipt: ${esc(receipt.text)}</span><span class="live">${online ? 'LIVE' : 'OFFLINE'}</span></div>`;
+  return `<div class="receipt toast" data-tone="${attr(receipt.tone ?? 'neutral')}" title="${attr(receipt.at ?? '')}">${icon(receipt.tone === 'critical' ? 'alert' : 'check')}<span class="receipt-text">Receipt: ${esc(receipt.text)}</span><span class="live">${online ? 'LIVE' : 'OFFLINE'}</span><button type="button" class="btn small ghost icon-only" data-action="dismiss-receipt" aria-label="Dismiss">${icon('x')}</button></div>`;
 }
 
 export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters = {}, view = 'picknext', endpoint = null, receipt = null }) {
@@ -143,17 +183,22 @@ export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters
   return `<div class="topbar">
   <div class="brand">${logoSvg()}<span>Session Quill</span></div>
   <label class="search">${icon('search')}<input type="search" id="search" data-filter="q" placeholder="Search tickets, keys, tags" value="${attr(filters.q ?? '')}" aria-label="Search tickets"><kbd aria-hidden="true">/</kbd></label>
-  <details class="connection-details"><summary>Connection</summary><span class="endpoint" title="${attr(isStatic ? 'Read-only exported snapshot' : 'Owner session on loopback')}"><span class="dot ${isStatic ? 'muted' : online ? 'good' : 'critical'}" aria-hidden="true"></span>${isStatic ? 'snapshot' : esc(endpoint ?? '127.0.0.1')} <strong>${isStatic ? 'Viewer' : 'Owner'}</strong>${!isStatic && endpoint ? `<button type="button" class="btn small ghost icon-only endpoint-copy" data-copy="${attr(`http://${endpoint}/`)}" data-copy-label="the dashboard address" aria-label="Copy the dashboard address" title="Copy the dashboard address">${icon('copy')}</button>` : ''}</span></details>
+  ${(() => { const st = statusLabel(snapshot, { now, online }); return `<details class="health-pop status-pop" data-tone="${st.tone}"><summary class="btn small ghost status-button" aria-label="${attr(`Workspace status: ${st.text}`)}"><span class="dot" aria-hidden="true"></span><span class="status-label">${esc(st.text)}</span></summary><div class="popover status-popover" role="group" aria-label="Workspace status">
+    ${renderHealth(snapshot, { now, online, includeProviders: true })}
+    ${!online ? '<p class="critical small">Changes unavailable until the worker reconnects.</p>' : ''}
+    ${renderRefreshControl(snapshot, { online, refresh })}
+    <p class="endpoint" title="${attr(isStatic ? 'Read-only exported snapshot' : 'Owner session on loopback')}">${isStatic ? 'snapshot' : esc(endpoint ?? '127.0.0.1')} <strong>${isStatic ? 'Viewer' : 'Owner'}</strong>${!isStatic && endpoint ? ` <button type="button" class="btn small ghost icon-only endpoint-copy" data-copy="${attr(`http://${endpoint}/`)}" data-copy-label="the dashboard address" aria-label="Copy the dashboard address">${icon('copy')}</button>` : ''}</p>
+  </div></details>`; })()}
   <div class="topbar-actions">
-    ${openProposals(snapshot).length ? `<button type="button" class="btn small attention-button" data-action="review-proposals">${icon('alert')}${openProposals(snapshot).length} awaiting approval</button>` : ''}
-    ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small ghost" data-action="schedules">${icon('clock')}Schedules</button>` : ''}
-    ${(snapshot.publishers ?? []).length && !isStatic ? `<button type="button" class="btn small ghost" data-action="publishers" data-publish-state="${snapshot.publishers.some((p) => p.last_outcome === 'failed' || !p.confirmed) ? 'attention' : 'ok'}">${icon('download')}Publish</button>` : ''}
-    ${caps.export ? `<button type="button" class="btn small ghost" data-action="export">${icon('download')}Export</button>` : ''}
+    ${openProposals(snapshot).length ? `<button type="button" class="btn small attention-button" data-action="review-proposals" aria-label="${openProposals(snapshot).length} awaiting approval">${icon('alert')}${openProposals(snapshot).length}<span class="action-label"> awaiting approval</span></button>` : ''}
+    ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small ghost" data-action="schedules">${icon('clock')}<span class="action-label">Schedules</span></button>` : ''}
+    ${(snapshot.publishers ?? []).length && !isStatic ? `<button type="button" class="btn small ghost" data-action="publishers" data-publish-state="${snapshot.publishers.some((p) => p.last_outcome === 'failed' || !p.confirmed) ? 'attention' : 'ok'}">${icon('download')}<span class="action-label">Publish</span></button>` : ''}
+    ${caps.export ? `<button type="button" class="btn small ghost" data-action="export">${icon('download')}<span class="action-label">Export</span></button>` : ''}
     <button type="button" class="btn small ghost icon-only" data-action="theme" aria-label="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" title="Theme">${icon(theme === 'dark' ? 'sun' : 'moon')}</button>
     <button type="button" class="btn small ghost icon-only" data-action="help" aria-label="Keyboard shortcuts" title="Help (?)">${icon('help')}</button>
   </div>
 </div>
-<div class="statusline"><div class="healthbar" role="status" aria-label="Freshness and health"><details class="health-pop health-summary"><summary>${icon('clock')}${isStatic ? 'Read-only snapshot' : !online ? 'Worker offline — reconnecting' : snapshot.meta.last_sync ? `Updated ${esc(relativeTime(snapshot.meta.last_sync, now))}` : 'Not synced yet'}${snapshot.meta.capture_health?.status && snapshot.meta.capture_health.status !== 'ok' || snapshot.meta.unresolved_event_count ? ' · Needs attention' : ''}</summary><div class="popover">${renderHealth(snapshot, { now, online, includeProviders: false })}</div></details>${!online ? '<span class="critical">Changes unavailable until the worker reconnects.</span>' : ''}${(snapshot.meta.provider_health ?? []).some((p) => p.error) ? providerHealth(snapshot.meta, { now, tz: snapshot.meta.timezone }) : ''}${renderRefreshControl(snapshot, { online, refresh })}</div>${renderReceipt(receipt, { online })}</div>`;
+${renderReceipt(receipt, { online })}`;
 }
 
 export function statusCounts(snapshot) {

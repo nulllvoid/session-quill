@@ -1,6 +1,6 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
 import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER } from './components.js';
-import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS } from './views/header.js';
+import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
 import { renderRuns } from './views/runs.js';
 import { renderRunDetail, renderRunNotFound } from './views/run-detail.js';
 import { renderPickNext } from './views/picknext.js';
@@ -66,8 +66,13 @@ const appState = {
 
 const BULK_VIEWS = new Set(['board', 'picknext']);
 
+let receiptTimer = null;
 function setReceipt(text, tone = 'neutral') {
-  appState.receipt = { text, tone, at: nowIso() };
+  const receipt = { text, tone, at: nowIso() };
+  appState.receipt = receipt;
+  clearTimeout(receiptTimer);
+  const ms = receiptLifetime(tone);
+  if (ms) receiptTimer = setTimeout(() => { if (appState.receipt === receipt) { appState.receipt = null; render(); } }, ms);
 }
 
 let api;
@@ -162,14 +167,14 @@ function render() {
   const workspaceOpen = $('#sidebar .workspace-details')?.open;
   setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen }));
   if (workspaceOpen) $('#sidebar .workspace-details').open = true;
-  const connectionOpen = $('#header .connection-details')?.open;
   // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
   const healthOpen = [...document.querySelectorAll('#header .health-pop')].findIndex((p) => p.open);
   setMarkup($('#header'), renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt }));
-  if (connectionOpen) $('#header .connection-details').open = true;
   if (healthOpen >= 0) { const pop = document.querySelectorAll('#header .health-pop')[healthOpen]; if (pop) pop.open = true; }
   if (searchFocused) { const sInput = $('#search'); if (sInput) { sInput.focus(); if (searchPos !== null) sInput.setSelectionRange(searchPos, searchPos); } }
-  setMarkup($('#filters'), renderFilterBar(s));
+  const filterOpen = $('#filters .filter-pop')?.open;
+  setMarkup($('#filters'), renderFilterBar(s, appState.filters));
+  if (filterOpen) $('#filters .filter-pop').open = true;
   const pending = [...appState.requests.values()];
   const opts = { now, pending, selected: appState.selected };
   let html = '';
@@ -308,27 +313,6 @@ async function loadContent(hash, generation, retried = false) {
     appState.contentStatus[hash] = { error: err.message || 'the request failed' };
   }
   render();
-}
-
-function renderFilterBar(s) {
-  const f = appState.filters;
-  const tokens = [];
-  for (const [k, v] of Object.entries(f)) {
-    if (!v || k === 'project') continue;
-    tokens.push(`<button type="button" class="token" data-action="clear-filter" data-filter="${attr(k)}" aria-label="Remove filter ${attr(k)}">${esc(k)}: ${esc(k === 'stale' ? 'stale only' : v === NEEDS_CLONE_FILTER ? 'needs clone' : v)} ${icon('x')}</button>`);
-  }
-  const categories = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
-  const repos = s.repos ?? [];
-  const needsClone = s.tickets.some((t) => t.repo_state === 'needs-clone');
-  const tags = [...new Set(s.tickets.flatMap((t) => t.tags.filter((x) => !x.startsWith('quill/'))))];
-  const projects = [...new Map(s.tickets.map((t) => [t.project_id, t.project_name])).entries()];
-  return `<span class="eyebrow">${icon('search')}Filter by</span>
-  <label>Project <select data-filter="project" aria-label="Project filter (applies to every view)"><option value="">All</option>${projects.map(([id, name]) => `<option value="${attr(id)}" ${f.project === id ? 'selected' : ''}>${esc(name ?? id)}</option>`).join('')}</select></label>
-  <label>Category <select data-filter="category"><option value="">All</option>${categories.map((c) => `<option value="${c}" ${f.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
-  ${repos.length || needsClone ? `<label>Repo <select data-filter="repo"><option value="">All</option>${repos.map((r) => `<option value="${attr(r.id)}" ${f.repo === r.id ? 'selected' : ''}>${esc(r.display_name)}</option>`).join('')}${needsClone || f.repo === NEEDS_CLONE_FILTER ? `<option value="${NEEDS_CLONE_FILTER}" ${f.repo === NEEDS_CLONE_FILTER ? 'selected' : ''}>Needs clone</option>` : ''}</select></label>` : ''}
-  ${tags.length ? `<label>Tag <select data-filter="tag"><option value="">All</option>${tags.map((t) => `<option value="${attr(t)}" ${f.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
-  <label class="check"><input type="checkbox" data-filter="stale" ${f.stale ? 'checked' : ''}> Stale only</label>
-  ${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
 }
 
 function renderDetailPanel(now, pending) {
@@ -590,6 +574,7 @@ function handleAction(el) {
     case 'toggle-stale': appState.filters.stale = !appState.filters.stale; render(); break;
     case 'sessions-page': appState.sessionsPage = Number(el.dataset.page); render(); break;
     case 'tree-root': appState.treeRoot = el.dataset.root || null; render(); break;
+    case 'dismiss-receipt': appState.receipt = null; render(); break;
     case 'clear-filter': appState.filters[el.dataset.filter] = el.dataset.filter === 'stale' ? false : ''; render(); break;
     case 'clear-filters': appState.filters = { ...appState.filters, category: '', tag: '', repo: '', machine: '', stale: false, q: '' }; render(); break;
     case 'cancel-request': cancelRequest(el.dataset.request); break;
@@ -912,6 +897,7 @@ function onChange(e) {
     appState.boardPages = {};
     appState.sessionsPage = 0;
     render();
+    if (el.dataset.filter !== 'q') $(`#filters [data-filter="${CSS.escape(el.dataset.filter)}"]`)?.focus();
     if (el.dataset.filter === 'q') { const s = $('#search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
     return;
   }

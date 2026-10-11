@@ -678,3 +678,21 @@ test('navigation is grouped, Runs has a live count and an attention dot, phones 
   assert.match(open, /id="more-sheet" class="more-sheet" role="dialog" aria-label="More views"/);
   assert.match(open, /class="more-panel"[\s\S]*data-view="deployments"/);
 });
+
+test('the top bar is one row with a status button; receipts are toasts; filters sit behind a counted button', async () => {
+  const { renderHeader, statusLabel, receiptLifetime, renderFilterBar, activeFilterCount } = await import('../../ui/views/header.js');
+  const s = snapshot();
+  const html = renderHeader(s, { now: NOW, online: true, refresh: null, theme: 'dark', endpoint: '127.0.0.1:4321', receipt: { text: 'next action applied', tone: 'good' } });
+  assert.doesNotMatch(html, /class="statusline"/);
+  assert.match(html, /<summary class="btn small ghost status-button"[^>]*><span class="dot"[^>]*><\/span><span class="status-label">1 provider error<\/span>/);
+  assert.match(html, /class="popover status-popover"[\s\S]*Refresh[\s\S]*127\.0\.0\.1:4321/);
+  assert.match(html, /class="receipt toast"[\s\S]*Receipt: next action applied[\s\S]*data-action="dismiss-receipt"/);
+  assert.deepEqual(statusLabel(s, { now: NOW, online: false }), { text: 'Offline', tone: 'critical' });
+  assert.equal(receiptLifetime('critical'), null);
+  assert.equal(receiptLifetime('good'), 6000);
+  assert.equal(activeFilterCount({ project: 'demo', category: '', tag: '', repo: 'demo', machine: '', stale: true, q: '' }), 3);
+  const bar = renderFilterBar(s, { project: '', category: 'feature', tag: '', repo: '', machine: '', stale: false, q: '' });
+  assert.match(bar, /<details class="filter-pop health-pop"><summary class="btn small ghost">[\s\S]*Filter · 1<\/summary>/);
+  assert.match(bar, /data-filter="category"/);
+  assert.match(bar, /data-action="clear-filter" data-filter="category"/);
+});
