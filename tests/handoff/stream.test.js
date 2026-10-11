@@ -144,7 +144,9 @@ test('redactLog hides secrets in their common shapes and keeps numbers', () => {
 });
 
 test('redaction stays linear on long word runs; excerpts are capped before redacting', () => {
-  for (const big of ['a-'.repeat(512 * 1024), `${'x.'.repeat(256 * 1024)}token${'y-'.repeat(256 * 1024)}`, '"'.repeat(1_048_576)]) {
+  const begin = '-----BEGIN PRIVATE KEY-----';
+  const nearMiss = '-----BEGIN RSA PRIVATE KEY-----x-----END PRIVATE KEY-----';
+  for (const big of [begin.repeat(Math.ceil(1_048_576 / begin.length)), `${begin}\n`.repeat(Math.ceil(1_048_576 / (begin.length + 1))), nearMiss.repeat(Math.ceil(1_048_576 / nearMiss.length)), '-----BEGIN '.repeat(100_000), 'a-'.repeat(512 * 1024),`${'x.'.repeat(256 * 1024)}token${'y-'.repeat(256 * 1024)}`, '"'.repeat(1_048_576)]) {
     const started = performance.now();
     redactLog(big);
     const ms = performance.now() - started;
@@ -153,6 +155,36 @@ test('redaction stays linear on long word runs; excerpts are capped before redac
     assert.ok(Buffer.byteLength(redactCapped(big, 2048)) <= 2048);
     assert.ok(performance.now() - t2 < 50);
   }
+});
+
+test('review probe: a secret split by the pre-cap boundary leaves no prefix behind', () => {
+  // Long tokens shrink when redacted, so the 8 KB pre-cap boundary lands inside the 2 KB excerpt.
+  const filler = `ghp_${'A'.repeat(200)} `.repeat(39);
+  const probe = `${filler}${' '.repeat(8180 - filler.length)}ghp_${'B'.repeat(200)}`;
+  const out = redactCapped(probe, 2048);
+  assert.ok(Buffer.byteLength(out) <= 2048);
+  assert.ok(!/ghp_[A-Z]/.test(out), `no token prefix survives: ...${out.slice(-40)}`);
+  assert.ok(!out.includes('BBBB'));
+  // No delimiter anywhere near the cut: the trailing fragment is dropped instead.
+  const solid = `${'z'.repeat(8180)}sk-${'C'.repeat(100)}`;
+  assert.ok(!redactCapped(solid, 8192).includes('sk-'));
+  // Closed and cut-off key blocks, with text around them.
+  assert.equal(redactLog('a -----BEGIN EC PRIVATE KEY-----\nAAA\n-----END EC PRIVATE KEY----- b'), 'a [secret redacted] b');
+  assert.equal(redactLog('-----BEGIN CERTIFICATE----- ok'), '-----BEGIN CERTIFICATE----- ok');
+});
+
+test('a huge result line is logged capped, and the window handed back is redacted', () => {
+  const t = tmp();
+  const c = createStreamCollector({ logPath: t.logPath, ledgerPath: t.ledgerPath });
+  const big = JSON.stringify({ type: 'result', is_error: false, session_id: 's1', result: `${'r '.repeat(2_000_000)}` });
+  const started = performance.now();
+  c.push(`${JSON.stringify({ type: 'stream_event', note: 'password=hunter2' })}\n${big}\n`);
+  const collected = c.end();
+  assert.ok(performance.now() - started < 1000);
+  assert.ok(fs.statSync(t.logPath).size < 70_000, 'the result line is capped in the log');
+  assert.match(fs.readFileSync(t.logPath, 'utf8'), /\[truncated\]/);
+  assert.equal(resultFromStream(collected).text.length, 4_000_000, 'the parsed result is whole');
+  assert.ok(collected.tail.length === 1 && !collected.tail[0].includes('hunter2'));
 });
 
 test('the log redacts secrets in assistant text and the result line', () => {

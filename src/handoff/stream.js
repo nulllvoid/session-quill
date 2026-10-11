@@ -9,7 +9,7 @@ import { redactText } from '../export/sanitize.js';
 
 export const EXCERPT_BYTES = 2048;
 const SUMMARY_CHARS = 300;
-const LOG_TEXT_CHARS = 65_536;
+const LOG_TEXT_BYTES = 65_536;
 // A single line longer than this many UTF-8 bytes (no newline in sight) is dropped rather than
 // held in memory. The pending line sits outside the rolling window, so this is its own bound.
 const MAX_LINE_BYTES = 16 * 1_048_576;
@@ -23,9 +23,7 @@ const SESSION_RE = /^[\w-]{1,100}$/;
 // the export path redaction. Every quantifier is bounded or anchored on a literal, so the cost is
 // linear in the input (a long run of word characters must not go quadratic).
 const R = '[secret redacted]';
-const PEM_CLOSED = /-----BEGIN ([A-Z ]{0,40})PRIVATE KEY-----[\s\S]{0,20000}?-----END \1PRIVATE KEY-----/g;
-// A key cut off by a length cap has no END line: everything after BEGIN goes.
-const PEM_OPEN = /-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----[\s\S]*/g;
+const PEM_BEGIN = /-----BEGIN ([A-Z ]{0,40})PRIVATE KEY-----/y;
 const TOKENS = /\b(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_\w{20,255}|glpat-[\w-]{20,255}|xox[abprs]-[\w-]{10,255}|xapp-[\w-]{10,255}|npm_[A-Za-z0-9]{30,255}|sk-[A-Za-z0-9_-]{20,255}|AKIA[0-9A-Z]{16})\b/g;
 const AUTH_SCHEME = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,1000}/gi;
 const URL_USERINFO = /\b([a-z][a-z0-9+.-]{1,20}:\/\/)[^\s/@:]{1,200}:[^\s/@]{1,200}@/gi;
@@ -33,18 +31,58 @@ const URL_USERINFO = /\b([a-z][a-z0-9+.-]{1,20}:\/\/)[^\s/@:]{1,200}:[^\s/@]{1,2
 // and a closing quote (JSON), then `=` or `:`. Purely numeric values (max_tokens=4096) are kept.
 const SECRET_ASSIGN = /((?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[\w.-]{0,40}["']?\s{0,10}[=:]\s{0,10})(?!["']?\d+["']?(?:[\s,;})\]]|$))("[^"\n]{0,1000}"|'[^'\n]{0,1000}'|[^\s,;})\]]{1,1000})/gi;
 
+// Private key blocks, found with indexOf rather than a lazy regex: each BEGIN either finds its END
+// further on (scanning resumes after it) or has none, and then everything after it goes, as for a
+// key cut off by a length cap. Each character is scanned a bounded number of times.
+function redactPem(text) {
+  let out = '';
+  let pos = 0;
+  for (;;) {
+    const at = text.indexOf('-----BEGIN ', pos);
+    if (at < 0) return out + text.slice(pos);
+    PEM_BEGIN.lastIndex = at;
+    const m = PEM_BEGIN.exec(text);
+    if (!m) { out += text.slice(pos, at + 11); pos = at + 11; continue; }
+    const endMark = `-----END ${m[1]}PRIVATE KEY-----`;
+    const end = text.indexOf(endMark, PEM_BEGIN.lastIndex);
+    if (end < 0) return `${out}${text.slice(pos, at)}${R}`;
+    out += `${text.slice(pos, at)}${R}`;
+    pos = end + endMark.length;
+  }
+}
+
+// A secret-looking fragment left at the very end of a cut (its rest fell past the cut). Only the
+// last 300 characters are examined, so this stays cheap on long text.
+const TRAILING_SECRET = /(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|xapp-|npm_|sk-|AKIA|-----BEGIN )\S*$/;
+function dropTrailingSecret(text) {
+  const tail = text.slice(-300);
+  const m = TRAILING_SECRET.exec(tail);
+  return m ? text.slice(0, text.length - tail.length + m.index) : text;
+}
+
+const DELIMITER = /[\s,;"'<>()[\]{}]/;
+// Cut to `max` bytes, then back to the last delimiter within 1 KB, so the cut never splits a
+// secret (a split token is too short to be recognised and would leak its prefix).
+function cutAtBoundary(text, max) {
+  if (Buffer.byteLength(text) <= max) return text;
+  const s = capBytes(text, max);
+  for (let i = s.length - 1; i >= Math.max(0, s.length - 1024); i--) if (DELIMITER.test(s[i])) return s.slice(0, i + 1);
+  return dropTrailingSecret(s);
+}
+
 export function redactLog(text) {
-  return redactText(String(text ?? '')
-    .replace(PEM_CLOSED, R).replace(PEM_OPEN, R)
+  return redactText(redactPem(String(text ?? ''))
     .replace(URL_USERINFO, `$1${R}@`)
     .replace(TOKENS, R)
     .replace(AUTH_SCHEME, `$1 ${R}`)
     .replace(SECRET_ASSIGN, `$1${R}`));
 }
 
-// Redact a bounded slice of `text`, then cut it to `max` bytes.
+// Redact a bounded slice of `text`, then cut it to `max` bytes; neither cut leaves part of a
+// secret behind.
 export function redactCapped(text, max) {
-  return capBytes(redactLog(capBytes(String(text ?? ''), Math.max(max, PRECAP_BYTES))), max);
+  const red = redactLog(cutAtBoundary(String(text ?? ''), Math.max(max, PRECAP_BYTES)));
+  return Buffer.byteLength(red) <= max ? red : dropTrailingSecret(capBytes(red, max));
 }
 
 // Cut to at most `max` UTF-8 bytes without splitting a character.
@@ -55,7 +93,13 @@ export function capBytes(text, max) {
   return s;
 }
 
-const oneLine = (s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+// Log text (and the window handed back by end()): redacted and capped, marked when it was cut.
+function logText(s) {
+  const out = redactCapped(s, LOG_TEXT_BYTES);
+  return Buffer.byteLength(s) > LOG_TEXT_BYTES ? `${out} … [truncated]` : out;
+}
+
+const oneLine =(s, max) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 
 function contentText(content) {
   if (typeof content === 'string') return content;
@@ -145,7 +189,7 @@ export function createStreamCollector({ logPath = null, ledgerPath = null, onIni
     }
     if (obj.type === 'result') {
       result = obj;
-      log(`[result] ${redactLog(line)}`);
+      log(`[result] ${logText(line)}`);
       for (const d of Array.isArray(obj.permission_denials) ? obj.permission_denials : []) if (d) denial(d.tool_name, d.tool_use_id, d.tool_input, 'listed in permission_denials');
       return;
     }
@@ -158,7 +202,7 @@ export function createStreamCollector({ logPath = null, ledgerPath = null, onIni
     if (obj.type === 'assistant') {
       for (const c of content) {
         if (!c) continue;
-        if (c.type === 'text' && typeof c.text === 'string' && c.text.trim()) log(`[assistant] ${redactLog(c.text.length > LOG_TEXT_CHARS ? `${c.text.slice(0, LOG_TEXT_CHARS)} … [truncated]` : c.text)}`);
+        if (c.type === 'text' && typeof c.text === 'string' && c.text.trim()) log(`[assistant] ${logText(c.text)}`);
         if (c.type === 'tool_use') {
           const tool = typeof c.name === 'string' ? c.name : null;
           const summary = summarizeInput(tool, c.input, cwd);
@@ -232,7 +276,7 @@ export function createStreamCollector({ logPath = null, ledgerPath = null, onIni
       for (const fd of [logFd, ledgerFd]) if (fd !== null && fd >= 0) { try { fs.closeSync(fd); } catch { /* ignore */ } }
       logFd = null;
       ledgerFd = null;
-      return { init, result, truncated, tail: window.map((w) => w.line) };
+      return { init, result, truncated, tail: window.map((w) => logText(w.line)) };
     },
   };
 }
