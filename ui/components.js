@@ -124,8 +124,16 @@ export function requestChip(state) {
   return `<span class="chip request" data-state="${attr(state)}">${esc(REQUEST_LABELS[state] ?? state)}</span>`;
 }
 
-export function keyEl(key) {
-  return `<code class="key" data-copy="${attr(key)}" title="${attr(key)} · Click to copy">${esc(key)}</code>`;
+export function keyEl(key, { short = false } = {}) {
+  return `<code class="key" data-copy="${attr(key)}" title="${attr(key)} · Click to copy">${esc(short ? shortKey(key) : key)}</code>`;
+}
+
+// Long local keys keep their prefix and unique suffix; the full key stays in titles and copies.
+export function shortKey(key, max = 22) {
+  const k = String(key ?? '');
+  if (k.length <= max) return k;
+  const tail = Math.floor((max - 1) / 2);
+  return `${k.slice(0, max - 1 - tail)}…${k.slice(-tail)}`;
 }
 
 export const SYSTEM_LABELS = { jira: 'Jira', linear: 'Linear', github: 'GitHub', custom: 'Tracker' };
@@ -139,11 +147,11 @@ export function externalLink(ticket) {
 }
 
 // A key that names an external ticket opens it in a new tab; the copy button copies the key.
-export function ticketKey(ticket) {
+export function ticketKey(ticket, { short = false } = {}) {
   const link = externalLink(ticket);
-  if (!link || !link.url || link.key !== ticket.key) return keyEl(ticket.key);
+  if (!link || !link.url || link.key !== ticket.key) return keyEl(ticket.key, { short });
   const where = SYSTEM_LABELS[link.system] ?? 'tracker';
-  return `<span class="key-group"><a class="key key-link" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer" title="${attr(`Open ${ticket.key} in ${where} (new tab)`)}">${esc(ticket.key)}</a><button type="button" class="copy-key" data-copy="${attr(ticket.key)}" aria-label="${attr(`Copy ${ticket.key}`)}" title="Copy key">${icon('copy')}</button></span>`;
+  return `<span class="key-group"><a class="key key-link" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer" title="${attr(`Open ${ticket.key} in ${where} (new tab)`)}">${esc(short ? shortKey(ticket.key) : ticket.key)}</a><button type="button" class="copy-key" data-copy="${attr(ticket.key)}" aria-label="${attr(`Copy ${ticket.key}`)}" title="Copy key">${icon('copy')}</button></span>`;
 }
 
 export function externalChip(ticket) {
@@ -308,6 +316,7 @@ export function viewCounts(snapshot, filters = {}) {
     tree: tickets.filter((t) => !t.parent_id).length,
     sessions: filterSessions(snapshot, filters).filter((s) => s.state === 'live' || s.state === 'idle').length,
     deployments: snapshot.deployments_outstanding.filter((o) => ids.has(o.ticket_id)).length,
+    runs: (snapshot.handoffs ?? []).filter((h) => (h.state === 'queued' || h.state === 'running') && ids.has(h.ticket_id)).length,
     today: today ? today.tickets.filter((t) => ids.has(t.ticket_id) || !ticketById(snapshot, t.ticket_id)).length : 0,
   };
 }
@@ -342,7 +351,7 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   return `<article class="card card-${attr(variant)}${selected ? ' selected' : ''}${entry && entry.rank === 1 ? ' top' : ''}" data-ticket="${attr(ticket.id)}" tabindex="0" role="button" aria-label="${attr(`${ticket.key} ${ticket.title}`)}" aria-pressed="${selected ? 'true' : 'false'}">
   <header class="card-head">
     ${entry ? `<span class="rank" aria-label="Rank ${attr(entry.rank)}">${esc(entry.rank)}</span>` : ''}
-    ${ticketKey(ticket)}
+    ${ticketKey(ticket, { short: true })}
     ${statusChip(ticket.status, { stale: ticket.stale, staleAge: staleAgeLabel(ticket, now) })}
     ${priorityMark(ticket.priority)}
     ${entry ? scoreBadge(entry) : ''}
@@ -353,7 +362,7 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   ${ticket.blocker ? `<p class="card-blocker">${icon('alert')}<span><span class="eyebrow">Blocker</span> ${esc(ticket.blocker)}</span></p>` : ''}
   ${entry && (leadingReason(entry) || (entry.limitations ?? []).length) ? `<ul class="reasons">${leadingReason(entry) ? `<li>${esc(leadingReason(entry))}</li>` : ''}${(entry.limitations ?? []).map((l) => `<li class="limitation">${icon('alert')}${esc(l)}</li>`).join('')}</ul>` : ''}
   <footer class="card-meta">${meta.join('')}</footer>
-  ${canHandoff ? `<div class="card-actions"><button type="button" class="btn small" data-action="handoff" data-ticket="${attr(ticket.id)}">${icon('play')}Handoff</button></div>` : ''}
+  ${canHandoff ? `<div class="card-actions"><button type="button" class="btn small" data-action="handoff" data-ticket="${attr(ticket.id)}">${icon('play')}Run agent</button></div>` : ''}
 </article>`;
 }
 
@@ -368,6 +377,18 @@ export function countLabel(n, noun) {
 export function pager(page, pages, { prefix }) {
   if (pages <= 1) return '';
   return `<nav class="pager" aria-label="Pagination"><button type="button" class="btn small" data-action="${attr(prefix)}-page" data-page="${page - 1}" ${page === 0 ? 'disabled' : ''}>Previous</button><span>Page ${page + 1} of ${pages}</span><button type="button" class="btn small" data-action="${attr(prefix)}-page" data-page="${page + 1}" ${page + 1 >= pages ? 'disabled' : ''}>Next</button></nav>`;
+}
+
+// Loaded text for a content ref (results, timeline entries, plans, checkpoints) with its loading
+// and failure states. A failure always offers Retry; nothing is left silently empty.
+export function contentViewer(ref, { content = {}, status = {}, generation = '', label = 'Full text' } = {}) {
+  if (!ref) return '';
+  if (Object.hasOwn(content, ref)) return `<div class="content-viewer" data-ref="${attr(ref)}"><button type="button" class="link small" data-action="hide-content" data-hash="${attr(ref)}">Hide</button><pre class="full">${esc(content[ref])}</pre></div>`;
+  const st = status[ref];
+  if (st === 'reloading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">The snapshot changed; reloading…</span></div>`;
+  if (st === 'loading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">Loading…</span></div>`;
+  if (st && st.error) return `<div class="content-viewer" data-ref="${attr(ref)}"><span class="small critical" role="alert">Could not load: ${esc(st.error)}</span> <button type="button" class="btn small ghost" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">Retry</button></div>`;
+  return `<button type="button" class="link small" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">${esc(label)}</button>`;
 }
 
 // How much of Claude Code a run may use (ADR 0017). The owner's settings are the default; Full

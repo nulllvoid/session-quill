@@ -63,14 +63,14 @@ test('through the worker: each access level reaches the runtime as its permissio
 
 test('dashboard: both dialogs offer access with my settings preselected and full access marked; file runs offer none', async () => {
   const { renderRecipeRunDialog } = await import('../../ui/views/agents.js');
-  const { renderHandoffForm } = await import('../../ui/views/handoff-form.js');
+  const { renderRunAgentDialog } = await import('../../ui/views/run-dialog.js');
   const ticket = { id: T1, key: 'PROJ-1', title: 'T', status: 'active', repo_id: null, files_touched: [{ relative_path: 'C:/x/a.cjs' }], tags: [], timeline: [] };
   const snap = { tickets: [ticket], handoffs: [], recipes: [], capabilities: { read: true, handoff: true }, meta: { timezone: 'UTC' } };
   const analyse = { name: 'analyse', description: 'd', source: 'builtin', mode: 'analyse', permissions: { ...NONE, read_source: true }, timeout_min: 20, legacy: true };
   const dialog = renderRecipeRunDialog(analyse, ticket, snap);
   assert.match(dialog, /name="access" value="settings" checked/);
   assert.match(dialog, /class="danger"><input type="radio" name="access" value="full">/);
-  assert.match(renderHandoffForm(ticket, snap), /name="access" value="settings" checked/);
+  assert.match(renderRunAgentDialog(ticket, { ...snap, recipes: [analyse] }, { recipe: 'analyse' }), /name="access" value="settings" checked/);
   const files = { name: 'file-task', description: 'd', source: 'builtin', mode: 'files', permissions: { ...NONE, delete_files: true }, timeout_min: 10, legacy: false };
   assert.doesNotMatch(renderRecipeRunDialog(files, ticket, snap), /name="access"/);
 });

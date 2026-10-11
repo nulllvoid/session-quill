@@ -164,7 +164,7 @@ export function renderExportDialog(snapshot, preview) {
 }
 
 export function renderHelpDialog() {
-  const rows = [['/', 'Focus search'], ['1 to 6', 'Switch view'], ['Enter / Space', 'Open the focused card'], ['h', 'Handoff on a focused eligible card'], ['Escape', 'Close detail or dialog, restore focus; otherwise clear the bulk selection'], ['x', 'Select or deselect the focused card for bulk actions (Board and Pick next)'], ['Shift + click', 'Select every card between the last selected one and this one'], ['Left / Right', 'Previous / next record while the detail navigation control is focused'], ['?', 'This help']];
+  const rows = [['/', 'Focus search'], ['1 to 7', 'Switch view (7 opens Runs)'], ['Enter / Space', 'Open the focused card'], ['h', 'Run agent on a focused eligible card'], ['Escape', 'Close detail or dialog, restore focus; otherwise clear the bulk selection'], ['x', 'Select or deselect the focused card for bulk actions (Board and Pick next)'], ['Shift + click', 'Select every card between the last selected one and this one'], ['Left / Right', 'Previous / next record while the detail navigation control is focused'], ['?', 'This help']];
   return `<div class="dialog-form"><h2 id="dialog-title">Keyboard shortcuts</h2><table class="shortcuts">${rows.map(([k, d]) => `<tr><th scope="row"><kbd>${esc(k)}</kbd></th><td>${esc(d)}</td></tr>`).join('')}</table><p class="muted small">Shortcuts never run inside inputs or while a dialog owns focus.</p><div class="dialog-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div></div>`;
 }
 

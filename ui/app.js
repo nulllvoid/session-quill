@@ -1,32 +1,37 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
 import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER } from './components.js';
-import { renderHeader, renderSidebar, renderPageHeading } from './views/header.js';
+import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
+import { renderRuns } from './views/runs.js';
+import { renderRunDetail, renderRunNotFound } from './views/run-detail.js';
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
 import { renderTree } from './views/tree.js';
 import { renderSessions } from './views/sessions.js';
 import { renderDeployments } from './views/deployments.js';
 import { renderToday } from './views/today.js';
-import { renderDetail } from './views/detail.js';
-import { renderHandoffForm } from './views/handoff-form.js';
+import { renderDetail, DETAIL_TABS } from './views/detail.js';
+import { renderRunAgentDialog } from './views/run-dialog.js';
 import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderCloneDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 import { createDashboardMotion } from './lib/motion.js';
-import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
+import { effectiveRecipes, runSummary } from './views/agents.js';
 import { renderBulkActionBar, bulkBarShape, renderBulkHandoffForm, renderBulkResults, renderBulkStatusDialog, renderBatchStrips } from './views/bulk.js';
 import { freshProposals, proposalNotice } from './lib/proposals.js';
 import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, mergeUndo, batchDialogUpdate, withoutIds, pruneChecked, activeBatches } from './lib/bulk.js';
 
-const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today'];
+const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today', 'runs'];
 const POLL_VISIBLE_MS = 2000;
 const POLL_HIDDEN_MS = 30000;
 
 const appState = {
+  moreOpen: false,
   snapshot: null,
   online: true,
   view: 'picknext',
   filters: { ...EMPTY_FILTERS },
   selected: null,
+  runTab: null,
+  selectedRun: null,
   detailTab: 'overview',
   detailExpanded: false,
   sidebarCollapsed: false,
@@ -41,6 +46,7 @@ const appState = {
   sessionsPage: 0,
   treeRoot: null,
   content: {},
+  contentStatus: {},
   loadedTicket: null,
   lastFocus: null,
   error: null,
@@ -60,8 +66,13 @@ const appState = {
 
 const BULK_VIEWS = new Set(['board', 'picknext']);
 
+let receiptTimer = null;
 function setReceipt(text, tone = 'neutral') {
-  appState.receipt = { text, tone, at: nowIso() };
+  const receipt = { text, tone, at: nowIso() };
+  appState.receipt = receipt;
+  clearTimeout(receiptTimer);
+  const ms = receiptLifetime(tone);
+  if (ms) receiptTimer = setTimeout(() => { if (appState.receipt === receipt) { appState.receipt = null; render(); } }, ms);
 }
 
 let api;
@@ -91,6 +102,10 @@ function readHash() {
   appState.filters = filtersFromHash(location.hash, appState.filters, VIEWS);
   appState.selected = params.get('ticket') || null;
   appState.treeRoot = params.get('root') || null;
+  appState.runTab = params.get('tab') || null;
+  appState.selectedRun = appState.view === 'runs' ? params.get('run') || null : null;
+  const section = params.get('section');
+  if (appState.selected && DETAIL_TABS.includes(section)) appState.detailTab = section;
 }
 
 // The drawer belongs to the view it was opened from: switching views closes it.
@@ -99,6 +114,8 @@ function setView(view) {
   appState.view = view;
   appState.treeRoot = null;
   appState.selected = null;
+  appState.selectedRun = null;
+  appState.runTab = null;
   appState.detailTab = 'overview';
   appState.detailExpanded = false;
   appState.editingNext = null;
@@ -111,7 +128,10 @@ function writeHash() {
   for (const [k, v] of Object.entries(appState.filters)) if (v && k !== 'stale') params.set(k, v);
   if (appState.filters.stale) params.set('stale', '1');
   if (appState.selected) params.set('ticket', appState.selected);
+  if (appState.selected && appState.detailTab !== 'overview') params.set('section', appState.detailTab);
   if (appState.treeRoot) params.set('root', appState.treeRoot);
+  if (appState.view === 'runs' && appState.runTab) params.set('tab', appState.runTab);
+  if (appState.view === 'runs' && appState.selectedRun) params.set('run', appState.selectedRun);
   const next = `#${params.toString()}`;
   if (location.hash !== next) history.replaceState(null, '', next);
 }
@@ -145,16 +165,16 @@ function render() {
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
   const workspaceOpen = $('#sidebar .workspace-details')?.open;
-  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed }));
+  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen }));
   if (workspaceOpen) $('#sidebar .workspace-details').open = true;
-  const connectionOpen = $('#header .connection-details')?.open;
   // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
-  const healthOpen = [...document.querySelectorAll('#header .health-pop')].findIndex((p) => p.open);
+  const healthOpen = [...document.querySelectorAll('#header .health-pop')].flatMap((p, i) => (p.open ? [i] : []));
   setMarkup($('#header'), renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt }));
-  if (connectionOpen) $('#header .connection-details').open = true;
-  if (healthOpen >= 0) { const pop = document.querySelectorAll('#header .health-pop')[healthOpen]; if (pop) pop.open = true; }
+  { const pops = document.querySelectorAll('#header .health-pop'); for (const i of healthOpen) if (pops[i]) pops[i].open = true; }
   if (searchFocused) { const sInput = $('#search'); if (sInput) { sInput.focus(); if (searchPos !== null) sInput.setSelectionRange(searchPos, searchPos); } }
-  setMarkup($('#filters'), renderFilterBar(s));
+  const filterOpen = $('#filters .filter-pop')?.open;
+  setMarkup($('#filters'), renderFilterBar(s, appState.filters));
+  if (filterOpen) $('#filters .filter-pop').open = true;
   const pending = [...appState.requests.values()];
   const opts = { now, pending, selected: appState.selected };
   let html = '';
@@ -165,6 +185,7 @@ function render() {
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
+  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun });
   if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
   renderBulkBar(s);
   setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
@@ -278,50 +299,52 @@ function cancelBatch(batchId) {
   announce(`Cancelling ${queued.length} queued run${queued.length === 1 ? '' : 's'}`);
 }
 
-function renderFilterBar(s) {
-  const f = appState.filters;
-  const tokens = [];
-  for (const [k, v] of Object.entries(f)) {
-    if (!v || k === 'project') continue;
-    tokens.push(`<button type="button" class="token" data-action="clear-filter" data-filter="${attr(k)}" aria-label="Remove filter ${attr(k)}">${esc(k)}: ${esc(k === 'stale' ? 'stale only' : v === NEEDS_CLONE_FILTER ? 'needs clone' : v)} ${icon('x')}</button>`);
+// Loads one content ref. A snapshot that moved on is polled and the load retried once with the new
+// generation; any other failure stays visible with Retry.
+async function loadContent(hash, generation, retried = false) {
+  appState.contentStatus[hash] = 'loading';
+  render();
+  try {
+    const text = await api.getContent(hash, generation);
+    delete appState.contentStatus[hash];
+    appState.content[hash] = text ?? '(content unavailable: capture incomplete)';
+  } catch (err) {
+    if (err.code === 'generation-expired' && !retried) { appState.contentStatus[hash] = 'reloading'; render(); await poll(); return loadContent(hash, appState.snapshot.generation_id, true); }
+    appState.contentStatus[hash] = { error: err.message || 'the request failed' };
   }
-  const categories = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
-  const repos = s.repos ?? [];
-  const needsClone = s.tickets.some((t) => t.repo_state === 'needs-clone');
-  const tags = [...new Set(s.tickets.flatMap((t) => t.tags.filter((x) => !x.startsWith('quill/'))))];
-  const projects = [...new Map(s.tickets.map((t) => [t.project_id, t.project_name])).entries()];
-  return `<span class="eyebrow">${icon('search')}Filter by</span>
-  <label>Project <select data-filter="project" aria-label="Project filter (applies to every view)"><option value="">All</option>${projects.map(([id, name]) => `<option value="${attr(id)}" ${f.project === id ? 'selected' : ''}>${esc(name ?? id)}</option>`).join('')}</select></label>
-  <label>Category <select data-filter="category"><option value="">All</option>${categories.map((c) => `<option value="${c}" ${f.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
-  ${repos.length || needsClone ? `<label>Repo <select data-filter="repo"><option value="">All</option>${repos.map((r) => `<option value="${attr(r.id)}" ${f.repo === r.id ? 'selected' : ''}>${esc(r.display_name)}</option>`).join('')}${needsClone || f.repo === NEEDS_CLONE_FILTER ? `<option value="${NEEDS_CLONE_FILTER}" ${f.repo === NEEDS_CLONE_FILTER ? 'selected' : ''}>Needs clone</option>` : ''}</select></label>` : ''}
-  ${tags.length ? `<label>Tag <select data-filter="tag"><option value="">All</option>${tags.map((t) => `<option value="${attr(t)}" ${f.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
-  <label class="check"><input type="checkbox" data-filter="stale" ${f.stale ? 'checked' : ''}> Stale only</label>
-  ${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
+  render();
 }
 
 function renderDetailPanel(now, pending) {
   const panel = $('#detail');
   const s = appState.snapshot;
   const ticket = appState.selected ? ticketById(s, appState.selected) : null;
+  const runId = !ticket && appState.view === 'runs' ? appState.selectedRun : null;
+  const run = runId ? (s.handoffs ?? []).find((h) => h.id === runId) ?? null : null;
+  const open = !!(ticket || runId);
   const mode = layoutMode();
   document.body.dataset.expandedTicket = appState.detailExpanded && ticket ? 'true' : 'false';
-  $('#main').inert = !!(ticket && appState.detailExpanded);
-  panel.hidden = !ticket;
-  document.body.dataset.detail = ticket ? 'open' : 'closed';
-  if (!ticket) { for (const id of ['sidebar', 'header', 'filters', 'bulk']) $(`#${id}`).inert = false; setMarkup(panel, ''); panel.removeAttribute('aria-modal'); renderedDetail = null; return; }
+  panel.hidden = !open;
+  document.body.dataset.detail = open ? 'open' : 'closed';
+  if (!open) { $('#main').inert = false; for (const id of ['sidebar', 'header', 'filters', 'bulk']) $(`#${id}`).inert = false; setMarkup(panel, ''); panel.removeAttribute('aria-modal'); renderedDetail = null; return; }
   const modal = mode !== 'desktop';
-  $('#main').inert = modal || appState.detailExpanded;
+  $('#main').inert = modal || (!!ticket && appState.detailExpanded);
   for (const id of ['sidebar', 'header', 'filters', 'bulk']) $(`#${id}`).inert = modal;
   panel.setAttribute('role', modal ? 'dialog' : 'complementary');
+  panel.setAttribute('aria-label', ticket ? 'Ticket detail' : 'Run detail');
   if (modal) panel.setAttribute('aria-modal', 'true'); else panel.removeAttribute('aria-modal');
   const active = document.activeElement;
   const activeId = active && panel.contains(active) ? active.id || active.dataset.action : null;
   const selectionStart = active && panel.contains(active) && active.tagName === 'TEXTAREA' ? active.selectionStart : null;
   const editing = active && panel.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
   if (editing) return; // never clobber an in-progress edit on poll
-  setMarkup(panel, renderDetail(ticket, s, { now, pending, content: appState.content, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded }));
-  // A different ticket starts at its title, not at the previous ticket's scroll offset.
-  if (renderedDetail !== ticket.id) { panel.scrollTop = 0; renderedDetail = ticket.id; }
+  const key = ticket ? ticket.id : `run:${runId}`;
+  const html = ticket
+    ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded })
+    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus }) : renderRunNotFound(runId);
+  setMarkup(panel, html);
+  // A different ticket or run starts at its title, not at the previous one's scroll offset.
+  if (renderedDetail !== key) { panel.scrollTop = 0; renderedDetail = key; }
   if (activeId) { const el = panel.querySelector(`#${CSS.escape(activeId)}`) || panel.querySelector(`[data-action="${CSS.escape(activeId)}"]`); if (el) { el.focus(); if (selectionStart !== null && el.setSelectionRange) el.setSelectionRange(selectionStart, selectionStart); } }
 }
 
@@ -331,8 +354,7 @@ function renderDialog() {
   if (!d) { if (host.open) host.close(); host.innerHTML = ''; return; }
   const s = appState.snapshot;
   let html = '';
-  if (d.type === 'handoff') html = renderHandoffForm(ticketById(s, d.ticket), s, { retryOf: d.retryOf });
-  else if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status);
+  if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status);
   else if (d.type === 'deployment') html = renderDeploymentDialog(ticketById(s, d.ticket), { mode: d.mode, deploymentId: d.deploymentId });
   else if (d.type === 'export') html = renderExportDialog(s, d.preview);
   else if (d.type === 'help') html = renderHelpDialog();
@@ -346,11 +368,10 @@ function renderDialog() {
     if (!t || t.repo_state !== 'needs-clone') { appState.dialog = null; return renderDialog(); }
     html = renderCloneDialog(t, s);
   }
-  else if (d.type === 'recipe-run') {
+  else if (d.type === 'run-agent') {
     const t = ticketById(s, d.ticket);
-    const recipe = t ? effectiveRecipes(s, t.repo_id).find((r) => r.name === d.recipe && !r.error) : null;
-    if (!recipe) { appState.dialog = null; return renderDialog(); }
-    html = renderRecipeRunDialog(recipe, t, s, { retryOf: d.retryOf });
+    if (!t) { appState.dialog = null; return renderDialog(); }
+    html = renderRunAgentDialog(t, s, { recipe: d.recipe, retryOf: d.retryOf });
   } else if (d.type === 'bulk-handoff') html = renderBulkHandoffForm(s, d.ids, { mode: d.mode });
   else if (d.type === 'bulk-results') html = renderBulkResults(s, { batchId: d.batchId, rows: d.rows, requests: [...appState.requests.values()] });
   else if (d.type === 'bulk-status') html = renderBulkStatusDialog(appState.checked.size);
@@ -388,7 +409,8 @@ async function poll() {
     appState.online = true;
     appState.error = null;
     syncRequests(snap);
-    if (changed) { appState.content = {}; appState.loadedTicket = null; }
+    // Content refs are content-addressed, so loaded text stays valid across generations.
+    if (changed) { appState.contentStatus = Object.fromEntries(Object.entries(appState.contentStatus).filter(([, v]) => v === 'loading' || v === 'reloading')); appState.loadedTicket = null; }
     render();
   } catch (err) {
     if (err.code === 'unauthenticated') { appState.error = err.message; appState.online = false; }
@@ -403,7 +425,7 @@ function syncRequests(snap) {
   const proposals = freshProposals(appState.proposalsSeen, snap);
   appState.proposalsSeen = proposals.seen;
   if (proposals.fresh.length) {
-    const text = proposals.fresh.length === 1 ? proposalNotice(proposals.fresh[0]) : `${proposals.fresh.length} runs proposed from shared pages; approve or dismiss them in Today`;
+    const text = proposals.fresh.length === 1 ? proposalNotice(proposals.fresh[0]) : `${proposals.fresh.length} runs proposed from shared pages; approve or dismiss them in Runs`;
     announce(text);
     setReceipt(text, 'neutral');
   }
@@ -512,17 +534,28 @@ function handleAction(el) {
       if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
       break;
     }
-    case 'review-proposals': appState.filters = { ...EMPTY_FILTERS }; setView('today'); render(); break;
+    case 'review-proposals': appState.filters = { ...EMPTY_FILTERS }; setView('runs'); appState.runTab = 'needs'; render(); break;
+    case 'run-tab': appState.runTab = el.dataset.tab; render(); document.querySelector(`#run-tab-${CSS.escape(appState.runTab)}`)?.focus(); break;
+    case 'open-run': openRun(el.dataset.run, el); break;
+    case 'close-run': closeRun(); break;
+    case 'run-prev': stepRun(-1); break;
+    case 'run-next': stepRun(1); break;
+    case 'open-ticket-from-run': { const id = el.dataset.ticket; setView('board'); openDetail(id, null); break; }
+    case 'open-runs': setView('runs'); appState.runTab = el.dataset.tab || null; render(); break;
+    case 'toggle-more': appState.moreOpen = !appState.moreOpen; render(); break;
     case 'toggle-sidebar': appState.sidebarCollapsed = !appState.sidebarCollapsed; try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage may be unavailable */ } render(); document.querySelector('[data-action="toggle-sidebar"]')?.focus(); break;
     case 'expand-detail': appState.detailExpanded = !appState.detailExpanded; render(); break;
     case 'detail-tab':
-      if (!['overview', 'activity', 'delivery'].includes(el.dataset.tab)) break;
+      if (!DETAIL_TABS.includes(el.dataset.tab)) break;
       appState.detailTab = el.dataset.tab; render();
       document.querySelector(`#detail-tab-${appState.detailTab}`)?.focus(); break;
     case 'cancel-next': appState.editingNext = null; render(); break;
     case 'toggle-blocked': appState.blockedExpanded = !appState.blockedExpanded; render(); break;
     case 'close-dialog': closeDialog(); break;
-    case 'handoff': appState.dialog = { type: 'handoff', ticket: el.dataset.ticket, retryOf: el.dataset.retryOf ?? null }; render(); break;
+    case 'handoff':
+    case 'run-agent': appState.dialog = { type: 'run-agent', ticket: el.dataset.ticket, recipe: el.dataset.recipe ?? null, retryOf: el.dataset.retryOf ?? null }; render(); break;
+    case 'run-agent-pick': appState.dialog = { ...appState.dialog, recipe: el.dataset.recipe }; render(); break;
+    case 'run-agent-back': appState.dialog = { ...appState.dialog, recipe: null }; render(); break;
     case 'record-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'record', deploymentId: el.dataset.deployment ?? null }; render(); break;
     case 'attach-unbound': appState.dialog = { type: 'attach', session: el.dataset.session, mode: el.dataset.mode === 'create' ? 'create' : 'attach' }; render(); break;
     case 'dismiss-unbound': submit({ kind: 'dismiss-unbound', target_id: el.dataset.session, expected_revision: Number(el.dataset.revision), payload: {} }, { announceText: 'Dismissal queued; undo within 10 seconds' }); break;
@@ -542,6 +575,7 @@ function handleAction(el) {
     case 'toggle-stale': appState.filters.stale = !appState.filters.stale; render(); break;
     case 'sessions-page': appState.sessionsPage = Number(el.dataset.page); render(); break;
     case 'tree-root': appState.treeRoot = el.dataset.root || null; render(); break;
+    case 'dismiss-receipt': appState.receipt = null; render(); break;
     case 'clear-filter': appState.filters[el.dataset.filter] = el.dataset.filter === 'stale' ? false : ''; render(); break;
     case 'clear-filters': appState.filters = { ...appState.filters, category: '', tag: '', repo: '', machine: '', stale: false, q: '' }; render(); break;
     case 'cancel-request': cancelRequest(el.dataset.request); break;
@@ -562,7 +596,6 @@ function handleAction(el) {
       break;
     }
     case 'undo-file-effect': submit({ kind: 'undo-file-effect', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff, effect_id: el.dataset.effect } }, { announceText: 'Undo queued; the file is restored within 10 seconds' }); break;
-    case 'run-recipe': appState.dialog = { type: 'recipe-run', ticket: el.dataset.ticket, recipe: el.dataset.recipe, retryOf: el.dataset.retryOf ?? null }; render(); break;
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
       const accept = el.dataset.action === 'accept-suggestion';
@@ -594,11 +627,8 @@ function handleAction(el) {
     }
     case 'cancel-batch': cancelBatch(el.dataset.batch); break;
     case 'dismiss-batch': appState.batches = appState.batches.filter((b) => b !== el.dataset.batch); render(); break;
-    case 'load-content': {
-      const hash = el.dataset.hash;
-      api.getContent(hash, el.dataset.generation).then((text) => { appState.content[hash] = text ?? '(content unavailable: capture incomplete)'; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
-      break;
-    }
+    case 'load-content': loadContent(el.dataset.hash, el.dataset.generation); break;
+    case 'hide-content': delete appState.content[el.dataset.hash]; render(); break;
     case 'load-ticket': {
       api.getTicket(el.dataset.ticket, el.dataset.generation).then((t) => { appState.loadedTicket = t; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
       break;
@@ -623,6 +653,7 @@ function openDetail(id, source) {
   motion?.cancelElement($('#detail'));
   appState.lastFocus = source ?? document.activeElement;
   appState.selected = id;
+  appState.selectedRun = null;
   appState.detailTab = 'overview';
   appState.detailExpanded = false;
   appState.loadedTicket = null;
@@ -672,6 +703,32 @@ function stepDetail(delta) {
   render();
 }
 
+function openRun(id, source) {
+  appState.lastFocus = source ?? document.activeElement;
+  if (appState.view !== 'runs') { setView('runs'); appState.runTab = 'all'; }
+  appState.selected = null;
+  appState.selectedRun = id;
+  render();
+  if (layoutMode() !== 'desktop') $('#detail [data-action="close-run"]')?.focus();
+  else $(`#main [data-action="open-run"][data-run="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+}
+
+function closeRun() {
+  const id = appState.selectedRun;
+  appState.selectedRun = null;
+  render();
+  const source = appState.lastFocus && document.contains(appState.lastFocus) ? appState.lastFocus : $(`#main [data-run="${CSS.escape(id ?? '')}"]`);
+  source?.focus({ preventScroll: true });
+}
+
+function stepRun(delta) {
+  const ids = [...document.querySelectorAll('#main [data-action="open-run"]')].map((el) => el.dataset.run);
+  const at = ids.indexOf(appState.selectedRun);
+  if (at === -1) return;
+  const next = ids[at + delta];
+  if (next) { appState.selectedRun = next; render(); }
+}
+
 function toLocalIso(value) {
   if (!value) return null;
   const d = new Date(value);
@@ -718,13 +775,6 @@ function handleSubmit(form) {
     if (!items.length) { appState.dialog = { ...appState.dialog, error: 'Select at least one obligation.' }; render(); return; }
     closeDialog();
     submit({ kind: 'record-deployment', target_id: ticketId, expected_revision: revision, payload: { items } });
-  } else if (kind === 'handoff') {
-    const permissions = {};
-    for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr']) permissions[k] = fd.get(k) === 'on';
-    const payload = { mode: fd.get('mode'), note: String(fd.get('note') ?? '').trim(), permissions, access: fd.get('access') || 'settings', branch: String(fd.get('branch') ?? '').trim() || null };
-    const retryOf = form.dataset.retryOf || null;
-    closeDialog();
-    submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: retryOf }, { announceText: 'Handoff request accepted; execution is tracked separately' });
   } else if (kind === 'recipe-run') {
     // Disabled boxes are not submitted: permissions the recipe requires come from the form itself.
     const required = form.dataset.requiresEdit === 'true';
@@ -763,12 +813,20 @@ function handleSubmit(form) {
 function onKey(e) {
   const target = e.target;
   const inInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
-  const detailTab = target?.closest('[role="tab"][data-tab]');
+  const runTab = target?.closest('[role="tab"][data-action="run-tab"]');
+  if (runTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault();
+    const tabs = [...document.querySelectorAll('#main [data-action="run-tab"]')].map((b) => b.dataset.tab);
+    const i = tabs.indexOf(runTab.dataset.tab);
+    appState.runTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+    render(); document.querySelector(`#run-tab-${CSS.escape(appState.runTab)}`)?.focus(); return;
+  }
+  const detailTab = target?.closest('[role="tab"][data-action="detail-tab"]');
   if (detailTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
     e.preventDefault();
-    const tabs = ['overview', 'activity', 'delivery'];
+    const tabs = DETAIL_TABS;
     const index = tabs.indexOf(appState.detailTab);
-    appState.detailTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? 2 : (index + (e.key === 'ArrowRight' ? 1 : 2)) % 3];
+    appState.detailTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
     render(); document.querySelector(`#detail-tab-${appState.detailTab}`)?.focus(); return;
   }
   const dialogOpen = $('#dialog').open;
@@ -778,10 +836,12 @@ function onKey(e) {
     if (first && (e.shiftKey && target === first || !e.shiftKey && target === last)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); return; }
   }
   if (e.key === 'Escape') {
+    if (appState.moreOpen) { e.preventDefault(); appState.moreOpen = false; render(); $('.nav-more')?.focus(); return; }
+    if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
     const pop = document.querySelector('.health-pop[open]');
     if (pop) { e.preventDefault(); pop.open = false; pop.querySelector('summary')?.focus(); return; }
-    if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
     if (appState.selected && !inInput) { e.preventDefault(); closeDetail(); return; }
+    if (appState.selectedRun && !inInput) { e.preventDefault(); closeRun(); return; }
     if (!dialogOpen && selectionKey('Escape', { checkedSize: appState.checked.size }) && (!inInput || target.dataset.check)) { e.preventDefault(); setChecked(new Set(), { anchor: null }); return; }
     if (inInput && target.form && target.form.dataset.form === 'next-action') { target.value = ticketById(appState.snapshot, target.form.dataset.ticket).next_action; target.blur(); appState.editingNext = null; render(); return; }
   }
@@ -790,7 +850,7 @@ function onKey(e) {
     return;
   }
   if (e.key === '/') { e.preventDefault(); const s = $('#search'); if (s) s.focus(); return; }
-  if (/^[1-6]$/.test(e.key)) { setView(VIEWS[Number(e.key) - 1]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
+  if (SHORTCUT_VIEWS[e.key]) { appState.moreOpen = false; setView(SHORTCUT_VIEWS[e.key]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
@@ -801,7 +861,7 @@ function onKey(e) {
     $(`#main [data-ticket="${CSS.escape(bulkKey.id)}"][role=button]`)?.focus();
     return;
   }
-  if (card && e.key === 'h' && card.querySelector('[data-action="handoff"]')) { e.preventDefault(); appState.lastFocus = card; appState.dialog = { type: 'handoff', ticket: card.dataset.ticket }; render(); return; }
+  if (card && e.key === 'h' && card.querySelector('[data-action="handoff"]')) { e.preventDefault(); appState.lastFocus = card; appState.dialog = { type: 'run-agent', ticket: card.dataset.ticket, recipe: null, retryOf: null }; render(); return; }
   if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && target && target.dataset && target.dataset.action === 'detail-nav' && appState.selected) {
     e.preventDefault();
     stepDetail(e.key === 'ArrowRight' ? 1 : -1);
@@ -822,11 +882,11 @@ function onClick(e) {
     return;
   }
   const open = e.target.closest('[data-open]');
-  if (open) { e.preventDefault(); openDetail(open.dataset.open, open); if (open.dataset.section === 'activity') { appState.detailTab = 'activity'; render(); $('#detail-tab-activity')?.focus(); } return; }
+  if (open) { e.preventDefault(); openDetail(open.dataset.open, open); if (DETAIL_TABS.includes(open.dataset.section)) { appState.detailTab = open.dataset.section; render(); $(`#detail-tab-${open.dataset.section}`)?.focus(); } return; }
   const action = e.target.closest('[data-action]');
   if (action && action.dataset.action !== 'detail-nav') { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
   const tab = e.target.closest('[data-view]');
-  if (tab) { setView(tab.dataset.view); render(); return; }
+  if (tab) { appState.moreOpen = false; setView(tab.dataset.view); render(); return; }
   const card = e.target.closest('#main [data-ticket][role=button]');
   if (card && !e.target.closest('button, a, [data-copy]')) openDetail(card.dataset.ticket, card);
 }
@@ -838,8 +898,24 @@ function onChange(e) {
     appState.boardPages = {};
     appState.sessionsPage = 0;
     render();
+    if (el.dataset.filter !== 'q') $(`#filters [data-filter="${CSS.escape(el.dataset.filter)}"]`)?.focus();
     if (el.dataset.filter === 'q') { const s = $('#search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
     return;
+  }
+  const runForm = el.closest && el.closest('form[data-form="recipe-run"]');
+  if (runForm) {
+    const t = ticketById(appState.snapshot, runForm.dataset.ticket);
+    const recipe = t ? effectiveRecipes(appState.snapshot, t.repo_id).find((r) => r.name === runForm.dataset.recipe) : null;
+    const repo = t ? (appState.snapshot.repos ?? []).find((r) => r.id === t.repo_id) ?? null : null;
+    // Spec §5: Push needs Commit and a draft PR needs Push (and a PR provider); clearing a parent clears its dependants.
+    const box = (n) => runForm.querySelector(`input[name="${n}"]`);
+    const commit = box('commit'), push = box('push_branch'), pr = box('open_draft_pr');
+    if (push) { push.disabled = !(commit && commit.checked); if (push.disabled) push.checked = false; }
+    if (pr) { pr.disabled = !(push && push.checked) || !(repo && repo.provider); if (pr.disabled) pr.checked = false; }
+    const fd = new FormData(runForm);
+    const choices = Object.fromEntries(['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'].map((k) => [k, fd.get(k) === 'on' || !!runForm.querySelector(`[name="${k}"][disabled][checked]`)]));
+    const out = runForm.querySelector('.run-summary');
+    if (recipe && out) out.textContent = runSummary(recipe, choices, repo);
   }
   if (el.dataset.action === 'status-select') {
     const status = el.value;

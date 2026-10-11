@@ -33,6 +33,8 @@ for (const [label, selector] of [['light', LIGHT_RE], ['dark', DARK_RE]]) {
     }
     assert.ok(contrastRatio(t.border, t.surface) >= 1.2, 'borders are visible');
     assert.ok(contrastRatio(t.focus, t.bg) >= 3, 'focus ring meets 3:1 against the page');
+    for (const bg of ['bg', 'surface']) assert.ok(contrastRatio(t['border-strong'], t[bg]) >= 3, `${label}: --border-strong on --${bg} is ${contrastRatio(t['border-strong'], t[bg]).toFixed(2)}:1, controls need 3:1`);
+    if (label === 'dark') assert.ok(contrastRatio(t['text-muted'], t.surface) - contrastRatio(t['text-faint'], t.surface) >= 2, 'faint text reads as a distinct level from muted');
   });
 }
 

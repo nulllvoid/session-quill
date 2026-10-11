@@ -36,7 +36,8 @@ export function createApi({ staticSnapshot = null } = {}) {
     getContent: async (hash, generation) => {
       const res = await fetch(`/v1/content/${encodeURIComponent(hash)}?generation=${encodeURIComponent(generation)}`, { credentials: 'same-origin' });
       if (res.status === 410) { const e = new Error('generation expired'); e.code = 'generation-expired'; throw e; }
-      if (!res.ok) return null;
+      if (res.status === 404) return null;
+      if (!res.ok) { const e = new Error(`the server returned ${res.status}`); e.code = `http-${res.status}`; e.status = res.status; throw e; }
       return res.text();
     },
     submit: (body) => call('POST', '/v1/requests', body),

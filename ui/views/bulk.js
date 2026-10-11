@@ -2,6 +2,7 @@
 // bulk run form and its per-ticket results, the bulk status dialog and batch progress strips.
 import { esc, attr, icon, keyEl, countLabel, normalizeSnapshot, accessFieldset, STATUS_LABELS, ticketById } from '../components.js';
 import { bulkEntries, bulkOutcome, batchProgress } from '../lib/bulk.js';
+import { runSummary } from './agents.js';
 
 export function canSelect(snapshot) {
   const caps = snapshot.capabilities ?? {};
@@ -59,6 +60,9 @@ export function renderBulkHandoffForm(rawSnapshot, ids, { mode = 'analyse' } = {
   <label><input type="radio" name="mode" value="analyse" checked> Analyse: summarize and recommend; no children</label>
   <label><input type="radio" name="mode" value="analyse-followups"> Analyse with follow-ups: may create child tickets and suggest a next action</label>
 </fieldset>`;
+  // The built-in recipe's defaults; the repository varies per ticket, so the test line stays generic.
+  const builtin = (snapshot.recipes ?? []).find((r) => r.source === 'builtin' && r.mode === mode) ?? { legacy: true };
+  const summary = runSummary(builtin, fix ? { read_source: true, edit_source: true } : { read_source: true }, null);
   return `<form class="handoff-form bulk-form" data-form="bulk-handoff" data-ids="${attr(ids.join(','))}">
 <h2 id="dialog-title">${icon('play')}${fix ? 'Attempt fix' : 'Analyze'} for ${esc(countLabel(ids.length, 'ticket'))}</h2>
 <ul class="bulk-entries">${entries.map(entryRow).join('')}</ul>
@@ -68,6 +72,7 @@ ${accessFieldset()}
 ${tests}
 <label class="label" for="bulk-note">Note for every run <span class="muted">(max 280)</span></label>
 <textarea id="bulk-note" name="note" maxlength="280" rows="2" placeholder="What should each agent focus on?"></textarea>
+<p class="run-summary">${esc(summary)}</p>
 ${fix && ready.length ? `<label class="danger confirm-edit"><input type="checkbox" name="confirm_edit" required> <span>Allow ${esc(countLabel(ready.length, 'run'))} to edit source (edit_source), each in an isolated checkout. Nothing is committed or pushed.</span></label>` : ''}
 <div class="dialog-actions"><button type="submit" class="btn primary"${ready.length ? '' : ' disabled'}>Queue ${esc(countLabel(ready.length, 'run'))}</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;
@@ -112,7 +117,7 @@ export function renderBatchStrips(rawSnapshot, batchIds, { canCancel = false } =
     const finished = p.done + p.failed + p.cancelled;
     const parts = [p.done ? `${p.done} done` : null, p.failed ? `${p.failed} failed` : null, p.cancelled ? `${p.cancelled} cancelled` : null, p.running ? `${p.running} running` : null, p.queued ? `${p.queued} queued` : null].filter(Boolean);
     const action = canCancel && p.queued ? `<button type="button" class="btn small ghost" data-action="cancel-batch" data-batch="${attr(id)}">Cancel batch (${esc(p.queued)} queued)</button>` : !p.queued && !p.running ? `<button type="button" class="btn small ghost" data-action="dismiss-batch" data-batch="${attr(id)}">Dismiss</button>` : '';
-    return `<div class="batch-strip" data-batch="${attr(id)}"><span class="eyebrow">Batch ${esc(id.slice(0, 8))}</span><div class="batch-bar" role="progressbar" aria-label="${attr(`Batch ${id.slice(0, 8)}: ${finished} of ${p.total} runs finished`)}" aria-valuemin="0" aria-valuenow="${finished}" aria-valuemax="${p.total}"><span style="width:${Math.round((finished / p.total) * 100)}%"></span></div><span class="small">${esc(parts.join(' · '))}</span>${action}</div>`;
+    return `<div class="batch-strip" data-batch="${attr(id)}"><span class="eyebrow">Batch ${esc(id.slice(0, 8))}</span><div class="batch-bar" role="progressbar" aria-label="${attr(`Batch ${id.slice(0, 8)}: ${finished} of ${p.total} runs finished`)}" aria-valuemin="0" aria-valuenow="${finished}" aria-valuemax="${p.total}"><span style="width:${Math.round((finished / p.total) * 100)}%"></span></div><span class="small">${esc(parts.join(' · '))}</span><button type="button" class="link small" data-action="open-runs" data-tab="all">View in Runs</button>${action}</div>`;
   }).join('');
   return strips ? `<section class="batch-strips" aria-label="Bulk runs">${strips}</section>` : '';
 }

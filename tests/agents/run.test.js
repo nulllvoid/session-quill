@@ -216,12 +216,12 @@ test('a self-checking recipe verifies its reply in a read-only follow-up turn an
 });
 
 test('run detail shows confidence, checks and sources; exports keep sources only with checkpoints', async () => {
-  const { renderAgentsSection } = await import('../../ui/views/agents.js');
+  const { renderRunDetail } = await import('../../ui/views/run-detail.js');
   const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
   const h = { id: 'h9', ticket_id: T1, state: 'done', mode: 'analyse', recipe: { name: 'deploy-check', source: 'builtin' }, legacy: false, requested_at: '2026-10-02T08:00:00Z', result_summary: 'ok', result_confidence: 'low', result_sources: ['deploy/values.yaml@3f2a1c9'], result_quality: { problems: [], repaired: true, self_checked: true }, suggestions: [] };
   const ticket = { id: T1, key: 'PROJ-1', title: 'T', status: 'active', project_id: 'demo', repo_id: null, handoff_ids: ['h9'], tags: [], timeline: [], prs: [], deployments: [] };
   const snap = { generation_id: 'g', tickets: [ticket], handoffs: [h], recipes: [], capabilities: { read: true, handoff: true, edit_tickets: true }, meta: { timezone: 'UTC' } };
-  const html = renderAgentsSection(ticket, snap, { now: '2026-10-02T09:00:00Z' });
+  const html = renderRunDetail(h, snap, { now: '2026-10-02T09:00:00Z' });
   for (const re of [/Low confidence/, /Self-checked/, /Repaired reply/, /1 source</, /deploy\/values\.yaml@3f2a1c9/]) assert.match(html, re);
   const exported = sanitizeSnapshot({ ...snap, sessions: [], checkpoints: [] }, { fields: ['key', 'title', 'status'] });
   assert.equal(JSON.stringify(exported.handoffs).includes('values.yaml'), false);

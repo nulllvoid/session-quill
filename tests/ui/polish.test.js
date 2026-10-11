@@ -66,8 +66,17 @@ test('#10 sidebar badges count what each view shows under the active filters', (
   assert.equal(counts.board, 2);
   assert.equal(counts.tree, 2);
   const side = renderSidebar(s, { view: 'board', filters });
-  assert.match(side, /data-view="board"[^]*?<span class="badge" aria-label="2 items/);
+  assert.match(side, /aria-label="Board, 2 items" data-view="board"/);
   assert.equal(viewCounts(s, EMPTY_FILTERS).picknext, 5);
+});
+
+test('the Runs badge counts live runs on tickets the filters keep', () => {
+  const s = ranked();
+  const other = s.tickets.find((t) => t.repo_id === 'other');
+  const mine = s.tickets.find((t) => t.repo_id !== 'other');
+  const live = normalizeSnapshot({ ...s, handoffs: [{ id: 'a', ticket_id: other.id, state: 'running', permissions: {} }, { id: 'b', ticket_id: mine.id, state: 'queued', permissions: {} }, { id: 'c', ticket_id: other.id, state: 'done', permissions: {} }] });
+  assert.equal(viewCounts(live, EMPTY_FILTERS).runs, 2);
+  assert.equal(viewCounts(live, { ...EMPTY_FILTERS, repo: 'other' }).runs, 1);
 });
 
 test('#11 a hash that names a view replaces remembered filters; a bare hash keeps them', () => {

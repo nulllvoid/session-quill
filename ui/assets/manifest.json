@@ -1,0 +1,253 @@
+{
+  "name": "Quill UI assets",
+  "version": "1.0.0",
+  "license": "MIT; see ../../LICENSE. Existing fonts retain ui/fonts/OFL.txt.",
+  "generatedBy": "scripts/build-ui-assets.mjs",
+  "files": [
+    {
+      "path": "tokens.css",
+      "role": "tokens",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "tokens.json",
+      "role": "tokens",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "brand/quill-mark-light.svg",
+      "role": "brand",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "brand/quill-mark-dark.svg",
+      "role": "brand",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "brand/quill-mark-mono.svg",
+      "role": "brand",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "icons/ticket.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/feature.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/bugfix.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/vuln.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/infra.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/research.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/analysis.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/clock.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/branch.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/alert.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/check.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/x.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/refresh.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/download.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/moon.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/sun.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/play.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/machine.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/copy.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/inbox.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/link.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/rocket.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/user.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/search.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/chevron.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/undo.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/help.svg",
+      "role": "icon",
+      "provenance": "existing ui/components.js glyph"
+    },
+    {
+      "path": "icons/runs.svg",
+      "role": "icon",
+      "provenance": "new Quill orchestration extension; not integrated into icon()"
+    },
+    {
+      "path": "icons/queue.svg",
+      "role": "icon",
+      "provenance": "new Quill orchestration extension; not integrated into icon()"
+    },
+    {
+      "path": "icons/approve.svg",
+      "role": "icon",
+      "provenance": "new Quill orchestration extension; not integrated into icon()"
+    },
+    {
+      "path": "icons/diff.svg",
+      "role": "icon",
+      "provenance": "new Quill orchestration extension; not integrated into icon()"
+    },
+    {
+      "path": "icons/tests.svg",
+      "role": "icon",
+      "provenance": "new Quill orchestration extension; not integrated into icon()"
+    },
+    {
+      "path": "icons/lock.svg",
+      "role": "icon",
+      "provenance": "new Quill orchestration extension; not integrated into icon()"
+    },
+    {
+      "path": "icons/expand.svg",
+      "role": "icon",
+      "provenance": "new Quill orchestration extension; not integrated into icon()"
+    },
+    {
+      "path": "icons/collapse.svg",
+      "role": "icon",
+      "provenance": "new Quill orchestration extension; not integrated into icon()"
+    },
+    {
+      "path": "icons/sprite.svg",
+      "role": "icon",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "illustrations/empty-queue.svg",
+      "role": "empty-state illustration",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "illustrations/empty-queue-dark.svg",
+      "role": "empty-state illustration",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "illustrations/no-results.svg",
+      "role": "empty-state illustration",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "illustrations/no-results-dark.svg",
+      "role": "empty-state illustration",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "illustrations/review-ready.svg",
+      "role": "empty-state illustration",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "illustrations/review-ready-dark.svg",
+      "role": "empty-state illustration",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "illustrations/worker-offline.svg",
+      "role": "empty-state illustration",
+      "provenance": "Quill repository design system"
+    },
+    {
+      "path": "illustrations/worker-offline-dark.svg",
+      "role": "empty-state illustration",
+      "provenance": "Quill repository design system"
+    }
+  ]
+}
