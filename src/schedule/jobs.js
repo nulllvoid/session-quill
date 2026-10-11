@@ -17,7 +17,7 @@ import { proposalFromEdit, runChoices, autoApprovalId } from '../publish/run-pro
 import { createArtifactClient } from '../publish/artifact-client.js';
 import { createTrackerClient, syncSettings, syncable } from '../tracker/client.js';
 import { onboardSettings } from '../onboard/settings.js';
-import { planImport, importProject, storeKeys, importSourceIdentity, IMPORT_LIMIT } from '../onboard/import.js';
+import { planImport, importProject, importSourceIdentity, IMPORT_LIMIT } from '../onboard/import.js';
 import { resolveRepo, createOriginIndex, NO_CODE_TAG } from '../onboard/resolver.js';
 
 const NO_PERMISSIONS = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
@@ -83,14 +83,15 @@ export async function importAssigned(worker, client, tracker) {
   const project = importProject(worker.config);
   if (!project) throw new Error('no project is configured for imported tickets');
   const issues = await client.searchAssigned({ limit: IMPORT_LIMIT });
-  const plan = planImport(issues, { tracker, keys: storeKeys(worker.state.tickets.values()), storeId: worker.state.meta.store_id, projectId: project.id, projectName: project.name, category: worker.config.default_category || 'research', now: worker.now() });
+  const plan = planImport(issues, { tracker, tickets: [...worker.state.tickets.values()], storeId: worker.state.meta.store_id, projectId: project.id, projectName: project.name, category: worker.config.default_category || 'research', now: worker.now() });
   const created = [];
   for (const ticket of plan.create) {
     const { result } = worker.emit('ticket-create', { ticket }, { source_identity: importSourceIdentity(ticket.key), ticket_id: ticket.id });
     if (result.rejected) worker.log(`tracker-sync: import of ${ticket.key} rejected: ${result.rejected}`);
     else if (!result.duplicate) created.push(ticket);
   }
-  return { created, existing: plan.existing };
+  for (const c of plan.collisions) worker.log(`tracker-sync: ${c.key} is not imported; ticket ${c.ticket_key} already uses that key for another issue`);
+  return { created, existing: plan.existing, collisions: plan.collisions };
 }
 
 export const RESOLVE_LIMIT = 25;
@@ -172,7 +173,7 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
       const resolvePart = linked || needsClone ? `; repositories: ${[linked ? `${linked} linked` : null, needsClone ? `${needsClone} need${needsClone === 1 ? 's' : ''} a clone` : null].filter(Boolean).join(', ')}` : '';
       if (importError && !imported && (!results.length || errors === results.length)) throw new Error(`import failed: ${importError}`);
       if (results.length && errors === results.length && !imported) throw new Error(results[0].error);
-      const importPart = imported ? `imported ${imported.created.length} assigned issue${imported.created.length === 1 ? '' : 's'}${imported.created.length ? ` (${imported.created.slice(0, 5).map((t) => t.key).join(', ')}${imported.created.length > 5 ? ', …' : ''})` : ''}; ` : importError ? `import failed: ${importError}; ` : '';
+      const importPart = imported ? `imported ${imported.created.length} assigned issue${imported.created.length === 1 ? '' : 's'}${imported.created.length ? ` (${imported.created.slice(0, 5).map((t) => t.key).join(', ')}${imported.created.length > 5 ? ', …' : ''})` : ''}${imported.collisions.length ? `, ${imported.collisions.length} key collision${imported.collisions.length === 1 ? '' : 's'} (${imported.collisions.slice(0, 3).map((c) => c.key).join(', ')})` : ''}; ` : importError ? `import failed: ${importError}; ` : '';
       return { summary: `${importPart}checked ${results.length} tracker key${results.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}${resolvePart}` };
     },
     // Runs publishers (ADR 0010). A destination the owner has not confirmed is never sent anything:

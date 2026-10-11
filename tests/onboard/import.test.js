@@ -43,15 +43,27 @@ test('the GitHub client searches open issues assigned to @me in the configured r
   await assert.rejects(createTrackerClient({ tracker: { system: 'linear', domain: 'https://linear.app/x' }, settings: {}, env: { LINEAR_API_KEY: 'k' }, fetchImpl: gh.fetchImpl }).searchAssigned(), (e) => e.code === 'import-unsupported');
 });
 
-test('import plans skip keys the store already has, in any case or as an alias, and name GitHub issues with a prefix', () => {
-  assert.equal(githubPrefix(GITHUB), 'WEB_APP');
+test('import plans skip issues a ticket already points at, report keys held by other tickets, and name GitHub issues with a prefix', () => {
+  assert.equal(githubPrefix(GITHUB), 'WEBAPP');
+  assert.match(`${githubPrefix(GITHUB)}-7`, /^[A-Z][A-Z0-9]+-\d+$/);
   assert.equal(githubPrefix({ ...GITHUB, prefixes: ['APP'] }), 'APP');
   assert.equal(githubPrefix({ ...GITHUB, repo: 'acme/123' }), 'GH');
-  const plan = planImport([{ key: 'PROJ-1', title: 'a' }, { key: 'proj-2', title: 'b' }, { key: 'PROJ-3', title: '  spaced\n title ' }, { key: 'PROJ-3', title: 'dup' }], { tracker: JIRA, keys: ['PROJ-1', 'LOCAL-1', 'PROJ-2'], storeId: 's', projectId: 'demo', now: '2026-10-11T00:00:00Z' });
+  assert.equal(githubPrefix({ ...GITHUB, repo: 'acme/x' }), 'GH');
+  const jira = (key) => ({ system: 'jira', key, url: `https://example.atlassian.net/browse/${key}` });
+  const tickets = [{ key: 'PROJ-1', aliases: [], external: jira('PROJ-1') }, { key: 'LOCAL-1', aliases: ['proj-2'], external: jira('PROJ-2') }, { key: 'PROJ-4', aliases: [], external: null }];
+  const plan = planImport([{ key: 'PROJ-1', title: 'a' }, { key: 'proj-2', title: 'b' }, { key: 'PROJ-3', title: '  spaced\n title ' }, { key: 'PROJ-3', title: 'dup' }, { key: 'PROJ-4', title: 'held' }], { tracker: JIRA, tickets, storeId: 's', projectId: 'demo', now: '2026-10-11T00:00:00Z' });
   assert.deepEqual(plan.existing, ['PROJ-1', 'PROJ-2']);
+  assert.deepEqual(plan.collisions, [{ key: 'PROJ-4', ticket_key: 'PROJ-4' }]);
   assert.deepEqual(plan.create.map((t) => [t.key, t.title, t.repo_id, t.external.validation, t.jira.key]), [['PROJ-3', 'spaced title', null, 'valid', 'PROJ-3']]);
-  const gh = planImport([{ number: 7, title: 'x', url: 'https://github.com/acme/web-app/issues/7' }], { tracker: GITHUB, keys: [], storeId: 's', projectId: 'demo', now: 'n' });
-  assert.deepEqual([gh.create[0].key, gh.create[0].jira, gh.create[0].external.url], ['WEB_APP-7', null, 'https://github.com/acme/web-app/issues/7']);
+  const gh = planImport([{ number: 7, title: 'x', url: 'https://github.com/acme/web-app/issues/7' }], { tracker: GITHUB, tickets: [], storeId: 's', projectId: 'demo', now: 'n' });
+  assert.deepEqual([gh.create[0].key, gh.create[0].jira, gh.create[0].external.url], ['WEBAPP-7', null, 'https://github.com/acme/web-app/issues/7']);
+  // WEBAPP-7 already names issue 7 of another repository: a collision, not "already imported".
+  const other = [{ key: 'WEBAPP-7', aliases: [], external: { system: 'github', key: 'WEBAPP-7', url: 'https://github.com/acme/other/issues/7' } }];
+  const clash = planImport([{ number: 7, title: 'x', url: 'https://github.com/acme/web-app/issues/7' }], { tracker: GITHUB, tickets: other, storeId: 's', projectId: 'demo', now: 'n' });
+  assert.deepEqual([clash.create, clash.existing, clash.collisions], [[], [], [{ key: 'WEBAPP-7', ticket_key: 'WEBAPP-7' }]]);
+  const same = [{ key: 'LOCAL-9', aliases: [], external: { system: 'github', key: 'APP-7', url: 'https://github.com/Acme/Web-App/issues/7/' } }];
+  const known = planImport([{ number: 7, title: 'x', url: 'https://github.com/acme/web-app/issues/7' }], { tracker: GITHUB, tickets: same, storeId: 's', projectId: 'demo', now: 'n' });
+  assert.deepEqual([known.create, known.existing], [[], ['WEBAPP-7']], 'a ticket pointing at the same issue under another key counts as imported');
 });
 
 test('tracker-sync imports assigned issues as tickets once when import_assigned is on, and never otherwise', async () => {
@@ -84,5 +96,20 @@ test('tracker-sync imports assigned issues as tickets once when import_assigned 
     assert.match(again.summary, /^imported 0 assigned issues; checked 2 tracker keys/);
     assert.equal([...s.w.state.tickets.values()].filter((t) => t.key === 'PROJ-5').length, 1);
     assert.equal(s.w.state.handoffs.size, 0, 'importing never runs an agent');
+  } finally { await s.stop(); }
+});
+
+test('tracker-sync reports an assigned issue whose key another ticket holds, and imports nothing over it', async () => {
+  const r = recorder((url) => (url.includes('/search/jql?') ? { status: 200, body: { issues: [jiraIssue('PROJ-6', 'Remote six')] } } : null));
+  const s = scenario({ jobOpts: { trackerFetch: r.fetchImpl } });
+  s.config.tracker = { ...JIRA, sync_token_env: 'JIRA_TOKEN', import_assigned: true };
+  s.env.JIRA_TOKEN = 'tok';
+  await s.start();
+  try {
+    s.ticket(T1, 'PROJ-6', { title: 'Local six, no tracker link' });
+    const out = await createJobs({ providers: null, trackerFetch: r.fetchImpl })['tracker-sync'](s.w, { settings: { limit: 100 } });
+    assert.match(out.summary, /^imported 0 assigned issues, 1 key collision \(PROJ-6\);/);
+    assert.equal(s.w.state.tickets.size, 1);
+    assert.equal(s.w.state.tickets.get(T1).title, 'Local six, no tracker link');
   } finally { await s.stop(); }
 });

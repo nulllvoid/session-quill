@@ -5,7 +5,7 @@
 import { loadContext, findTicketByKey, latestTicketDetail, cliEvent, submitAndWait, latestSnapshot, workerStatus } from '../context.js';
 import { resolveTracker } from '../../config/config.js';
 import { createTrackerClient, syncSettings, writeSettings, targetStatus, linkedTo } from '../../tracker/client.js';
-import { planImport, importProject, storeKeys, importSourceIdentity, IMPORT_LIMIT } from '../../onboard/import.js';
+import { planImport, importProject, importSourceIdentity, IMPORT_LIMIT } from '../../onboard/import.js';
 import { writeIngress } from '../../core/ingress.js';
 import { nowIso } from '../../lib/time.js';
 import { TrackerError } from '../../lib/errors.js';
@@ -70,26 +70,29 @@ export async function importNow(ctx, io, flags, { fetchImpl } = {}) {
   const client = createTrackerClient({ tracker, settings: syncSettings(ctx.config.tracker), env: ctx.env, ...(fetchImpl ? { fetchImpl } : {}) });
   const issues = await client.searchAssigned({ limit: IMPORT_LIMIT });
   const known = latestSnapshot(ctx)?.tickets ?? [];
-  const plan = planImport(issues, { tracker, keys: storeKeys(known), storeId: ctx.storeMeta.store_id, projectId: project.id, projectName: project.name, category: ctx.config.default_category || 'research', now: nowIso() });
+  const plan = planImport(issues, { tracker, tickets: known, storeId: ctx.storeMeta.store_id, projectId: project.id, projectName: project.name, category: ctx.config.default_category || 'research', now: nowIso() });
   const live = workerStatus(ctx).healthy;
   const created = [];
   const existing = [...plan.existing];
+  const collisions = [...plan.collisions];
   for (const ticket of plan.create) {
     const ev = cliEvent(ctx, { kind: 'ticket-create', payload: { ticket }, session: null, ticket_id: ticket.id, source_identity: importSourceIdentity(ticket.key) });
     // Without a worker the events wait in ingress and apply when it starts.
     if (!live) { writeIngress(ev, ctx.env); created.push(ticket); continue; }
     const ack = await submitAndWait(ctx, ev, { timeoutMs: flags.timeout ? Number(flags.timeout) : 10_000 });
-    if (ack.duplicate || ['ticket-exists', 'key-collision'].includes(ack.rejected)) existing.push(ticket.key);
+    if (ack.duplicate || ack.rejected === 'ticket-exists') existing.push(ticket.key);
+    else if (ack.rejected === 'key-collision') collisions.push({ key: ticket.key, ticket_key: ticket.key });
     else if (ack.rejected) throw new TrackerError(ack.rejected, `import of ${ticket.key} rejected: ${ack.rejected}`);
     else created.push(ticket);
   }
-  if (flags.json) { io.json({ system: tracker.system, imported: created.map((t) => ({ key: t.key, title: t.title, url: t.external.url })), existing, pending: !live }); return 0; }
+  if (flags.json) { io.json({ system: tracker.system, imported: created.map((t) => ({ key: t.key, title: t.title, url: t.external.url })), existing, collisions, pending: !live }); return 0; }
   if (!created.length) io.println(`No new assigned issues on ${tracker.system}${existing.length ? ` (${existing.length} already tracked)` : ''}.`);
   else {
     io.println(`Imported ${created.length} assigned issue${created.length === 1 ? '' : 's'} from ${tracker.system}${live ? '' : ' (the worker is not running; they apply when it starts)'}:`);
     for (const t of created) io.println(`  ${t.key}  ${t.title}`);
     if (existing.length) io.println(`${existing.length} already tracked.`);
   }
+  for (const c of collisions) io.println(`! ${c.key} was not imported: ticket ${c.ticket_key} already uses that key for another issue`);
   return 0;
 }
 
