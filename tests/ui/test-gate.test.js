@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderAgentsSection, renderRecipeRunDialog } from '../../ui/views/agents.js';
+import { renderRecipeRunDialog } from '../../ui/views/agents.js';
+import { renderRunDetail } from '../../ui/views/run-detail.js';
 import { renderHandoffForm } from '../../ui/views/handoff-form.js';
 import { sanitizeSnapshot } from '../../src/export/sanitize.js';
 import { snapshot, ticket } from './fixtures.js';
@@ -16,7 +17,8 @@ test('runs show the worker test gate: passed is good, failed is critical with it
     { id: 'h3', ticket_id: t.id, state: 'failed', mode: 'attempt-fix', requested_at: NOW, test_gate: { status: 'timeout', command: 'npm test', exit_code: null, ms: 600_000, tail: '', attempts: 2, repaired: false } },
     { id: 'h4', ticket_id: t.id, state: 'done', mode: 'attempt-fix', requested_at: NOW, test_gate: { status: 'skipped', reason: 'no test_command for this repository; the fix is not test-verified' } },
   ];
-  const html = renderAgentsSection(t, snapshot({ tickets: [t], handoffs }), { now: NOW });
+  const snap = snapshot({ tickets: [t], handoffs });
+  const html = handoffs.map((h) => renderRunDetail(h, snap, { now: NOW })).join('');
   assert.match(html, /<span class="chip good small" title="[^"]*npm test[^"]*">Tests passed \(worker\)<\/span>/);
   assert.match(html, /<details class="test-output small"><summary><span class="chip critical small">Tests failed<\/span><\/summary>/);
   assert.match(html, /<pre class="preview">not ok 2 - &lt;expected&gt; 3<\/pre>/, 'the recorded output, escaped');

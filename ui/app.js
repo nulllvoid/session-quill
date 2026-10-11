@@ -9,7 +9,7 @@ import { renderTree } from './views/tree.js';
 import { renderSessions } from './views/sessions.js';
 import { renderDeployments } from './views/deployments.js';
 import { renderToday } from './views/today.js';
-import { renderDetail } from './views/detail.js';
+import { renderDetail, DETAIL_TABS } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
 import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderCloneDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
@@ -98,6 +98,8 @@ function readHash() {
   appState.treeRoot = params.get('root') || null;
   appState.runTab = params.get('tab') || null;
   appState.selectedRun = appState.view === 'runs' ? params.get('run') || null : null;
+  const section = params.get('section');
+  if (appState.selected && DETAIL_TABS.includes(section)) appState.detailTab = section;
 }
 
 // The drawer belongs to the view it was opened from: switching views closes it.
@@ -120,6 +122,7 @@ function writeHash() {
   for (const [k, v] of Object.entries(appState.filters)) if (v && k !== 'stale') params.set(k, v);
   if (appState.filters.stale) params.set('stale', '1');
   if (appState.selected) params.set('ticket', appState.selected);
+  if (appState.selected && appState.detailTab !== 'overview') params.set('section', appState.detailTab);
   if (appState.treeRoot) params.set('root', appState.treeRoot);
   if (appState.view === 'runs' && appState.runTab) params.set('tab', appState.runTab);
   if (appState.view === 'runs' && appState.selectedRun) params.set('run', appState.selectedRun);
@@ -558,7 +561,7 @@ function handleAction(el) {
     case 'toggle-sidebar': appState.sidebarCollapsed = !appState.sidebarCollapsed; try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage may be unavailable */ } render(); document.querySelector('[data-action="toggle-sidebar"]')?.focus(); break;
     case 'expand-detail': appState.detailExpanded = !appState.detailExpanded; render(); break;
     case 'detail-tab':
-      if (!['overview', 'activity', 'delivery'].includes(el.dataset.tab)) break;
+      if (!DETAIL_TABS.includes(el.dataset.tab)) break;
       appState.detailTab = el.dataset.tab; render();
       document.querySelector(`#detail-tab-${appState.detailTab}`)?.focus(); break;
     case 'cancel-next': appState.editingNext = null; render(); break;
@@ -840,9 +843,9 @@ function onKey(e) {
   const detailTab = target?.closest('[role="tab"][data-action="detail-tab"]');
   if (detailTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
     e.preventDefault();
-    const tabs = ['overview', 'activity', 'delivery'];
+    const tabs = DETAIL_TABS;
     const index = tabs.indexOf(appState.detailTab);
-    appState.detailTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? 2 : (index + (e.key === 'ArrowRight' ? 1 : 2)) % 3];
+    appState.detailTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
     render(); document.querySelector(`#detail-tab-${appState.detailTab}`)?.focus(); return;
   }
   const dialogOpen = $('#dialog').open;
@@ -897,7 +900,7 @@ function onClick(e) {
     return;
   }
   const open = e.target.closest('[data-open]');
-  if (open) { e.preventDefault(); openDetail(open.dataset.open, open); if (open.dataset.section === 'activity') { appState.detailTab = 'activity'; render(); $('#detail-tab-activity')?.focus(); } return; }
+  if (open) { e.preventDefault(); openDetail(open.dataset.open, open); if (DETAIL_TABS.includes(open.dataset.section)) { appState.detailTab = open.dataset.section; render(); $(`#detail-tab-${open.dataset.section}`)?.focus(); } return; }
   const action = e.target.closest('[data-action]');
   if (action && action.dataset.action !== 'detail-nav') { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
   const tab = e.target.closest('[data-view]');

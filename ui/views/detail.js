@@ -1,5 +1,7 @@
 import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, handoffChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip, openProposals, proposalItem, hasActiveRun, contentViewer } from '../components.js';
-import { renderAgentsSection } from './agents.js';
+import { renderAgentsSection, testGateBadge } from './agents.js';
+import { ticketRuns, openSuggestions } from '../lib/runs.js';
+import { runRow } from './runs.js';
 import { environmentLine } from './deployments.js';
 
 const TRACKER_NAMES = { jira: 'Jira', linear: 'Linear', github: 'GitHub', custom: 'Tracker' };
@@ -53,8 +55,22 @@ function proposalsBlock(t, snapshot, { now, pending }) {
 `;
 }
 
+export const DETAIL_TABS = ['overview', 'runs', 'activity', 'delivery'];
+const TAB_LABELS = { overview: 'Overview', runs: 'Runs', activity: 'Activity', delivery: 'Delivery' };
+
+// The current run, or else the latest, under the title; it opens the run detail.
+function runStrip(t, snapshot, { now, tz }) {
+  const runs = ticketRuns(snapshot, t.id);
+  const current = runs.find((h) => h.state === 'queued' || h.state === 'running') ?? runs[0];
+  const caps = snapshot.capabilities ?? {};
+  if (!current) return caps.handoff && t.status !== 'done' ? `<div class="run-strip" data-empty="true"><span class="muted small">No agent runs yet</span> <button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}">${icon('play')}Run agent</button></div>` : '';
+  const name = current.recipe ? current.recipe.name : current.mode;
+  const open = openSuggestions(current).length;
+  return `<button type="button" class="run-strip" data-action="open-run" data-run="${attr(current.id)}" aria-label="${attr(`Open run: ${name}, ${current.state}`)}">${handoffChip({ ...current, error: null })} <strong>${esc(name)}</strong> ${testGateBadge(current.test_gate)}${open ? ` <span class="chip small">${esc(open)} suggestion${open === 1 ? '' : 's'} to review</span>` : ''} <span class="muted small">${timeEl(current.requested_at, now, tz)}</span></button>`;
+}
+
 export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, loadedTicket = null, editingNext = false, tab = 'overview', expanded = false }) {
-  if (!['overview', 'activity', 'delivery'].includes(tab)) tab = 'overview';
+  if (!DETAIL_TABS.includes(tab)) tab = 'overview';
   const snapshot = normalizeSnapshot(rawSnapshot);
   const ticket = normalizeTicket(rawTicket);
   const caps = snapshot.capabilities ?? {};
@@ -81,7 +97,7 @@ export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], conten
   const nextValue = t.next_action && !(showEditor && editingNext)
     ? `<div class="next-value"><p class="prewrap confirmed-value">${esc(t.next_action)}</p>${readOnly ? '' : `<button type="button" class="btn small ghost" data-action="edit-next" data-ticket="${attr(t.id)}" aria-label="Edit next action">Edit</button>`}</div>`
     : (readOnly && !t.next_action ? '<p class="muted small">None set.</p>' : '');
-  const statusControls = readOnly ? '' : `<div class="status-controls"><label class="label" for="status-select-${attr(t.id)}">Change status</label> <select id="status-select-${attr(t.id)}" data-action="status-select" data-ticket="${attr(t.id)}" data-revision="${attr(t.revision)}">${STATUS_ORDER.map((s) => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${esc(STATUS_LABELS[s])}</option>`).join('')}</select>${caps.handoff && t.status !== 'done' && t.status !== 'blocked' ? ` <button type="button" class="btn small" data-action="handoff" data-ticket="${attr(t.id)}">${icon('play')}Handoff</button>` : ''}</div>`;
+  const statusControls = readOnly ? '' : `<div class="status-controls"><label class="label" for="status-select-${attr(t.id)}">Change status</label> <select id="status-select-${attr(t.id)}" data-action="status-select" data-ticket="${attr(t.id)}" data-revision="${attr(t.revision)}">${STATUS_ORDER.map((s) => `<option value="${s}" ${s === t.status ? 'selected' : ''}>${esc(STATUS_LABELS[s])}</option>`).join('')}</select>${caps.handoff && t.status !== 'done' && t.status !== 'blocked' ? ` <button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}">${icon('play')}Run agent</button>` : ''}</div>`;
 
   return `<article class="detail" data-ticket="${attr(t.id)}" aria-labelledby="detail-title">
 <header class="detail-head">
@@ -90,19 +106,23 @@ export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], conten
   <h2 id="detail-title">${esc(t.title)}</h2>
   ${trackerRemote(t, { now, tz })}
   <div class="detail-chips">${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} ${categoryChip(t.category)} ${priorityMark(t.priority)} <span class="muted small">${esc(t.project_name)}${repoName(snapshot, t.repo_id) ? ` · ${esc(repoName(snapshot, t.repo_id))}` : ''}</span>${repoChip(t, snapshot)}${readOnly ? ' <span class="chip" data-readonly="true">Read-only snapshot</span>' : ''}</div>
+  ${runStrip(t, snapshot, { now, tz })}
   ${t.validation_issues && t.validation_issues.length ? `<p class="issues">${icon('alert')}Validation: ${t.validation_issues.map((i) => `<code>${esc(i)}</code>`).join(' ')}</p>` : ''}
 ${statusControls}
 </header>
 ${mine.length ? `<section class="detail-requests" aria-label="Pending edits">${mine.map((r) => requestFeedback(r, { now })).join('')}</section>` : ''}
 <section class="detail-section"><h3>Next action</h3>${nextValue}${editNext}</section>
 ${checkpoints.length ? `<section class="latest-checkpoint"><h3>Latest checkpoint</h3><p>${checkpoints[0].complete ? esc(checkpoints[0].preview.slice(0, 240)) : 'Capture incomplete — full content unavailable.'}</p><button type="button" class="link small" data-action="detail-tab" data-tab="activity">View checkpoints and activity</button></section>` : ''}
-<div class="detail-tabs" role="tablist" aria-label="Ticket sections">${['overview', 'activity', 'delivery'].map((name) => `<button type="button" role="tab" id="detail-tab-${name}" data-action="detail-tab" data-tab="${name}" aria-selected="${tab === name}" aria-controls="detail-page-${name}" tabindex="${tab === name ? 0 : -1}">${name[0].toUpperCase() + name.slice(1)}</button>`).join('')}</div>
+<div class="detail-tabs" role="tablist" aria-label="Ticket sections">${DETAIL_TABS.map((name) => `<button type="button" role="tab" id="detail-tab-${name}" data-action="detail-tab" data-tab="${name}" aria-selected="${tab === name}" aria-controls="detail-page-${name}" tabindex="${tab === name ? 0 : -1}">${TAB_LABELS[name]}</button>`).join('')}</div>
 <div class="detail-page" id="detail-page-overview" role="tabpanel" aria-labelledby="detail-tab-overview" ${tab !== 'overview' ? 'hidden' : ''}>
 <section class="detail-section"><h3>Description</h3>${descriptionBlock(t)}</section>
 <section class="detail-section"><h3>Status</h3><p>${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} <span class="muted small">source: ${esc(t.status_source)}</span></p>${t.blocker ? `<p class="card-blocker">${icon('alert')}<span class="label">Blocker</span> ${esc(t.blocker)}</p>` : ''}${t.due ? `<p>${icon('clock')}Due ${esc(t.due)}</p>` : ''}</section>
 <section class="detail-section"><h3>Approved plans <span class="count">${esc(t.plans_count)}</span></h3>${t.plans.length ? t.plans.map((p) => `<details class="plan"><summary>${timeEl(p.approved_at, now, tz, { absolute: true })} · ${esc(p.provenance)}</summary><pre class="preview">${esc(p.preview)}</pre>${viewer(p.content_ref, 'Full plan')}</details>`).join('') : '<p class="muted small">No approved plans. Approve the latest checkpoint with <code>/session-quill:approve</code>.</p>'}</section>
 <section class="detail-section"><h3>Follow-ups</h3>${parent ? `<p>Parent: <button type="button" class="link" data-open="${attr(parent.id)}">${keyEl(parent.key)} ${esc(parent.title)}</button></p>` : ''}${children.length ? `<ul class="children">${children.map((c) => `<li><button type="button" class="link" data-open="${attr(c.id)}">${keyEl(c.key)} ${esc(c.title)}</button> ${statusChip(c.status)}</li>`).join('')}</ul><p class="muted small">${esc(t.children_done_count)} of ${esc(children.length)} children done</p>` : '<p class="muted small">No children.</p>'}</section>
-${proposalsBlock(t, snapshot, { now, pending })}${renderAgentsSection(t, snapshot, { now, pending, content, contentStatus })}
+</div>
+<div class="detail-page" id="detail-page-runs" role="tabpanel" aria-labelledby="detail-tab-runs" ${tab !== 'runs' ? 'hidden' : ''}>
+<section class="detail-section"><h3>Runs <span class="count">${esc(ticketRuns(snapshot, t.id).length)}</span></h3>${ticketRuns(snapshot, t.id).length ? `<ul class="run-list">${ticketRuns(snapshot, t.id).map((h) => runRow(snapshot, h, { now, tz })).join('')}</ul>` : '<p class="muted small">No runs yet.</p>'}${caps.handoff && t.status !== 'done' ? `<p><button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}">${icon('play')}Run agent</button></p>` : ''}</section>
+${proposalsBlock(t, snapshot, { now, pending })}${renderAgentsSection(t, snapshot, { busy: hasActiveRun(snapshot, t.id) })}
 </div>
 <div class="detail-page" id="detail-page-activity" role="tabpanel" aria-labelledby="detail-tab-activity" ${tab !== 'activity' ? 'hidden' : ''}>
 <section class="detail-section"><h3>Timeline <span class="count">${esc(total)}</span></h3>${timeline.length ? `<ul class="timeline">${timeline.map((e) => timelineItem(e, { now, tz, generation: snapshot.generation_id, content, contentStatus })).join('')}</ul>${total > timeline.length ? `<button type="button" class="btn small" data-action="load-ticket" data-ticket="${attr(t.id)}" data-generation="${attr(snapshot.generation_id)}">Load all ${esc(total)} entries</button>` : ''}` : '<p class="muted small">No events yet.</p>'}</section>

@@ -10,7 +10,8 @@ import { renderTree } from '../../ui/views/tree.js';
 import { renderSessions } from '../../ui/views/sessions.js';
 import { renderDeployments } from '../../ui/views/deployments.js';
 import { renderToday } from '../../ui/views/today.js';
-import { renderDetail } from '../../ui/views/detail.js';
+import { renderDetail, DETAIL_TABS } from '../../ui/views/detail.js';
+import { renderRunDetail } from '../../ui/views/run-detail.js';
 import { renderHandoffForm } from '../../ui/views/handoff-form.js';
 import { renderHeader } from '../../ui/views/header.js';
 import { renderRecipeRunDialog, effectiveRecipes } from '../../ui/views/agents.js';
@@ -399,30 +400,33 @@ function recipeSnapshot() {
   return { s, t };
 }
 
-test('the Agents panel lists the recipes for the ticket repository with permissions, and each run with its suggestions', () => {
+test('the recipe catalogue lists the recipes for the ticket repository with permissions; the run detail holds its suggestions', () => {
   const { s, t } = recipeSnapshot();
   assert.deepEqual(effectiveRecipes(s, 'demo').map((r) => [r.name, r.source]), [['deploy-check', 'builtin'], ['standup', 'repo'], ['broken', 'personal'], ['attempt-fix', 'builtin']]);
   const html = renderDetail(t, s, { now: NOW, pending: [], content: {} });
-  assert.match(html, /<h3>Agents/);
-  assert.match(html, /data-action="run-recipe" data-ticket="[^"]+" data-recipe="deploy-check"/);
+  assert.match(html, /<h3>Recipes/);
+  assert.match(html, /data-action="run-agent" data-ticket="[^"]+" data-recipe="deploy-check"/);
   assert.match(html, /Team standup/);
   assert.doesNotMatch(html, /Builtin standup|Elsewhere only/);
   assert.match(html, /broken[\s\S]{0,800}commit requires edit_source/);
   assert.doesNotMatch(html, /data-recipe="broken"/);
   assert.match(html, /Reads source · 10 min/);
   assert.match(html, /Notes only · 5 min/);
-  assert.match(html, /Confirm &lt;prod&gt;/);
-  assert.match(html, /data-action="accept-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
-  assert.match(html, /data-action="dismiss-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
-  assert.match(html, /production: deployed \(tag v1\.2\)/);
-  assert.match(html, /data-copy="Deployed to prod"/);
-  assert.match(html, /Add alert[\s\S]{0,120}Accepted/);
-  assert.doesNotMatch(html, /data-suggestion="s4"/);
-  const pending = renderDetail(t, s, { now: NOW, pending: [{ id: 'q', kind: 'accept-suggestion', target_id: t.id, state: 'pending', payload: { handoff_id: 'h2', suggestion_id: 's1' } }], content: {} });
+  const h2 = s.handoffs.find((h) => h.id === 'h2');
+  const run = renderRunDetail(h2, s, { now: NOW, pending: [], content: {} });
+  assert.match(run, /Confirm &lt;prod&gt;/);
+  assert.match(run, /data-action="accept-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
+  assert.match(run, /data-action="dismiss-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
+  assert.match(run, /production: deployed \(tag v1\.2\)/);
+  assert.match(run, /data-copy="Deployed to prod"/);
+  assert.match(run, /Add alert[\s\S]{0,120}Accepted/);
+  assert.doesNotMatch(run, /data-suggestion="s4"/);
+  const pending = renderRunDetail(h2, s, { now: NOW, pending: [{ id: 'q', kind: 'accept-suggestion', target_id: t.id, state: 'pending', payload: { handoff_id: 'h2', suggestion_id: 's1' } }], content: {} });
   assert.doesNotMatch(pending, /data-action="accept-suggestion"[^>]*data-suggestion="s1"/);
   assert.match(pending, /Accepting…/);
-  const ro = renderDetail(t, { ...s, capabilities: { read: true } }, { now: NOW, pending: [], content: {} });
-  for (const action of ['run-recipe', 'accept-suggestion', 'dismiss-suggestion']) assert.equal(ro.includes(`data-action="${action}"`), false, action);
+  const roSnap = { ...s, capabilities: { read: true } };
+  const ro = renderDetail(t, roSnap, { now: NOW, pending: [], content: {} }) + renderRunDetail(h2, roSnap, { now: NOW, pending: [], content: {} });
+  for (const action of ['run-agent', 'accept-suggestion', 'dismiss-suggestion']) assert.equal(ro.includes(`data-action="${action}"`), false, action);
 });
 
 test('the recipe run dialog shows what the run may do and pre-selects only source access', () => {
@@ -612,8 +616,8 @@ test('a run result and a timeline entry render their loaded full text', () => {
   const ref = 'b'.repeat(64);
   const t = { ...s.tickets[4], handoff_ids: ['h1'], timeline: [{ id: 'e1', at: '2026-10-02T09:00:00Z', kind: 'plan', text: 'plan text', event_id: 'x', content_ref: 'd'.repeat(64), coverage: 'complete' }], timeline_total: 1 };
   const content = { [ref]: 'FULL-RESULT-SENTINEL', ['d'.repeat(64)]: 'FULL-TIMELINE-SENTINEL' };
-  const overview = renderDetail(t, s, { now: NOW, pending: [], content, contentStatus: {} });
-  assert.match(overview, /FULL-RESULT-SENTINEL/);
+  const run = renderRunDetail(s.handoffs[0], { ...s, tickets: [t] }, { now: NOW, pending: [], content, contentStatus: {} });
+  assert.match(run, /FULL-RESULT-SENTINEL/);
   const activity = renderDetail(t, s, { now: NOW, pending: [], content, contentStatus: {}, tab: 'activity' });
   assert.match(activity, /FULL-TIMELINE-SENTINEL/);
 });
@@ -635,4 +639,26 @@ test('the sidebar lists Runs with shortcut 7 and a live count; 1 to 6 keep their
   assert.match(side, /data-view="runs"[^>]*aria-selected="true"[^>]*aria-keyshortcuts="7"/);
   assert.match(side, /data-view="runs"[\s\S]*?<span class="badge"[^>]*>1<\/span>/);
   assert.deepEqual(SHORTCUT_VIEWS, { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs' });
+});
+
+test('ticket detail: a run strip under the title and a Runs tab with runs, proposals and recipes', () => {
+  const base = snapshot();
+  const t = { ...base.tickets[0] };
+  const queued = { ...base.handoffs[0], id: 'q1', ticket_id: t.id, state: 'queued', requested_at: '2026-10-02T11:00:00Z' };
+  const done = { ...base.handoffs[0], id: 'd1', ticket_id: t.id, state: 'done', requested_at: '2026-10-02T10:00:00Z', suggestions: [{ id: 's', type: 'next-action', text: 'x', state: 'proposed' }] };
+  const s = { ...base, handoffs: [queued, done], recipes: [{ name: 'analyse', source: 'builtin', mode: 'analyse', description: 'd', permissions: {}, timeout_min: 20, legacy: true, repo_id: null }] };
+  const html = renderDetail(t, s, { now: NOW, pending: [], content: {} });
+  assert.match(html, /class="run-strip" data-action="open-run" data-run="q1"/, 'the live run leads');
+  assert.deepEqual(DETAIL_TABS, ['overview', 'runs', 'activity', 'delivery']);
+  assert.match(html, /id="detail-tab-runs"/);
+  const overview = /id="detail-page-overview"[\s\S]*?id="detail-page-runs"/.exec(html)[0];
+  assert.doesNotMatch(overview, /data-recipe-row|class="detail-section proposals"/, 'Overview no longer lists recipes or proposals');
+  const runsTab = renderDetail(t, s, { now: NOW, pending: [], content: {}, tab: 'runs' });
+  assert.match(runsTab, /data-action="open-run" data-run="d1"/);
+  assert.match(runsTab, /One run per ticket/, 'recipes wait while a run is live');
+  const idle = renderDetail(t, { ...s, handoffs: [done] }, { now: NOW, pending: [], content: {}, tab: 'runs' });
+  assert.match(idle, /data-action="run-agent" data-ticket="[^"]+" data-recipe="analyse"/);
+  const none = renderDetail(t, { ...s, handoffs: [] }, { now: NOW, pending: [], content: {} });
+  assert.match(none, /No agent runs yet/);
+  assert.match(none, /data-action="run-agent" data-ticket="[^"]+">/);
 });

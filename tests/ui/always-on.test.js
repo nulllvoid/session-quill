@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { renderHeader } from '../../ui/views/header.js';
-import { renderAgentsSection } from '../../ui/views/agents.js';
+import { renderRunDetail } from '../../ui/views/run-detail.js';
 import { formatDuration } from '../../ui/components.js';
 import { snapshot, ticket } from './fixtures.js';
 
@@ -36,8 +36,9 @@ test('each run shows how long it queued, set up and ran, and only what was measu
     { id: 'h2', ticket_id: t.id, state: 'done', mode: 'analyse', requested_at: '2026-10-02T12:00:00Z', timings: { queue_wait_ms: 0, agent_ms: 30_000 } },
     { id: 'h3', ticket_id: t.id, state: 'done', mode: 'analyse', requested_at: '2026-10-02T12:00:00Z' },
   ];
-  const html = renderAgentsSection(t, snapshot({ tickets: [t], handoffs }), { now: NOW });
-  assert.match(html, /<p class="run-timings small muted">Queue wait 2.0 s · Setup 850 ms · Agent 1 min 35 s<\/p>/);
-  assert.match(html, /<p class="run-timings small muted">Queue wait 0 ms · Agent 30 s<\/p>/);
-  assert.equal((html.match(/run-timings/g) ?? []).length, 2, 'a run without timings shows none');
+  const snap = snapshot({ tickets: [t], handoffs });
+  const [a, b, c] = handoffs.map((h) => renderRunDetail(h, snap, { now: NOW }));
+  assert.match(a, /<p class="run-timings small muted">Queue wait 2.0 s · Setup 850 ms · Agent 1 min 35 s<\/p>/);
+  assert.match(b, /<p class="run-timings small muted">Queue wait 0 ms · Agent 30 s<\/p>/);
+  assert.equal((c.match(/run-timings/g) ?? []).length, 0, 'a run without timings shows none');
 });
