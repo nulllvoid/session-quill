@@ -88,6 +88,9 @@ export function renderSessionNote(session, { state }) {
   return `---\n${stringifyYaml(fm)}---\n${block('session', body)}## Notes\n\n`;
 }
 
+// Front matter allow-list: today's record fields minus worktree_path. Fields added later stay out until named here.
+export const HANDOFF_NOTE_FIELDS = ['schema_version', 'store_id', 'id', 'revision', 'created_at', 'updated_at', 'ticket_id', 'request_id', 'mode', 'note', 'permissions', 'access', 'base_ticket_revision', 'base_next_action', 'repo_id', 'base_commit', 'branch', 'state', 'requested_at', 'started_at', 'finished_at', 'deadline_at', 'error', 'result_ref', 'result_summary', 'result_confidence', 'result_sources', 'result_quality', 'children_ids', 'changed_files', 'test_results', 'test_gate', 'commit_sha', 'pr_url', 'uncertain_effects', 'retry_of', 'batch_id', 'recipe', 'legacy', 'outputs', 'deadline_ms', 'suggestions', 'timings', 'cancel_requested', 'proposal_id', 'proposal', 'file_effects', 'files', 'log_path', 'patch_path'];
+
 export function renderHandoffNote(handoff, { state }) {
   const ticket = state.tickets.get(handoff.ticket_id);
   const body = [
@@ -104,8 +107,7 @@ export function renderHandoffNote(handoff, { state }) {
     handoff.uncertain_effects && handoff.uncertain_effects.length ? `\n### Uncertain effects\n${handoff.uncertain_effects.map((u) => `- ${safeInline(u)}`).join('\n')}` : '',
     '',
   ].filter((l) => l !== '').join('\n');
-  const fm = { ...handoff };
-  delete fm.worktree_path;
+  const fm = Object.fromEntries(HANDOFF_NOTE_FIELDS.filter((k) => k in handoff).map((k) => [k, handoff[k]]));
   return `---\n${stringifyYaml(fm)}---\n${block('handoff', body)}## Notes\n\n`;
 }
 
