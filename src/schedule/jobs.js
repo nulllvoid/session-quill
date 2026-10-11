@@ -17,6 +17,7 @@ import { createArtifactClient } from '../publish/artifact-client.js';
 import { createTrackerClient, syncSettings, syncable } from '../tracker/client.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { planImport, importProject, storeKeys, importSourceIdentity, IMPORT_LIMIT } from '../onboard/import.js';
+import { resolveRepo, createOriginIndex, NO_CODE_TAG } from '../onboard/resolver.js';
 
 const NO_PERMISSIONS = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 
@@ -70,6 +71,30 @@ export async function importAssigned(worker, client, tracker) {
   return { created, existing: plan.existing };
 }
 
+export const RESOLVE_LIMIT = 25;
+
+// Resolves the repository of open tickets linked to this tracker that have none, least recently
+// checked first. Tickets marked quill/no-code are skipped. A ticket whose hints cannot be read is
+// left for the next run.
+export async function resolveTickets(worker, client, tracker, onboard, { originOf } = {}) {
+  const candidates = [...worker.state.tickets.values()]
+    .filter((t) => syncable(t, tracker) && !t.repo_id && !(t.tags ?? []).includes(NO_CODE_TAG))
+    .sort((a, b) => ((a.repo_resolution?.checked_at ?? '') < (b.repo_resolution?.checked_at ?? '') ? -1 : (a.repo_resolution?.checked_at ?? '') > (b.repo_resolution?.checked_at ?? '') ? 1 : a.key < b.key ? -1 : 1))
+    .slice(0, RESOLVE_LIMIT);
+  if (!candidates.length) return [];
+  const repos = worker.config.repos ?? {};
+  const index = createOriginIndex({ repos, autoCloneDir: onboard.auto_clone_dir, ...(originOf ? { originOf } : {}) });
+  const out = [];
+  for (const t of candidates) {
+    let hints;
+    try { hints = await client.repoHints(t.external.key); } catch (err) { worker.log(`tracker-sync: repository hints for ${t.external.key}: ${err.message}`); continue; }
+    const r = resolveRepo({ ticket: t, hints, settings: onboard, repos, index, tracker });
+    if (r.state === 'no-code') continue;
+    out.push({ ticket_id: t.id, ...r });
+  }
+  return out;
+}
+
 function defaultArtifactClient(publisher, worker) {
   return createArtifactClient({ claudePath: worker.config.claude_path || 'claude', workRoot: path.join(quillHome(worker.env), 'publish', publisher.name, 'runs') });
 }
@@ -108,13 +133,25 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
           else { results.push({ ticket_id: t.id, key: t.external.key, validation: null, remote: null, error: err.message }); errors += 1; }
         }
       }
-      if (results.length) worker.emit('tracker-sync', { system: tracker.system, synced_at: worker.now(), results });
+      // Repository resolution (ADR 0024) for tickets of this tracker without a repository, when the
+      // owner opted into onboarding (import or a repo_map). Deterministic; no agent, no clone.
+      const resolutions = onboard.import_assigned || Object.keys(onboard.repo_map).length ? await resolveTickets(worker, client, tracker, onboard) : [];
+      if (results.length || resolutions.length) worker.emit('tracker-sync', { system: tracker.system, synced_at: worker.now(), results, ...(resolutions.length ? { resolutions } : {}) });
+      let linked = 0;
+      for (const r of resolutions.filter((x) => x.state === 'linked')) {
+        const t = worker.state.tickets.get(r.ticket_id);
+        if (!t || t.repo_id) continue;
+        const { result } = worker.emit('ticket-update', { ticket_id: t.id, fields: { repo_id: r.repo_id }, source: 'resolver', expected_revision: t.revision }, { ticket_id: t.id });
+        if (!result.rejected) linked += 1;
+      }
       worker.markGenerationDirty();
+      const needsClone = resolutions.filter((x) => x.state === 'needs-clone').length;
       const parts = [found ? `${found} found` : null, missing ? `${missing} not found` : null, errors ? `${errors} error${errors === 1 ? '' : 's'}` : null].filter(Boolean);
+      const resolvePart = linked || needsClone ? `; repositories: ${[linked ? `${linked} linked` : null, needsClone ? `${needsClone} need${needsClone === 1 ? 's' : ''} a clone` : null].filter(Boolean).join(', ')}` : '';
       if (importError && !imported && (!results.length || errors === results.length)) throw new Error(`import failed: ${importError}`);
       if (results.length && errors === results.length && !imported) throw new Error(results[0].error);
       const importPart = imported ? `imported ${imported.created.length} assigned issue${imported.created.length === 1 ? '' : 's'}${imported.created.length ? ` (${imported.created.slice(0, 5).map((t) => t.key).join(', ')}${imported.created.length > 5 ? ', …' : ''})` : ''}; ` : importError ? `import failed: ${importError}; ` : '';
-      return { summary: `${importPart}checked ${results.length} tracker key${results.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}` };
+      return { summary: `${importPart}checked ${results.length} tracker key${results.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}${resolvePart}` };
     },
     // Runs publishers (ADR 0010). A destination the owner has not confirmed is never sent anything:
     // the run records needs-confirmation until a publish request carries confirm.

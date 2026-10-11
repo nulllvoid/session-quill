@@ -20,8 +20,24 @@ export function applyTrackerSync(state, ev, result) {
     if (t.jira && t.jira.key === r.key && r.validation) t.jira = { ...t.jira, validation: r.validation, validated_at: ext.validated_at, error: ext.error };
     result.changed.add(t.id);
   }
+  // Repository resolutions (ADR 0024), also beside the ticket and without a revision bump. Linking
+  // itself is a separate ticket-update; this records what the resolver found and when.
+  for (const r of Array.isArray(p.resolutions) ? p.resolutions : []) {
+    const t = r && state.tickets.get(r.ticket_id);
+    if (!t || !RESOLUTION_STATES.includes(r.state)) continue;
+    const next = { state: r.state, repo_id: r.repo_id ?? null, remote: r.remote ?? null, existing_path: r.existing_path ?? null, rule: r.rule ?? null, via: r.via ?? null, checked_at: p.synced_at ?? ev.occurred_at };
+    const prev = t.repo_resolution ?? null;
+    const same = prev && prev.state === next.state && prev.repo_id === next.repo_id && prev.remote === next.remote && prev.existing_path === next.existing_path;
+    t.repo_resolution = next;
+    if (same) continue;
+    if (next.state === 'needs-clone') t.timeline.push(timelineEntry(ev, 'tracker', next.existing_path ? `Repository ${next.remote} has a clone on this computer to register` : `Repository ${next.remote} needs a clone (${next.rule === 'repo_map' ? `repo_map ${next.via}` : 'linked from the issue'})`));
+    else if (next.state === 'linked') t.timeline.push(timelineEntry(ev, 'tracker', `Repository ${next.repo_id} found (${next.rule === 'repo_map' ? `repo_map ${next.via}` : 'linked from the issue'})`));
+    result.changed.add(t.id);
+  }
   return {};
 }
+
+export const RESOLUTION_STATES = ['linked', 'needs-clone', 'none'];
 
 // A confirmed write to the ticket's tracker issue (ADR 0018), or its failure. Only the timeline
 // records it: the ticket's own fields and revision are untouched.
