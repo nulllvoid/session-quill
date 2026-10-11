@@ -161,7 +161,7 @@ export function hasUnlinkedWork(session) {
 }
 
 export function requestFeedback(req, { now }) {
-  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone' }[req.kind] ?? req.kind;
+  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run' }[req.kind] ?? req.kind;
   let body = '';
   if (req.state === 'sending') body = 'Sending to the worker…';
   else if (req.state === 'pending') {
@@ -218,6 +218,7 @@ export function normalizeSnapshot(snapshot) {
     handoffs: (snapshot.handoffs ?? []).map((h) => ({ children_ids: [], changed_files: [], test_results: [], uncertain_effects: [], permissions: {}, ...h })),
     requests: snapshot.requests ?? [],
     schedules: snapshot.schedules ?? [], recipes: snapshot.recipes ?? [], publishers: snapshot.publishers ?? [], today: snapshot.today ?? null,
+    run_proposals: snapshot.run_proposals ?? [],
     picknext: snapshot.picknext ?? [],
     blocked: snapshot.blocked ?? [],
     deployments_outstanding: snapshot.deployments_outstanding ?? [],
@@ -377,4 +378,34 @@ export function accessFieldset() {
   <label><input type="radio" name="access" value="standard"> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
   <label class="danger"><input type="radio" name="access" value="full"> Full access <span class="small">(no permission checks: any command, any file on this computer, network, connectors, and pushing with your credentials)</span></label>
 </fieldset>`;
+}
+
+// Runs proposed from a shared page (ADR 0025), still waiting for the owner, oldest first.
+export function openProposals(snapshot, ticketId = null) {
+  return (snapshot.run_proposals ?? []).filter((p) => p.state === 'proposed' && (!ticketId || p.ticket_id === ticketId)).sort((a, b) => (a.proposed_at < b.proposed_at ? -1 : a.proposed_at > b.proposed_at ? 1 : 0));
+}
+
+const RUNNING = new Set(['queued', 'running']);
+const IN_FLIGHT = new Set(['sending', 'pending', 'applying']);
+
+// One proposed run: recipe, access, who proposed it on which page, and Approve / Dismiss for the
+// owner. The editor is what the page reported, so it is shown as data, never as a name we vouch for.
+export function proposalItem(p, snapshot, { now, pending = [], withTicket = false } = {}) {
+  const caps = snapshot.capabilities ?? {};
+  const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
+  const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
+  const sent = pending.find((r) => (r.kind === 'approve-run' || r.kind === 'dismiss-run') && r.payload && r.payload.proposal_id === p.id && IN_FLIGHT.has(r.state));
+  const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : '<span class="chip small">Standard access</span>';
+  const perms = p.permissions ?? {};
+  const kind = p.read_only ? '<span class="chip small">Read-only</span>' : perms.edit_source ? '<span class="chip warning small">Edits source</span>' : perms.edit_files || perms.delete_files ? '<span class="chip warning small">Changes files</span>' : '';
+  const key = p.ticket_key ?? (t ? t.key : '');
+  const actions = !caps.handoff ? '' : sent
+    ? ` <span class="muted small">${sent.kind === 'approve-run' ? 'Approval sent' : 'Dismissal queued'}</span>`
+    : ` <span class="proposal-actions"><button type="button" class="btn small" data-action="approve-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Approve the ${p.recipe.name} run on ${key}`)}">Approve</button> <button type="button" class="btn small ghost" data-action="dismiss-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Dismiss the ${p.recipe.name} run on ${key}`)}">Dismiss</button></span>`;
+  return `<li class="proposal" data-proposal="${attr(p.id)}">${t ? `<button type="button" class="link" data-open="${attr(t.id)}">${keyEl(t.key)} ${esc(t.title)}</button> ` : ''}<strong>${esc(p.recipe.name)}</strong> ${access}${kind ? ` ${kind}` : ''} <span class="muted small">proposed on the ${esc(p.publisher)} page by ${p.editor ? `<code>${esc(p.editor)}</code>` : 'an unknown editor'} ${timeEl(p.proposed_at, now, tz)}</span>${actions}</li>`;
+}
+
+// Whether the ticket already has a run, which an approval would then report instead of queueing.
+export function hasActiveRun(snapshot, ticketId) {
+  return (snapshot.handoffs ?? []).some((h) => h.ticket_id === ticketId && RUNNING.has(h.state));
 }

@@ -14,6 +14,7 @@ import { createApi, uuidv4 } from './lib/api.js';
 import { createDashboardMotion } from './lib/motion.js';
 import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
 import { renderBulkActionBar, bulkBarShape, renderBulkHandoffForm, renderBulkResults, renderBulkStatusDialog, renderBatchStrips } from './views/bulk.js';
+import { freshProposals, proposalNotice } from './lib/proposals.js';
 import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, mergeUndo, batchDialogUpdate, withoutIds, pruneChecked, activeBatches } from './lib/bulk.js';
 
 const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today'];
@@ -50,6 +51,8 @@ const appState = {
   bulkUndo: [],
   // Request id -> the submit still sending it, so Undo all can cancel it once it lands.
   sending: new Map(),
+  // Ids of open proposed runs already seen (ADR 0025); null until the first poll.
+  proposalsSeen: null,
 };
 
 const BULK_VIEWS = new Set(['board', 'picknext']);
@@ -380,6 +383,14 @@ async function poll() {
 }
 
 function syncRequests(snap) {
+  // A run proposed from a shared page since the last poll (ADR 0025) is announced and receipted.
+  const proposals = freshProposals(appState.proposalsSeen, snap);
+  appState.proposalsSeen = proposals.seen;
+  if (proposals.fresh.length) {
+    const text = proposals.fresh.length === 1 ? proposalNotice(proposals.fresh[0]) : `${proposals.fresh.length} runs proposed from shared pages; approve or dismiss them in Today`;
+    announce(text);
+    setReceipt(text, 'neutral');
+  }
   for (const r of snap.requests ?? []) {
     const local = appState.requests.get(r.id);
     if (local && local.state === 'already-applied') continue;
@@ -535,6 +546,8 @@ function handleAction(el) {
       submit({ kind: el.dataset.action, target_id: el.dataset.ticket, expected_revision: accept ? ticketRevision(el.dataset.ticket) : null, payload: { handoff_id: el.dataset.handoff, suggestion_id: el.dataset.suggestion } }, { announceText: accept ? 'Accepting the suggestion; undo within 10 seconds' : 'Dismissing the suggestion; undo within 10 seconds' });
       break;
     }
+    case 'approve-run': submit({ kind: 'approve-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Approving the proposed run; it is queued as an ordinary run' }); break;
+    case 'dismiss-run': submit({ kind: 'dismiss-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Dismissing the proposed run; undo within 10 seconds' }); break;
     case 'cancel-handoff': {
       const h = s.handoffs.find((x) => x.id === el.dataset.handoff);
       if (h) submit({ kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticketRevision(h.ticket_id), payload: { handoff_id: h.id } }, { announceText: 'Handoff cancellation requested' });

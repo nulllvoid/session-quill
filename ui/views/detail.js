@@ -1,4 +1,4 @@
-import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, handoffChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip } from '../components.js';
+import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, handoffChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip, openProposals, proposalItem, hasActiveRun } from '../components.js';
 import { renderAgentsSection } from './agents.js';
 import { environmentLine } from './deployments.js';
 
@@ -33,7 +33,7 @@ function descriptionBlock(t) {
 }
 
 function timelineItem(e, { now, tz, generation }) {
-  const kindLabel = { bind: 'Bound', write: 'Write', tool: 'Tool', commit: 'Commit', pr: 'PR', plan: 'Plan', conclusion: 'Conclusion', handoff: 'Handoff', comment: 'Comment', status: 'Status', deployment: 'Deployment', 'capture-error': 'Capture error' }[e.kind] ?? e.kind;
+  const kindLabel = { bind: 'Bound', write: 'Write', tool: 'Tool', commit: 'Commit', pr: 'PR', plan: 'Plan', conclusion: 'Conclusion', handoff: 'Handoff', comment: 'Comment', proposal: 'Proposed run', status: 'Status', deployment: 'Deployment', 'capture-error': 'Capture error' }[e.kind] ?? e.kind;
   return `<li class="timeline-item" data-kind="${attr(e.kind)}"><span class="tl-kind">${esc(kindLabel)}</span> ${timeEl(e.at, now, tz)} <span class="tl-text">${esc(e.text)}</span>${e.coverage !== 'complete' ? ` <span class="chip warning small" title="Change coverage">${esc(e.coverage)}</span>` : ''}${e.content_ref ? ` <button type="button" class="link small" data-action="load-content" data-hash="${attr(e.content_ref)}" data-generation="${attr(generation)}">Full text</button>` : ''}</li>`;
 }
 
@@ -43,6 +43,14 @@ function trackerChip(t, readOnly) {
   if (!ext || ext.validation !== 'not-found' || readOnly) return externalChip(t);
   const name = TRACKER_NAMES[ext.system] ?? 'tracker';
   return ` <button type="button" class="chip external" data-validation="not-found" data-action="link-external" data-ticket="${attr(t.id)}" title="${attr(`${ext.key} was not found in ${name}. Link the ticket to the right key.`)}">${icon('alert')}${esc(`${ext.key} not found in ${name}`)} · Relink…</button>`;
+}
+
+// Runs proposed for this ticket from a shared page (ADR 0025), waiting for the owner.
+function proposalsBlock(t, snapshot, { now, pending }) {
+  const list = openProposals(snapshot, t.id);
+  if (!list.length) return '';
+  return `<section class="detail-section proposals"><h3>Proposed runs <span class="count">${esc(list.length)}</span></h3><ul class="proposal-list">${list.map((p) => proposalItem(p, snapshot, { now, pending })).join('')}</ul>${hasActiveRun(snapshot, t.id) ? '<p class="muted small">A run is already queued or running on this ticket; approving now reports that instead of queueing a second one.</p>' : ''}</section>
+`;
 }
 
 export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, loadedTicket = null, editingNext = false }) {
@@ -93,7 +101,7 @@ ${effortText(t.effort) ? `<section class="detail-section"><h3>Effort</h3><p>${es
 <section class="detail-section"><h3>Files touched <span class="count">${esc(t.files_touched_count)}</span></h3>${t.files_touched.length ? `<ul class="files">${t.files_touched.slice(0, 50).map((f) => `<li><code>${esc(f.relative_path)}</code> <span class="muted small">${esc(f.repo_id ?? '')}</span></li>`).join('')}</ul>${t.files_touched.length > 50 ? `<p class="muted small">and ${esc(t.files_touched.length - 50)} more</p>` : ''}` : '<p class="muted small">No verified file changes. Shell and MCP writes are recorded as tool activity with unknown coverage.</p>'}</section>
 <section class="detail-section"><h3>PRs and deployments</h3>${environmentLine(t, { now, tz })}${t.prs.length ? `<ul class="prs">${t.prs.map((p) => `<li><a href="${attr(p.url)}" rel="noopener noreferrer" target="_blank">${esc(p.url)}</a> <span class="chip" data-pr="${attr(p.state)}">${esc(p.state)}</span>${p.merged_at ? ` merged ${timeEl(p.merged_at, now, tz)}` : ''}${p.error ? ` <span class="small critical">${esc(p.error)}</span>` : ''}</li>`).join('')}</ul>` : '<p class="muted small">No PR evidence.</p>'}${t.deployments.length ? `<ul class="deployments-list">${t.deployments.map((d) => `<li><strong>${esc(d.environment)}</strong>: ${esc(d.state)}${d.deployed_at ? ` ${timeEl(d.deployed_at, now, tz)}` : ''}${d.waiver_reason ? ` (waived: ${esc(d.waiver_reason)})` : ''}${d.evidence ? ` <span class="muted small">${esc(d.evidence)}</span>` : ''}</li>`).join('')}</ul>${!readOnly && outstanding.length ? `<button type="button" class="btn small" data-action="record-deployment" data-ticket="${attr(t.id)}">${icon('rocket')}Record deployment…</button>` : ''}` : ''}</section>
 <section class="detail-section"><h3>Follow-ups</h3>${parent ? `<p>Parent: <button type="button" class="link" data-open="${attr(parent.id)}">${keyEl(parent.key)} ${esc(parent.title)}</button></p>` : ''}${children.length ? `<ul class="children">${children.map((c) => `<li><button type="button" class="link" data-open="${attr(c.id)}">${keyEl(c.key)} ${esc(c.title)}</button> ${statusChip(c.status)}</li>`).join('')}</ul><p class="muted small">${esc(t.children_done_count)} of ${esc(children.length)} children done</p>` : '<p class="muted small">No children.</p>'}</section>
-${renderAgentsSection(t, snapshot, { now, pending })}
+${proposalsBlock(t, snapshot, { now, pending })}${renderAgentsSection(t, snapshot, { now, pending })}
 <section class="detail-section"><h3>Sessions <span class="count">${esc(sessions.length)}</span></h3>${sessions.length ? `<ul class="session-list">${sessions.map((s) => `<li>${esc(s.host_session_id)} · ${esc(s.state)} · ${esc(s.machine_name)}</li>`).join('')}</ul>` : '<p class="muted small">No sessions.</p>'}</section>
 <footer class="detail-foot muted small">Revision ${esc(t.revision)} · updated ${timeEl(t.updated_at, now, tz, { absolute: true })} · created ${timeEl(t.created_at, now, tz, { absolute: true })}</footer>
 </article>`;
