@@ -79,7 +79,15 @@ Hypothesise → consult memory, repo docs and connected tools → read prod free
 
 ≈ 25–36 working days. P1 alone already fixes "shallow" and part of "forgets"; P2 fixes "tools refused".
 
-## 5. Decisions needed from the owner
+## 5. Owner decisions (2026-10-12)
+
+- **Read-only credentials:** yes, for most systems — CLI prod reads in `autonomous` go through read-only profiles; systems without one are connector-only or need a scope.
+- **Argo / Kibana:** both — MCP servers (read-only) preferred, CLIs with read-only credentials as the fallback route.
+- **Memory trust:** auto-file self-verified facts; quarantine tool-sourced facts for owner approval.
+- **First delivery:** everything (P0–P6) in one release.
+- Still open (spec proposes defaults): default tier (`autonomous`), budgets (80 turns / 60 min / configurable USD cap).
+
+## 5a. Decisions as originally posed
 
 1. **Read-only credentials.** Can you obtain read-only prod credentials yourself (kube `view` context, AWS ViewOnly profile, SELECT-only DB user, Argo read-only token)? Without them, `autonomous` should not read prod via CLIs (connector reads are still fine).
 2. **Argo / Kibana.** Add Argo CD and Elastic MCP servers to Claude Code now (read-only), or rely on CLIs (`argocd`, `curl` to Kibana) through credentials?
