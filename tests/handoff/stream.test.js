@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createStreamCollector, resultFromStream, readLedger } from '../../src/handoff/stream.js';
+import { createStreamCollector, resultFromStream, readLedger, redactLog, redactCapped } from '../../src/handoff/stream.js';
 import { parseAgentResult, spawnAgent } from '../../src/handoff/runner.js';
 import { handoffRunDir } from '../../src/lib/paths.js';
 import { FAKE_CLAUDE } from './helpers.js';
@@ -119,6 +119,52 @@ test('the ledger has one tool_use and one tool_result with a capped, redacted ex
   assert.equal(failed.exit_code, 1);
   assert.ok(!failed.result_excerpt.includes('ghp_abcdefghijklmnopqrstuvwxyz0123456789'), 'tokens are redacted');
   assert.ok(!failed.result_excerpt.includes('someone'), 'absolute paths are redacted');
+});
+
+test('redactLog hides secrets in their common shapes and keeps numbers', () => {
+  const hidden = [
+    ['GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789', 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'],
+    ['{"token": "abc123secretvalue"}', 'abc123secretvalue'],
+    ['{"api_key":"k-998877"}', 'k-998877'],
+    ["password = 'hunter2'", 'hunter2'],
+    ['clone https://bob:s3cr3tpw@git.example.com/repo.git', 's3cr3tpw'],
+    ['-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAuZ\n-----END RSA PRIVATE KEY-----', 'MIIEowIBAAKCAQEAuZ'],
+    ['-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC (cut off', 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASC'],
+    ['//registry.npmjs.org/:_authToken npm_abcdefghijklmnopqrstuvwxyz0123456789', 'npm_abcdefghijklmnopqrstuvwxyz0123456789'],
+    ['SLACK=xapp-1-A0123-4567-abcdef', 'xapp-1-A0123-4567-abcdef'],
+    ['Authorization: Bearer abcdef.ghijkl.mnop', 'abcdef.ghijkl.mnop'],
+  ];
+  for (const [input, secret] of hidden) {
+    const out = redactLog(input);
+    assert.ok(!out.includes(secret), `${input} -> ${out}`);
+    assert.match(out, /\[secret redacted\]/, input);
+  }
+  for (const kept of ['max_tokens=4096', 'tokens: 1234', '{"input_tokens": 52, "output_tokens": 7}', 'see https://example.com/a/b']) assert.equal(redactLog(kept), kept);
+  assert.equal(redactLog('git.example.com and GH_TOKEN=abc'), 'git.example.com and GH_TOKEN=[secret redacted]');
+});
+
+test('redaction stays linear on long word runs; excerpts are capped before redacting', () => {
+  for (const big of ['a-'.repeat(512 * 1024), `${'x.'.repeat(256 * 1024)}token${'y-'.repeat(256 * 1024)}`, '"'.repeat(1_048_576)]) {
+    const started = performance.now();
+    redactLog(big);
+    const ms = performance.now() - started;
+    assert.ok(ms < 100, `1 MB redacted in ${Math.round(ms)} ms`);
+    const t2 = performance.now();
+    assert.ok(Buffer.byteLength(redactCapped(big, 2048)) <= 2048);
+    assert.ok(performance.now() - t2 < 50);
+  }
+});
+
+test('the log redacts secrets in assistant text and the result line', () => {
+  const said = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'found GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789 in env' }] } });
+  const res = JSON.stringify({ type: 'result', is_error: false, session_id: 's1', result: 'password=hunter2 \n```json\n{"summary":"real"}\n```' });
+  const { logPath, collected } = collect([`${said}\n${res}\n`]);
+  const log = fs.readFileSync(logPath, 'utf8');
+  assert.ok(!log.includes('ghp_abcdefghijklmnopqrstuvwxyz0123456789'));
+  assert.ok(!log.includes('hunter2'));
+  assert.match(log, /\[assistant\] found GH_TOKEN=\[secret redacted\]/);
+  // The parsed result itself is not altered by log redaction.
+  assert.match(resultFromStream(collected).text, /hunter2/);
 });
 
 test('permission denials reach the ledger once, from the event or the result', () => {
