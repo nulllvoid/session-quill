@@ -13,8 +13,12 @@ import { normalizePublishers, consentId, KIND_LABELS } from '../publish/config.j
 import { rowsFor } from '../publish/content.js';
 import { publishMarkdown, publishHtml } from '../publish/writers.js';
 import { publishArtifact, editRequestId } from '../publish/artifact.js';
+import { proposalFromEdit, runChoices } from '../publish/run-proposals.js';
 import { createArtifactClient } from '../publish/artifact-client.js';
 import { createTrackerClient, syncSettings, syncable } from '../tracker/client.js';
+import { onboardSettings } from '../onboard/settings.js';
+import { planImport, importProject, importSourceIdentity, IMPORT_LIMIT } from '../onboard/import.js';
+import { resolveRepo, createOriginIndex, NO_CODE_TAG } from '../onboard/resolver.js';
 
 const NO_PERMISSIONS = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 
@@ -37,20 +41,80 @@ function previousDate(date) {
   return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
 }
 
+// A Run agent pick (ADR 0025) becomes a proposal and nothing more: only the owner approves it, on
+// the dashboard or with `quill approve --run`.
+export function proposeRun(worker, publisher, e) {
+  const ticket = worker.state.tickets.get(e.ticket_id);
+  if (!ticket) { worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} names an unknown ticket`); return; }
+  const out = proposalFromEdit(publisher, e, { recipes: catalogFor(worker), ticket, repoRegistered: !!repoFor(worker.state, ticket.repo_id) });
+  if (out.skip) return;
+  if (out.error) { worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} refused: ${out.error}`); return; }
+  const { result } = worker.emit('run-proposal', out.proposal, { source_identity: `run-proposal:${out.proposal.id}`, ticket_id: ticket.id });
+  if (result.rejected) worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} not recorded: ${result.rejected}`);
+}
+
 // Two-way artifacts (ADR 0011): page edits become revision-checked requests with the normal undo
 // window; comments join their ticket's timeline. Invalid edits (an unknown status) are skipped.
 export function applyFeedback(worker, publisher, done) {
   for (const e of done.edits ?? []) {
+    if (e.field === 'run') { proposeRun(worker, publisher, e); continue; }
     const body = e.field === 'status' ? { kind: 'set-status', payload: { status: e.value } } : { kind: 'set-next-action', payload: { next_action: String(e.value ?? '') } };
     try {
-      submitRequest(worker, { id: editRequestId(publisher, e), target_id: e.ticket_id, expected_revision: e.expected_revision, ...body }, { actor: `artifact:${publisher}` });
+      submitRequest(worker, { id: editRequestId(publisher.name, e), target_id: e.ticket_id, expected_revision: e.expected_revision, ...body }, { actor: `artifact:${publisher.name}` });
     } catch (err) {
-      worker.log(`publish ${publisher}: page edit of ${e.key} ${e.field} refused: ${err.message}`);
+      worker.log(`publish ${publisher.name}: page edit of ${e.key} ${e.field} refused: ${err.message}`);
     }
   }
   for (const c of done.comments ?? []) {
-    worker.emit('artifact-comment', { publisher, ...c }, { source_identity: `artifact-comment:${publisher}:${c.comment_id}` });
+    worker.emit('artifact-comment', { publisher: publisher.name, ...c }, { source_identity: `artifact-comment:${publisher.name}:${c.comment_id}` });
   }
+}
+
+// Creates a ticket for each open issue assigned to the owner that the store does not have yet.
+export async function importAssigned(worker, client, tracker) {
+  const project = importProject(worker.config);
+  if (!project) throw new Error('no project is configured for imported tickets');
+  const issues = await client.searchAssigned({ limit: IMPORT_LIMIT });
+  const plan = planImport(issues, { tracker, tickets: [...worker.state.tickets.values()], storeId: worker.state.meta.store_id, projectId: project.id, projectName: project.name, category: worker.config.default_category || 'research', now: worker.now() });
+  const created = [];
+  for (const ticket of plan.create) {
+    const { result } = worker.emit('ticket-create', { ticket }, { source_identity: importSourceIdentity(ticket.key), ticket_id: ticket.id });
+    if (result.rejected) worker.log(`tracker-sync: import of ${ticket.key} rejected: ${result.rejected}`);
+    else if (!result.duplicate) created.push(ticket);
+  }
+  for (const c of plan.collisions) worker.log(`tracker-sync: ${c.key} is not imported; ticket ${c.ticket_key} already uses that key for another issue`);
+  return { created, existing: plan.existing, collisions: plan.collisions };
+}
+
+export const RESOLVE_LIMIT = 25;
+
+// Resolves the repository of open tickets linked to this tracker that have none, least recently
+// checked first. Tickets marked quill/no-code are skipped, and so are tickets whose last hint read
+// was refused (not found or forbidden) until their back-off ends.
+export async function resolveTickets(worker, client, tracker, onboard, { originOf } = {}) {
+  const now = worker.now();
+  const candidates = [...worker.state.tickets.values()]
+    .filter((t) => syncable(t, tracker) && !t.repo_id && !(t.tags ?? []).includes(NO_CODE_TAG) && !(t.repo_resolution && t.repo_resolution.retry_after && t.repo_resolution.retry_after > now))
+    .sort((a, b) => ((a.repo_resolution?.checked_at ?? '') < (b.repo_resolution?.checked_at ?? '') ? -1 : (a.repo_resolution?.checked_at ?? '') > (b.repo_resolution?.checked_at ?? '') ? 1 : a.key < b.key ? -1 : 1))
+    .slice(0, RESOLVE_LIMIT);
+  if (!candidates.length) return [];
+  const repos = worker.config.repos ?? {};
+  const index = await createOriginIndex({ repos, autoCloneDir: onboard.auto_clone_dir, ...(originOf ? { originOf } : {}) });
+  const out = [];
+  for (const t of candidates) {
+    let hints;
+    try { hints = await client.repoHints(t.external.key); } catch (err) {
+      // Recorded, so the ticket goes to the back of the queue (and waits after not found or forbidden).
+      worker.log(`tracker-sync: repository hints for ${t.external.key}: ${err.message}`);
+      const kind = err.code === 'not-found' ? 'not-found' : /HTTP 40[13]/.test(err.message) ? 'forbidden' : 'error';
+      out.push({ ticket_id: t.id, failed: true, error: err.message, error_kind: kind });
+      continue;
+    }
+    const r = resolveRepo({ ticket: t, hints, settings: onboard, repos, index, tracker });
+    if (r.state === 'no-code') continue;
+    out.push({ ticket_id: t.id, ...r });
+  }
+  return out;
 }
 
 function defaultArtifactClient(publisher, worker) {
@@ -66,7 +130,15 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
       const tracker = worker.identity && worker.identity.tracker;
       if (!tracker) throw new Error('tracker-sync needs a [tracker] table with system and domain in config.toml');
       const client = createTrackerClient({ tracker, settings: syncSettings(worker.config.tracker), env: worker.env, fetchImpl: trackerFetch });
-      const tickets = [...worker.state.tickets.values()].filter((t) => syncable(t, tracker))
+      const onboard = onboardSettings(worker.config.tracker);
+      // Assigned-issue import (ADR 0024) comes first, so new tickets are resolved in the same run.
+      let imported = null;
+      let importError = null;
+      if (onboard.import_assigned) {
+        try { imported = await importAssigned(worker, client, tracker); } catch (err) { importError = err.message; worker.log(`tracker-sync: import failed: ${err.message}`); }
+      }
+      const fresh = new Set(imported ? imported.created.map((t) => t.id) : []);
+      const tickets = [...worker.state.tickets.values()].filter((t) => syncable(t, tracker) && !fresh.has(t.id))
         .sort((a, b) => ((a.external.validated_at ?? '') < (b.external.validated_at ?? '') ? -1 : (a.external.validated_at ?? '') > (b.external.validated_at ?? '') ? 1 : a.key < b.key ? -1 : 1))
         .slice(0, settings.limit ?? 100);
       const results = [];
@@ -83,11 +155,25 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
           else { results.push({ ticket_id: t.id, key: t.external.key, validation: null, remote: null, error: err.message }); errors += 1; }
         }
       }
-      if (results.length) worker.emit('tracker-sync', { system: tracker.system, synced_at: worker.now(), results });
+      // Repository resolution (ADR 0024) for tickets of this tracker without a repository, when the
+      // owner opted into onboarding (import or a repo_map). Deterministic; no agent, no clone.
+      const resolutions = onboard.import_assigned || Object.keys(onboard.repo_map).length ? await resolveTickets(worker, client, tracker, onboard) : [];
+      if (results.length || resolutions.length) worker.emit('tracker-sync', { system: tracker.system, synced_at: worker.now(), results, ...(resolutions.length ? { resolutions } : {}) });
+      let linked = 0;
+      for (const r of resolutions.filter((x) => x.state === 'linked')) {
+        const t = worker.state.tickets.get(r.ticket_id);
+        if (!t || t.repo_id) continue;
+        const { result } = worker.emit('ticket-update', { ticket_id: t.id, fields: { repo_id: r.repo_id }, source: 'resolver', expected_revision: t.revision }, { ticket_id: t.id });
+        if (!result.rejected) linked += 1;
+      }
       worker.markGenerationDirty();
+      const needsClone = resolutions.filter((x) => x.state === 'needs-clone').length;
       const parts = [found ? `${found} found` : null, missing ? `${missing} not found` : null, errors ? `${errors} error${errors === 1 ? '' : 's'}` : null].filter(Boolean);
-      if (results.length && errors === results.length) throw new Error(results[0].error);
-      return { summary: `checked ${results.length} tracker key${results.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}` };
+      const resolvePart = linked || needsClone ? `; repositories: ${[linked ? `${linked} linked` : null, needsClone ? `${needsClone} need${needsClone === 1 ? 's' : ''} a clone` : null].filter(Boolean).join(', ')}` : '';
+      if (importError && !imported && (!results.length || errors === results.length)) throw new Error(`import failed: ${importError}`);
+      if (results.length && errors === results.length && !imported) throw new Error(results[0].error);
+      const importPart = imported ? `imported ${imported.created.length} assigned issue${imported.created.length === 1 ? '' : 's'}${imported.created.length ? ` (${imported.created.slice(0, 5).map((t) => t.key).join(', ')}${imported.created.length > 5 ? ', …' : ''})` : ''}${imported.collisions.length ? `, ${imported.collisions.length} key collision${imported.collisions.length === 1 ? '' : 's'} (${imported.collisions.slice(0, 3).map((c) => c.key).join(', ')})` : ''}; ` : importError ? `import failed: ${importError}; ` : '';
+      return { summary: `${importPart}checked ${results.length} tracker key${results.length === 1 ? '' : 's'}${parts.length ? `: ${parts.join(', ')}` : ''}${resolvePart}` };
     },
     // Runs publishers (ADR 0010). A destination the owner has not confirmed is never sent anything:
     // the run records needs-confirmation until a publish request carries confirm.
@@ -125,7 +211,7 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
             const sidecar = path.join(quillHome(worker.env), 'publish', p.name, 'state.json');
             const prior = readJsonIfExists(sidecar);
             try {
-              out = await publishArtifact(p, rowsFor(snapshot, p, { exportedAt: now }), { client: artifactClientFor(p, worker), prior: prior && (!p.url || prior.url === p.url) ? prior : null, now });
+              out = await publishArtifact(p, rowsFor(snapshot, p, { exportedAt: now }), { client: artifactClientFor(p, worker), prior: prior && (!p.url || prior.url === p.url) ? prior : null, now, runRecipes: runChoices(catalogFor(worker), p) });
             } catch (err) {
               // A page that was created before the failure is kept, so the next publish updates it.
               if (err.url && !(prior && prior.url === err.url)) writeJsonAtomic(sidecar, { url: err.url, page_hash: null, rows: {}, seen_comments: [] });
@@ -133,7 +219,7 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
             }
             // Edits and comments are journaled before the state that acknowledges them is saved; their
             // ids are derived from the edits, so a retry after a crash in between makes no duplicates.
-            applyFeedback(worker, p.name, out);
+            applyFeedback(worker, p, out);
             writeJsonAtomic(sidecar, out.state);
           }
           worker.emit('publish-run', { ...base, outcome: 'ok', summary: out.summary, url: out.url ?? null }, { source_identity: `publish-run:${run_id}:${p.name}` });

@@ -68,3 +68,15 @@ test('top-level array tables parse in order and round-trip through stringifyToml
   assert.throws(() => parseToml('[[a.b]]\n'), /top-level/);
   assert.throws(() => parseToml('[[schedule]\n'), /malformed/);
 });
+
+test('quoted keys hold names a bare key cannot, such as owner/repo, and round-trip', () => {
+  const cfg = parseToml('[tracker.repo_map]\nPROJ = "backend"\n"PROJ/Payments" = "payments"\n"acme/app" = "git@github.com:acme/app.git" # mapped\n');
+  assert.deepEqual(cfg.tracker.repo_map, { PROJ: 'backend', 'PROJ/Payments': 'payments', 'acme/app': 'git@github.com:acme/app.git' });
+  const text = stringifyToml(cfg);
+  assert.match(text, /^"acme\/app" = "git@github.com:acme\/app.git"$/m);
+  assert.match(text, /^PROJ = "backend"$/m);
+  assert.deepEqual(parseToml(text), cfg);
+  assert.throws(() => parseToml('"unterminated = 1'), (e) => e.code === 'toml-unsupported');
+  assert.throws(() => parseToml('"" = "x"'), (e) => e.code === 'toml-unsupported');
+  assert.throws(() => parseToml('"a\\"b" = "x"'), (e) => e.code === 'toml-unsupported');
+});

@@ -15,6 +15,7 @@ import { TrackerError } from '../lib/errors.js';
 import { storeLayout } from '../config/store.js';
 import { loadUserConfig } from '../config/config.js';
 import { buildRuntimeIdentity, identityStamp } from '../config/runtime.js';
+import { onboardSettings } from '../onboard/settings.js';
 import { keyExample } from '../core/external-keys.js';
 import { acquireLock } from './lock.js';
 import { writeBindingSnapshot, readBindingSnapshot, writeHeartbeat, writeRuntimeIdentity, snapshotFileName } from '../hooks/binding-snapshot.js';
@@ -93,7 +94,7 @@ export class Worker {
       approval_phrases_enabled: this.config.approval_phrases_enabled,
       projects: this.config.projects,
       repos: this.config.repos,
-      tracker_version: this.config.tracker_version ?? '0.7.2',
+      tracker_version: this.config.tracker_version ?? '1.0.0',
     });
     for (const ev of this.journal.read()) this.safeApply(ev, { replay: true });
     this.notesIndex = readJsonIfExists(path.join(stateDir(this.env), 'notes-index.json')) ?? {};
@@ -193,9 +194,18 @@ export class Worker {
     this.publishIdentity();
   }
 
-  // Small control markers written by the CLI: flush now, restore a conflicted note, stop.
+  // Re-reads config.toml now rather than at the next identity check, so a repository registered a
+  // moment ago (a clone, ADR 0024) can be linked to a ticket straight away.
+  reloadConfig() {
+    this.lastIdentityCheckMs = -Infinity;
+    this.identityStampValue = null;
+    this.refreshIdentity();
+  }
+
+  // Small control markers written by the CLI: reload config, flush now, restore a conflicted note, stop.
   processControl() {
     const dir = path.join(stateDir(this.env), 'control');
+    if (removeIfExists(path.join(dir, 'reload-config.json'))) this.reloadConfig();
     if (removeIfExists(path.join(dir, 'flush.json'))) this.flushRequested = true;
     for (const name of listFiles(path.join(dir, 'restore'), (f) => f.endsWith('.json'))) {
       const ticketId = name.replace(/\.json$/, '');
@@ -250,6 +260,13 @@ export class Worker {
         this.ack({ ...ev, sequence: null }, { duplicate: true });
         removeIngress(entry.name, this.env);
         continue;
+      }
+      // A link to a repository registered moments ago (a clone, ADR 0024) must not race the config
+      // reload: an unknown repository id makes the worker re-read config.toml before applying.
+      const linkTo = ev.kind === 'ticket-update' && ev.payload && ev.payload.fields ? ev.payload.fields.repo_id : null;
+      if (typeof linkTo === 'string' && !Object.hasOwn(this.state.meta.repos ?? {}, linkTo)) {
+        removeIfExists(path.join(stateDir(this.env), 'control', 'reload-config.json'));
+        this.reloadConfig();
       }
       const record = this.journal.append(ev);
       this.applyRecord(record);
@@ -432,6 +449,7 @@ export class Worker {
       environmentsFor: (repoId) => this.environmentsFor(repoId),
       publishers: this.publishInfo ? this.publishInfo() : [],
       handoff_limits: this.handoffLimits ? this.handoffLimits() : null,
+      onboarding: (({ clone_hosts, auto_clone_dir, import_assigned }) => ({ clone_hosts, auto_clone_dir, import_assigned }))(onboardSettings(this.config.tracker)),
     };
   }
 

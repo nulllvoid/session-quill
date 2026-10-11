@@ -7,6 +7,8 @@ import { Worker } from '../../src/worker/worker.js';
 import { createExtension as schedulerExt } from '../../src/reconcile/extension.js';
 import { saveUserConfig } from '../../src/config/config.js';
 import { makeHome, cli } from './helpers.js';
+import { applyDueRequests } from '../../src/server/requests.js';
+import { repoFor } from '../../src/core/state.js';
 
 const FAKE = path.resolve('tests/fixtures/fake-artifact-claude.js');
 const T1 = 'eeeeeeee-0000-4000-8000-000000000001';
@@ -64,5 +66,59 @@ test('an artifact publisher runs through a Claude Code session: --plan writes th
 
 async function waitFor(fn) {
   for (let i = 0; i < 100; i += 1) { const v = fn(); if (v && v.last_outcome === 'ok') return v; await new Promise((r) => setTimeout(r, 50)); }
+  return fn();
+}
+
+test('through a session publish, a Run agent pick comes back as one proposal that waits for the owner, and a refused pick is reported', async () => {
+  const fx = makeHome();
+  const store = path.join(fx.home, 'remote.json');
+  fx.config.publish = [{ name: 'team', kind: 'artifact', two_way: true, run_agent: true, fields: ['key', 'title', 'status'] }];
+  saveUserConfig(fx.config, fx.env);
+  const w = new Worker({ config: fx.config, storeMeta: fx.meta, env: fx.env });
+  const ext = schedulerExt({ env: fx.env, config: fx.config }, { providers: { for: () => ({ name: 'github', fetchPr: async () => { throw new Error('offline'); } }) } });
+  w.use(ext);
+  await w.start();
+  w.emit('ticket-create', { ticket: { id: T1, key: 'PROJ-1', title: 'Retry flake', project_id: 'demo', project_name: 'Demo', category: 'feature', priority: 'P2', parent_id: null, repo_id: 'demo', due: null, jira: null } });
+  w.publishGeneration();
+  const timer = setInterval(() => { try { w.tick(); applyDueRequests(w, w.now()); } catch (err) { console.error(err); } }, 20);
+  const publishOnce = async () => {
+    let out = await cli(['publish', 'team', '--plan', '--confirm'], fx.env);
+    assert.equal(out.code, 0, out.err);
+    let text = '';
+    for (;;) {
+      const dir = /Run directory: (.+)/.exec(out.out)[1].trim();
+      out = await cli(['publish', 'team', '--result', executeAsSession(dir, store)], fx.env);
+      assert.equal(out.code, 0, out.err);
+      text += out.out;
+      if (!/Next plan/.test(out.out)) return text;
+    }
+  };
+  const pick = (run, by, at) => {
+    const remote = JSON.parse(fs.readFileSync(store, 'utf8'));
+    const doc = remote.docs['tickets/PROJ-1'];
+    doc.data = { ...doc.data, run, _edits: { run: { by, at } } };
+    doc.version += 1;
+    fs.writeFileSync(store, JSON.stringify(remote));
+  };
+  try {
+    await publishOnce();
+    assert.match(JSON.parse(fs.readFileSync(store, 'utf8')).page, /RUN_RECIPES = \["analyse"/);
+    pick('file-task', 'u_editor', '2026-10-11T08:59:00Z');
+    assert.match(await publishOnce(), /Run agent pick on PROJ-1 refused: file-task is not offered on the team page/);
+    pick('analyse', 'u_editor', '2026-10-11T09:00:00Z');
+    assert.match(await publishOnce(), /analyse on PROJ-1 proposed from the page/);
+    await publishOnce();
+    const proposals = await until(() => (w.state.runProposals.size ? [...w.state.runProposals.values()] : null));
+    assert.equal(proposals.length, 1);
+    assert.equal(proposals[0].state, 'proposed');
+    assert.equal(proposals[0].editor, 'u_editor');
+    assert.equal(proposals[0].permissions.read_source, !!repoFor(w.state, 'demo'), 'repository registration as the worker sees it');
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(w.state.handoffs.size, 0, 'nothing runs without the owner');
+  } finally { clearInterval(timer); await w.stop(); }
+});
+
+async function until(fn) {
+  for (let i = 0; i < 100; i += 1) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 50)); }
   return fn();
 }

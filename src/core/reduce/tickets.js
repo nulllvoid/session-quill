@@ -10,6 +10,10 @@ import { applyStatusChange, deriveStatusFromEvidence, recordDeployment } from '.
 import { timelineEntry, touch } from './common.js';
 import { bindSession } from './sessions.js';
 
+// Reserved quill/ tags the owner may set and clear through ticket-update (ADR 0024).
+export const NO_CODE_TAG = 'quill/no-code';
+const OWNER_TAGS = new Set([NO_CODE_TAG]);
+
 export function applyTicketFields(state, ticket, fields, ev, source, result) {
   // Validate before mutating so a rejected update leaves the ticket untouched.
   if (fields.repo_id !== undefined && fields.repo_id !== null && !state.meta.repos[fields.repo_id]) throw new TrackerError('repo-unknown', `repository ${fields.repo_id} is not registered`);
@@ -37,8 +41,16 @@ export function applyTicketFields(state, ticket, fields, ev, source, result) {
   if (fields.summary !== undefined) ticket.summary = String(fields.summary);
   if (fields.user_notes !== undefined) ticket.user_notes = String(fields.user_notes);
   if (fields.tags !== undefined && Array.isArray(fields.tags)) {
-    const explicit = fields.tags.filter((t) => typeof t === 'string' && !t.startsWith('quill/'));
-    ticket.tags = [...ticket.tags.filter((t) => t.startsWith('quill/')), ...explicit];
+    // Reserved tags stay; quill/no-code can be added here but only `no_code: false` clears it, so
+    // a tag list that merely omits it (an older client, a page edit) never drops it.
+    const explicit = fields.tags.filter((t) => typeof t === 'string' && (!t.startsWith('quill/') || OWNER_TAGS.has(t)));
+    const kept = ticket.tags.filter((t) => t.startsWith('quill/'));
+    ticket.tags = [...new Set([...kept, ...explicit])];
+  }
+  // quill/no-code (ADR 0024): the owner says this ticket has no repository, so the resolver skips it.
+  if (typeof fields.no_code === 'boolean' && fields.no_code !== ticket.tags.includes(NO_CODE_TAG)) {
+    ticket.tags = fields.no_code ? [...ticket.tags, NO_CODE_TAG] : ticket.tags.filter((t) => t !== NO_CODE_TAG);
+    ticket.timeline.push(timelineEntry(ev, 'status', fields.no_code ? 'Marked as needing no code' : 'No longer marked as needing no code'));
   }
   if (fields.validation_issues !== undefined) ticket.validation_issues = fields.validation_issues;
   if (Array.isArray(fields.deployments)) {

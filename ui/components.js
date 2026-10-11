@@ -124,8 +124,16 @@ export function requestChip(state) {
   return `<span class="chip request" data-state="${attr(state)}">${esc(REQUEST_LABELS[state] ?? state)}</span>`;
 }
 
-export function keyEl(key) {
-  return `<code class="key" data-copy="${attr(key)}" title="Click to copy">${esc(key)}</code>`;
+export function keyEl(key, { short = false } = {}) {
+  return `<code class="key" data-copy="${attr(key)}" title="${attr(key)} · Click to copy">${esc(short ? shortKey(key) : key)}</code>`;
+}
+
+// Long local keys keep their prefix and unique suffix; the full key stays in titles and copies.
+export function shortKey(key, max = 22) {
+  const k = String(key ?? '');
+  if (k.length <= max) return k;
+  const tail = Math.floor((max - 1) / 2);
+  return `${k.slice(0, max - 1 - tail)}…${k.slice(-tail)}`;
 }
 
 export const SYSTEM_LABELS = { jira: 'Jira', linear: 'Linear', github: 'GitHub', custom: 'Tracker' };
@@ -139,11 +147,11 @@ export function externalLink(ticket) {
 }
 
 // A key that names an external ticket opens it in a new tab; the copy button copies the key.
-export function ticketKey(ticket) {
+export function ticketKey(ticket, { short = false } = {}) {
   const link = externalLink(ticket);
-  if (!link || !link.url || link.key !== ticket.key) return keyEl(ticket.key);
+  if (!link || !link.url || link.key !== ticket.key) return keyEl(ticket.key, { short });
   const where = SYSTEM_LABELS[link.system] ?? 'tracker';
-  return `<span class="key-group"><a class="key key-link" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer" title="${attr(`Open ${ticket.key} in ${where} (new tab)`)}">${esc(ticket.key)}</a><button type="button" class="copy-key" data-copy="${attr(ticket.key)}" aria-label="${attr(`Copy ${ticket.key}`)}" title="Copy key">${icon('copy')}</button></span>`;
+  return `<span class="key-group"><a class="key key-link" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer" title="${attr(`Open ${ticket.key} in ${where} (new tab)`)}">${esc(short ? shortKey(ticket.key) : ticket.key)}</a><button type="button" class="copy-key" data-copy="${attr(ticket.key)}" aria-label="${attr(`Copy ${ticket.key}`)}" title="Copy key">${icon('copy')}</button></span>`;
 }
 
 export function externalChip(ticket) {
@@ -161,7 +169,7 @@ export function hasUnlinkedWork(session) {
 }
 
 export function requestFeedback(req, { now }) {
-  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo' }[req.kind] ?? req.kind;
+  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run' }[req.kind] ?? req.kind;
   let body = '';
   if (req.state === 'sending') body = 'Sending to the worker…';
   else if (req.state === 'pending') {
@@ -176,7 +184,7 @@ export function requestFeedback(req, { now }) {
   } else if (req.state === 'failed') body = `<strong>Failed:</strong> ${esc(req.error ? req.error.message : 'unknown error')}${req.error && req.error.retryable ? ` <button type="button" class="btn small" data-action="retry-request" data-request="${attr(req.id)}">Retry</button>` : ''} <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Dismiss</button>`;
   else if (req.state === 'cancelled') body = 'Cancelled.';
   else if (req.state === 'already-applied') body = 'Cancellation lost the race: the edit was already applied. <button type="button" class="btn small" data-action="reverse-request" data-request="${attr(req.id)}">Revert with a new revision-checked edit</button>';
-  const proposedValue = req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? null);
+  const proposedValue = req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? req.payload.url ?? null);
   return `<div class="request-feedback" data-state="${attr(req.state)}" role="group" aria-label="${attr(`Pending ${label} change`)}">${requestChip(req.state)} <span class="label">${esc(label)}</span>${proposedValue ? ` → <span class="proposed">${esc(proposedValue)}</span>` : ''} <span class="feedback-body">${body}</span></div>`;
 }
 
@@ -218,6 +226,7 @@ export function normalizeSnapshot(snapshot) {
     handoffs: (snapshot.handoffs ?? []).map((h) => ({ children_ids: [], changed_files: [], test_results: [], uncertain_effects: [], permissions: {}, ...h })),
     requests: snapshot.requests ?? [],
     schedules: snapshot.schedules ?? [], recipes: snapshot.recipes ?? [], publishers: snapshot.publishers ?? [], today: snapshot.today ?? null,
+    run_proposals: snapshot.run_proposals ?? [],
     picknext: snapshot.picknext ?? [],
     blocked: snapshot.blocked ?? [],
     deployments_outstanding: snapshot.deployments_outstanding ?? [],
@@ -232,7 +241,7 @@ export function normalizeSnapshot(snapshot) {
 export function matchesFilters(ticket, filters, snapshot) {
   if (filters.project && ticket.project_id !== filters.project) return false;
   if (filters.category && ticket.category !== filters.category) return false;
-  if (filters.repo && ticket.repo_id !== filters.repo) return false;
+  if (filters.repo === NEEDS_CLONE_FILTER) { if (ticket.repo_state !== 'needs-clone') return false; } else if (filters.repo && ticket.repo_id !== filters.repo) return false;
   if (filters.tag && !ticket.tags.includes(filters.tag)) return false;
   if (filters.stale && !ticket.stale) return false;
   if (filters.q) {
@@ -307,9 +316,25 @@ export function viewCounts(snapshot, filters = {}) {
     tree: tickets.filter((t) => !t.parent_id).length,
     sessions: filterSessions(snapshot, filters).filter((s) => s.state === 'live' || s.state === 'idle').length,
     deployments: snapshot.deployments_outstanding.filter((o) => ids.has(o.ticket_id)).length,
+    runs: (snapshot.handoffs ?? []).filter((h) => (h.state === 'queued' || h.state === 'running') && ids.has(h.ticket_id)).length,
     today: today ? today.tickets.filter((t) => ids.has(t.ticket_id) || !ticketById(snapshot, t.ticket_id)).length : 0,
   };
 }
+
+// The repository chip (ADR 0024): Needs clone (with Clone… when the owner can act), Cloning while
+// the worker clones, or No code. Tickets with a repository show its name instead.
+export function repoChip(ticket, snapshot) {
+  const state = ticket.repo_state;
+  if (state === 'needs-clone') {
+    const canClone = !!(snapshot.capabilities && snapshot.capabilities.edit_tickets);
+    return `<span class="meta-item repo-state"><span class="chip warning small" data-repo-state="needs-clone">${icon('branch')}Needs clone</span>${canClone ? `<button type="button" class="btn small" data-action="clone-repo" data-ticket="${attr(ticket.id)}" aria-label="${attr(`Clone the repository for ${ticket.key}`)}">Clone…</button>` : ''}</span>`;
+  }
+  if (state === 'cloning') return `<span class="meta-item repo-state"><span class="chip small" data-repo-state="cloning"><span class="dot pulse" aria-hidden="true"></span>Cloning</span></span>`;
+  if (state === 'no-code') return '<span class="meta-item repo-state"><span class="chip small" data-repo-state="no-code">No code</span></span>';
+  return '';
+}
+
+export const NEEDS_CLONE_FILTER = ':needs-clone';
 
 export function ticketCard(ticket, snapshot, { variant = 'board', now, selected = false, showHandoff = false, entry = null } = {}) {
   const canHandoff = showHandoff && snapshot.capabilities && snapshot.capabilities.handoff && ['todo', 'active', 'review', 'deploy-pending'].includes(ticket.status);
@@ -318,13 +343,15 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   if (ticket.due) meta.push(`<span class="meta-item">${icon('clock')}Due ${esc(ticket.due)}</span>`);
   const repo = repoName(snapshot, ticket.repo_id);
   if (repo) meta.push(`<span class="meta-item">${icon('branch')}${esc(repo)}</span>`);
+  const chip = repoChip(ticket, snapshot);
+  if (chip) meta.push(chip);
   if (ticket.prs && ticket.prs.length) meta.push(`<span class="meta-item">${icon('link')}${ticket.prs.length} PR${ticket.prs.length === 1 ? '' : 's'}</span>`);
   if (ticket.files_touched_count) meta.push(`<span class="meta-item">${ticket.files_touched_count} file${ticket.files_touched_count === 1 ? '' : 's'}</span>`);
   meta.push(`<span class="meta-item">${icon('clock')}${timeEl(ticket.last_activity, now, tz)}</span>`);
   return `<article class="card card-${attr(variant)}${selected ? ' selected' : ''}${entry && entry.rank === 1 ? ' top' : ''}" data-ticket="${attr(ticket.id)}" tabindex="0" role="button" aria-label="${attr(`${ticket.key} ${ticket.title}`)}" aria-pressed="${selected ? 'true' : 'false'}">
   <header class="card-head">
     ${entry ? `<span class="rank" aria-label="Rank ${attr(entry.rank)}">${esc(entry.rank)}</span>` : ''}
-    ${ticketKey(ticket)}
+    ${ticketKey(ticket, { short: true })}
     ${statusChip(ticket.status, { stale: ticket.stale, staleAge: staleAgeLabel(ticket, now) })}
     ${priorityMark(ticket.priority)}
     ${entry ? scoreBadge(entry) : ''}
@@ -335,7 +362,7 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   ${ticket.blocker ? `<p class="card-blocker">${icon('alert')}<span><span class="eyebrow">Blocker</span> ${esc(ticket.blocker)}</span></p>` : ''}
   ${entry && (leadingReason(entry) || (entry.limitations ?? []).length) ? `<ul class="reasons">${leadingReason(entry) ? `<li>${esc(leadingReason(entry))}</li>` : ''}${(entry.limitations ?? []).map((l) => `<li class="limitation">${icon('alert')}${esc(l)}</li>`).join('')}</ul>` : ''}
   <footer class="card-meta">${meta.join('')}</footer>
-  ${canHandoff ? `<div class="card-actions"><button type="button" class="btn small" data-action="handoff" data-ticket="${attr(ticket.id)}">${icon('play')}Handoff</button></div>` : ''}
+  ${canHandoff ? `<div class="card-actions"><button type="button" class="btn small" data-action="handoff" data-ticket="${attr(ticket.id)}">${icon('play')}Run agent</button></div>` : ''}
 </article>`;
 }
 
@@ -352,6 +379,18 @@ export function pager(page, pages, { prefix }) {
   return `<nav class="pager" aria-label="Pagination"><button type="button" class="btn small" data-action="${attr(prefix)}-page" data-page="${page - 1}" ${page === 0 ? 'disabled' : ''}>Previous</button><span>Page ${page + 1} of ${pages}</span><button type="button" class="btn small" data-action="${attr(prefix)}-page" data-page="${page + 1}" ${page + 1 >= pages ? 'disabled' : ''}>Next</button></nav>`;
 }
 
+// Loaded text for a content ref (results, timeline entries, plans, checkpoints) with its loading
+// and failure states. A failure always offers Retry; nothing is left silently empty.
+export function contentViewer(ref, { content = {}, status = {}, generation = '', label = 'Full text' } = {}) {
+  if (!ref) return '';
+  if (Object.hasOwn(content, ref)) return `<div class="content-viewer" data-ref="${attr(ref)}"><button type="button" class="link small" data-action="hide-content" data-hash="${attr(ref)}">Hide</button><pre class="full">${esc(content[ref])}</pre></div>`;
+  const st = status[ref];
+  if (st === 'reloading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">The snapshot changed; reloading…</span></div>`;
+  if (st === 'loading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">Loading…</span></div>`;
+  if (st && st.error) return `<div class="content-viewer" data-ref="${attr(ref)}"><span class="small critical" role="alert">Could not load: ${esc(st.error)}</span> <button type="button" class="btn small ghost" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">Retry</button></div>`;
+  return `<button type="button" class="link small" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">${esc(label)}</button>`;
+}
+
 // How much of Claude Code a run may use (ADR 0017). The owner's settings are the default; Full
 // access skips every permission check and says so where it is chosen.
 export function accessFieldset() {
@@ -360,4 +399,34 @@ export function accessFieldset() {
   <label><input type="radio" name="access" value="standard"> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
   <label class="danger"><input type="radio" name="access" value="full"> Full access <span class="small">(no permission checks: any command, any file on this computer, network, connectors, and pushing with your credentials)</span></label>
 </fieldset>`;
+}
+
+// Runs proposed from a shared page (ADR 0025), still waiting for the owner, oldest first.
+export function openProposals(snapshot, ticketId = null) {
+  return (snapshot.run_proposals ?? []).filter((p) => p.state === 'proposed' && (!ticketId || p.ticket_id === ticketId)).sort((a, b) => (a.proposed_at < b.proposed_at ? -1 : a.proposed_at > b.proposed_at ? 1 : 0));
+}
+
+const RUNNING = new Set(['queued', 'running']);
+const IN_FLIGHT = new Set(['sending', 'pending', 'applying']);
+
+// One proposed run: recipe, access, who proposed it on which page, and Approve / Dismiss for the
+// owner. The editor is what the page reported, so it is shown as data, never as a name we vouch for.
+export function proposalItem(p, snapshot, { now, pending = [], withTicket = false } = {}) {
+  const caps = snapshot.capabilities ?? {};
+  const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
+  const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
+  const sent = pending.find((r) => (r.kind === 'approve-run' || r.kind === 'dismiss-run') && r.payload && r.payload.proposal_id === p.id && IN_FLIGHT.has(r.state));
+  const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : '<span class="chip small">Standard access</span>';
+  const perms = p.permissions ?? {};
+  const kind = p.read_only ? '<span class="chip small">Read-only</span>' : perms.edit_source ? '<span class="chip warning small">Edits source</span>' : perms.edit_files || perms.delete_files ? '<span class="chip warning small">Changes files</span>' : '';
+  const key = p.ticket_key ?? (t ? t.key : '');
+  const actions = !caps.handoff ? '' : sent
+    ? ` <span class="muted small">${sent.kind === 'approve-run' ? 'Approval sent' : 'Dismissal queued'}${sent.kind === 'dismiss-run' && sent.state === 'pending' ? ` <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(sent.id)}" aria-label="${attr(`Undo dismissing the ${p.recipe.name} run`)}">${icon('undo')}Undo</button>` : ''}</span>`
+    : ` <span class="proposal-actions"><button type="button" class="btn small" data-action="approve-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Approve the ${p.recipe.name} run on ${key}`)}">Approve</button> <button type="button" class="btn small ghost" data-action="dismiss-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Dismiss the ${p.recipe.name} run on ${key}`)}">Dismiss</button></span>`;
+  return `<li class="proposal" data-proposal="${attr(p.id)}">${t ? `<button type="button" class="link" data-open="${attr(t.id)}">${keyEl(t.key)} ${esc(t.title)}</button> ` : ''}<strong>${esc(p.recipe.name)}</strong> ${access}${kind ? ` ${kind}` : ''} <span class="muted small">proposed on the ${esc(p.publisher)} page by ${p.editor ? `<code>${esc(p.editor)}</code>` : 'an unknown editor'} ${timeEl(p.proposed_at, now, tz)}</span>${actions}</li>`;
+}
+
+// Whether the ticket already has a run, which an approval would then report instead of queueing.
+export function hasActiveRun(snapshot, ticketId) {
+  return (snapshot.handoffs ?? []).some((h) => h.ticket_id === ticketId && RUNNING.has(h.state));
 }

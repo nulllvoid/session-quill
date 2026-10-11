@@ -115,6 +115,15 @@ if (!fs.existsSync(path.join(home, 'seeded.flag'))) {
   ev('stop', { content_ref: putBlob('Reworded the export dialog and tightened spacing.', env).hash, preview: 'Reworded the export dialog and tightened spacing.', length: 49, complete: true, conclusions: [] }, { session_id: 'sess-unlinked-5a6b7c8d', at: ago(1500e3) });
   // A ticket created from a tracker key, so its key renders as a link with a copy button.
   ev('ticket-create', { ticket: { id: T(20), key: 'PROJ-42', title: 'Tracker-linked ticket from a prompt mention', project_id: 'session-quill', project_name: 'Session Quill', category: 'feature', priority: 'P1', parent_id: null, repo_id: 'session-quill', due: null, jira: { key: 'PROJ-42', url: 'https://example.atlassian.net/browse/PROJ-42', validation: 'pending', validated_at: null, error: null }, external: { system: 'jira', key: 'PROJ-42', url: 'https://example.atlassian.net/browse/PROJ-42', validation: 'pending', validated_at: null, error: null } } }, { at: ago(2 * 86400e3) });
+  // Onboarding (ADR 0024): an imported issue whose repository needs a clone, and one with no code.
+  const imported = (n, key, title) => ev('ticket-create', { ticket: { id: T(n), key, title, project_id: 'session-quill', project_name: 'Session Quill', category: 'feature', priority: 'P2', parent_id: null, repo_id: null, due: null, jira: null, external: { system: 'jira', key, url: `https://example.atlassian.net/browse/${key}`, validation: 'valid', validated_at: ago(3600e3), error: null }, created_via: 'imported from jira' } }, { at: ago(3600e3), source_identity: `tracker-import:${key}` });
+  imported(21, 'PROJ-43', 'Payments retry budget is ignored');
+  imported(22, 'PROJ-44', 'Write the Q4 incident review');
+  ev('tracker-sync', { system: 'jira', synced_at: ago(3500e3), results: [], resolutions: [{ ticket_id: T(21), state: 'needs-clone', remote: 'git@github.com:acme/payments.git', rule: 'repo_map', via: 'PROJ/Payments' }] }, { at: ago(3500e3) });
+  ev('ticket-update', { ticket_id: T(22), fields: { no_code: true }, source: 'manual' }, { at: ago(3400e3) });
+  // Remote runs (ADR 0025): a Run agent pick on a shared page, waiting in Today for Approve.
+  const proposalId = '7e57a9e0-0000-4000-8000-000000000025';
+  ev('run-proposal', { id: proposalId, ticket_id: T(2), publisher: 'team', editor: 'user_01HZX4J7Q2', edited_at: ago(900e3), recipe: { name: 'analyse', source: 'builtin', hash: null }, mode: 'analyse', permissions: { read_source: true }, access: 'standard', read_only: true, expected_revision: null }, { at: ago(840e3), source_identity: `run-proposal:${proposalId}` });
   fs.writeFileSync(path.join(home, 'seeded.flag'), '1');
 }
 w.tick();

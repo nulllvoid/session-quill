@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { sanitizeSnapshot } from './sanitize.js';
 
 const UI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ui');
-const MODULE_ORDER = ['lib/time.js', 'lib/motion.js', 'components.js', 'views/header.js', 'views/picknext.js', 'views/board.js', 'views/tree.js', 'views/sessions.js', 'views/deployments.js', 'views/detail.js', 'views/handoff-form.js', 'views/dialogs.js'];
 const LINE_SEP = String.fromCharCode(0x2028);
 const PARA_SEP = String.fromCharCode(0x2029);
 
@@ -18,8 +17,24 @@ function stripModuleSyntax(source) {
     .join('\n');
 }
 
+// Every module app.js reaches, dependencies first, so a new UI module is bundled without a list to
+// keep in sync. The live API is swapped for the static one.
+export function uiModuleOrder(uiDir = UI_DIR) {
+  const seen = new Set();
+  const order = [];
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const source = fs.readFileSync(path.join(uiDir, rel), 'utf8');
+    for (const m of source.matchAll(/^import\s[^;]*from\s+'(\.[^']+)';\s*$/gm)) walk(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1])));
+    order.push(rel);
+  };
+  walk('app.js');
+  return order.filter((rel) => rel !== 'app.js' && rel !== 'lib/api.js');
+}
+
 export function bundleUiModules({ staticMode = true, uiDir = UI_DIR } = {}) {
-  const files = [...MODULE_ORDER, staticMode ? 'lib/api-static.js' : 'lib/api.js', 'app.js'];
+  const files = [...uiModuleOrder(uiDir), staticMode ? 'lib/api-static.js' : 'lib/api.js', 'app.js'];
   const parts = files.map((rel) => `// ---- ${rel} ----\n${stripModuleSyntax(fs.readFileSync(path.join(uiDir, rel), 'utf8'))}`);
   return `'use strict';\n${parts.join('\n')}\n`;
 }

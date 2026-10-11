@@ -1,8 +1,8 @@
 // Agents panel on ticket detail (ADR 0008): the recipes available for the ticket's repository,
 // the permissions each may use, and every run with the suggestions it left.
-import { esc, attr, icon, timeEl, handoffChip, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset, formatDuration } from '../components.js';
+import { esc, attr, icon, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset, formatDuration, hasActiveRun } from '../components.js';
 
-const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 'repository' };
+export const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 'repository' };
 const ACTIVE = new Set(['pending', 'applying']);
 
 // Repository recipes replace global ones of the same name for that repository only.
@@ -29,7 +29,7 @@ export function permissionSummary(p = {}) {
 function recipeRow(r, ticket, canRun) {
   const head = `<strong>${esc(r.name)}</strong> <span class="chip small" data-source="${attr(r.source)}">${esc(SOURCE_LABELS[r.source] ?? r.source)}</span>`;
   if (r.error) return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small critical">${icon('alert')}Invalid: ${esc(r.error)}</span></li>`;
-  const run = canRun ? ` <button type="button" class="btn small" data-action="run-recipe" data-ticket="${attr(ticket.id)}" data-recipe="${attr(r.name)}">${icon('play')}Run…</button>` : '';
+  const run = canRun ? ` <button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(ticket.id)}" data-recipe="${attr(r.name)}">${icon('play')}Run…</button>` : '';
   return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small">${esc(r.description)}</span><div class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(r.timeout_min)} min${r.legacy ? '' : ' · results are suggestions'}</div>${run}</li>`;
 }
 
@@ -43,7 +43,7 @@ function suggestionText(s) {
   return esc(s.type);
 }
 
-function suggestionItem(s, h, ticket, { canEdit, pending }) {
+export function suggestionItem(s, h, ticket, { canEdit, pending }) {
   const req = pending.find((r) => (r.kind === 'accept-suggestion' || r.kind === 'dismiss-suggestion') && ACTIVE.has(r.state) && r.payload && r.payload.handoff_id === h.id && r.payload.suggestion_id === s.id);
   let controls = '';
   if (s.state !== 'proposed') controls = ` <span class="chip small" data-suggestion-state="${attr(s.state)}">${s.state === 'accepted' ? 'Accepted' : 'Dismissed'}</span>`;
@@ -59,14 +59,14 @@ function suggestionItem(s, h, ticket, { canEdit, pending }) {
 const CONFIDENCE_LABELS = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' };
 
 // How sure the run is, what it relied on, and whether its reply needed repair or a self-check (ADR 0013).
-function runQuality(h) {
+export function runQuality(h, { gate = true } = {}) {
   const parts = [];
   if (h.result_confidence) parts.push(`<span class="chip small" data-confidence="${attr(h.result_confidence)}">${esc(CONFIDENCE_LABELS[h.result_confidence] ?? h.result_confidence)}</span>`);
   const q = h.result_quality;
   if (q && q.self_checked) parts.push('<span class="chip small" title="The agent checked each claim against its cited source before finishing">Self-checked</span>');
   if (q && q.repaired) parts.push('<span class="chip small" title="The first reply broke the output format and was repaired in a follow-up turn">Repaired reply</span>');
-  const gate = testGateChip(h.test_gate);
-  if (gate) parts.push(gate);
+  const gateChip = gate ? testGateChip(h.test_gate) : '';
+  if (gateChip) parts.push(gateChip);
   if (q && (q.problems ?? []).length) parts.push(`<span class="chip warning small" title="${attr(q.problems.join('; '))}">Reply incomplete</span>`);
   const sources = h.result_sources ?? [];
   const list = sources.length ? `<details class="sources small"><summary>${esc(sources.length)} source${sources.length === 1 ? '' : 's'}</summary><ul>${sources.map((x) => `<li><code>${esc(x)}</code></li>`).join('')}</ul></details>` : '';
@@ -83,14 +83,23 @@ export function testGateChip(g) {
   return `<details class="test-output small"><summary><span class="chip critical small">${label}</span></summary><p class="muted small">${esc(g.command ?? '')}${Number.isInteger(g.exit_code) ? ` exited with code ${esc(g.exit_code)}` : ''}${g.attempts > 1 ? ' after one repair turn' : ''}</p><pre class="preview">${esc(g.tail ?? '')}</pre></details>`;
 }
 
-// The test gate a fix will get, said where a fix is queued.
-export function testCommandNote(repo) {
-  if (!repo) return '';
-  return repo.test_command ? `<p class="small test-command">Fixes are checked with <code>${esc(repo.test_command)}</code>, run by the worker in the fix's checkout; a fix whose tests still fail after one repair turn is not suggested.</p>` : '<p class="small muted test-command">No test command: fixes are not test-verified. Set <code>test_command</code> for this repository in the user config.</p>';
+// The test gate as a plain chip, for places where a disclosure cannot nest (row buttons).
+export function testGateBadge(g) {
+  if (!g || !g.status) return '';
+  if (g.status === 'passed') return '<span class="chip good small">Tests passed (worker)</span>';
+  if (g.status === 'skipped') return '<span class="chip small">Not test-verified</span>';
+  return `<span class="chip critical small">${g.status === 'timeout' ? 'Tests timed out' : 'Tests failed'}</span>`;
+}
+
+// Whether a run reads or edits, and Full access as a warning.
+export function accessBadge(h) {
+  const p = h.permissions ?? {};
+  const kind = p.edit_source ? '<span class="chip warning small">Edits source</span>' : p.edit_files || p.delete_files ? '<span class="chip warning small">Changes files</span>' : '<span class="chip small">Read-only</span>';
+  return h.access === 'full' ? `${kind} <span class="chip warning small">Full access</span>` : kind;
 }
 
 // What a files run changed (ADR 0015), each with an Undo while it still applies.
-function fileEffects(h, ticket, { canEdit, pending }) {
+export function fileEffects(h, ticket, { canEdit, pending }) {
   const effects = h.file_effects ?? [];
   if (!effects.length) return '';
   const rows = effects.map((e) => {
@@ -103,33 +112,52 @@ function fileEffects(h, ticket, { canEdit, pending }) {
 }
 
 // Where a run's time went (ADR 0022): only the steps that were measured.
-function runTimings(h) {
+export function runTimings(h) {
   const t = h.timings;
   if (!t) return '';
   const parts = [['queue_wait_ms', 'Queue wait'], ['worktree_ms', 'Setup'], ['agent_ms', 'Agent'], ['test_ms', 'Tests']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`);
   return parts.length ? `<p class="run-timings small muted">${esc(parts.join(' · '))}</p>` : '';
 }
 
-function runItem(h, ticket, snapshot, { now, tz, caps, pending }) {
-  const name = h.recipe ? h.recipe.name : h.mode;
-  const suggestions = h.suggestions ?? [];
-  const accessChip = h.access === 'full' ? ' <span class="chip warning small">Full access</span>' : h.access === 'settings' ? ' <span class="chip small">My settings</span>' : '';
-  return `<li>${handoffChip(h)} <strong>${esc(name)}</strong>${accessChip} <span class="muted small">${h.recipe && h.recipe.name !== h.mode ? `${esc(h.mode)} · ` : ''}requested ${timeEl(h.requested_at, now, tz)}</span>${h.result_summary ? `<p class="prewrap small">${esc(h.result_summary)}</p>` : ''}${runQuality(h)}${runTimings(h)}${h.changed_files && h.changed_files.length ? `<p class="small">Changed: ${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : ''}${fileEffects(h, ticket, { canEdit: !!caps.edit_tickets, pending })}${suggestions.length ? `<ul class="suggestions">${suggestions.map((s) => suggestionItem(s, h, ticket, { canEdit: !!caps.edit_tickets, pending })).join('')}</ul>` : ''}${h.result_ref ? `<button type="button" class="link small" data-action="load-content" data-hash="${attr(h.result_ref)}" data-generation="${attr(snapshot.generation_id)}">Partial/full result</button>` : ''}${caps.handoff && ['queued', 'running'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>` : ''}${caps.handoff && ['failed', 'timed-out', 'cancelled'].includes(h.state) ? ` <button type="button" class="btn small ghost" data-action="${h.recipe && h.legacy === false ? 'run-recipe' : 'handoff'}" data-ticket="${attr(ticket.id)}"${h.recipe && h.legacy === false ? ` data-recipe="${attr(h.recipe.name)}"` : ''} data-retry-of="${attr(h.id)}">Retry as new run</button>` : ''}</li>`;
-}
-
-export function renderAgentsSection(ticket, rawSnapshot, { now, pending = [] } = {}) {
+// The recipes a ticket's repository offers (ADR 0008). Runs themselves are listed on the Runs tab
+// and opened as run detail.
+export function renderAgentsSection(ticket, rawSnapshot, { busy = false } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const caps = snapshot.capabilities ?? {};
-  const tz = snapshot.meta.timezone;
-  const runs = (ticket.handoff_ids ?? []).map((id) => snapshot.handoffs.find((h) => h.id === id)).filter(Boolean);
   // A files recipe is offered only where there are attached files for it to work on.
   const hasFiles = attachedFilePaths(ticket).length > 0;
   const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => r.mode !== 'files' || hasFiles);
   const canRun = !!caps.handoff && ticket.status !== 'done';
-  const busy = runs.some((h) => ['queued', 'running'].includes(h.state));
-  return `<section class="detail-section agents"><h3>Agents <span class="count">${esc(runs.length)}</span></h3>
-${recipes.length ? `<ul class="recipes">${recipes.map((r) => recipeRow(r, ticket, canRun && !busy)).join('')}</ul>${canRun && busy ? '<p class="muted small">One run per ticket: wait for the current run or cancel it.</p>' : ''}` : '<p class="muted small">No recipes found. Add one in <code>.quill/agents/</code> or <code>~/.claude/quill/agents/</code>.</p>'}
-<h4 class="small">Runs</h4>${runs.length ? `<ul class="handoffs">${runs.map((h) => runItem(h, ticket, snapshot, { now, tz, caps, pending })).join('')}</ul>` : '<p class="muted small">No runs yet.</p>'}</section>`;
+  return `<section class="detail-section agents"><h3>Recipes</h3>
+${recipes.length ? `<ul class="recipes">${recipes.map((r) => recipeRow(r, ticket, canRun && !busy)).join('')}</ul>${canRun && busy ? '<p class="muted small">One run per ticket: wait for the current run or cancel it.</p>' : ''}` : '<p class="muted small">No recipes found. Add one in <code>.quill/agents/</code> or <code>~/.claude/quill/agents/</code>.</p>'}</section>`;
+}
+
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// What a run with these choices will do, in plain words (spec §5).
+export function runSummary(recipe, c = {}, repo = null) {
+  const parts = [c.edit_source ? 'edits in an isolated checkout' : c.read_source ? 'reads source' : c.edit_files || c.delete_files ? 'works on copies of the attached files' : 'notes only'];
+  if (c.edit_source) parts.push(repo && repo.test_command ? `tests: ${repo.test_command} run by the worker` : 'not test-verified (no test command)');
+  const delivery = [c.commit ? 'commits' : null, c.push_branch ? 'pushes a branch' : null, c.open_draft_pr ? 'opens a draft PR' : null].filter(Boolean);
+  if (c.edit_source) parts.push(delivery.length ? delivery.join(', ') : 'no commit, push or PR');
+  parts.push(recipe.legacy ? 'applies its next action and follow-ups directly' : 'result needs your acceptance');
+  return cap(parts.join(' · '));
+}
+
+// What stops a run (blocker) or limits it (warning), from facts the snapshot has.
+export function runBlockers(ticket, rawSnapshot, recipe) {
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const p = recipe.permissions ?? {};
+  const repo = (snapshot.repos ?? []).find((r) => r.id === ticket.repo_id) ?? null;
+  const out = [];
+  if (ticket.status === 'done') out.push({ level: 'blocker', text: 'This ticket is done.' });
+  if (hasActiveRun(snapshot, ticket.id)) out.push({ level: 'blocker', text: 'A run is already queued or running on this ticket. Cancel it first or wait.' });
+  if (!repo && (p.read_source || p.edit_source)) {
+    const why = ticket.repo_state === 'needs-clone' ? 'The repository needs a clone first' : 'No registered repository';
+    out.push(p.edit_source || recipe.mode === 'attempt-fix' ? { level: 'blocker', text: `${why}: this recipe edits source.` } : { level: 'warning', text: `${why}: the run works from the ticket notes only.` });
+  }
+  if (repo && (p.edit_source || recipe.mode === 'attempt-fix') && !repo.test_command) out.push({ level: 'warning', text: 'No test command: fixes will be marked Not test-verified.' });
+  return out;
 }
 
 export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf = null } = {}) {
@@ -139,10 +167,12 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
   const repo = (snapshot.repos ?? []).find((r) => r.id === ticket.repo_id) ?? null;
   const fix = recipe.mode === 'attempt-fix';
   const boxes = [];
+  const advanced = [];
   if (p.read_source) boxes.push(`<label><input type="checkbox" name="read_source" ${repo ? 'checked' : ''}${fix || !repo ? ' disabled' : ''}> Read source in an isolated checkout${repo ? '' : ' <span class="muted small">(no registered repository)</span>'}</label>`);
   if (p.edit_source) boxes.push(`<label><input type="checkbox" name="edit_source" ${repo ? 'checked' : ''} disabled> Edit source in that checkout <span class="muted small">(required by this recipe)</span></label>`);
-  if (p.commit) boxes.push('<label><input type="checkbox" name="commit"> Commit locally</label>');
-  if (p.push_branch) boxes.push('<label><input type="checkbox" name="push_branch"> Push a branch <span class="muted small">(never a default or protected branch)</span></label><label class="indent">Branch <input type="text" name="branch" placeholder="feat/agent-..." pattern="[A-Za-z0-9._/-]+"></label>');
+  // Each delivery step needs the one before it (spec §5); app.js enables a dependant when its parent is ticked.
+  if (p.commit) advanced.push('<label><input type="checkbox" name="commit"> Commit locally <span class="muted small">(requires edit source)</span></label>');
+  if (p.push_branch) advanced.push('<label><input type="checkbox" name="push_branch" disabled> Push a branch <span class="muted small">(requires commit; never a default or protected branch)</span></label><label class="indent">Branch <input type="text" name="branch" placeholder="feat/agent-..." pattern="[A-Za-z0-9._/-]+"></label>');
   if (recipe.mode === 'files') {
     const files = attachedFilePaths(ticket);
     boxes.push(`<p class="small">Works on copies of these attached files only; nothing else on this computer is in reach:</p><ul class="small run-files">${files.map((f) => `<li><code>${esc(f)}</code></li>`).join('')}</ul>`);
@@ -151,16 +181,20 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
   }
   // The worker refuses a draft PR without a PR provider, so the box is offered only when one is set.
   const provider = !!(repo && repo.provider);
-  if (p.open_draft_pr) boxes.push(`<label><input type="checkbox" name="open_draft_pr"${provider ? '' : ' disabled'}> Open a draft PR${provider ? '' : ' <span class="muted small">(no PR provider configured for this repository)</span>'}</label>`);
+  if (p.open_draft_pr) advanced.push(`<label><input type="checkbox" name="open_draft_pr" disabled> Open a draft PR <span class="muted small">(requires push branch)</span>${provider ? '' : ' <span class="muted small">(no PR provider configured for this repository)</span>'}</label>`);
+  const blockers = runBlockers(ticket, snapshot, recipe);
+  const blocked = blockers.some((b) => b.level === 'blocker');
+  const defaults = { read_source: !!(p.read_source && repo), edit_source: !!(p.edit_source && repo) };
   return `<form class="handoff-form" data-form="recipe-run" data-ticket="${attr(ticket.id)}" data-revision="${attr(ticket.revision)}" data-recipe="${attr(recipe.name)}"${fix ? ' data-requires-edit="true"' : ''}${retryOf ? ` data-retry-of="${attr(retryOf)}"` : ''}>
 <h2 id="dialog-title">${icon('play')}Run ${esc(recipe.name)} on ${keyEl(ticket.key)}</h2>
 <p class="small">${esc(recipe.description)} <span class="muted">(${esc(SOURCE_LABELS[recipe.source] ?? recipe.source)} recipe, mode ${esc(recipe.mode)})</span></p>
-${boxes.length ? `<fieldset><legend>Permissions for this run</legend>${boxes.join('\n')}<p class="muted small">The recipe allows at most what is listed here. Anything with a side effect stays off unless you tick it.</p></fieldset>` : '<p class="small">This run works from the ticket notes only: no source access and no side effects.</p>'}
+${boxes.length || advanced.length ? `<fieldset><legend>Permissions for this run</legend>${boxes.join('\n')}${advanced.length ? `<details class="advanced"><summary>Advanced: commit, push, PR</summary>${advanced.join('\n')}</details>` : ''}<p class="muted small">The recipe allows at most what is listed here. Anything with a side effect stays off unless you tick it.</p></fieldset>` : '<p class="small">This run works from the ticket notes only: no source access and no side effects.</p>'}
 ${recipe.mode === 'files' ? '' : accessFieldset()}
-${fix ? testCommandNote(repo ?? { test_command: null }) : ''}
 <label class="label" for="recipe-note">Note <span class="muted">(max 280)</span></label>
 <textarea id="recipe-note" name="note" maxlength="280" rows="2" placeholder="Anything the agent should focus on?"></textarea>
 <p class="muted small">Capped at ${esc(recipe.timeout_min)} minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>
-<div class="dialog-actions"><button type="submit" class="btn primary">Queue run</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
+${blockers.length ? `<ul class="issues">${blockers.map((b) => `<li data-level="${b.level}">${icon('alert')}${esc(b.text)}</li>`).join('')}</ul>` : ''}
+<p class="run-summary" aria-live="polite">${esc(runSummary(recipe, defaults, repo))}</p>
+<div class="dialog-actions"><button type="submit" class="btn primary"${blocked ? ` disabled title="${attr(blockers.find((b) => b.level === 'blocker').text)}"` : ''}>Queue run</button><button type="button" class="btn ghost" data-action="run-agent-back" data-ticket="${attr(ticket.id)}">Back</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;
 }

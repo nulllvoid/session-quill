@@ -14,6 +14,9 @@ export function renderSessions(rawSnapshot, filters, { now, page = 0, selected =
   const multiMachine = machines.length > 1;
   const rows = sessions.slice(page * SESSIONS_PAGE_SIZE, (page + 1) * SESSIONS_PAGE_SIZE).map((s) => {
     const current = s.current_ticket_id ? ticketById(snapshot, s.current_ticket_id) : null;
+    // The preview belongs to the checkpoint's own ticket; a later rebind does not move it.
+    const checkpoint = s.last_checkpoint_id ? snapshot.checkpoints.find((c) => c.id === s.last_checkpoint_id) : null;
+    const checkpointTicket = checkpoint && checkpoint.ticket_id ? ticketById(snapshot, checkpoint.ticket_id) : null;
     const history = s.bindings.filter((b) => b.ticket_id && b.ticket_id !== s.current_ticket_id).map((b) => ticketById(snapshot, b.ticket_id)).filter(Boolean);
     const flags = [];
     if (s.unpromoted) flags.push(`<span class="chip warning" title="A complete checkpoint has not been approved or dismissed">${icon('alert')}Unpromoted checkpoint</span>`);
@@ -24,10 +27,10 @@ export function renderSessions(rawSnapshot, filters, { now, page = 0, selected =
     return `<tr data-session="${attr(s.id)}">
   <td><div class="session-title">${s.title ? esc(s.title) : '<span class="muted">Untitled session</span>'}</div><div class="small muted"><span class="session-id" title="${attr(s.host_session_id)}">${esc(String(s.host_session_id ?? '').slice(0, 8))}</span>${s.agent_id ? ` · agent ${esc(s.agent_id)}` : ''}${multiMachine ? ` · ${esc(s.machine_name)}` : ''}</div></td>
   <td>${sessionChip(s.state)}</td>
-  <td>${current ? `<button type="button" class="link" data-open="${attr(current.id)}">${keyEl(current.key)}</button>` : '<span class="muted">Unbound</span>'}${history.length ? `<div class="small muted">Earlier: ${history.map((h) => `<button type="button" class="link" data-open="${attr(h.id)}">${esc(h.key)}</button>`).join(', ')}</div>` : ''}<div class="small muted">binding rev ${esc(s.current_binding_revision)}</div></td>
+  <td>${current ? `<button type="button" class="link" data-open="${attr(current.id)}">${keyEl(current.key)}</button>` : '<span class="muted">Unbound</span>'}${history.length ? `<div class="small muted">Earlier: ${history.map((h) => `<button type="button" class="link" data-open="${attr(h.id)}">${esc(h.key)}</button>`).join(', ')}</div>` : ''}<details class="session-metadata"><summary class="small muted">Session details</summary><div class="small muted">Binding revision ${esc(s.current_binding_revision)}<br>${esc(s.host_session_id)}</div></details></td>
   <td>${timeEl(s.started_at, now, tz)}</td>
   <td>${esc(s.successful_write_count)} <span class="small muted">/ ${esc(s.change_coverage)}</span></td>
-  <td class="preview">${s.last_checkpoint_preview ? `<span title="${attr(s.last_checkpoint_preview.slice(0, 300))}">${esc(s.last_checkpoint_preview.slice(0, 80))}${s.last_checkpoint_preview.length > 80 ? '…' : ''}</span>` : '<span class="muted" aria-label="none">-</span>'}</td>
+  <td class="preview">${s.last_checkpoint_preview ? `<span title="${attr(s.last_checkpoint_preview.slice(0, 300))}">${esc(s.last_checkpoint_preview.slice(0, 180))}${s.last_checkpoint_preview.length > 180 ? '…' : ''}</span>${checkpointTicket ? `<button type="button" class="link small" data-open="${attr(checkpointTicket.id)}" data-section="activity">View checkpoints on ${esc(checkpointTicket.key)}</button>` : ''}` : '<span class="muted" aria-label="none">-</span>'}${current?.next_action ? `<p class="small"><strong>Next on ${esc(current.key)}</strong> ${esc(current.next_action)}</p>` : ''}</td>
   <td>${flags.join(' ') || '<span class="muted" aria-label="none">-</span>'}</td>
 </tr>`;
   }).join('');

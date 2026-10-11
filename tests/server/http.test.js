@@ -247,3 +247,18 @@ test('an applying request interrupted by a restart is re-evaluated against expec
     await w2.stop();
   } finally { /* stopped above */ }
 });
+
+test('the owner cookie lasts as long as the 7-day sliding session and is renewed with it (ADR 0022)', async () => {
+  const b = await boot();
+  try {
+    assert.match(b.authRes.headers.get('set-cookie'), /Max-Age=604800/);
+    const res = await b.get('/v1/snapshot');
+    assert.equal(res.status, 200);
+    const renewed = res.headers.get('set-cookie');
+    assert.ok(renewed, 'an authenticated response refreshes the cookie');
+    assert.equal(renewed.split(';')[0], b.cookie, 'same session token');
+    assert.match(renewed, /Max-Age=604800/);
+    assert.match(renewed, /HttpOnly/);
+    assert.equal((await fetch(`${b.base}/v1/snapshot`)).headers.get('set-cookie'), null, 'no cookie without a session');
+  } finally { await b.w.stop(); }
+});

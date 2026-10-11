@@ -4,8 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-11
+
+Orchestration-first 1.0: the dashboard is always reachable, runs can be queued in bulk and are verified by the worker's own test run, assigned issues arrive with their repositories resolved, a shared page can propose (never start) a run, and a Runs page brings dispatch, monitoring and review into one place.
+
 ### Added
 
+- **Runs** page (shortcut 7): Needs you, Live, Failed and All, grouped by batch, with run detail showing the result, changed files, worker test gate, PR, uncertain effects and the checkout path. Batch summaries survive a reload.
+- A run strip and a Runs tab on every ticket; one **Run agent** dialog with a plain summary of what the run will do and any blockers.
 - Always-on dashboard ([ADR 0022](docs/decisions/0022-always-on-dashboard.md)): the dashboard prefers the fixed port 47321 (`ui_port`, falling back to a random port when it is taken; `ui_port = 0` keeps random), and a signed-in browser stays signed in for 7 days from its last use, across worker restarts. Sessions are stored only as hashes. `quill ui --revoke` signs every browser out.
 - A browser without a session gets a sign-in page that says to run `/session-quill:ui` (or `quill ui`) instead of a bare error.
 - `quill status --statusline` ends with the dashboard address as a clickable link while the worker that serves it is healthy. It never carries a secret.
@@ -17,16 +23,54 @@ All notable changes to this project are documented here. The format follows [Kee
 - Worker test gate: with `test_command` (and `test_timeout_ms`, default 10 minutes) on a repository, the worker runs the tests itself after each fix and records `test_gate` and `timings.test_ms` on the run. A failure gets one repair turn with the failing output; a fix whose tests still fail is not suggested (no commit, push or PR). Runs show *Tests passed (worker)*, *Tests failed* with the output, or *Not test-verified*, and draft PR bodies say "Tests passed (worker)" only after a real pass.
 - `[handoff] max_concurrent_readonly` (default 2) and `max_concurrent_fix` (default 1) cap read-only and fix runs separately.
 - Read-only analyse runs with source access may use Claude Code subagents, and the built-in analyse recipes split large analyses by module and merge the results.
+- Onboarding from the tracker ([ADR 0024](docs/decisions/0024-tracker-onboarding.md)): with `[tracker] import_assigned = true`, `tracker-sync` imports the open issues assigned to you (Jira and GitHub) as tickets, once each. `quill tracker import` imports now; `quill init --bootstrap-from-tracker` turns the import on, adds a `tracker-sync` schedule and imports once.
+- Rule-based repository resolver: `tracker-sync` links tickets without a repository through `[tracker.repo_map]` (Jira component or project, GitHub `owner/repo`, to a repository id or remote), a registered repository whose origin matches a repository the issue links to, or a clone already on disk. A remote with no clone shows **Needs clone** on the card and in the snapshot's `repo_state`; no agent runs.
+- Clone with consent: `quill repo clone <KEY>` previews the remote, host check and target folder, and `--confirm` clones into `[tracker] auto_clone_dir` (default `~/quill-repos`), registers the clone and links the ticket. The dashboard's **Clone…** dialog sends the new `repo-clone` request. Only https and ssh remotes on a `[tracker] clone_hosts` host (default github.com, gitlab.com, bitbucket.org) are cloned, without credentials in the address, file/ext transports or submodules, and a remote that already has a clone is linked instead of cloned again.
+- `quill/no-code`: `quill ticket set <KEY> --no-code yes|no` (or `ticket-update` field `no_code`) marks a ticket as needing no repository; it shows **No code** and the resolver skips it.
+- The dashboard's Repo filter has a **Needs clone** value, and cards show **Cloning** while a clone runs.
+- A read-only built-in `workspace-setup` recipe suggests a repository and a `repo_map` line for a ticket the rules could not place.
+- The TOML subset accepts double-quoted keys, so `[tracker.repo_map]` can name `"owner/repo"` and `"PROJ/Component"`.
+- Runs proposed from a shared page ([ADR 0025](docs/decisions/0025-remote-run-proposals.md)): `run_agent = true` on a two-way artifact publisher adds a **Run agent** select offering read-only recipes plus `run_recipes`. A pick becomes one proposed run (journaled as `run-proposal`, with an id derived from the edit) naming the editor, recipe and access; nothing runs until you approve it.
+- **Proposed runs** in Today and ticket detail with **Approve** and **Dismiss**, a live-region notice and receipt when a page proposes one, and `quill approve --run [<id>]` / `quill dismiss --run <id>`. Approval queues an ordinary suggest-only run through the normal reservation and says so when the ticket already has one; dismissals are journaled. Open proposals lapse after 7 days, or for good once the ticket is done. Every proposal needs the owner: there is no auto-approval (`auto_run_editors` and `auto_run_recipes` from a pre-release build are ignored with a warning), and `/session-quill:approve` is not model-invocable. An approved run's origin is kept as `handoff.proposal` and shown to the agent only as labelled untrusted data, never as the owner's note. A repository recipe that shadows the offered one is refused.
 
 ### Changed
 
+- Navigation is grouped into Work and Track; phones show Pick next, Board, Runs, Activity and More.
+- The top bar is one row: workspace status, refresh and connection details live in one popover; filters sit behind a Filter button; receipts are toasts, and errors stay until dismissed.
+- Proposed runs moved from Activity to Runs → Needs you.
+- Form controls have 3:1 borders; dark-mode faint text is a distinct level.
+- Put Pick next recommendations before the collapsed unlinked-work inbox, with compact workspace statistics and a recent-context section.
+- Group ticket details into Overview, Activity and Delivery, with next action, latest checkpoint and status controls first; add an expanded ticket view and collapsible navigation.
+- Consolidate workspace health details, surface pending run approvals in the header, and add direct checkpoint access from Sessions. Rename Today to Activity and Tree to Relationships.
+- Improve keyboard focus in modal ticket details and responsive layouts; refresh dashboard screenshots.
 - A run that may edit source (`edit_source`) always self-checks its reply, whatever its recipe's `self_check` says.
 - At most one run that edits source executes at a time by default (it was any two runs of either kind); set `max_concurrent_fix` to allow more.
 - `agent_ms` no longer includes the worker's test runs, which are `test_ms`.
 
 ### Fixed
 
+- Full run results and timeline text now display after loading, and failed loads show Retry.
+- Sessions → View checkpoints opens the ticket the checkpoint was captured on.
+- Static exports bundle every dashboard module; ticket detail and Activity no longer fail in an exported page.
+- Onboarding ([ADR 0024](docs/decisions/0024-tracker-onboarding.md)): an assigned issue counts as imported only when a ticket points at that very issue; a key another ticket holds is reported as a collision and skipped. The fallback GitHub key prefix drops separators (`WEBAPP-12`, not `WEB_APP-12`) so it matches the key pattern.
+- The repository resolver records a failed read of an issue's hints and moves the ticket to the back of its queue; after a 404 or 403 it waits a day, doubling to a week. Origins are read without blocking the worker, four at a time, and cached until a folder's git config changes.
+- Clones also disable Git LFS filters (`GIT_LFS_SKIP_SMUDGE=1`) and HTTP redirects, kill git's whole process tree on timeout or cancel (Windows too), and register a folder of the target name that already holds the remote instead of cloning beside it. The worker removes unfinished `.*.partial-*` clone folders when it starts. Folder names are cleaned again after the 64-character cut and never a Windows device name with an extension.
+- `[tracker.repo_map]` remotes carrying credentials are ignored with a warning; remotes are stored and shown without userinfo.
+- `quill/no-code` is no longer dropped by a `tags` update that omits it; only `no_code: false` clears it.
+- Linking a ticket to a just-registered repository no longer races the worker's config reload, and registering a clone re-reads `config.toml` right before writing, keeping a `quill repo add` made meanwhile.
+- Dashboard bulk selection: a bulk run no longer reopens its results dialog after you close it or overwrite another batch's, and clears only the tickets it submitted. **Undo all** also covers changes still being sent and keeps earlier bulk changes inside their window. Changing filters drops checked tickets they hide. `x` with ctrl, meta or alt is left to the browser. The bulk bar is a labelled group and updates its count in place, keeping focus and not replaying its entrance.
+- Queued runs of a built-in recipe no longer fail with `recipe-changed` after an upgrade changes the built-in's text; they run the current built-in. Personal and repository recipes still must match the hash that was reviewed.
+- `quill handoff cancel --batch` without a value no longer cancels the first run it finds; it, an empty batch id, and `quill handoff cancel` without a run id are usage errors.
+- Fix runs could reach Claude Code subagents (`Task`/`Agent`) under `settings` or `full` access, and a fix run's self-check turn was given them. Only read-only `analyse` and `analyse-followups` runs get subagents now, under every access level, and the self-check never does.
+- Worker test gate: a passing test command that leaves a background process holding its output is recorded as passed, not as a timeout. The exit code decides; the gate then waits 2 s for the output to close and kills the leftover tree (the process group on POSIX, `taskkill /T` on Windows), also after a cancellation or deadline. Stopping the worker during the gate waits for it, so the run ends as stopped rather than interrupted.
+- Runs that fail during setup or cannot spawn the runtime keep the timings measured so far (queue wait, setup, agent time) instead of dropping them. A run whose self-check was skipped or did not finish records why in `result_quality.self_check_skipped`.
+- When the dashboard port is taken, `ui-endpoint.json` records `configured_port`, `quill ui` warns that bookmarks to it do not reach the dashboard, and the status line ends with "⚠ port 47321 taken; using N". The host and port read from that file are validated (loopback host, port 1-65535) before they reach a URL or the status line's OSC 8 sequence.
+- The `st_owner` cookie has a 7-day `Max-Age`, renewed on every authenticated response, so a browser really stays signed in for 7 days across browser restarts. CSRF tokens are compared in constant time.
+- `quill worker install`: the macOS LaunchAgent and the Linux systemd unit carry the install-time `PATH`, so `claude`, git and node resolve at login; the Linux unit escapes `%` (and `$` in `ExecStart=`); the Windows `worker-login.vbs` is written as UTF-16LE with a BOM, so a profile path outside ASCII works. `quill doctor` checks on Windows that the Task Scheduler task still exists and warns "marker present but task missing".
+- Configs from earlier releases stored `ui_port = 0` (the old default) and so never got the fixed dashboard port. The user config now carries `config_version = 1`; loading a file without it once drops a stored `ui_port = 0` and adds the marker, so a `ui_port = 0` set afterwards still means random. Saving no longer pins an untouched default `ui_port`.
+- `quill ui --revoke` always leaves the sign-out for the worker (`control/ui-revoke.json`), so a stopped worker applies it at its next start and a slow one on its next tick; until then no session verifies and a running worker can no longer write a revoked session back to `ui-sessions.json`. A worker that does not confirm within 5 s is reported, not treated as an error.
 - Cancelling or timing out a run on Windows kills its whole process tree; the parent was killed before `taskkill` walked the tree, which could leave children running and holding the run open.
+- Dashboard, after a browser audit of the orchestration UI: on phone-width layouts the bulk action bar no longer overlaps the bottom nav (it sits 68px up, the nav being 61px tall) and the worker health popover ("Starts at login") no longer runs off the right edge of the screen. In select mode the top-ranked Pick next card keeps its full-width row. **Undo all (N)** reads as one label instead of "Undo all ( N )". Rows of the bulk run form keep their eligibility chip on the ticket's line, truncating a long title on wide screens and wrapping on phones.
 
 ## [0.7.2] - 2026-10-11
 
@@ -206,7 +250,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/nulllvoid/session-quill/compare/v0.7.2...v1.0.0
 [0.7.2]: https://github.com/nulllvoid/session-quill/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nulllvoid/session-quill/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/nulllvoid/session-quill/compare/v0.6.0...v0.7.0

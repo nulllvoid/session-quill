@@ -119,3 +119,13 @@ test('CLI: quill ui --static writes a standalone file; quill export requires --y
     await w.stop();
   }
 });
+
+test('the static bundle contains every module app.js imports, dependencies first', async () => {
+  const { uiModuleOrder } = await import('../../src/export/static.js');
+  const order = uiModuleOrder();
+  for (const rel of ['views/agents.js', 'views/today.js', 'views/bulk.js', 'lib/bulk.js', 'lib/proposals.js', 'components.js']) assert.ok(order.includes(rel), `${rel} bundled`);
+  assert.ok(order.indexOf('components.js') < order.indexOf('views/detail.js'), 'dependencies come first');
+  assert.equal(order.includes('lib/api.js'), false, 'the live API is never bundled');
+  const bundle = bundleUiModules({ staticMode: true });
+  for (const name of ['renderAgentsSection', 'renderToday', 'renderBatchStrips', 'freshProposals', 'activeBatches']) assert.ok(bundle.includes(`function ${name}(`), `${name} present`);
+});

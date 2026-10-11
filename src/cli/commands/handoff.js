@@ -105,10 +105,16 @@ async function cancelBatch(ctx, io, batch, flags) {
 }
 
 async function cancel(ctx, io, args, flags) {
-  if (typeof flags.batch === 'string') return cancelBatch(ctx, io, flags.batch, flags);
+  const usage = 'usage: quill handoff cancel <handoff-id> | quill handoff cancel --batch <batch-id>';
+  // A bare --batch parses as true; it must never fall through to cancelling some other run.
+  if (flags.batch !== undefined) {
+    if (typeof flags.batch !== 'string' || !flags.batch.trim()) throw new TrackerError('usage', usage);
+    return cancelBatch(ctx, io, flags.batch.trim(), flags);
+  }
   const [id] = args;
+  if (typeof id !== 'string' || !id.trim()) throw new TrackerError('usage', usage);
   const snap = latestSnapshot(ctx);
-  const h = snap ? snap.handoffs.find((x) => x.id === id || x.id.startsWith(id ?? '')) : null;
+  const h = snap ? snap.handoffs.find((x) => x.id === id || x.id.startsWith(id)) : null;
   if (!h) throw new TrackerError('handoff-unknown', `unknown handoff ${id}`);
   const ticket = snap.tickets.find((x) => x.id === h.ticket_id);
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticket ? ticket.revision : null, payload: { handoff_id: h.id } }, flags);

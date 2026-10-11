@@ -31,7 +31,7 @@ const HELP = `quill — Session Quill CLI
 Usage: quill <command> [options]
 
   start [--repo <path>] [--store <path>] [--session <id>] [--share-settings]
-  init [--store <path>] [--project <id>] [--project-name <name>] [--repo <path>] [--timezone <tz>] [--yes]
+  init [--store <path>] [--project <id>] [--project-name <name>] [--repo <path>] [--timezone <tz>] [--yes] [--bootstrap-from-tracker]
   ticket create "<title>" --description "<Goal/Context/Done when>" [--category c] [--priority P2] [--parent KEY] [--project id] [--due YYYY-MM-DD] [--bind] --session <id>
   ticket work "<task title>" --description "<Goal/Context/Done when>" [--category c] [--project id] [--repo id] --session <id>  (reuse or create, then bind)
   ticket bind <KEY> --session <id>          ticket show --session <id> [--json]
@@ -39,9 +39,11 @@ Usage: quill <command> [options]
   ticket relink <KEY> --external <EXT-KEY> [--system s] [--url <url>] --session <id>   (--jira is an alias)
   ticket children <KEY>                     ticket list [--status s] [--json]
   ticket stale [--idle-days n] [--json]     ticket stale --apply  (closes shipped and children-done tickets)
-  ticket set <KEY> [--description d] [--title t] [--status s] [--blocker b] [--next text] [--priority P] [--category c] [--due D|none] [--parent KEY|none] [--repo id|none]
+  ticket set <KEY> [--description d] [--title t] [--status s] [--blocker b] [--next text] [--priority P] [--category c] [--due D|none] [--parent KEY|none] [--repo id|none] [--no-code yes|no]
   repo add <path> [--id id] [--project id] [--repo-file]   repo list [--json]   repo remove <id>
+  repo clone <KEY> [--url <remote>] [--confirm]   (preview, then clone a ticket's repository into [tracker] auto_clone_dir)
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>
+  approve --run [<id>] [--json]             dismiss --run <id>  (runs proposed from a shared page)
   status [--json] [--session <id>] | status --statusline
   doctor
   worker run | start | stop | status       worker install | uninstall  (start the worker at login)
@@ -57,6 +59,7 @@ Usage: quill <command> [options]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
   agent install <https git URL|folder> [--ref r] [--only a,b] [--replace] [--confirm]   agent uninstall <recipe> [--force]
   publish list [--json]                     publish [<name>] [--confirm]
+  tracker import [--json]                   (open issues assigned to you become tickets)
   tracker push <KEY> [--to "<status>"] [--comment text] [--confirm]   (needs [tracker] write_back = true)
   migrate --source <dir> [--profile <name|path.json>] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>
   hook <EventName>                          (reads host JSON on stdin)

@@ -20,6 +20,8 @@ import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest } from './handoff.js';
 import { bodyHash, EDIT_DELAY_MS } from '../../server/requests.js';
 import { addMs } from '../../lib/time.js';
+import { createRecipeCatalog } from '../../agents/recipes.js';
+import { proposalFromEdit, runChoices } from '../../publish/run-proposals.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const publishDir = (ctx, name) => path.join(quillHome(ctx.env), 'publish', name);
@@ -75,11 +77,30 @@ async function run(ctx, io, name, flags) {
   return 0;
 }
 
+const recipeCatalog = (ctx) => createRecipeCatalog({ env: ctx.env, config: ctx.config, ttlMs: 0 });
+
+// A Run agent pick (ADR 0025) becomes a proposal through ingress, as the worker's publish job does.
+// Whether the repository is registered comes from the worker's snapshot (its store's repos), as in
+// the worker, and a refused pick is said out loud.
+function bringBackRun(ctx, io, p, e, snap) {
+  const ticket = ((snap && snap.tickets) || []).find((t) => t.id === e.ticket_id);
+  if (!ticket) { io.println(`${p.name}: Run agent pick on ${e.key} names an unknown ticket; skipped`); return; }
+  const registered = !!(ticket.repo_id && ((snap && snap.repos) || []).some((r) => r.id === ticket.repo_id));
+  const out = proposalFromEdit(p, e, { recipes: recipeCatalog(ctx), ticket, repoRegistered: registered });
+  if (out.skip) return;
+  if (out.error) { io.println(`${p.name}: Run agent pick on ${e.key} refused: ${out.error}`); return; }
+  writeIngress(cliEvent(ctx, { kind: 'run-proposal', payload: out.proposal, ticket_id: ticket.id, source_identity: `run-proposal:${out.proposal.id}` }), ctx.env);
+  io.println(`${p.name}: ${out.proposal.recipe.name} on ${e.key} proposed from the page; approve or dismiss it in Today or with quill approve --run`);
+}
+
 // Two-way artifacts (ADR 0011): page edits become revision-checked requests (with the normal undo
 // window) and comments become ticket timeline entries, through ingress like any CLI change.
-function bringBack(ctx, publisher, done) {
+function bringBack(ctx, io, p, done) {
+  const publisher = p.name;
   const now = nowIso();
+  const snap = latestSnapshot(ctx);
   for (const e of done.edits ?? []) {
+    if (e.field === 'run') { bringBackRun(ctx, io, p, e, snap); continue; }
     const kind = e.field === 'status' ? 'set-status' : 'set-next-action';
     const payload = e.field === 'status' ? { status: e.value } : { next_action: String(e.value ?? '') };
     const body = { id: editRequestId(publisher, e), kind, target_id: e.ticket_id, expected_revision: e.expected_revision, payload };
@@ -128,7 +149,7 @@ function plan(ctx, io, name, flags) {
   const now = nowIso();
   const statePath = path.join(publishDir(ctx, name), 'state.json');
   const prior = readJsonIfExists(statePath);
-  const step = beginArtifactPublish(p, rowsFor(snap, p, { exportedAt: now }), { prior: prior && (!p.url || prior.url === p.url) ? prior : null, now });
+  const step = beginArtifactPublish(p, rowsFor(snap, p, { exportedAt: now }), { prior: prior && (!p.url || prior.url === p.url) ? prior : null, now, runRecipes: runChoices(recipeCatalog(ctx), p) });
   writeRun(ctx, io, p, step, { publisher: name, run_id: uuid(), destination, confirm: flags.confirm === true, started_at: now });
   return 0;
 }
@@ -158,7 +179,7 @@ function result(ctx, io, name, file) {
     return 0;
   }
   // Edits and comments reach ingress before the state that acknowledges them is saved (see jobs.js).
-  bringBack(ctx, name, outcome.done);
+  bringBack(ctx, io, p, outcome.done);
   writeJsonAtomic(path.join(publishDir(ctx, name), 'state.json'), outcome.done.state);
   fs.rmSync(pendingPath, { force: true });
   journal(ctx, { publisher: name, run_id: pending.run_id, outcome: 'ok', summary: outcome.done.summary, url: outcome.done.url, destination: pending.destination, confirmed: pending.confirm, trigger: 'session' });

@@ -50,6 +50,9 @@ export function handleRequestTx(state, ev, result) {
         // The suggestion baseline is the ticket revision as recorded with the handoff itself.
         handoff.base_ticket_revision = ticket.revision;
       }
+      // An approved proposal (ADR 0025) records who approved it and the run it became.
+      const proposal = m.proposal_id && state.runProposals ? state.runProposals.get(m.proposal_id) : null;
+      if (proposal && proposal.state === 'proposed') Object.assign(proposal, { state: 'approved', resolved_at: ev.occurred_at, resolved_by: req.actor_id ?? 'owner', request_id: req.id, handoff_id: handoff.id });
       result.handoffsChanged.add(m.handoff.id);
     } else if (m.type === 'file-effect-undo') {
       const h = state.handoffs.get(m.handoff_id);
@@ -85,6 +88,13 @@ export function handleRequestTx(state, ev, result) {
     } else if (m.type === 'relink') {
       const ticket = state.tickets.get(m.ticket_id);
       if (ticket && !relinkTicket(state, ticket, ev, m, result).rejected) req.applied_revision = ticket.revision;
+    } else if (m.type === 'run-proposal-dismiss') {
+      const proposal = state.runProposals ? state.runProposals.get(m.proposal_id) : null;
+      if (proposal && proposal.state === 'proposed') {
+        Object.assign(proposal, { state: 'dismissed', resolved_at: ev.occurred_at, resolved_by: req.actor_id ?? 'owner', request_id: req.id });
+        const ticket = state.tickets.get(proposal.ticket_id);
+        if (ticket) { ticket.timeline.push(timelineEntry(ev, 'proposal', `Proposed ${proposal.recipe.name} run dismissed`)); result.changed.add(ticket.id); }
+      }
     } else if (m.type === 'refresh') {
       // no state mutation; the worker runs reconciliation as an effect
     } else if (m.type === 'suggestion') {

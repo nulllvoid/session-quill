@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { cli } from './helpers.js';
+import { cli, seedSpawnConfig, stopSpawnedWorker } from './helpers.js';
 import { loadUserConfig } from '../../src/config/config.js';
 import { mainWorkTree, samePath } from '../../src/config/repos.js';
 import { mainWorkTreeOf } from '../../src/lib/git-head.js';
@@ -26,11 +26,9 @@ function repoWithWorktrees() {
   const beside = path.join(root, 'app-feature-2');
   git(repo, 'worktree', 'add', '-q', '-b', 'feature', inside);
   git(repo, 'worktree', 'add', '-q', '-b', 'feature-2', beside);
-  return { root, repo, inside, beside, env: { QUILL_HOME: path.join(root, 'home') } };
-}
-
-async function stop(fx) {
-  if (loadUserConfig(fx.env).store_path) await cli(['worker', 'stop'], fx.env);
+  const env = { QUILL_HOME: path.join(root, 'home') };
+  seedSpawnConfig(env);
+  return { root, repo, inside, beside, env };
 }
 
 test('a linked worktree resolves to its repository, with and without git', () => {
@@ -45,7 +43,7 @@ test('a linked worktree resolves to its repository, with and without git', () =>
 });
 
 test('start from a worktree registers the repository, and keeps an existing registration', async (t) => {
-  const fx = repoWithWorktrees(); t.after(() => stop(fx));
+  const fx = repoWithWorktrees(); t.after(() => stopSpawnedWorker(fx.env));
   const first = await cli(['start', '--repo', fx.inside], fx.env);
   assert.equal(first.code, 0, first.err);
   const repos = Object.values(loadUserConfig(fx.env).repos);
@@ -60,7 +58,7 @@ test('start from a worktree registers the repository, and keeps an existing regi
 });
 
 test('an id from a parent .quill.toml does not take over a repository registered elsewhere', async (t) => {
-  const fx = repoWithWorktrees(); t.after(() => stop(fx));
+  const fx = repoWithWorktrees(); t.after(() => stopSpawnedWorker(fx.env));
   assert.equal((await cli(['start', '--repo', fx.repo], fx.env)).code, 0);
   const [id] = Object.keys(loadUserConfig(fx.env).repos);
   fs.writeFileSync(path.join(fx.repo, '.quill.toml'), `repo_id = "${id}"\nproject_id = "app"\n`);
@@ -75,8 +73,8 @@ test('an id from a parent .quill.toml does not take over a repository registered
   assert.ok(Object.values(repos).some((x) => samePath(x.canonical_path, nested)), 'the nested clone gets its own entry');
 });
 
-test('repo add on a worktree registers the repository and says so', async () => {
-  const fx = repoWithWorktrees();
+test('repo add on a worktree registers the repository and says so', async (t) => {
+  const fx = repoWithWorktrees(); t.after(() => stopSpawnedWorker(fx.env));
   assert.equal((await cli(['init', '--repo', fx.repo, '--store', path.join(fx.root, 'store'), '--project', 'app', '--project-name', 'App', '--yes'], fx.env)).code, 0);
   const r = await cli(['repo', 'add', fx.beside, '--id', 'app2'], fx.env);
   assert.equal(r.code, 0, r.err);

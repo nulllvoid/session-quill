@@ -1,10 +1,12 @@
 // Restricted TOML subset used for quill-written configuration.
-// Supported: comments, `key = value` with string/integer/boolean/array-of-strings values,
-// and `[dotted.table]` headers. Anything else is rejected with a diagnostic rather than
+// Supported: comments, `key = value` with string/integer/boolean/array-of-strings values (a key is
+// bare, or double-quoted without escapes for names such as "owner/repo"), and `[dotted.table]` headers. Anything else is rejected with a diagnostic rather than
 // parsed lossily (TRD §Configuration and packaging).
 import { TrackerError } from '../lib/errors.js';
 
 const KEY_RE = /^[A-Za-z0-9_-]+$/;
+// A quoted key: printable characters other than quotes and backslashes (no escapes to decode).
+const QUOTED_KEY_RE = /^"([^"\\\x00-\x1f]{1,200})"\s*=(.*)$/;
 
 function unsupported(line, lineNo, why) {
   return new TrackerError('toml-unsupported', `config line ${lineNo}: ${why}: ${line.trim()}`);
@@ -124,6 +126,12 @@ export function parseToml(text) {
       }
       return;
     }
+    if (line.startsWith('"')) {
+      const m = QUOTED_KEY_RE.exec(line);
+      if (!m) throw unsupported(rawLine, lineNo, 'unsupported quoted key');
+      table[m[1]] = parseValue(m[2].trim(), rawLine, lineNo);
+      return;
+    }
     const eq = line.indexOf('=');
     if (eq < 0) throw unsupported(rawLine, lineNo, 'expected key = value');
     const key = line.slice(0, eq).trim();
@@ -146,6 +154,12 @@ function formatValue(value) {
   throw new TrackerError('toml-unsupported', `cannot serialize value of type ${typeof value}`);
 }
 
+function formatKey(key) {
+  if (KEY_RE.test(key)) return key;
+  if (!/^[^"\\\x00-\x1f]{1,200}$/.test(key)) throw new TrackerError('toml-unsupported', `cannot write the key ${JSON.stringify(key)}`);
+  return `"${key}"`;
+}
+
 function isTable(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -157,7 +171,7 @@ function emitTable(obj, prefix, out) {
   const tables = Object.entries(obj).filter(([, v]) => isTable(v));
   const arrays = Object.entries(obj).filter(([, v]) => isTableArray(v));
   if (prefix.length) out.push(`[${prefix.join('.')}]`);
-  for (const [k, v] of scalars) out.push(`${k} = ${formatValue(v)}`);
+  for (const [k, v] of scalars) out.push(`${formatKey(k)} = ${formatValue(v)}`);
   if (prefix.length || scalars.length) out.push('');
   for (const [k, v] of tables) emitTable(v, [...prefix, k], out);
   for (const [k, items] of arrays) {

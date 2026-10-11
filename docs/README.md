@@ -12,6 +12,8 @@ Session Quill is a proposed public Claude Code plugin for ticket-bound sessions,
 | [TRD](TRD.md) | Gate behavior, durable writer, attribution, reconciliation, UI transport, handoff and migration |
 | [Data contract](DATA-CONTRACT.md) | Canonical fields, enums, identities, requests and state transitions |
 | [UI design](UI-DESIGN.md) | Views, capabilities, interaction outcomes, responsive layout and visual system |
+| [Claude design system](design-system/CLAUDE-DESIGN-SYSTEM.md) | Current Quill Fieldnotes identity, reusable assets, components and agent implementation contract |
+| [Visual reference](design-system/index.html) | Interactive light/dark token, icon and component catalog; run `node scripts/preview-design-system.mjs` |
 | [Acceptance scenarios](ACCEPTANCE.md) | Testable phase gates and traceability back to review findings |
 | [Architecture decisions](decisions/) | Worker serialization, local-first dashboard, tested hook compatibility, plan-path first claim, gate modes and zero-command binding, unlinked work inbox, schedules and Bitbucket, agent recipes, environments and Today, publishers, tracker sync and two-way artifacts |
 | [Architecture guide](ARCHITECTURE.md) | Contributor-facing map of the code and the invariants it keeps |

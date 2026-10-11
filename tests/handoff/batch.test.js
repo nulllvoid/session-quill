@@ -44,3 +44,13 @@ test('cancelling a batch targets its queued runs only', () => {
   assert.deepEqual(batchCancelTargets(snap, BATCH.slice(0, 8)).map((h) => h.id), ['h1'], 'a unique prefix names the batch');
   assert.deepEqual(batchCancelTargets(snap, 'nope'), []);
 });
+
+test('quill handoff cancel needs a batch id after --batch, or a run id', async () => {
+  const { makeHome, cli } = await import('../cli/helpers.js');
+  const fx = makeHome();
+  for (const argv of [['handoff', 'cancel', '--batch'], ['handoff', 'cancel', '--batch', ''], ['handoff', 'cancel']]) {
+    const r = await cli(argv, fx.env);
+    assert.notEqual(r.code, 0, argv.join(' '));
+    assert.match(r.err, /usage: .*handoff cancel/i, argv.join(' '));
+  }
+});

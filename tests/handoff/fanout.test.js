@@ -28,3 +28,27 @@ test('the built-in analyse recipes tell the agent to split large analyses by mod
     assert.match(r.body, /merge/i);
   }
 });
+
+test('only read-only analyses get subagents, under every access level, and a self-check never does', async () => {
+  const { runtimeAccess, selfCheckTools } = await import('../../src/handoff/runner.js');
+  const fixPerms = { read_source: true, edit_source: true };
+  for (const access of ['standard', 'settings', 'full']) {
+    const fix = runtimeAccess({ access, mode: 'attempt-fix', permissions: fixPerms });
+    for (const tool of SUBAGENT_TOOLS) {
+      assert.equal(fix.allowed.includes(tool), false, `${access}: a fix is not allowed ${tool}`);
+      assert.ok(fix.disallowed.includes(tool), `${access}: a fix is denied ${tool}`);
+    }
+    const editingAnalyse = runtimeAccess({ access, mode: 'analyse', permissions: fixPerms });
+    for (const tool of SUBAGENT_TOOLS) assert.ok(editingAnalyse.disallowed.includes(tool), `${access}: a run that may edit source is denied ${tool}`);
+    const read = runtimeAccess({ access, mode: 'analyse', permissions: { read_source: true } });
+    for (const tool of SUBAGENT_TOOLS) assert.equal(read.disallowed.includes(tool), false, `${access}: a read-only analysis keeps ${tool}`);
+  }
+  for (const perms of [{ read_source: true }, { read_source: false }, fixPerms]) {
+    const check = selfCheckTools(perms);
+    for (const tool of SUBAGENT_TOOLS) {
+      assert.equal(check.allowed.includes(tool), false, 'the self-check is one agent');
+      assert.ok(check.disallowed.includes(tool));
+    }
+    assert.ok(check.disallowed.includes('Edit'), 'and never edits');
+  }
+});

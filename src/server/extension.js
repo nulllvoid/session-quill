@@ -21,7 +21,8 @@ export function sessionsPath(env) {
   return path.join(stateDir(env), 'ui-sessions.json');
 }
 
-// Dropped by `quill ui --revoke`; the running worker signs every browser out when it sees it.
+// Dropped by `quill ui --revoke`; the worker signs every browser out when it sees it, on its next
+// tick or at its next start, and serves no session while it is waiting.
 export function revokePath(env) {
   return path.join(stateDir(env), 'control', 'ui-revoke.json');
 }
@@ -55,14 +56,16 @@ export function createExtension(ctx, { port, exportHandler = null } = {}) {
     address: () => address,
     acceptSecretHash: (hash, expiresAtMs) => auth && auth.acceptSecretHash(hash, expiresAtMs),
     async onStart(worker) {
-      auth = createAuth({ clock: worker.clock, sessionsPath: sessionsPath(ctx.env) });
+      auth = createAuth({ clock: worker.clock, sessionsPath: sessionsPath(ctx.env), revokePath: revokePath(ctx.env) });
       applyRevoke(worker);
       recoverApplying(worker);
       const exporter = exportHandler ?? await loadExportHandler();
       server = createServer(worker, { auth, exportHandler: exporter });
       address = await listen(server, { port: configuredPort });
-      if (configuredPort && address.port !== configuredPort) worker.log(`dashboard port ${configuredPort} is in use; serving on ${address.port} instead`);
-      writeJsonAtomic(endpointPath(ctx.env), { host: '127.0.0.1', port: address.port, pid: process.pid, started_at: worker.now() });
+      const fellBack = configuredPort && address.port !== configuredPort;
+      if (fellBack) worker.log(`dashboard port ${configuredPort} is in use; serving on ${address.port} instead`);
+      // configured_port only on a fallback, so `quill ui` and the status line can warn about it.
+      writeJsonAtomic(endpointPath(ctx.env), { host: '127.0.0.1', port: address.port, ...(fellBack ? { configured_port: configuredPort } : {}), pid: process.pid, started_at: worker.now() });
     },
     tick(worker) {
       if (!auth) return;

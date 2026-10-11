@@ -73,6 +73,8 @@ export function planRowWrites({ local, last = {}, remote = {}, now, editable = n
     const patch = {};
     const record = {};
     let edited = false;
+    // A Run agent pick (ADR 0025) is not a ticket edit: it never holds back the revision stamp.
+    let heldRevision = false;
     for (const [f, lv] of fieldsOf(row)) {
       const rv = r.data[f];
       if (eq(lv, rv)) { record[f] = lv; continue; }
@@ -85,6 +87,7 @@ export function planRowWrites({ local, last = {}, remote = {}, now, editable = n
         edits.push({ ticket_id: row._ticket.id, key: row.key ?? id, field: f, value: rv, expected_revision: r.data._quill.revision, by: (r.data._edits && r.data._edits[f] && r.data._edits[f].by) || null, at: (r.data._edits && r.data._edits[f] && typeof r.data._edits[f].at === 'string' && r.data._edits[f].at) || null });
         record[f] = rv;
         edited = true;
+        if (f !== 'run') heldRevision = true;
         continue;
       }
       // One-way: their value stands on the page.
@@ -99,9 +102,9 @@ export function planRowWrites({ local, last = {}, remote = {}, now, editable = n
     const outOfScope = r.data._quill.in_scope === false;
     // Two-way rows carry the revision they show, so a page edit is checked against what the editor saw.
     // A row still showing an edit keeps the revision its editor saw until it shows Quill's values again.
-    const staleRevision = !!editable && !!row._ticket && !edited && r.data._quill.revision !== row._ticket.revision;
-    const revision = edited ? r.data._quill.revision : undefined;
-    if (Object.keys(patch).length || outOfScope || staleRevision) writes.push({ op: 'update', collection: 'tickets', doc_id: id, if_version: r.version, data: { ...patch, ...(edited ? stamp(true, row, revision) : stamp(true, row)) } });
+    const staleRevision = !!editable && !!row._ticket && !heldRevision && r.data._quill.revision !== row._ticket.revision;
+    const revision = heldRevision ? r.data._quill.revision : undefined;
+    if (Object.keys(patch).length || outOfScope || staleRevision) writes.push({ op: 'update', collection: 'tickets', doc_id: id, if_version: r.version, data: { ...patch, ...(heldRevision ? stamp(true, row, revision) : stamp(true, row)) } });
     published[id] = record;
   }
   for (const [id, r] of Object.entries(remote)) {
@@ -200,16 +203,19 @@ function withOps(plan) {
   return { plan, ops: plan.steps.map((s) => s.op) };
 }
 
-// Phase 1. Returns { plan, files, context } for the first executor run.
-export function beginArtifactPublish(publisher, rows, { prior = null, now }) {
+// Phase 1. Returns { plan, files, context } for the first executor run. `runRecipes` are the
+// recipes a run_agent page offers (ADR 0025); each row then carries an empty `run` field that a
+// page editor's pick changes, and the next publish clears again.
+export function beginArtifactPublish(publisher, rows, { prior = null, now, runRecipes = [] }) {
   const twoWay = publisher.two_way === true;
-  const page = renderArtifactPage({ title: publisher.title ?? publisher.name, fields: publisher.fields, twoWay });
+  const runAgent = twoWay && publisher.run_agent === true;
+  const page = renderArtifactPage({ title: publisher.title ?? publisher.name, fields: publisher.fields, twoWay, runRecipes: runAgent ? runRecipes : [] });
   const pageHash = crypto.createHash('sha256').update(page).digest('hex');
-  const local = Object.fromEntries(rows.map((r) => [docId(r.key), r]));
+  const local = Object.fromEntries(rows.map((r) => [docId(r.key), runAgent ? { ...r, run: '' } : r]));
   const meta = { title: publisher.title ?? publisher.name, fields: publisher.fields, published_at: now, publisher: publisher.name, generator: 'session-quill' };
   const url = (prior && prior.url) || publisher.url || null;
   const publishStep = { op: 'publish', file: 'page.html', title: meta.title, capabilities: twoWay ? { ...PAGE_CAPABILITIES, user: {} } : PAGE_CAPABILITIES };
-  const editable = twoWay ? ['status', 'next'].filter((f) => publisher.fields.includes(f)) : null;
+  const editable = twoWay ? [...['status', 'next'].filter((f) => publisher.fields.includes(f)), ...(runAgent ? ['run'] : [])] : null;
   const keys = Object.fromEntries(rows.filter((r) => r._ticket).map((r) => [r.key, r._ticket.id]));
   const base = { url, page_hash: pageHash, local, last: (prior && prior.rows) || {}, meta, now, rows: rows.length, two_way: twoWay, editable, keys, seen_comments: (prior && prior.seen_comments) || [] };
   if (!url) {
@@ -272,8 +278,8 @@ function summarize({ added, updated, out, foreign = 0, missing = 0 }, kept) {
 }
 
 // The headless executor path: run every phase through `client.run`.
-export async function publishArtifact(publisher, rows, { client, prior = null, now }) {
-  let step = beginArtifactPublish(publisher, rows, { prior, now });
+export async function publishArtifact(publisher, rows, { client, prior = null, now, runRecipes = [] }) {
+  let step = beginArtifactPublish(publisher, rows, { prior, now, runRecipes });
   for (;;) {
     const { result, dir } = await client.run(step.plan, step.files);
     const next = continueArtifactPublish(step.context, result, dir);

@@ -110,7 +110,7 @@ export function sanitizeSnapshot(snapshot, options = {}) {
   const o = normalizeOptions(options);
   const tickets = snapshot.tickets.filter((t) => !o.projects || o.projects.includes(t.project_id));
   const ids = new Set(tickets.map((t) => t.id));
-  const meta = { ...snapshot.meta, owner_machine_id: null, exported_at: o.exportedAt, active_sync_request_id: null, oldest_pending_event_at: null };
+  const meta = { ...snapshot.meta, onboarding: null, owner_machine_id: null, exported_at: o.exportedAt, active_sync_request_id: null, oldest_pending_event_at: null };
   const out = {
     schema_version: snapshot.schema_version ?? 1,
     generation_id: snapshot.generation_id,

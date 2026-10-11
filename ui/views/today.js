@@ -2,8 +2,8 @@
 // writes the same feed into the daily note.
 import { esc, attr, keyEl, statusChip, timeEl, ticketById, matchesFilters, emptyState, normalizeSnapshot } from '../components.js';
 
-const LABELS = { commit: ['commit', 'commits'], pr: ['PR', 'PRs'], deployment: ['deployment', 'deployments'], status: ['status change', 'status changes'], write: ['file write', 'file writes'], plan: ['plan', 'plans'], conclusion: ['conclusion', 'conclusions'], handoff: ['agent run', 'agent runs'], comment: ['page comment', 'page comments'], bind: ['binding', 'bindings'] };
-const KIND_TEXT = { commit: 'Commit', pr: 'PR', deployment: 'Deployment', status: 'Status', write: 'Write', plan: 'Plan', conclusion: 'Conclusion', handoff: 'Agent', comment: 'Comment', bind: 'Bound' };
+const LABELS = { commit: ['commit', 'commits'], pr: ['PR', 'PRs'], deployment: ['deployment', 'deployments'], status: ['status change', 'status changes'], write: ['file write', 'file writes'], plan: ['plan', 'plans'], conclusion: ['conclusion', 'conclusions'], handoff: ['agent run', 'agent runs'], comment: ['page comment', 'page comments'], proposal: ['proposed run', 'proposed runs'], bind: ['binding', 'bindings'] };
+const KIND_TEXT = { commit: 'Commit', pr: 'PR', deployment: 'Deployment', status: 'Status', write: 'Write', plan: 'Plan', conclusion: 'Conclusion', handoff: 'Agent', comment: 'Comment', proposal: 'Proposed', bind: 'Bound' };
 
 function previousDate(date) {
   const [y, m, d] = date.split('-').map(Number);
@@ -21,7 +21,7 @@ export function countsText(counts = {}) {
   return Object.keys(LABELS).filter((k) => counts[k]).map((k) => `${counts[k]} ${LABELS[k][counts[k] === 1 ? 0 : 1]}`).join(' · ');
 }
 
-export function renderToday(rawSnapshot, filters, { now }) {
+export function renderToday(rawSnapshot, filters, { now, pending = [] }) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const tz = snapshot.meta.timezone;
   if (!snapshot.today) {

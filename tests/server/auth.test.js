@@ -106,3 +106,30 @@ test('revokeAll clears persisted sessions and outstanding one-use secrets', () =
   assert.equal(auth.exchangeSecret(pending), null);
   assert.equal(createAuth({ clock: () => NOW, sessionsPath: file }).verifyToken(token), false);
 });
+
+test('while a revoke marker is waiting, no session verifies and none is written back to disk', () => {
+  const file = sessionsFile();
+  const marker = path.join(path.dirname(file), 'ui-revoke.json');
+  let now = NOW;
+  const auth = createAuth({ clock: () => now, sessionsPath: file, revokePath: marker });
+  const token = signIn(auth, NOW);
+  // `quill ui --revoke` deletes the stored hashes and drops the marker before the worker ticks.
+  fs.rmSync(file);
+  fs.writeFileSync(marker, '{}');
+  now += 2 * 60 * 60 * 1000;
+  assert.equal(auth.verifyToken(token), false, 'the in-memory session is gone');
+  const stored = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).sessions : [];
+  assert.deepEqual(stored, [], 'the revoked hash is never re-saved');
+});
+
+test('verifyCsrf accepts only the exact token, whatever the length of a wrong one', () => {
+  const auth = createAuth({ clock: () => NOW });
+  const token = signIn(auth, NOW);
+  const good = auth.csrfFor(token);
+  assert.equal(auth.verifyCsrf(token, good), true);
+  assert.equal(auth.verifyCsrf(token, good.slice(0, 63) + (good[63] === 'a' ? 'b' : 'a')), false);
+  assert.equal(auth.verifyCsrf(token, good.slice(0, 10)), false);
+  assert.equal(auth.verifyCsrf(token, `${good}00`), false);
+  assert.equal(auth.verifyCsrf(token, 'é'.repeat(32)), false, 'multi-byte input of the same character length');
+  assert.equal(auth.verifyCsrf(token, undefined), false);
+});

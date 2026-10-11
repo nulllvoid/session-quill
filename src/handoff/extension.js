@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
-import { buildPrompt, allowedToolsFor, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
+import { buildPrompt, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
@@ -54,7 +54,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   const inUse = (fix) => [...running.values()].filter((e) => e.fix === fix).length;
   let paused = false;
 
-  function fail(worker, h, code, message, extra = {}) {
+  function failRun(worker, h, code, message, extra = {}) {
     recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code, message }, extra });
   }
 
@@ -68,6 +68,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       return null;
     }
     entry.child = run.child;
+    entry.kill = null;
     entry.done = run.done;
     const outcome = await run.done;
     if (entry.reason || outcome.error || outcome.code !== 0) return null;
@@ -84,8 +85,11 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     quality.problems = parsed.problems;
     entry.sessionId = parsed.session_id;
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
-    if (parsed.is_error || !entry.sessionId) return { outcome, quality };
-    if (parsed.problems.length && timeLeft()) {
+    if (parsed.is_error || !entry.sessionId) {
+      if (entry.selfCheck) quality.self_check_skipped = parsed.is_error ? 'the agent reported an error' : 'the reply carried no session id to resume';
+      return { outcome, quality };
+    }
+    if (parsed.problems.length && !entry.reason && timeLeft()) {
       const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: 2 });
       const fixed = next ? parseAgentResult(next.stdout, parseOpts) : null;
       if (fixed && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
@@ -97,13 +101,16 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     }
     if (entry.selfCheck && !parsed.problems.length && !entry.reason && timeLeft()) {
       // The check re-reads sources; it never edits, whatever the run was allowed to do.
-      const readOnly = allowedToolsFor({ mode: 'analyse', permissions: { read_source: !!entry.permissions.read_source } });
+      const readOnly = selfCheckTools(entry.permissions);
       const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: 12, permissionMode: 'dontAsk' });
       const checked = next ? parseAgentResult(next.stdout, parseOpts) : null;
       if (checked && !checked.is_error && !checked.problems.length) {
         outcome = next;
         quality.self_checked = true;
-      }
+      } else if (!entry.reason) quality.self_check_skipped = 'the self-check turn did not finish cleanly; the earlier reply stands';
+    } else if (entry.selfCheck) {
+      // Recorded so a fix run without its mandatory check says why (ADR 0022).
+      quality.self_check_skipped = parsed.problems.length ? 'the reply still breaks its output contract' : entry.reason ? 'the run was stopped first' : 'less than a minute left before the deadline';
     }
     return { outcome, quality };
   }
@@ -134,7 +141,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (reason === 'timeout') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'stopped') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
-    if (outcome.error) { fail(worker, current, outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', outcome.error.message); return; }
+    if (outcome.error) { record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
     const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
     const explicit = readJsonIfExists(resultFile);
     const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: outcome.stdout } : parseAgentResult(outcome.stdout, parseOpts);
@@ -205,7 +212,13 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const { command, timeoutMs } = testGateSettings(ctx.config.repos[h.repo_id]);
     if (!command) return { outcome, gate: { status: 'skipped', reason: 'no test_command for this repository; the fix is not test-verified' } };
     const env = childEnvFor(entry.permissions, process.env, entry.env);
-    const once = () => runTestCommand({ command, cwd: h.worktree_path, timeoutMs, env, onChild: (child) => { entry.child = child; } });
+    // The gate's command is the run's child while it runs: cancellation, the deadline and a worker
+    // stop kill it through its own handle, and onStop waits for it (entry.done).
+    const once = () => {
+      const p = runTestCommand({ command, cwd: h.worktree_path, timeoutMs, env, onChild: (child, kill) => { entry.child = child; entry.kill = kill; } });
+      entry.done = p;
+      return p;
+    };
     let total = 0;
     let attempts = 1;
     let result = await once();
@@ -225,6 +238,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   }
 
   async function dispatch(worker, h) {
+    // How long the run waited for a slot (worker clock), then each setup step that actually ran.
+    // A run that fails before it starts keeps whatever was measured (ADR 0022).
+    const timings = { queue_wait_ms: Math.max(0, Date.parse(worker.now()) - Date.parse(h.requested_at)) };
+    const fail = (w, run, code, message) => failRun(w, run, code, message, { timings: { ...timings } });
     const ticket = worker.state.tickets.get(h.ticket_id);
     if (!ticket) return fail(worker, h, 'ticket-missing', 'ticket no longer exists');
     const repoCfg = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
@@ -233,7 +250,11 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const catalog = catalogFor(worker);
     // Runs queued before recipes existed have no recipe reference and use the built-in of their mode.
     const recipe = !h.recipe || h.recipe.source === 'builtin' ? catalog.builtin(h.recipe ? h.recipe.name : h.mode) : catalog.get(h.recipe.name, h.repo_id ?? null, { fresh: true });
-    if (h.recipe && (!recipe || recipe.error || recipe.hash !== h.recipe.hash)) return fail(worker, h, 'recipe-changed', `recipe ${h.recipe.name} changed or was removed after this run was queued; review it and queue a new run`);
+    // A built-in recipe ships with Quill: after an upgrade its text (and hash) may differ from what
+    // was queued, and the current built-in is what this release runs. Only personal and repository
+    // recipes, which anyone can edit on disk, must still match the reviewed hash.
+    const builtin = h.recipe && h.recipe.source === 'builtin';
+    if (h.recipe && (!recipe || recipe.error || (!builtin && recipe.hash !== h.recipe.hash))) return fail(worker, h, 'recipe-changed', `recipe ${h.recipe.name} changed or was removed after this run was queued; review it and queue a new run`);
     try {
       validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null });
     } catch (err) {
@@ -242,8 +263,6 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const available = runtimeAvailable ?? detectRuntime(claudePath);
     if (!available) return fail(worker, h, 'runtime-missing', `Claude Code runtime (${claudePath}) is not installed or not on PATH; install and authenticate it, then retry as a new run`);
     const needsSource = h.permissions && h.permissions.read_source;
-    // How long the run waited for a slot (worker clock), then each setup step that actually ran.
-    const timings = { queue_wait_ms: Math.max(0, Date.parse(worker.now()) - Date.parse(h.requested_at)) };
     let cwd;
     let baseCommit = null;
     let worktreePath = null;
@@ -253,8 +272,9 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
         baseCommit = await headCommit(repoCfg.canonical_path);
         worktreePath = path.join(handoffsDir(worker.env), 'worktrees', h.id);
         const worktreeStarted = performance.now();
-        await createWorktree({ repoPath: repoCfg.canonical_path, baseCommit, dir: worktreePath });
-        timings.worktree_ms = Math.round(performance.now() - worktreeStarted);
+        try {
+          await createWorktree({ repoPath: repoCfg.canonical_path, baseCommit, dir: worktreePath });
+        } finally { timings.worktree_ms = Math.round(performance.now() - worktreeStarted); }
       } catch (err) {
         return fail(worker, h, err.code === 'worktree-failed' ? 'worktree-failed' : 'source-failed', err.message);
       }
@@ -301,14 +321,14 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
     running.set(h.id, { child: run.child, done: run.done, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, spawnedAt });
-    run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
+    running.get(h.id).finished = run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 
   function killWithReason(id, reason) {
     const entry = running.get(id);
     if (!entry) return;
     entry.reason = reason;
-    killTree(entry.child);
+    if (entry.kill) entry.kill(); else killTree(entry.child);
   }
 
   return {
@@ -336,14 +356,16 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
         const fix = isFix(h);
         if (inUse(fix) >= (fix ? limits.fix : limits.readonly)) continue;
         running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null, fix });
-        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); fail(worker, h, 'dispatch-failed', err.message); });
+        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); });
       }
     },
     async onStop(worker, { abandonRuns = false } = {}) {
       if (abandonRuns) { running.clear(); return; }
       const pending = [];
       for (const [id, entry] of running) {
-        if (entry.child) { killWithReason(id, 'stopped'); pending.push(entry.done); }
+        // Wait for the whole finish, not just the process: it may be in a follow-up turn or the
+        // test gate, and its outcome must reach the journal before the worker stops.
+        if (entry.child) { killWithReason(id, 'stopped'); pending.push(entry.done, entry.finished); }
       }
       await Promise.all(pending);
       // give finish() handlers a tick to journal their outcomes

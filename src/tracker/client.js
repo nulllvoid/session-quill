@@ -198,5 +198,65 @@ export function createTrackerClient({ tracker, settings = {}, env = process.env,
       }
       throw fail(`tracker-sync does not support ${system ?? 'this'} trackers; use jira, github or linear`);
     },
+
+    // Open issues assigned to the token's user (ADR 0024), newest first, at most `limit`. Read only.
+    async searchAssigned({ limit = 50 } = {}) {
+      const max = Math.max(1, Math.min(100, Number(limit) || 50));
+      if (system === 'jira') {
+        const base = jiraBase();
+        const qs = `jql=${encodeURIComponent('assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC')}&fields=summary,status,assignee,fixVersions,components,project&maxResults=${max}`;
+        let json;
+        // Jira Cloud serves search at /search/jql; Data Center and older sites only at /search.
+        try { json = await request(`${base}/rest/api/2/search/jql?${qs}`, { method: 'GET' }); } catch (err) {
+          if (err.code !== 'not-found' && !/HTTP 410/.test(err.message)) throw err;
+          json = await request(`${base}/rest/api/2/search?${qs}`, { method: 'GET' });
+        }
+        return ((json && json.issues) ?? []).filter((i) => i && typeof i.key === 'string' && KEY_RE.test(i.key)).slice(0, max).map((i) => {
+          const f = i.fields ?? {};
+          return {
+            key: i.key.toUpperCase(), url: `${base}/browse/${i.key.toUpperCase()}`, title: f.summary ?? null, status: (f.status && f.status.name) ?? null,
+            assignee: (f.assignee && (f.assignee.displayName ?? f.assignee.name)) ?? null, fix_versions: (f.fixVersions ?? []).map((v) => v.name).filter(Boolean),
+            project: (f.project && f.project.key) ?? i.key.split('-')[0], components: (f.components ?? []).map((c) => c.name).filter((n) => typeof n === 'string'),
+          };
+        });
+      }
+      if (system === 'github') {
+        githubIssueUrl('X-1'); // validates repo and domain
+        const base = origin(tracker.domain || 'https://github.com');
+        const api = base === 'https://github.com' ? 'https://api.github.com' : `${base}/api/v3`;
+        const q = `repo:${tracker.repo} is:issue is:open assignee:@me`;
+        const json = await request(`${api}/search/issues?q=${encodeURIComponent(q)}&sort=updated&order=desc&per_page=${max}`, { method: 'GET' });
+        return ((json && json.items) ?? []).filter((i) => i && Number.isInteger(i.number) && !i.pull_request).slice(0, max).map((i) => ({
+          number: i.number, url: `${base}/${tracker.repo}/issues/${i.number}`, title: i.title ?? null, status: i.state ?? null, assignee: (i.assignee && i.assignee.login) ?? null,
+          fix_versions: i.milestone && i.milestone.title ? [i.milestone.title] : [], repo: tracker.repo,
+        }));
+      }
+      throw fail(`importing assigned issues supports jira and github trackers, not ${system ?? 'this one'}`, 'import-unsupported');
+    },
+
+    // What the issue says about its code (ADR 0024): Jira's project, components and remote links;
+    // a GitHub issue's own repository. Read only, used by the repository resolver.
+    async repoHints(key) {
+      checkKey(key);
+      if (system === 'jira') {
+        const base = jiraBase();
+        const json = await request(`${base}/rest/api/2/issue/${encodeURIComponent(key)}?fields=project,components`, { method: 'GET' });
+        const f = (json && json.fields) ?? {};
+        let links = [];
+        try {
+          const remote = await request(`${base}/rest/api/2/issue/${encodeURIComponent(key)}/remotelink`, { method: 'GET' });
+          links = (Array.isArray(remote) ? remote : []).map((l) => l && l.object && l.object.url).filter((u) => typeof u === 'string').slice(0, 50);
+        } catch (err) {
+          if (err.code !== 'not-found') throw err;
+        }
+        return { project: (f.project && f.project.key) ?? key.split('-')[0], components: (f.components ?? []).map((c) => c.name).filter((n) => typeof n === 'string'), github_repo: null, links };
+      }
+      if (system === 'github') {
+        githubIssueUrl(key);
+        const base = origin(tracker.domain || 'https://github.com');
+        return { project: null, components: [], github_repo: tracker.repo, links: [`${base}/${tracker.repo}`] };
+      }
+      return { project: null, components: [], github_repo: null, links: [] };
+    },
   };
 }

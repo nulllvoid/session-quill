@@ -129,6 +129,7 @@ test('through the worker: a file-task run deletes an attached artifact into the 
 
 test('dashboard: the file recipe shows only on tickets with attached files, lists them, leaves both permissions off, and offers Undo per change', async () => {
   const { renderAgentsSection, renderRecipeRunDialog } = await import('../../ui/views/agents.js');
+  const { renderRunDetail } = await import('../../ui/views/run-detail.js');
   const recipe = { name: 'file-task', description: 'Do the task on attached files', source: 'builtin', mode: 'files', permissions: { ...NONE, edit_files: true, delete_files: true }, timeout_min: 10, legacy: false, repo_id: null, error: null };
   const base = { id: T1, key: 'PROJ-1', title: 'T', status: 'active', repo_id: null, files_touched: [], handoff_ids: [], tags: [], timeline: [], prs: [], deployments: [] };
   const snap = (ticket, handoffs = []) => ({ generation_id: 'g', tickets: [ticket], handoffs, recipes: [recipe], capabilities: { read: true, handoff: true, edit_tickets: true }, meta: { timezone: 'UTC' } });
@@ -142,7 +143,7 @@ test('dashboard: the file recipe shows only on tickets with attached files, list
   assert.match(dialog, /name="delete_files">/);
   assert.doesNotMatch(dialog, /name="(edit|delete)_files" checked/);
   const h = { id: 'h1', ticket_id: T1, state: 'done', mode: 'files', recipe: { name: 'file-task' }, legacy: false, requested_at: 'T', suggestions: [], file_effects: [{ id: 'e1', action: 'deleted', path: 'C:/Users/me/Temp/readme-install.cjs', undone_at: null }, { id: 'e2', action: 'edited', path: 'C:/x/b.txt', undone_at: 'T' }] };
-  const html = renderAgentsSection({ ...withFiles, handoff_ids: ['h1'] }, snap({ ...withFiles, handoff_ids: ['h1'] }, [h]), { now: 'T' });
+  const html = renderRunDetail(h, snap({ ...withFiles, handoff_ids: ['h1'] }, [h]), { now: 'T' });
   assert.match(html, /Deleted<\/span> <code>C:\/Users\/me\/Temp\/readme-install\.cjs<\/code> <button[^>]*data-action="undo-file-effect"[^>]*data-effect="e1"/);
   assert.match(html, /Edited<\/span> <code>C:\/x\/b\.txt<\/code> <span class="chip small">Undone<\/span>/);
 });

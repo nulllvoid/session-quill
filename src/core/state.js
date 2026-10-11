@@ -27,7 +27,7 @@ export function createState(meta) {
       approval_phrases_enabled: meta.approval_phrases_enabled === true,
       projects: meta.projects ?? {},
       repos: meta.repos ?? {},
-      tracker_version: meta.tracker_version ?? '0.7.2',
+      tracker_version: meta.tracker_version ?? '1.0.0',
     },
     tickets: new Map(),
     sessions: new Map(),
@@ -47,6 +47,8 @@ export function createState(meta) {
     appliedSources: new Set(),
     schedules: new Map(),
     publishers: new Map(),
+    // Runs proposed from a shared page, by proposal id (ADR 0025).
+    runProposals: new Map(),
     lastSequence: 0,
     lastSync: null,
     providerHealth: [],

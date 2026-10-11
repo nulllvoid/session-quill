@@ -18,7 +18,7 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Agent recipes.** Analyse, analyse with follow-ups, attempt a fix, check deployments or write a standup, or add your own recipes as Markdown files. Each runs in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions that the recipe caps, and its suggestions wait for you to accept them.
 - **Environments and Today.** Each merged PR owes a deployment per environment, shown as a PR-by-environment matrix with the evidence for each. Today lists what happened on each day of the last week, and a digest job writes the same summary into your daily note.
 - **Publishers.** Share a roll-up note, a read-only HTML copy or a live claude.ai artifact page. Each sends only the fields and projects you list, and only after you confirm the destination.
-- **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear on a schedule; sync never writes. Opt in to push one ticket's status back yourself, previewed and confirmed. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline.
+- **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear on a schedule; sync never writes. Opt in to push one ticket's status back yourself, previewed and confirmed. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline. With Run agent on, they can propose an agent run that waits for your Approve.
 
 ## Documentation
 
@@ -75,7 +75,8 @@ To have the worker (and the dashboard) running from the moment you log in, run
 `quill worker install` once; `quill worker uninstall` removes it.
 
 The dashboard lives at `http://127.0.0.1:47321/` (set `ui_port` in
-`~/.claude/quill/config.toml` to change it, or `ui_port = 0` for a random port;
+`~/.claude/quill/config.toml` to change it, or `ui_port = 0` for a random port; a `ui_port = 0` saved by a release before
+the fixed port is treated as unset once;
 when the port is taken the worker uses a random one). The first visit needs the
 one-use link from `/session-quill:ui`; after that the browser stays signed in for
 7 days from its last use, across worker restarts. A browser that is not signed in
@@ -242,6 +243,17 @@ fields   = ["key", "title", "status", "next", "pr", "deployments", "updated"]
 
 Only those fields of those projects are sent, through the same filter as exports (no local paths, links only with `include_links = true`). The first publish to a destination waits for you to confirm it, from **Publish** in the dashboard header or with `quill publish team --confirm`. A live artifact is published from a Claude Code session, which has the Artifact tools: run `/session-quill:publish team`. Later publishes update each row in place and keep anything someone edited on the page. Add `on = ["reconcile"]` to republish a note or copy after every reconciliation. With `two_way = true`, people you let edit the page can change a ticket's status or next action there; the next publish turns each change into an edit that applies unless the ticket changed since, and comments that name a ticket appear on its timeline.
 
+Add `run_agent = true` to a two-way publisher to give page editors a **Run agent** select. It offers read-only recipes (analyse, analyse-followups, deploy-check, standup, workspace-setup and your personal read-only ones), plus any built-in or personal recipe you list in `run_recipes`. A repository recipe that shadows the offered one is refused. A pick never starts a run. The next publish turns it into a **proposed run**, shown in Today and on the ticket, with the editor as the page reported them, the recipe and the access it would get (always standard, never commit, push or a PR). Approve or dismiss it there, or with `quill approve --run` (lists them), `quill approve --run <id>` and `quill dismiss --run <id>`. An approved run is an ordinary run whose results arrive as suggestions; if the ticket already has a run, Approve says so. Open proposals lapse after 7 days or once the ticket is done. Every proposal needs your approval: the editor id comes from the page, and anyone who can edit the page can write it, so there is no auto-approval.
+
+```toml
+[[publish]]
+name = "team"
+kind = "artifact"
+two_way = true
+run_agent = true
+run_recipes = ["attempt-fix"]          # also offered; still needs your Approve
+```
+
 ## Tracker sync
 
 To see what your tracker says about each linked ticket (status, assignee, fix version), name the token variable in `[tracker]` and schedule a sync. Quill only reads; it never writes to the tracker and never changes its own status from it.
@@ -278,6 +290,38 @@ quill tracker push PROJ-7 --to "Blocked" --comment "Waiting on infra" --confirm
 ```
 
 GitHub issues close for done and reopen otherwise. Each push, or failure, is recorded on the ticket's timeline. Nothing pushes automatically ([ADR 0018](docs/decisions/0018-tracker-write-back.md)).
+
+### Start from your assigned issues (opt-in)
+
+Quill can fill the board with the open issues assigned to you and find the repository each one belongs to. Everything here is in your own `config.toml`; a repository's `.quill.toml` cannot turn it on ([ADR 0024](docs/decisions/0024-tracker-onboarding.md)).
+
+```bash
+quill init --bootstrap-from-tracker   # turns on import_assigned, adds a tracker-sync schedule, imports once
+quill tracker import                  # one import now (idempotent)
+```
+
+```toml
+[tracker]
+import_assigned = true                # Jira: assignee = currentUser() AND statusCategory != Done; GitHub: is:open assignee:@me in repo
+auto_clone_dir  = "~/quill-repos"     # where confirmed clones go (default ~/quill-repos)
+clone_hosts     = ["github.com", "gitlab.com", "bitbucket.org"]   # the only hosts Quill clones from (this is the default)
+
+[tracker.repo_map]                    # optional: first match wins
+"PROJ/Payments" = "payments"          # a Jira component -> a registered repository id
+PROJ            = "git@github.com:acme/backend.git"   # a Jira project -> a remote
+"acme/web"      = "web"               # a GitHub repository -> a registered repository id
+```
+
+Each `tracker-sync` run imports new issues as tickets (under their tracker key; an issue already tracked is skipped) and then resolves the repository of tickets that have none, by rules, never by an agent: the `repo_map` entry for the issue's component, project or GitHub repository; else a registered repository whose `origin` is a repository the issue links to (the GitHub issue's own repository, or Jira remote links on a `clone_hosts` forge); else a clone already in `auto_clone_dir` or beside your registered repositories. A match links the ticket. A remote with no clone shows **Needs clone** on the card; nothing is cloned until you confirm:
+
+```bash
+quill repo clone PROJ-12              # preview: remote, host check, target folder; clones nothing
+quill repo clone PROJ-12 --confirm    # clone, register like `quill repo add`, link the ticket
+quill repo clone PROJ-12 --url git@github.com:acme/api.git   # name the remote yourself
+quill ticket set PROJ-14 --no-code yes                      # this ticket needs no repository
+```
+
+The dashboard's **Clone…** button opens the same preview. Quill clones only `https://` and `ssh` remotes on a `clone_hosts` host, refuses addresses with credentials, `file:` and `ext::` transports, and never clones a remote that already has a clone (it links or registers that one instead). The Repo filter has a **Needs clone** value, and the read-only `workspace-setup` recipe can suggest a `repo_map` line for a ticket the rules could not place.
 
 ## Your board on another machine
 
@@ -326,7 +370,7 @@ token_env = "BITBUCKET_TOKEN"                       # an access token, sent as a
 
 ## Agent recipes
 
-A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check` and `standup`; add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
+A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check`, `file-task`, `standup` and `workspace-setup`; add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
 
 ```markdown
 ---

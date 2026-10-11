@@ -1,4 +1,4 @@
-import { loadContext, workerStatus, latestSnapshot, liveEndpoint } from '../context.js';
+import { loadContext, workerStatus, latestSnapshot, liveEndpoint, portFallbackNote } from '../context.js';
 import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
 import { sessionKey } from '../../core/state.js';
 import { countIngress } from '../../core/ingress.js';
@@ -10,10 +10,11 @@ import { pausePath } from '../../runtime/readiness.js';
 function dashboardLink(ctx) {
   const endpoint = liveEndpoint(ctx);
   if (!endpoint) return '';
-  const url = `http://${endpoint.host ?? '127.0.0.1'}:${endpoint.port}/`;
+  const url = `http://${endpoint.host}:${endpoint.port}/`;
   const osc = '\u001b]8;;';
   const st = '\u001b\\';
-  return ` ${osc}${url}${st}${url}${osc}${st}`;
+  const note = portFallbackNote(endpoint);
+  return ` ${osc}${url}${st}${url}${osc}${st}${note ? ` ⚠ ${note}` : ''}`;
 }
 
 function bindingFor(ctx, session) {

@@ -76,3 +76,9 @@ test('claude plugin validate passes when the CLI is available', (t) => {
   }
   assert.match(out, /Validation passed/);
 });
+
+test('/session-quill:approve runs only when the user invokes it, never on the model\'s own initiative (ADR 0025)', () => {
+  const text = fs.readFileSync(path.resolve('commands/approve.md'), 'utf8');
+  const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)[1];
+  assert.match(front, /^disable-model-invocation: true$/m);
+});

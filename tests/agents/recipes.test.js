@@ -64,7 +64,7 @@ test('recipes: a read-only recipe may narrow its tools; git log is accepted in e
 
 test('recipes: built-ins ship the three handoff modes plus deploy-check and standup, all valid', () => {
   const { effective } = loadRecipes({ env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-rec-')) } });
-  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check', 'file-task', 'standup']);
+  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check', 'file-task', 'standup', 'workspace-setup']);
   assert.deepEqual([effective.get('file-task').mode, effective.get('file-task').schedulable], ['files', false], 'a files run is never scheduled');
   for (const r of effective.values()) assert.equal(r.error, null, r.name);
   assert.deepEqual(['analyse', 'analyse-followups', 'attempt-fix'].map((n) => effective.get(n).legacy), [true, true, true]);
@@ -132,4 +132,13 @@ test('recipes: work, related and history are inputs; self_check must be a boolea
   const { effective } = loadRecipes({ env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-r-')) } });
   assert.deepEqual(['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check', 'standup'].map((n) => effective.get(n).self_check), [false, false, true, true, false]);
   for (const r of effective.values()) assert.equal(r.error, null, `${r.name}: ${r.error}`);
+});
+
+test('the built-in workspace-setup recipe only suggests: no source access, no edits, nothing scheduled by sync', () => {
+  const r = normalizeRecipe({ name: 'workspace-setup', text: fs.readFileSync(path.join(BUILTIN_DIR, 'workspace-setup.md'), 'utf8'), source: 'builtin' });
+  assert.equal(r.error, null);
+  assert.equal(r.mode, 'analyse');
+  assert.deepEqual(Object.entries(r.permissions).filter(([, v]) => v), [], 'no permission at all');
+  assert.deepEqual(r.outputs, ['summary', 'next_action']);
+  assert.match(r.body, /You only suggest\. Do not clone, register, configure or run anything/);
 });

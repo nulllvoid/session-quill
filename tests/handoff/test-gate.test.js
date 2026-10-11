@@ -148,3 +148,61 @@ test('a draft PR body says the tests passed (worker) only after a real pass', as
   assert.doesNotMatch(gateLine({ status: 'skipped', reason: 'no test_command' }), /passed/i);
   assert.doesNotMatch(gateLine(null), /passed/i);
 });
+
+// A suite that passes (or hangs) but first leaves a background process holding stdout and stderr,
+// as a watcher or a forgotten server does.
+function leakyScript(behaviour, marker = null) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-gate-leak-'));
+  const file = path.join(dir, 'gate.js');
+  fs.writeFileSync(file, [
+    "const { spawn } = require('child_process');",
+    "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'inherit' });",
+    ...(marker ? [`require('fs').writeFileSync(${JSON.stringify(marker)}, 'started');`] : []),
+    "console.log('ok 3 tests');",
+    behaviour === 'hang' ? 'setTimeout(() => {}, 60000);' : 'process.exit(0);',
+  ].join('\n'));
+  return `"${process.execPath}" "${file}"`;
+}
+
+test('a passing command that leaves a process holding its output still passes, after a short grace', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'st-gate-cwd-'));
+  const started = Date.now();
+  const r = await runTestCommand({ command: leakyScript('pass'), cwd, timeoutMs: 20_000 });
+  assert.equal(r.status, 'passed', r.tail);
+  assert.equal(r.exit_code, 0);
+  assert.match(r.tail, /ok 3 tests/);
+  assert.ok(Date.now() - started < 10_000, 'the exit code decides, not the pipes closing');
+});
+
+test('stopping a test command through its kill handle ends it promptly even when a background process holds the pipes', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'st-gate-cwd-'));
+  let kill;
+  const p = runTestCommand({ command: leakyScript('hang'), cwd, timeoutMs: 60_000, onChild: (_child, k) => { kill = k; } });
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(typeof kill, 'function');
+  const started = Date.now();
+  kill();
+  const r = await p;
+  assert.notEqual(r.status, 'passed');
+  assert.ok(Date.now() - started < 8_000, `ended ${Date.now() - started} ms after the kill`);
+});
+
+test('a worker stopped during the test gate waits for it and ends the run as stopped, not interrupted', async () => {
+  const repo = makeRepo();
+  const marker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'st-gate-mark-')), 'started');
+  const b = await bootWorker({ repo, runtimeAvailable: true, repoExtra: { test_command: leakyScript('hang', marker) }, fakeEnv: { FAKE_CLAUDE_EDIT: 'src.js' } });
+  let stopped = false;
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(20), { target_id: T1, expected_revision: t.revision, payload: fix });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(20)).result.handoff_id;
+    await until(() => { b.w.tick(); return fs.existsSync(marker); }, { timeoutMs: 20_000 });
+    await b.w.stop();
+    stopped = true;
+    const h = b.w.state.handoffs.get(hid);
+    assert.equal(h.state, 'failed');
+    assert.equal(h.error.code, 'interrupted');
+    assert.match(h.error.message, /worker stopped while the run was in progress/);
+  } finally { if (!stopped) await b.w.stop(); }
+});

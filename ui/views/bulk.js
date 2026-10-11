@@ -2,6 +2,7 @@
 // bulk run form and its per-ticket results, the bulk status dialog and batch progress strips.
 import { esc, attr, icon, keyEl, countLabel, normalizeSnapshot, accessFieldset, STATUS_LABELS, ticketById } from '../components.js';
 import { bulkEntries, bulkOutcome, batchProgress } from '../lib/bulk.js';
+import { runSummary } from './agents.js';
 
 export function canSelect(snapshot) {
   const caps = snapshot.capabilities ?? {};
@@ -17,13 +18,22 @@ export function selectableCard(cardHtml, ticket, { checked = false } = {}) {
   return `<div class="card-pick"><input type="checkbox" class="card-check" data-check="${attr(ticket.id)}" aria-label="${attr(`Select ${ticket.key} ${ticket.title}`)}"${checked ? ' checked' : ''}>${cardHtml}</div>`;
 }
 
+// Which buttons the bar holds. While it stays the same, the shell updates the counts in place, so
+// focus stays on the button the owner is on and the entrance animation does not replay.
+export function bulkBarShape({ count = 0, undo = 0 } = {}) {
+  return `${count ? 'actions' : 'none'}-${undo ? 'undo' : 'no-undo'}`;
+}
+
+// A labelled group, not a toolbar: a toolbar promises arrow-key roving focus, and these few
+// buttons are reached with Tab like any other.
 export function renderBulkActionBar({ count = 0, undo = 0 } = {}) {
   const actions = count ? `<button type="button" class="btn small" data-action="bulk-handoff" data-mode="analyse">${icon('analysis')}Analyze</button>
   <button type="button" class="btn small" data-action="bulk-handoff" data-mode="attempt-fix">${icon('play')}Attempt fix</button>
   <button type="button" class="btn small" data-action="bulk-status">Change status</button>
   <button type="button" class="btn small ghost" data-action="bulk-clear">Clear</button>` : '';
-  const undoBtn = undo ? `<button type="button" class="btn small" data-action="bulk-undo-all">${icon('undo')}Undo all (${esc(undo)})</button>` : '';
-  return `<div class="bulk-bar" role="toolbar" aria-label="Bulk actions">${count ? `<span class="bulk-count">${esc(count)} selected</span>` : ''}${actions}${undoBtn}</div>`;
+  // One label span: the button is a flex row with a gap, which would otherwise space out "Undo all (", the count and ")".
+  const undoBtn = undo ? `<button type="button" class="btn small" data-action="bulk-undo-all">${icon('undo')}<span class="bulk-undo-label">Undo all (<span class="bulk-undo-count">${esc(undo)}</span>)</span></button>` : '';
+  return `<div class="bulk-bar" role="group" aria-label="Bulk actions" data-shape="${bulkBarShape({ count, undo })}">${count ? `<span class="bulk-count">${esc(count)} selected</span>` : ''}${actions}${undoBtn}</div>`;
 }
 
 const ENTRY_LABELS = { ready: 'Ready', running: 'Already running', 'no-repo': 'No repo', 'not-eligible': 'Not eligible' };
@@ -50,6 +60,9 @@ export function renderBulkHandoffForm(rawSnapshot, ids, { mode = 'analyse' } = {
   <label><input type="radio" name="mode" value="analyse" checked> Analyse: summarize and recommend; no children</label>
   <label><input type="radio" name="mode" value="analyse-followups"> Analyse with follow-ups: may create child tickets and suggest a next action</label>
 </fieldset>`;
+  // The built-in recipe's defaults; the repository varies per ticket, so the test line stays generic.
+  const builtin = (snapshot.recipes ?? []).find((r) => r.source === 'builtin' && r.mode === mode) ?? { legacy: true };
+  const summary = runSummary(builtin, fix ? { read_source: true, edit_source: true } : { read_source: true }, null);
   return `<form class="handoff-form bulk-form" data-form="bulk-handoff" data-ids="${attr(ids.join(','))}">
 <h2 id="dialog-title">${icon('play')}${fix ? 'Attempt fix' : 'Analyze'} for ${esc(countLabel(ids.length, 'ticket'))}</h2>
 <ul class="bulk-entries">${entries.map(entryRow).join('')}</ul>
@@ -59,6 +72,7 @@ ${accessFieldset()}
 ${tests}
 <label class="label" for="bulk-note">Note for every run <span class="muted">(max 280)</span></label>
 <textarea id="bulk-note" name="note" maxlength="280" rows="2" placeholder="What should each agent focus on?"></textarea>
+<p class="run-summary">${esc(summary)}</p>
 ${fix && ready.length ? `<label class="danger confirm-edit"><input type="checkbox" name="confirm_edit" required> <span>Allow ${esc(countLabel(ready.length, 'run'))} to edit source (edit_source), each in an isolated checkout. Nothing is committed or pushed.</span></label>` : ''}
 <div class="dialog-actions"><button type="submit" class="btn primary"${ready.length ? '' : ' disabled'}>Queue ${esc(countLabel(ready.length, 'run'))}</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;
@@ -103,7 +117,7 @@ export function renderBatchStrips(rawSnapshot, batchIds, { canCancel = false } =
     const finished = p.done + p.failed + p.cancelled;
     const parts = [p.done ? `${p.done} done` : null, p.failed ? `${p.failed} failed` : null, p.cancelled ? `${p.cancelled} cancelled` : null, p.running ? `${p.running} running` : null, p.queued ? `${p.queued} queued` : null].filter(Boolean);
     const action = canCancel && p.queued ? `<button type="button" class="btn small ghost" data-action="cancel-batch" data-batch="${attr(id)}">Cancel batch (${esc(p.queued)} queued)</button>` : !p.queued && !p.running ? `<button type="button" class="btn small ghost" data-action="dismiss-batch" data-batch="${attr(id)}">Dismiss</button>` : '';
-    return `<div class="batch-strip" data-batch="${attr(id)}"><span class="eyebrow">Batch ${esc(id.slice(0, 8))}</span><div class="batch-bar" role="progressbar" aria-label="${attr(`Batch ${id.slice(0, 8)}: ${finished} of ${p.total} runs finished`)}" aria-valuemin="0" aria-valuenow="${finished}" aria-valuemax="${p.total}"><span style="width:${Math.round((finished / p.total) * 100)}%"></span></div><span class="small">${esc(parts.join(' · '))}</span>${action}</div>`;
+    return `<div class="batch-strip" data-batch="${attr(id)}"><span class="eyebrow">Batch ${esc(id.slice(0, 8))}</span><div class="batch-bar" role="progressbar" aria-label="${attr(`Batch ${id.slice(0, 8)}: ${finished} of ${p.total} runs finished`)}" aria-valuemin="0" aria-valuenow="${finished}" aria-valuemax="${p.total}"><span style="width:${Math.round((finished / p.total) * 100)}%"></span></div><span class="small">${esc(parts.join(' · '))}</span><button type="button" class="link small" data-action="open-runs" data-tab="all">View in Runs</button>${action}</div>`;
   }).join('');
   return strips ? `<section class="batch-strips" aria-label="Bulk runs">${strips}</section>` : '';
 }

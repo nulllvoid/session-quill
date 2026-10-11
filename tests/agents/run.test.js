@@ -216,12 +216,12 @@ test('a self-checking recipe verifies its reply in a read-only follow-up turn an
 });
 
 test('run detail shows confidence, checks and sources; exports keep sources only with checkpoints', async () => {
-  const { renderAgentsSection } = await import('../../ui/views/agents.js');
+  const { renderRunDetail } = await import('../../ui/views/run-detail.js');
   const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
   const h = { id: 'h9', ticket_id: T1, state: 'done', mode: 'analyse', recipe: { name: 'deploy-check', source: 'builtin' }, legacy: false, requested_at: '2026-10-02T08:00:00Z', result_summary: 'ok', result_confidence: 'low', result_sources: ['deploy/values.yaml@3f2a1c9'], result_quality: { problems: [], repaired: true, self_checked: true }, suggestions: [] };
   const ticket = { id: T1, key: 'PROJ-1', title: 'T', status: 'active', project_id: 'demo', repo_id: null, handoff_ids: ['h9'], tags: [], timeline: [], prs: [], deployments: [] };
   const snap = { generation_id: 'g', tickets: [ticket], handoffs: [h], recipes: [], capabilities: { read: true, handoff: true, edit_tickets: true }, meta: { timezone: 'UTC' } };
-  const html = renderAgentsSection(ticket, snap, { now: '2026-10-02T09:00:00Z' });
+  const html = renderRunDetail(h, snap, { now: '2026-10-02T09:00:00Z' });
   for (const re of [/Low confidence/, /Self-checked/, /Repaired reply/, /1 source</, /deploy\/values\.yaml@3f2a1c9/]) assert.match(html, re);
   const exported = sanitizeSnapshot({ ...snap, sessions: [], checkpoints: [] }, { fields: ['key', 'title', 'status'] });
   assert.equal(JSON.stringify(exported.handoffs).includes('values.yaml'), false);
@@ -273,5 +273,24 @@ test('a run that may edit source always self-checks, whatever its recipe says (A
     assert.equal(h.result_quality.self_checked, true);
     const [turn] = fs.readFileSync(`${capture}.resume`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     assert.match(turn.prompt, /check your answer/i);
+  } finally { await b.w.stop(); }
+});
+
+test('a run of a built-in recipe queued before an upgrade runs with the current built-in text, not recipe-changed', async () => {
+  const { b, capture } = await boot();
+  try {
+    const t = b.ticket(T1, 'PROJ-7');
+    b.hext.pause();
+    b.request(RID(30), { target_id: T1, expected_revision: t.revision, payload: { recipe: 'deploy-check', note: '', permissions: { ...NONE, read_source: true } } });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(30)).result.handoff_id;
+    const queued = b.w.state.handoffs.get(hid);
+    assert.equal(queued.recipe.source, 'builtin');
+    // The built-in text changed in the release installed since: its hash no longer matches.
+    queued.recipe = { ...queued.recipe, hash: '0'.repeat(64) };
+    b.hext.resume();
+    const h = await until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return ['done', 'failed'].includes(x.state) ? x : null; });
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.ok(fs.existsSync(capture), 'the agent ran');
   } finally { await b.w.stop(); }
 });

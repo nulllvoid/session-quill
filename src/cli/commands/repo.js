@@ -1,13 +1,15 @@
-// `quill repo add|list|remove` (issue #5): register repositories without re-running init or touching the worker.
+// `quill repo add|list|remove|clone` (issue #5, ADR 0024): register repositories without re-running init or touching the worker.
 import path from 'node:path';
 import { loadUserConfig, saveUserConfig, loadRepoConfig, saveRepoConfig } from '../../config/config.js';
 import { isGitWorkTree, detectDefaultBranch, repoIdFromPath, samePath, repoStatus, REPO_STATUS_TEXT, mainWorkTree } from '../../config/repos.js';
-import { loadContext, latestSnapshot } from '../context.js';
+import { loadContext, latestSnapshot, findTicketByKey, latestTicketDetail, cliEvent, submitAndWait, writeControl, workerStatus } from '../context.js';
+import { planClone, executeClone, registerClone } from '../../onboard/clone.js';
+import { writeIngress } from '../../core/ingress.js';
 import { mainWorkTreeOf } from '../../lib/git-head.js';
 import { TrackerError } from '../../lib/errors.js';
 import fs from 'node:fs';
 
-const USAGE = 'usage: repo add <path> [--id <id>] [--project <id>] [--repo-file] | repo list [--json] | repo remove <id>';
+const USAGE = 'usage: repo add <path> [--id <id>] [--project <id>] [--repo-file] | repo list [--json] | repo remove <id> | repo clone <KEY> [--url <remote>] [--confirm] [--json]';
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 function add(io, args, flags, env) {
@@ -72,12 +74,52 @@ function remove(io, args, env) {
   return 0;
 }
 
+// `quill repo clone <KEY>` (ADR 0024): show what would be cloned, from where, to where; with
+// --confirm clone it (or reuse a clone that exists), register it and link the ticket.
+export async function clone(io, args, flags, env, { git } = {}) {
+  const [key] = args;
+  if (!key) throw new TrackerError('usage', USAGE);
+  const ctx = loadContext(env);
+  const found = findTicketByKey(ctx, key);
+  if (!found) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
+  const ticket = latestTicketDetail(ctx, found.id) ?? found;
+  const plan = await planClone({ config: ctx.config, ticket, url: typeof flags.url === 'string' ? flags.url : null });
+  const what = { link: `link ${ticket.key} to repository ${plan.repo_id} (${plan.path}), which is already a clone of it`, register: `register the existing clone ${plan.path} and link ${ticket.key} to it; nothing is cloned`, clone: `clone it over ${plan.protocol} into ${plan.path}, register it and link ${ticket.key} to it` }[plan.action];
+  if (!flags.confirm) {
+    if (flags.json) { io.json({ preview: true, ...plan }); return 0; }
+    io.println(`Preview: nothing has been cloned.`);
+    io.println(`  remote   ${plan.remote}`);
+    if (plan.action === 'clone') io.println(`  host     ${plan.host} (allowed by [tracker] clone_hosts)`);
+    io.println(`  would    ${what}`);
+    io.println(`Run it with: quill repo clone ${ticket.key}${flags.url ? ` --url ${plan.remote}` : ''} --confirm`);
+    return 0;
+  }
+  if (plan.action === 'clone') io.println(`Cloning ${plan.remote} into ${plan.path}…`);
+  const dir = await executeClone(plan, git ? { git } : {});
+  const repoId = plan.action === 'link' ? plan.repo_id : registerClone(env, dir, { projectId: plan.project_id });
+  if (plan.action !== 'link') io.println(`Registered repository ${repoId} → ${dir}`);
+  // The worker reads the new repository before it applies the link.
+  writeControl(ctx, 'reload-config.json');
+  const ev = cliEvent(ctx, { kind: 'ticket-update', payload: { ticket_id: ticket.id, fields: { repo_id: repoId }, source: 'clone' }, session: null, ticket_id: ticket.id });
+  if (!workerStatus(ctx).healthy) {
+    writeIngress(ev, ctx.env);
+    io.println(`${ticket.key} will be linked to ${repoId} when the worker starts.`);
+  } else {
+    const ack = await submitAndWait(ctx, ev, { timeoutMs: flags.timeout ? Number(flags.timeout) : 10_000 });
+    if (ack.rejected) throw new TrackerError(ack.rejected, `${repoId} is registered, but linking ${ticket.key} was refused (${ack.rejected}); link it with quill ticket set ${ticket.key} --repo ${repoId}`);
+    io.println(`Linked ${ticket.key} to ${repoId}.`);
+  }
+  if (flags.json) io.json({ ...plan, repo_id: repoId, path: dir });
+  return 0;
+}
+
 export async function run({ args, flags, io, env }) {
   const [verb, ...rest] = args;
   switch (verb) {
     case 'add': return add(io, rest, flags, env);
     case 'list': return list(io, flags, env);
     case 'remove': return remove(io, rest, env);
+    case 'clone': return clone(io, rest, flags, env);
     default: throw new TrackerError('usage', USAGE);
   }
 }

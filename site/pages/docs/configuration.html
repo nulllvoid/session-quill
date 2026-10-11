@@ -103,10 +103,8 @@ fields        = ["key", "title", "status", "next", "pr", "deployments", "updated
 include_links = false
 on            = ["reconcile"]
 two_way       = true
-
-[publish.team]
-auto_run_editors = ["priya@example.com"]   # 1.0: these editors' Run agent edits queue without approval
-auto_run_recipes = ["analyse", "deploy-check"]   # read-only recipes only</code></pre>
+run_agent     = true             # 1.0: a Run agent select; every pick waits for your approval
+run_recipes   = ["deploy-check"] # offered beside the read-only built-ins</code></pre>
 <p>The first publish to a destination waits for your confirmation. With <code>two_way</code>, editors change status and next action on the page and, from 1.0, pick a recipe under <em>Run agent</em>; each becomes a revision-checked request or a proposed run on your dashboard.</p>
 
 <h2 id="mirror">[mirror]</h2>

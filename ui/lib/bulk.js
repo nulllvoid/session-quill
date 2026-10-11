@@ -1,6 +1,7 @@
 // Bulk selection and fan-out (ADR 0023): pure helpers the dashboard shell wires to the DOM. A bulk
 // action is one ordinary request per ticket; runs queued together share a client-chosen batch id.
 import { uuidv4 } from './api.js';
+import { normalizeSnapshot, matchesFilters } from '../components.js';
 
 // Statuses a run may be queued from, as on the ticket card's Handoff button.
 export const RUNNABLE_STATUSES = ['todo', 'active', 'review', 'deploy-pending'];
@@ -24,9 +25,10 @@ export function selectRange(checked, orderedIds, anchor, id) {
   return next;
 }
 
-// Keyboard selection: `x` toggles the focused card, Esc clears a selection.
-export function selectionKey(key, { focusedId = null, checkedSize = 0 } = {}) {
-  if (key === 'x' && focusedId) return { type: 'toggle', id: focusedId };
+// Keyboard selection: `x` toggles the focused card, Esc clears a selection. With ctrl, meta or
+// alt held, `x` belongs to the browser or the system (cut, shortcuts), not to the selection.
+export function selectionKey(key, { focusedId = null, checkedSize = 0, ctrlKey = false, metaKey = false, altKey = false } = {}) {
+  if (key === 'x' && focusedId && !ctrlKey && !metaKey && !altKey) return { type: 'toggle', id: focusedId };
   if (key === 'Escape' && checkedSize > 0) return { type: 'clear' };
   return null;
 }
@@ -109,10 +111,37 @@ export function bulkStatusRequests(snapshot, ids, { status, blocker = '' } = {})
   return { bodies, skipped };
 }
 
-// Request ids from a bulk edit that can still be undone (inside their delay window).
+// Request ids from a bulk edit that can still be undone: inside their delay window, or still being
+// sent (Undo all waits for those to land, then cancels them).
 export function pendingUndo(requests, ids) {
   const get = (id) => (requests instanceof Map ? requests.get(id) : (requests ?? []).find((r) => r.id === id));
-  return ids.filter((id) => { const r = get(id); return r && r.state === 'pending'; });
+  return ids.filter((id) => { const r = get(id); return r && (r.state === 'pending' || r.state === 'sending'); });
+}
+
+// A second bulk edit joins the Undo all set while the earlier ones are still undoable.
+export function mergeUndo(requests, previous, ids) {
+  return [...new Set([...pendingUndo(requests, previous), ...ids])];
+}
+
+// The results dialog of a bulk submit is refreshed only while it still shows that batch; a
+// dialog the owner closed, or one for another batch, is left alone.
+export function batchDialogUpdate(dialog, batchId, rows) {
+  if (!dialog || dialog.type !== 'bulk-results' || dialog.batchId !== batchId) return dialog;
+  return { type: 'bulk-results', batchId, rows };
+}
+
+export function withoutIds(checked, ids) {
+  const next = new Set(checked);
+  for (const id of ids) next.delete(id);
+  return next;
+}
+
+// Checked tickets that the current filters hide are dropped, so a bulk action never reaches a
+// ticket the owner cannot see.
+export function pruneChecked(snapshot, checked, filters = {}) {
+  const s = normalizeSnapshot(snapshot);
+  const visible = new Set(s.tickets.filter((t) => matchesFilters(t, filters, s)).map((t) => t.id));
+  return new Set([...checked].filter((id) => visible.has(id)));
 }
 
 export function batchProgress(snapshot, batchId) {

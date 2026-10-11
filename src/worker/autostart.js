@@ -61,16 +61,29 @@ function windowsPlan({ env, nodePath, binPath, user }) {
   return {
     platform: 'win32',
     entry: `Task Scheduler task "${TASK_NAME}"`,
-    files: [{ path: vbs, content: vbsText }, { path: xml, content: `﻿${taskXml}`, encoding: 'utf16le', transient: true }],
+    // Both files are UTF-16LE with a BOM: wscript reads a BOM-less .vbs in the ANSI code page, which
+    // would garble a profile path outside ASCII.
+    files: [{ path: vbs, content: `﻿${vbsText}`, encoding: 'utf16le' }, { path: xml, content: `﻿${taskXml}`, encoding: 'utf16le', transient: true }],
     install: [['schtasks', ['/Create', '/TN', TASK_NAME, '/XML', xml, '/F']]],
     uninstall: [['schtasks', ['/Delete', '/TN', TASK_NAME, '/F']]],
     query: ['schtasks', ['/Query', '/TN', TASK_NAME]],
   };
 }
 
+// launchd and systemd start login entries with a minimal PATH, so `claude` (and git) installed
+// under Homebrew, nvm or ~/.local would not resolve; the entry keeps the PATH of the install.
+function loginEnv(env) {
+  const out = {};
+  const PATH = env.PATH ?? env.Path ?? process.env.PATH;
+  if (PATH) out.PATH = PATH;
+  if (env.QUILL_HOME) out.QUILL_HOME = path.resolve(env.QUILL_HOME);
+  return out;
+}
+
 function darwinPlan({ env, nodePath, binPath, home, uid }) {
   const plist = path.join(home, 'Library', 'LaunchAgents', `${LAUNCH_AGENT_LABEL}.plist`);
-  const envBlock = env.QUILL_HOME ? `  <key>EnvironmentVariables</key>\n  <dict><key>QUILL_HOME</key><string>${xmlEsc(path.resolve(env.QUILL_HOME))}</string></dict>\n` : '';
+  const vars = Object.entries(loginEnv(env));
+  const envBlock = vars.length ? `  <key>EnvironmentVariables</key>\n  <dict>${vars.map(([k, v]) => `<key>${k}</key><string>${xmlEsc(v)}</string>`).join('')}</dict>\n` : '';
   const text = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -101,7 +114,13 @@ ${envBlock}  <key>RunAtLoad</key><true/>
 function linuxPlan({ env, nodePath, binPath, home }) {
   const configHome = env.XDG_CONFIG_HOME ? path.resolve(env.XDG_CONFIG_HOME) : path.join(home, '.config');
   const unit = path.join(configHome, 'systemd', 'user', SYSTEMD_UNIT);
-  const q = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  // Quoted for systemd: backslash and quote escaped, `%` doubled (specifiers apply to both
+  // settings) and, in ExecStart= only, `$` doubled (Environment= does no variable expansion).
+  const q = (s, { exec = false } = {}) => {
+    let v = String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%');
+    if (exec) v = v.replace(/\$/g, '$$$$');
+    return `"${v}"`;
+  };
   // oneshot: run `worker start` once at login. No Restart=; recovery stays with ensureReady.
   const text = [
     '[Unit]',
@@ -110,8 +129,8 @@ function linuxPlan({ env, nodePath, binPath, home }) {
     '[Service]',
     'Type=oneshot',
     'RemainAfterExit=yes',
-    ...(env.QUILL_HOME ? [`Environment=${q(`QUILL_HOME=${path.resolve(env.QUILL_HOME)}`)}`] : []),
-    `ExecStart=${q(nodePath)} ${q(binPath)} worker start`,
+    ...Object.entries(loginEnv(env)).map(([k, v]) => `Environment=${q(`${k}=${v}`)}`),
+    `ExecStart=${q(nodePath, { exec: true })} ${q(binPath, { exec: true })} worker start`,
     '',
     '[Install]',
     'WantedBy=default.target',
@@ -173,6 +192,17 @@ export async function uninstallAutostart({ env = process.env, run = defaultRunne
   for (const f of plan.files) removeIfExists(f.path);
   removed = removeIfExists(autostartMarkerPath(env)) || removed;
   return { plan, removed };
+}
+
+// `quill doctor` only: autostartStatus, plus asking Task Scheduler on Windows whether the task
+// install registered still exists (it has no entry file to check). Hot paths stay marker-only.
+export async function verifyAutostart(env = process.env, { platform = process.platform, run = defaultRunner, home = os.homedir() } = {}) {
+  const status = autostartStatus(env, { home });
+  const marker = readJsonIfExists(autostartMarkerPath(env));
+  if (!status.installed || !marker || marker.platform !== 'win32' || platform !== 'win32') return status;
+  const r = await run('schtasks', ['/Query', '/TN', TASK_NAME]);
+  if (r.code === 0) return status;
+  return { installed: false, entry: marker.entry, missing: true, detail: `marker present but task missing (${TASK_NAME})` };
 }
 
 // What install recorded, checked against the entry file where there is one. No OS tool runs.

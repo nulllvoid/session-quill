@@ -153,7 +153,7 @@ const CLEAR = 'none';
 
 // One ticket-update event for every field given; values are validated here because the reducer applies what it is sent.
 async function set(ctx, io, args, flags) {
-  const usage = 'usage: ticket set <KEY> [--title t] [--status s] [--blocker text] [--next text] [--priority P0-P3] [--category c] [--due YYYY-MM-DD|none] [--parent KEY|none] [--repo <repo-id>|none]';
+  const usage = 'usage: ticket set <KEY> [--title t] [--status s] [--blocker text] [--next text] [--priority P0-P3] [--category c] [--due YYYY-MM-DD|none] [--parent KEY|none] [--repo <repo-id>|none] [--no-code yes|no]';
   const [key] = args;
   if (!key) throw new TrackerError('key-required', usage);
   validateKey(key);
@@ -214,6 +214,12 @@ async function set(ctx, io, args, flags) {
       throw new TrackerError('repo-unknown', `unknown repository ${repo}; registered: ${known.length ? known.join(', ') : 'none'} (see quill repo list)`);
     }
     fields.repo_id = repo === CLEAR ? null : repo;
+  }
+  // quill/no-code (ADR 0024): the ticket needs no repository; the repository resolver skips it.
+  if (flags['no-code'] !== undefined) {
+    const v = flags['no-code'] === true ? 'yes' : String(flags['no-code']).trim().toLowerCase();
+    if (!['yes', 'no'].includes(v)) throw new TrackerError('usage', `--no-code takes yes or no. ${usage}`);
+    fields.no_code = v === 'yes';
   }
   if (!Object.keys(fields).length) throw new TrackerError('usage', `nothing to change. ${usage}`);
   const session = flags.session ? sessionFromFlags(flags, ctx.env) : null;

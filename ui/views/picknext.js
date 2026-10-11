@@ -1,5 +1,5 @@
 import { canSelect, renderSelectToggle, selectableCard } from './bulk.js';
-import { esc, attr, ticketCard, ticketById, emptyState, matchesFilters, keyEl, icon, normalizeSnapshot, sessionChip, timeEl, countLabel, hasUnlinkedWork, requestFeedback, pickNextEntries } from '../components.js';
+import { esc, attr, ticketCard, ticketById, emptyState, matchesFilters, keyEl, icon, normalizeSnapshot, sessionChip, timeEl, countLabel, hasUnlinkedWork, requestFeedback, pickNextEntries, openProposals } from '../components.js';
 
 function mentionHint(snapshot) {
   return `Mention a ticket key such as <code>${esc(snapshot.meta.key_example ?? 'PROJ-123')}</code> in a Claude Code prompt, or run <code>/session-quill:ticket create "&lt;title&gt;"</code>.`;
@@ -90,5 +90,24 @@ export function renderPickNext(rawSnapshot, filters, { now, pending = [], blocke
     ['Completed', tickets.filter((t) => t.status === 'done').length, 'Marked done', 'check'],
   ];
   const overview = `<div class="work-overview" aria-label="Filtered ticket overview">${stats.map(([label, value, hint, glyph]) => `<div class="overview-stat"><span class="stat-label">${icon(glyph)}${label}</span><strong>${value}</strong><span class="stat-hint">${hint}</span></div>`).join('')}</div>`;
-  return `<section class="view view-picknext" aria-labelledby="tab-picknext"><h2 class="sr-only">Pick next</h2>${overview}${renderInbox(snapshot, { now, pending })}${main}${blockedHtml}</section>`;
+  return `<section class="view view-picknext" aria-labelledby="tab-picknext"><h2 class="sr-only">Pick next</h2>${overview}${main}${renderRecentWork(snapshot, filters, { now })}${renderAttention(snapshot, { now, pending })}${blockedHtml}</section>`;
+}
+
+function renderRecentWork(snapshot, filters, { now }) {
+  // A session can switch tickets after a checkpoint; use the checkpoint's recorded binding.
+  const checkpoint = [...snapshot.checkpoints].filter((c) => c.complete && c.preview && c.ticket_id)
+    .sort((a, b) => String(b.recorded_at).localeCompare(String(a.recorded_at)))
+    .find((c) => { const t = ticketById(snapshot, c.ticket_id); return t && matchesFilters(t, filters, snapshot); });
+  if (!checkpoint) return '';
+  const t = ticketById(snapshot, checkpoint.ticket_id);
+  return `<section class="recent-work"><div class="section-head"><h2>Where you left off</h2><span class="small muted">${timeEl(checkpoint.recorded_at, now, snapshot.meta.timezone)}</span></div><button type="button" class="link" data-open="${attr(t.id)}">${esc(t.title)}</button><p>${esc(checkpoint.preview.slice(0, 240))}</p>${t.next_action ? `<p class="small"><strong>Next action</strong> ${esc(t.next_action)}</p>` : ''}<button type="button" class="btn small" data-open="${attr(t.id)}" data-section="activity">View context</button></section>`;
+}
+
+function renderAttention(snapshot, { now, pending }) {
+  const inbox = renderInbox(snapshot, { now, pending });
+  const count = snapshot.sessions.filter(hasUnlinkedWork).length;
+  const approvals = openProposals(snapshot).length;
+  const deployments = snapshot.deployments_outstanding.length;
+  if (!inbox && !approvals && !deployments) return '';
+  return `<section class="attention-section" aria-label="Needs your attention"><h2>Needs your attention</h2>${inbox ? `<details data-disclosure="unlinked-work"><summary>Unlinked work <span class="count">${count}</span><span class="muted small">Review captured sessions</span></summary>${inbox}</details>` : ''}<div class="attention-links">${approvals ? `<button type="button" class="btn small" data-action="review-proposals">${approvals} awaiting approval</button>` : ''}${deployments ? `<button type="button" class="btn small" data-view="deployments">${deployments} awaiting deployment</button>` : ''}</div></section>`;
 }

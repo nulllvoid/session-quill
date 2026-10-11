@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshness, relativeTime, formatAbsolute } from '../../ui/lib/time.js';
-import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip } from '../../ui/components.js';
+import { esc, statusChip, scoreBadge, ticketCard, ticketKey, externalChip, contentViewer } from '../../ui/components.js';
 import { sanitizeSnapshot } from '../../src/export/sanitize.js';
 import { renderPickNext, renderInbox } from '../../ui/views/picknext.js';
 import { renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from '../../ui/views/dialogs.js';
@@ -10,8 +10,9 @@ import { renderTree } from '../../ui/views/tree.js';
 import { renderSessions } from '../../ui/views/sessions.js';
 import { renderDeployments } from '../../ui/views/deployments.js';
 import { renderToday } from '../../ui/views/today.js';
-import { renderDetail } from '../../ui/views/detail.js';
-import { renderHandoffForm } from '../../ui/views/handoff-form.js';
+import { renderDetail, DETAIL_TABS } from '../../ui/views/detail.js';
+import { renderRunDetail } from '../../ui/views/run-detail.js';
+import { renderRunAgentDialog } from '../../ui/views/run-dialog.js';
 import { renderHeader } from '../../ui/views/header.js';
 import { renderRecipeRunDialog, effectiveRecipes } from '../../ui/views/agents.js';
 import { snapshot, TID, ticket } from './fixtures.js';
@@ -171,13 +172,12 @@ test('renderDetail surfaces pending, conflict and failed request states for the 
   assert.match(html, /Retry/);
 });
 
-test('renderHandoffForm defaults to analyse-followups with source off and shows permission dependencies', () => {
+test('renderRunAgentDialog step 1 offers the three built-in recipes as cards', () => {
   const s = snapshot();
-  const html = renderHandoffForm(s.tickets[0], s, {});
-  assert.match(html, /value="analyse-followups"[^>]*checked/);
-  assert.match(html, /name="read_source"(?![^>]*checked)/);
-  assert.match(html, /requires push branch/i);
-  assert.match(html, /maxlength="280"/);
+  s.recipes = ['analyse', 'analyse-followups', 'attempt-fix'].map((name) => ({ name, source: 'builtin', mode: name, description: name, permissions: { read_source: true }, timeout_min: 20, legacy: true, repo_id: null }));
+  const html = renderRunAgentDialog(s.tickets[0], s, { recipe: null });
+  for (const name of ['analyse', 'analyse-followups', 'attempt-fix']) assert.match(html, new RegExp(`data-action="run-agent-pick"[^>]*data-recipe="${name}"`));
+  assert.doesNotMatch(html, /<form/);
 });
 
 test('every view renders a field-restricted sanitized export without throwing', async () => {
@@ -278,7 +278,7 @@ test('the inbox lists unlinked work with files, commits, the last checkpoint and
   assert.match(html, /abc1234/);
   assert.match(html, /Made the retry deterministic/);
   for (const action of ['data-action="attach-unbound" data-session="sess-u" data-mode="attach"', 'data-action="attach-unbound" data-session="sess-u" data-mode="create"', 'data-action="dismiss-unbound" data-session="sess-u" data-revision="3"']) assert.ok(html.includes(action), action);
-  assert.ok(html.indexOf('Unlinked work') < html.indexOf('<h2>Up next</h2>'), 'the inbox precedes recommendations');
+  assert.ok(html.indexOf('Unlinked work') > html.indexOf('<h2>Up next</h2>'), 'recommendations precede the collapsed inbox');
 });
 
 test('the inbox hides dismissed or empty work and read-only snapshots, and shows pending requests instead of actions', () => {
@@ -399,30 +399,33 @@ function recipeSnapshot() {
   return { s, t };
 }
 
-test('the Agents panel lists the recipes for the ticket repository with permissions, and each run with its suggestions', () => {
+test('the recipe catalogue lists the recipes for the ticket repository with permissions; the run detail holds its suggestions', () => {
   const { s, t } = recipeSnapshot();
   assert.deepEqual(effectiveRecipes(s, 'demo').map((r) => [r.name, r.source]), [['deploy-check', 'builtin'], ['standup', 'repo'], ['broken', 'personal'], ['attempt-fix', 'builtin']]);
   const html = renderDetail(t, s, { now: NOW, pending: [], content: {} });
-  assert.match(html, /<h3>Agents/);
-  assert.match(html, /data-action="run-recipe" data-ticket="[^"]+" data-recipe="deploy-check"/);
+  assert.match(html, /<h3>Recipes/);
+  assert.match(html, /data-action="run-agent" data-ticket="[^"]+" data-recipe="deploy-check"/);
   assert.match(html, /Team standup/);
   assert.doesNotMatch(html, /Builtin standup|Elsewhere only/);
   assert.match(html, /broken[\s\S]{0,800}commit requires edit_source/);
   assert.doesNotMatch(html, /data-recipe="broken"/);
   assert.match(html, /Reads source · 10 min/);
   assert.match(html, /Notes only · 5 min/);
-  assert.match(html, /Confirm &lt;prod&gt;/);
-  assert.match(html, /data-action="accept-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
-  assert.match(html, /data-action="dismiss-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
-  assert.match(html, /production: deployed \(tag v1\.2\)/);
-  assert.match(html, /data-copy="Deployed to prod"/);
-  assert.match(html, /Add alert[\s\S]{0,120}Accepted/);
-  assert.doesNotMatch(html, /data-suggestion="s4"/);
-  const pending = renderDetail(t, s, { now: NOW, pending: [{ id: 'q', kind: 'accept-suggestion', target_id: t.id, state: 'pending', payload: { handoff_id: 'h2', suggestion_id: 's1' } }], content: {} });
+  const h2 = s.handoffs.find((h) => h.id === 'h2');
+  const run = renderRunDetail(h2, s, { now: NOW, pending: [], content: {} });
+  assert.match(run, /Confirm &lt;prod&gt;/);
+  assert.match(run, /data-action="accept-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
+  assert.match(run, /data-action="dismiss-suggestion" data-ticket="[^"]+" data-handoff="h2" data-suggestion="s1"/);
+  assert.match(run, /production: deployed \(tag v1\.2\)/);
+  assert.match(run, /data-copy="Deployed to prod"/);
+  assert.match(run, /Add alert[\s\S]{0,120}Accepted/);
+  assert.doesNotMatch(run, /data-suggestion="s4"/);
+  const pending = renderRunDetail(h2, s, { now: NOW, pending: [{ id: 'q', kind: 'accept-suggestion', target_id: t.id, state: 'pending', payload: { handoff_id: 'h2', suggestion_id: 's1' } }], content: {} });
   assert.doesNotMatch(pending, /data-action="accept-suggestion"[^>]*data-suggestion="s1"/);
   assert.match(pending, /Accepting…/);
-  const ro = renderDetail(t, { ...s, capabilities: { read: true } }, { now: NOW, pending: [], content: {} });
-  for (const action of ['run-recipe', 'accept-suggestion', 'dismiss-suggestion']) assert.equal(ro.includes(`data-action="${action}"`), false, action);
+  const roSnap = { ...s, capabilities: { read: true } };
+  const ro = renderDetail(t, roSnap, { now: NOW, pending: [], content: {} }) + renderRunDetail(h2, roSnap, { now: NOW, pending: [], content: {} });
+  for (const action of ['run-agent', 'accept-suggestion', 'dismiss-suggestion']) assert.equal(ro.includes(`data-action="${action}"`), false, action);
 });
 
 test('the recipe run dialog shows what the run may do and pre-selects only source access', () => {
@@ -436,9 +439,11 @@ test('the recipe run dialog shows what the run may do and pre-selects only sourc
   assert.match(fix, /name="branch"/);
   assert.match(fix, /applies its next action and follow-ups directly/);
   const hasProvider = !!(s.repos ?? []).find((r) => r.id === t.repo_id)?.provider;
-  assert.match(fix, hasProvider ? /name="open_draft_pr">/ : /name="open_draft_pr" disabled> Open a draft PR <span class="muted small">\(no PR provider configured/);
+  const noProvider = /\(no PR provider configured for this repository\)/;
+  assert.match(fix, /name="open_draft_pr" disabled> Open a draft PR <span class="muted small">\(requires push branch\)<\/span>/, 'PR starts disabled until Push is ticked');
+  (hasProvider ? assert.doesNotMatch : assert.match)(fix, noProvider);
   const other = { ...s, repos: (s.repos ?? []).map((r) => (r.id === t.repo_id ? { ...r, provider: hasProvider ? null : 'github' } : r)) };
-  assert.match(renderRecipeRunDialog(other.recipes.find((r) => r.name === 'attempt-fix'), t, other), hasProvider ? /name="open_draft_pr" disabled/ : /name="open_draft_pr">/, 'the box follows the repository provider');
+  (hasProvider ? assert.match : assert.doesNotMatch)(renderRecipeRunDialog(other.recipes.find((r) => r.name === 'attempt-fix'), t, other), noProvider, 'the provider note follows the repository provider');
   const standup = renderRecipeRunDialog(s.recipes.find((r) => r.source === 'repo' && r.name === 'standup'), t, s);
   assert.match(standup, /works from the ticket notes only/);
   assert.doesNotMatch(standup, /type="checkbox"/);
@@ -586,4 +591,133 @@ test('pick next: one reason per card with the breakdown in the score tooltip; bl
   assert.equal((open.match(/class="blocker-text"/g) ?? []).length, many.blocked.filter((b) => b.blocker).length);
   assert.match(open, /Show fewer/);
   assert.match(open, /<h3>Second /, 'more than one project groups the list');
+});
+
+test('contentViewer shows a load button, loading, the escaped text with Hide, and a failure with Retry', () => {
+  const ref = 'c'.repeat(64);
+  assert.match(contentViewer(ref, { content: {}, status: {}, generation: 'g1', label: 'Show full result' }), /data-action="load-content" data-hash="c{64}" data-generation="g1">Show full result</);
+  const loading = contentViewer(ref, { content: {}, status: { [ref]: 'loading' }, generation: 'g1', label: 'x' });
+  assert.match(loading, /aria-busy="true"/);
+  assert.match(loading, /Loading/);
+  const reloading = contentViewer(ref, { content: {}, status: { [ref]: 'reloading' }, generation: 'g1', label: 'x' });
+  assert.match(reloading, /aria-busy="true"/);
+  assert.match(reloading, /The snapshot changed; reloading…/);
+  assert.doesNotMatch(reloading, /Retry|<button/);
+  const loaded = contentViewer(ref, { content: { [ref]: '<b>done</b>' }, status: {}, generation: 'g1', label: 'x' });
+  assert.match(loaded, /<pre class="full">&lt;b&gt;done&lt;\/b&gt;<\/pre>/);
+  assert.match(loaded, /data-action="hide-content" data-hash="c{64}"/);
+  const failed = contentViewer(ref, { content: {}, status: { [ref]: { error: 'boom <x>' } }, generation: 'g1', label: 'x' });
+  assert.match(failed, /role="alert"[^>]*>Could not load: boom &lt;x&gt;/);
+  assert.match(failed, /data-action="load-content"[^>]*>Retry</);
+  assert.equal(contentViewer(null, { content: {}, status: {}, generation: 'g1', label: 'x' }), '');
+});
+
+test('a run result and a timeline entry render their loaded full text', () => {
+  const s = snapshot();
+  const ref = 'b'.repeat(64);
+  const t = { ...s.tickets[4], handoff_ids: ['h1'], timeline: [{ id: 'e1', at: '2026-10-02T09:00:00Z', kind: 'plan', text: 'plan text', event_id: 'x', content_ref: 'd'.repeat(64), coverage: 'complete' }], timeline_total: 1 };
+  const content = { [ref]: 'FULL-RESULT-SENTINEL', ['d'.repeat(64)]: 'FULL-TIMELINE-SENTINEL' };
+  const run = renderRunDetail(s.handoffs[0], { ...s, tickets: [t] }, { now: NOW, pending: [], content, contentStatus: {} });
+  assert.match(run, /FULL-RESULT-SENTINEL/);
+  const activity = renderDetail(t, s, { now: NOW, pending: [], content, contentStatus: {}, tab: 'activity' });
+  assert.match(activity, /FULL-TIMELINE-SENTINEL/);
+});
+
+test('Sessions links the checkpoint to the ticket it was captured on, not the current binding', () => {
+  const base = snapshot();
+  const rebound = { ...base, sessions: [{ ...base.sessions[0], current_ticket_id: TID(1), ticket_ids: [TID(2), TID(1)] }] };
+  const html = renderSessions(rebound, noFilters, { now: NOW, page: 0 });
+  assert.match(html, new RegExp(`data-open="${TID(2)}" data-section="activity">View checkpoints on ${base.tickets[1].key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.doesNotMatch(html, new RegExp(`data-open="${TID(1)}" data-section="activity"`));
+  const missing = { ...base, checkpoints: [] };
+  assert.doesNotMatch(renderSessions(missing, noFilters, { now: NOW, page: 0 }), /View checkpoints/);
+});
+
+test('the sidebar lists Runs with shortcut 7 and a live count; 1 to 6 keep their views', async () => {
+  const { renderSidebar, SHORTCUT_VIEWS } = await import('../../ui/views/header.js');
+  const s = snapshot({ handoffs: [{ ...snapshot().handoffs[0], id: 'q1', state: 'queued' }] });
+  const side = renderSidebar(s, { view: 'runs' });
+  assert.match(side, /data-view="runs"[^>]*aria-selected="true"[^>]*aria-keyshortcuts="7"/);
+  assert.match(side, /data-view="runs"[\s\S]*?<span class="badge"[^>]*>1<\/span>/);
+  assert.deepEqual(SHORTCUT_VIEWS, { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs' });
+});
+
+test('ticket detail: a run strip under the title and a Runs tab with runs, proposals and recipes', () => {
+  const base = snapshot();
+  const t = { ...base.tickets[0] };
+  const queued = { ...base.handoffs[0], id: 'q1', ticket_id: t.id, state: 'queued', requested_at: '2026-10-02T11:00:00Z' };
+  const done = { ...base.handoffs[0], id: 'd1', ticket_id: t.id, state: 'done', requested_at: '2026-10-02T10:00:00Z', suggestions: [{ id: 's', type: 'next-action', text: 'x', state: 'proposed' }] };
+  const s = { ...base, handoffs: [queued, done], recipes: [{ name: 'analyse', source: 'builtin', mode: 'analyse', description: 'd', permissions: {}, timeout_min: 20, legacy: true, repo_id: null }] };
+  const html = renderDetail(t, s, { now: NOW, pending: [], content: {} });
+  assert.match(html, /class="run-strip" data-action="open-run" data-run="q1"/, 'the live run leads');
+  assert.deepEqual(DETAIL_TABS, ['overview', 'runs', 'activity', 'delivery']);
+  assert.match(html, /id="detail-tab-runs"/);
+  const overview = /id="detail-page-overview"[\s\S]*?id="detail-page-runs"/.exec(html)[0];
+  assert.doesNotMatch(overview, /data-recipe-row|class="detail-section proposals"/, 'Overview no longer lists recipes or proposals');
+  const runsTab = renderDetail(t, s, { now: NOW, pending: [], content: {}, tab: 'runs' });
+  assert.match(runsTab, /data-action="open-run" data-run="d1"/);
+  assert.match(runsTab, /One run per ticket/, 'recipes wait while a run is live');
+  const idle = renderDetail(t, { ...s, handoffs: [done] }, { now: NOW, pending: [], content: {}, tab: 'runs' });
+  assert.match(idle, /data-action="run-agent" data-ticket="[^"]+" data-recipe="analyse"/);
+  const none = renderDetail(t, { ...s, handoffs: [] }, { now: NOW, pending: [], content: {} });
+  const strip = /<div class="run-strip" data-empty="true">[\s\S]*?<\/div>/.exec(none)[0];
+  assert.match(strip, /No agent runs yet/);
+  assert.doesNotMatch(strip, /data-action="run-agent"/, 'the empty strip has no button of its own');
+  assert.match(none, /class="status-controls"[\s\S]*?data-action="run-agent" data-ticket="[^"]+">/, 'the status controls keep Run agent');
+});
+
+test('navigation is grouped, Runs has a live count and an attention dot, phones get More', async () => {
+  const { renderSidebar, NAV_ITEMS, PHONE_PRIMARY } = await import('../../ui/views/header.js');
+  assert.deepEqual(NAV_ITEMS.map((n) => n[0]), ['picknext', 'board', 'runs', 'today', 'sessions', 'deployments', 'tree']);
+  assert.deepEqual([...PHONE_PRIMARY], ['picknext', 'board', 'runs', 'today']);
+  const base = snapshot();
+  const s = { ...base, handoffs: [{ ...base.handoffs[0], id: 'f', ticket_id: base.tickets[0].id, state: 'failed', finished_at: '2026-10-02T11:00:00Z' }] };
+  const side = renderSidebar(s, { view: 'sessions', now: NOW });
+  assert.match(side, /<span class="nav-caption">Work<\/span>[\s\S]*data-view="runs"[\s\S]*<span class="nav-caption">Track<\/span>/);
+  assert.match(side, /aria-label="Runs, \d+ live, 1 needs you" data-view="runs"/);
+  assert.match(side, /data-view="runs"[\s\S]*?class="attention-dot" aria-hidden="true"/);
+  assert.match(side, /data-view="sessions"[^>]*class="nav-item nav-overflow"|class="nav-item nav-overflow"[^>]*data-view="sessions"/);
+  assert.match(side, /data-action="toggle-more" aria-expanded="false" aria-controls="more-sheet" aria-current="page"/, 'More is current when an overflow view is open');
+  const open = renderSidebar(s, { view: 'board', now: NOW, moreOpen: true });
+  assert.match(open, /id="more-sheet" class="more-sheet" role="dialog" aria-label="More views"/);
+  assert.match(open, /class="more-panel"[\s\S]*data-view="deployments"/);
+});
+
+test('the top bar is one row with a status button; receipts are toasts; filters sit behind a counted button', async () => {
+  const { renderHeader, statusLabel, receiptLifetime, renderFilterBar, activeFilterCount } = await import('../../ui/views/header.js');
+  const s = snapshot();
+  const html = renderHeader(s, { now: NOW, online: true, refresh: null, theme: 'dark', endpoint: '127.0.0.1:4321', receipt: { text: 'next action applied', tone: 'good' } });
+  assert.doesNotMatch(html, /class="statusline"/);
+  assert.match(html, /<summary class="btn small ghost status-button"[^>]*><span class="dot"[^>]*><\/span><span class="status-label">1 provider error<\/span>/);
+  assert.match(html, /class="popover status-popover"[\s\S]*Refresh[\s\S]*127\.0\.0\.1:4321/);
+  assert.match(html, /class="receipt toast"[\s\S]*Receipt: next action applied[\s\S]*data-action="dismiss-receipt"/);
+  assert.deepEqual(statusLabel(s, { now: NOW, online: false }), { text: 'Offline · 1 provider error', tone: 'critical' });
+  assert.equal(receiptLifetime('critical'), null);
+  assert.equal(receiptLifetime('good'), 6000);
+  assert.equal(activeFilterCount({ project: 'demo', category: '', tag: '', repo: 'demo', machine: '', stale: true, q: '' }), 3);
+  const bar = renderFilterBar(s, { project: '', category: 'feature', tag: '', repo: '', machine: '', stale: false, q: '' });
+  assert.match(bar, /<details class="filter-pop health-pop"><summary class="btn small ghost">[\s\S]*Filter · 1<\/summary>/);
+  assert.match(bar, /data-filter="category"/);
+  assert.match(bar, /data-action="clear-filter" data-filter="category"/);
+});
+
+test('statusLabel: offline without errors, plural errors, needs attention', async () => {
+  const { statusLabel } = await import('../../ui/views/header.js');
+  const clean = snapshot(); clean.meta.provider_health = [];
+  assert.deepEqual(statusLabel(clean, { now: NOW, online: false }), { text: 'Offline', tone: 'critical' });
+  const two = snapshot(); two.meta.provider_health = [{ provider: 'github', error: 'x' }, { provider: 'bitbucket', error: 'y' }];
+  assert.deepEqual(statusLabel(two, { now: NOW, online: true }), { text: '2 provider errors', tone: 'critical' });
+  assert.equal(statusLabel(two, { now: NOW, online: false }).text, 'Offline · 2 provider errors');
+  const warn = snapshot(); warn.meta.provider_health = []; warn.meta.capture_health = { status: 'degraded' };
+  assert.deepEqual(statusLabel(warn, { now: NOW, online: true }), { text: 'Needs attention', tone: 'warning' });
+  const snap = snapshot(); snap.meta.exported_at = NOW;
+  assert.deepEqual(statusLabel(snap, { now: NOW, online: false }), { text: 'Read-only snapshot', tone: 'muted' });
+});
+
+test('cards show a shortened key with the full key in title and copy; Hide is an icon button', () => {
+  const long = { ...snapshot().tickets[0], key: 'LOCAL-preserve-session-checkpoints-00000001' };
+  const card = ticketCard(long, snapshot(), { variant: 'board', now: NOW });
+  assert.match(card, /data-copy="LOCAL-preserve-session-checkpoints-00000001"[^>]*title="LOCAL-preserve-session-checkpoints-00000001[^"]*">LOCAL-pre[^<]*…[^<]*00000001</);
+  const board = renderBoard(snapshot(), noFilters, { now: NOW, layout: 'columns', toggled: new Set(), pages: {} });
+  assert.match(board, /class="btn small ghost icon-only" data-action="toggle-column"[^>]*aria-label="Hide To do"/);
 });
