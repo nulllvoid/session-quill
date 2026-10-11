@@ -275,3 +275,22 @@ test('a run that may edit source always self-checks, whatever its recipe says (A
     assert.match(turn.prompt, /check your answer/i);
   } finally { await b.w.stop(); }
 });
+
+test('a run of a built-in recipe queued before an upgrade runs with the current built-in text, not recipe-changed', async () => {
+  const { b, capture } = await boot();
+  try {
+    const t = b.ticket(T1, 'PROJ-7');
+    b.hext.pause();
+    b.request(RID(30), { target_id: T1, expected_revision: t.revision, payload: { recipe: 'deploy-check', note: '', permissions: { ...NONE, read_source: true } } });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(30)).result.handoff_id;
+    const queued = b.w.state.handoffs.get(hid);
+    assert.equal(queued.recipe.source, 'builtin');
+    // The built-in text changed in the release installed since: its hash no longer matches.
+    queued.recipe = { ...queued.recipe, hash: '0'.repeat(64) };
+    b.hext.resume();
+    const h = await until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return ['done', 'failed'].includes(x.state) ? x : null; });
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.ok(fs.existsSync(capture), 'the agent ran');
+  } finally { await b.w.stop(); }
+});

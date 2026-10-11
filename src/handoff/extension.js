@@ -250,7 +250,11 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const catalog = catalogFor(worker);
     // Runs queued before recipes existed have no recipe reference and use the built-in of their mode.
     const recipe = !h.recipe || h.recipe.source === 'builtin' ? catalog.builtin(h.recipe ? h.recipe.name : h.mode) : catalog.get(h.recipe.name, h.repo_id ?? null, { fresh: true });
-    if (h.recipe && (!recipe || recipe.error || recipe.hash !== h.recipe.hash)) return fail(worker, h, 'recipe-changed', `recipe ${h.recipe.name} changed or was removed after this run was queued; review it and queue a new run`);
+    // A built-in recipe ships with Quill: after an upgrade its text (and hash) may differ from what
+    // was queued, and the current built-in is what this release runs. Only personal and repository
+    // recipes, which anyone can edit on disk, must still match the reviewed hash.
+    const builtin = h.recipe && h.recipe.source === 'builtin';
+    if (h.recipe && (!recipe || recipe.error || (!builtin && recipe.hash !== h.recipe.hash))) return fail(worker, h, 'recipe-changed', `recipe ${h.recipe.name} changed or was removed after this run was queued; review it and queue a new run`);
     try {
       validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null });
     } catch (err) {
