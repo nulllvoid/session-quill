@@ -25,10 +25,10 @@ Two labelled groups replace the flat list:
 
 | Group | Items (route id) | Count badge |
 | --- | --- | --- |
-| Work | Pick next (`picknext`), Board (`board`), Runs (`runs`) | Runs: number of queued + running runs, labelled "live"; falls back to the Needs-you count when nothing is live |
+| Work | Pick next (`picknext`), Board (`board`), Runs (`runs`) | Runs: number of queued + running runs, labelled "live"; a separate attention dot (with an accessible label such as "3 need you") when Needs you is non-empty. One number never means two things. |
 | Track | Activity (`today`), Sessions (`sessions`), Deployments (`deployments`), Relationships (`tree`) | unchanged |
 
-`NAV_ITEMS` in `ui/views/header.js` gains a group field; keyboard shortcuts `1`–`7` follow the new order. The collapsed (72 px) sidebar keeps icons and badges; group labels hide.
+`NAV_ITEMS` in `ui/views/header.js` gains a group field; keyboard shortcuts `1`–`6` keep their current targets (Pick next, Board, Relationships, Sessions, Deployments, Activity) so nobody's muscle memory breaks, and `7` opens Runs. The help dialog lists them. The collapsed (72 px) sidebar keeps icons and badges; group labels hide.
 
 ### Phone bottom bar (< 900 px)
 
@@ -43,7 +43,7 @@ One row at every width:
 3. Approvals button (existing `review-proposals` action) now opens Runs → Needs you.
 4. Schedules, Export, theme, help as today.
 
-- The request receipt line ("Receipt: handoff applied …") becomes a toast in the existing announcement region: shown for 6 s, dismissible, with the LIVE chip. Receipts also remain in the run detail they belong to.
+- The request receipt line ("Receipt: handoff applied …") becomes a toast in the existing announcement region. Neutral and good receipts auto-dismiss after 6 s; **critical receipts** (`refresh failed`, `request rejected before the queue`, and any other `critical` tone) stay until dismissed, so an error is never lost to a timer. Every toast keeps the LIVE chip and is also announced through the live region.
 - Filters move behind a **Filter** button showing the count of active filters (e.g. "Filter · 2"). Clicking opens a popover with the same Project, Category, Repo and Stale controls. The hash keeps the same filter parameters so links keep working. Views that ignore filters (Sessions, Deployments) hide the button.
 
 ### Width rules
@@ -56,7 +56,7 @@ Nothing may be wider than the viewport at 390 px. The top bar, filter popover, s
 
 | Tab | Membership | Count |
 | --- | --- | --- |
-| Needs you | open run proposals (state `proposed`, not expired); done runs with ≥ 1 unresolved suggestion; runs in `failed`, `timed-out` or `cancelled` with no later run that has `retry_of` pointing at them | yes |
+| Needs you | open run proposals (state `proposed`, not expired); done runs with ≥ 1 unresolved suggestion; runs in `failed` or `timed-out` from the last 7 days whose ticket is not done and has no later run (any later run on the same ticket supersedes a failure, retried or not). Cancelled runs never need you: the owner cancelled them. The 7-day bound keeps the list from growing without a dismiss action, which would need new stored state. | yes |
 | Live | `queued`, `running` | yes |
 | Failed | `failed`, `timed-out`, `cancelled` (all, retried or not) | yes |
 | All | every handoff with `requested_at` in the last 30 days, plus proposals | no |
@@ -71,10 +71,10 @@ Runs are grouped by `batch_id`; runs without one are listed individually. Within
 
 Each run row: state icon and label, ticket key (middle-ellipsised) and title, recipe or mode, access chip (read-only / edits source), one fact line, and a time. The fact line by state:
 
-- `queued`: "Queued" plus, when the snapshot shows the cap in use, "· read-only slots 2/2 in use" or "· fix slot in use" from `meta.handoff_limits` and the count of running runs of that kind. When the ticket's repository already has a running fix, "· repository busy". Never a reason the snapshot does not contain; never an ETA.
-- `running`: the phase if `timings` or `test_gate` reveal it ("agent 2 min", "tests running"), else "Running since …".
+- `queued`: "Queued" plus, when the snapshot shows the cap in use, "· read-only slots 2/2 in use" or "· fix slots 1/1 in use" from `meta.handoff_limits` and the count of running runs of the same kind (read-only vs `edit_source`). For a queued run with `edit_source` only, when another `edit_source` run on the same `repo_id` is running, "· repository busy" (fix serialisation is per repository; read-only runs are never blocked by it). These are facts about current occupancy, not a claimed cause. Never an ETA.
+- `running`: "Running for 2 min" from `started_at`, plus "· setup 4 s" when `timings.worktree_ms` is present. The worker writes `agent_ms`, `test_ms` and `test_gate` only when the run finishes, so the row never claims an agent or test phase while running.
 - `done`: test-gate chip (`testGateChip`), suggestion count ("2 suggestions to review"), PR link indicator.
-- `failed` / `timed-out` / `cancelled`: `error` or the test-gate failure summary, plus "Retried as …" when a later run has `retry_of`.
+- `failed` / `timed-out` / `cancelled`: `error` or the test-gate failure summary, plus "Retried as …" when a later run has `retry_of` naming this run, or "Superseded by a later run" when the ticket has a later run without it.
 - proposal: "Proposed on the team page by <editor>", with Approve and Dismiss inline (owner only).
 
 Clicking a row opens run detail (§3). Rows are buttons with the run's state in `aria-label`.
@@ -111,7 +111,7 @@ Proposals open the same panel with their payload (recipe, editor, publisher, pro
 
 ## 5. One Run agent dialog
 
-Replaces the Handoff dialog (`renderHandoffForm`) and the recipe Run dialog (`renderRecipeRunDialog`). One dialog, two steps, one request shape as today (`handoff` payload: recipe, mode, note, permissions, access, branch, batch_id, retry_of).
+Replaces the Handoff dialog (`renderHandoffForm`) and the recipe Run dialog (`renderRecipeRunDialog`). One dialog, two steps, one request shape as today: a `handoff` request whose payload is recipe, mode, note, permissions, access, branch and batch_id, with `retry_of` on the **request** (not the payload) when retrying, exactly as `ui/app.js` submits it now. Legacy modes still submit without a recipe; recipe runs still carry the recipe name.
 
 **Step 1 — What to run.** Cards for each effective recipe (`effectiveRecipes`) and the three legacy modes, each with name, one-line description, "reads source" / "edits source" marker and the time cap. Legacy modes are marked "built-in". The chosen card is remembered per ticket for the session.
 
@@ -141,7 +141,8 @@ Bulk runs keep their own dialog (`ui/views/bulk.js`), which gains the same summa
 
 ## 8. Error handling
 
-- Snapshot without `handoffs` or `handoff_limits` (older worker, exports): Runs renders with what exists; wait facts and caps are simply omitted.
+- Snapshot without `handoffs` or `handoff_limits` (older worker): Runs renders with what exists; wait facts and caps are simply omitted.
+- **Exports.** `sanitizeHandoff` in `src/export/sanitize.js` strips `worktree_path`, `result_ref`, `changed_files`, the test-gate command and output, and (unless the export includes checkpoints or links) `result_summary`, `suggestions` and `pr_url`. In an export, Runs shows only Live, Failed and All: no Needs you, since nobody can act on it there and stripped `suggestions` would make its count wrong. Run detail shows state, recipe, access, timings and test-gate status, and omits each stripped section entirely rather than rendering it empty, so no section implies data the export withheld.
 - Request failures for cancel, approve, dismiss, accept show the server's error code and message in the row/panel, matching the existing `pending`/error pattern; `handoff-reserved` on approve shows the active run and links to it.
 - Generation changes during a load show "Snapshot changed, reloading…" and retry once.
 - A `run=` in the hash that no longer exists shows "Run not found" in the panel with Open Runs.
@@ -150,13 +151,19 @@ Bulk runs keep their own dialog (`ui/views/bulk.js`), which gains the same summa
 
 Renderer tests (`tests/ui/*.test.js`, `node:test`):
 
-- `runs.test.js`: tab membership for every state including expired proposals and retried failures; grouping by batch and ordering; fact lines for queued with caps in use, repository busy, running with timings, done with suggestions, failed with retry; no ETA or reason text without snapshot evidence.
+New files, using the shared `tests/ui/fixtures.js`:
+
+- `runs.test.js`: tab membership for every state, including expired proposals, a failure superseded by a later run, a failure older than 7 days, a failure on a done ticket and a cancelled run (never Needs you); grouping by batch and ordering; fact lines for queued with caps in use, repository busy only for a queued `edit_source` run, running with and without `worktree_ms`, done with suggestions, failed with retry; no ETA, no agent/test phase while running, no reason text without snapshot evidence.
 - `run-detail.test.js`: every section with and without data; content loading, loaded, unavailable and failed states; escaping of result text and file names; `uncertain_effects` never inside a success-styled element; `worktree_path` absent when `capabilities.handoff` is false.
-- `detail.test.js` additions: run strip for queued, done and none; Runs tab contents; Overview no longer contains recipes or proposals; full result and timeline full text render when `content` has them.
-- `sessions.test.js`: checkpoint on A, rebind to B → link targets A; missing checkpoint → no link.
-- `run-dialog.test.js`: step 1 cards, step 2 option gating by recipe frontmatter, summary text for each combination, blockers disable Queue, retry pre-fill.
-- `header.test.js`: groups, badges, bottom bar with More, status popover content, filter count.
-- `export.test.js` additions: a static export renders Runs and run detail with no Cancel/Approve/Accept controls, no `worktree_path`, no result links.
+- `run-dialog.test.js`: step 1 cards, step 2 option gating by recipe frontmatter, summary text for each combination, blockers disable Queue, retry puts `retry_of` on the request and not in the payload, legacy modes submit without a recipe.
+
+Additions to existing files:
+
+- `render.test.js`: run strip for queued, done and none; Runs detail tab and its arrow/Home/End keys over four tabs; Overview no longer contains recipes or proposals; full result and timeline full text render when `content` has them; Sessions checkpoint on A, rebind to B → link targets A, missing checkpoint → no link; nav groups, badge plus attention dot, bottom bar with More, shortcuts 1–6 unchanged and 7 opens Runs; status popover content; filter count; critical receipts persist and neutral ones expire.
+- `proposals.test.js`: proposals render in Runs → Needs you and the ticket Runs tab, no longer in Activity; the approvals button opens Runs with filters cleared.
+- `test-gate.test.js`: chips in run rows and run detail match the existing wording.
+- `tokens.test.js`: `--border-strong` ≥ 3:1 on `--bg` and `--surface` in both themes (new assertion); existing 4.5:1 text assertions still pass with the new `--text-faint`.
+- `tests/export/static.test.js`: a static export renders Runs without Needs you, and run detail with no Cancel/Approve/Accept controls, no `worktree_path`, no result links and no empty sections for stripped fields.
 
 Browser checks (Playwright from the local runtime, dev-seed store, not committed as a dependency): at 1440×900, 1280×720 and 390×844, light and dark, reduced motion on and off — `document.documentElement.scrollWidth === innerWidth` on every view; queue a run and watch it move Live → Needs you; open run detail by keyboard, Tab stays inside the modal, Escape returns focus to the row; More sheet opens and closes; filter popover sets the hash. Refresh `docs/images/dashboard-*.jpg`.
 
