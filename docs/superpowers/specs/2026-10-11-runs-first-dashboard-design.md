@@ -15,6 +15,7 @@ Not a visual redesign: Geist, the evergreen accent and the semantic status colou
 - Route IDs `picknext`, `board`, `tree`, `sessions`, `deployments`, `today` keep working; `runs` is added. Existing links keep resolving.
 - Queued, running, tests passed and done remain distinct states. A completed run is never shown as a completed ticket or a deployment.
 - Exports (`capabilities` all mutation flags false) show no owner-only controls, no local paths, no result links into the filesystem.
+- The static export bundles every module `ui/app.js` imports (derived from the import graph), so new modules ship in exports and the existing gap (agents, today and bulk views missing) is closed.
 - Approval, clone consent, commit/push/PR permissions, concurrency caps and reservation stay enforced by the worker; the UI only reflects them.
 
 ## 1. Navigation and shell
@@ -44,7 +45,7 @@ One row at every width:
 4. Schedules, Export, theme, help as today.
 
 - The request receipt line ("Receipt: handoff applied …") becomes a toast in the existing announcement region. Neutral and good receipts auto-dismiss after 6 s; **critical receipts** (`refresh failed`, `request rejected before the queue`, and any other `critical` tone) stay until dismissed, so an error is never lost to a timer. Every toast keeps the LIVE chip and is also announced through the live region.
-- Filters move behind a **Filter** button showing the count of active filters (e.g. "Filter · 2"). Clicking opens a popover with the same Project, Category, Repo and Stale controls. The hash keeps the same filter parameters so links keep working. Views that ignore filters (Sessions, Deployments) hide the button.
+- Filters move behind a **Filter** button showing the count of active filters (e.g. "Filter · 2"). Clicking opens a popover with the same Project, Category, Repo and Stale controls. The hash keeps the same filter parameters so links keep working. Every view shows the button: all of them, Sessions and Deployments included, apply the project and search filters.
 
 ### Width rules
 
@@ -101,7 +102,7 @@ Sections, top to bottom:
 6. **Suggestions**: the existing `suggestionItem` list with Accept / Dismiss and their undo.
 7. **Actions** row: Cancel (queued/running, `capabilities.handoff`), Retry as new run (terminal non-done states; opens the Run agent dialog pre-filled with the same recipe, `retry_of` set), Open ticket.
 
-Proposals open the same panel with their payload (recipe, editor, publisher, proposed_at, expiry) and Approve / Dismiss. An expired proposal shows why ("older than 7 days" / "ticket done") and only Dismiss.
+Proposals do not open the panel: their rows already carry recipe, access, editor and Approve / Dismiss. An expired proposal shows why ("older than 7 days" / "ticket is done") and no actions, because the server refuses both approve and dismiss on an expired proposal (`proposal-expired`).
 
 ## 4. Ticket detail
 
@@ -111,7 +112,7 @@ Proposals open the same panel with their payload (recipe, editor, publisher, pro
 
 ## 5. One Run agent dialog
 
-Replaces the Handoff dialog (`renderHandoffForm`) and the recipe Run dialog (`renderRecipeRunDialog`). One dialog, two steps, one request shape as today: a `handoff` request whose payload is recipe, mode, note, permissions, access, branch and batch_id, with `retry_of` on the **request** (not the payload) when retrying, exactly as `ui/app.js` submits it now. Legacy modes still submit without a recipe; recipe runs still carry the recipe name.
+Replaces the Handoff dialog (`renderHandoffForm`) and the recipe Run dialog (`renderRecipeRunDialog`). One dialog, two steps, one request shape as today: a `handoff` request whose payload is recipe, mode, note, permissions, access, branch and batch_id, with `retry_of` on the **request** (not the payload) when retrying, exactly as `ui/app.js` submits it now. The built-in modes are built-in recipes, so the dialog queues every run through the recipe form with the recipe name, as the recipe dialog already does; the worker still accepts mode-only requests from the CLI and bulk runs.
 
 **Step 1 — What to run.** Cards for each effective recipe (`effectiveRecipes`) and the three legacy modes, each with name, one-line description, "reads source" / "edits source" marker and the time cap. Legacy modes are marked "built-in". The chosen card is remembered per ticket for the session.
 
