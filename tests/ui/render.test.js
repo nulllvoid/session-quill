@@ -617,3 +617,13 @@ test('a run result and a timeline entry render their loaded full text', () => {
   const activity = renderDetail(t, s, { now: NOW, pending: [], content, contentStatus: {}, tab: 'activity' });
   assert.match(activity, /FULL-TIMELINE-SENTINEL/);
 });
+
+test('Sessions links the checkpoint to the ticket it was captured on, not the current binding', () => {
+  const base = snapshot();
+  const rebound = { ...base, sessions: [{ ...base.sessions[0], current_ticket_id: TID(1), ticket_ids: [TID(2), TID(1)] }] };
+  const html = renderSessions(rebound, noFilters, { now: NOW, page: 0 });
+  assert.match(html, new RegExp(`data-open="${TID(2)}" data-section="activity">View checkpoints on ${base.tickets[1].key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.doesNotMatch(html, new RegExp(`data-open="${TID(1)}" data-section="activity"`));
+  const missing = { ...base, checkpoints: [] };
+  assert.doesNotMatch(renderSessions(missing, noFilters, { now: NOW, page: 0 }), /View checkpoints/);
+});
