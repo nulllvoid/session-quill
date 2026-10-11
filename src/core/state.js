@@ -47,6 +47,8 @@ export function createState(meta) {
     appliedSources: new Set(),
     schedules: new Map(),
     publishers: new Map(),
+    // Runs proposed from a shared page, by proposal id (ADR 0025).
+    runProposals: new Map(),
     lastSequence: 0,
     lastSync: null,
     providerHealth: [],

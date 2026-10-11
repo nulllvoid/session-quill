@@ -15,18 +15,19 @@ import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
 import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
+import { proposalState, proposalNote } from '../publish/run-proposals.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone'];
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run'];
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
 // Long-running requests owned by an extension: the scheduler's, and repo-clone (ADR 0024).
 const EXTENSION_KINDS = new Set([...SCHEDULER_KINDS, 'repo-clone']);
-const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone']);
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
-const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone']);
-const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion']);
+const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run']);
+const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'dismiss-run']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
 // Tracker keys are uppercase (PROJ-123). Requests normalize them, and lookups also match legacy
@@ -102,6 +103,25 @@ function findSuggestion(state, ticket, payload) {
   return { h, sug };
 }
 
+// A run proposed from a shared page (ADR 0025), still open: not approved, dismissed or lapsed.
+function findProposal(state, ticket, payload, now) {
+  const p = typeof payload.proposal_id === 'string' && state.runProposals ? state.runProposals.get(payload.proposal_id) : null;
+  if (!p || p.ticket_id !== ticket.id) throw new TrackerError('proposal-unknown', 'proposal_id must name a proposed run of the target ticket');
+  const st = proposalState(p, ticket, now);
+  if (st === 'expired') throw new TrackerError('proposal-expired', ticket.status === 'done' ? `${ticket.key} is done, so this proposed run lapsed` : 'this proposed run is more than 7 days old and lapsed; ask for it again on the page');
+  if (st !== 'proposed') throw new TrackerError('proposal-resolved', `this proposed run was already ${st}`);
+  return p;
+}
+
+// Only the owner approves: the dashboard (actor owner) or the CLI. An auto proposal may also be
+// approved by its own publisher's auto-run, which the owner turned on in config. Page edits and
+// anything else acting for a page or a schedule are refused.
+function approvalRefusal(actor, p, kind) {
+  if (actor === 'owner' || actor === 'cli') return null;
+  if (kind === 'approve-run' && p.auto === true && actor === `auto-run:${p.publisher}`) return null;
+  return `${kind === 'approve-run' ? 'approving' : 'dismissing'} a proposed run needs the owner, on the dashboard or with quill approve --run`;
+}
+
 export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
@@ -164,6 +184,10 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       normalized = { handoff_id: h.id, effect_id: effect.id };
       break;
     }
+    case 'approve-run':
+    case 'dismiss-run':
+      normalized = { proposal_id: findProposal(state, target, payload, nowIso).id };
+      break;
     case 'handoff-cancel': {
       const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
       if (!h || h.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
@@ -318,6 +342,36 @@ function evaluateSessionRequest(worker, req) {
   return { outcome: 'applied', mutation: { type: 'unbound-attach', session_id: session.id, ticket_id: ticketId, create, bind: req.payload.bind !== false }, result: { ticket_id: ticketId, created: !!create }, session: who };
 }
 
+// A handoff request, or an approved proposal, becomes a queued run (TRD §Handoff execution).
+function evaluateHandoff(worker, req, ticket, payload) {
+  const { state } = worker;
+  // Re-checked here because CLI requests arrive through ingress without submit validation, and
+  // the recipe file may have changed during the request's lifetime.
+  let recipe;
+  let checked;
+  try {
+    recipe = resolveRecipe(catalogFor(worker), payload, ticket.repo_id);
+    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length });
+  } catch (err) {
+    return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
+  }
+  if (payload.recipe && payload.recipe.hash && payload.recipe.hash !== recipe.hash) {
+    return { outcome: 'failed', error: { code: 'recipe-changed', message: `recipe ${recipe.name} changed after the request was made; review it and queue it again`, retryable: true, current_revision: ticket.revision } };
+  }
+  const existing = [...state.handoffs.values()].find((h) => h.ticket_id === ticket.id && ['queued', 'running'].includes(h.state));
+  if (existing) return { outcome: 'failed', error: { code: 'handoff-reserved', message: `handoff ${existing.id} is already ${existing.state} for this ticket`, retryable: true, current_revision: ticket.revision }, result: { existing_handoff_id: existing.id } };
+  const handoff = {
+    schema_version: 1, store_id: state.meta.store_id, id: uuid(), revision: 1, created_at: worker.now(), updated_at: worker.now(),
+    ticket_id: ticket.id, request_id: req.id, mode: checked.mode, note: checked.note, permissions: checked.permissions, access: checked.access ?? 'standard',
+    // The next action as queued: a run's own suggestion conflicts only if someone changed it since.
+    base_ticket_revision: ticket.revision, base_next_action: ticket.next_action ?? '', repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
+    requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,
+    children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
+    batch_id: checked.batch_id ?? null, recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
+  };
+  return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
+}
+
 const REVALIDATED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
 
 export function evaluateRequest(worker, req) {
@@ -349,32 +403,31 @@ export function evaluateRequest(worker, req) {
     }
     case 'record-deployment':
       return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { deployments: req.payload.items } } };
-    case 'handoff': {
-      // Re-checked here because CLI requests arrive through ingress without submit validation, and
-      // the recipe file may have changed during the request's lifetime.
-      let recipe;
-      let checked;
-      try {
-        recipe = resolveRecipe(catalogFor(worker), req.payload, ticket.repo_id);
-        checked = validateHandoffRequest({ ...req.payload, recipe: req.payload.recipe ? req.payload.recipe.name ?? req.payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length });
-      } catch (err) {
-        return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
+    case 'handoff':
+      return evaluateHandoff(worker, req, ticket, req.payload);
+    case 'approve-run':
+    case 'dismiss-run': {
+      let p;
+      try { p = findProposal(state, ticket, req.payload, worker.now()); } catch (err) {
+        return { outcome: 'failed', error: { code: err.code, message: err.message, retryable: false, current_revision: ticket.revision } };
       }
-      if (req.payload.recipe && req.payload.recipe.hash && req.payload.recipe.hash !== recipe.hash) {
-        return { outcome: 'failed', error: { code: 'recipe-changed', message: `recipe ${recipe.name} changed after the request was made; review it and queue it again`, retryable: true, current_revision: ticket.revision } };
+      const refusal = approvalRefusal(req.actor_id, p, req.kind);
+      if (refusal) return { outcome: 'failed', error: { code: 'approval-refused', message: refusal, retryable: false, current_revision: ticket.revision } };
+      if (req.kind === 'dismiss-run') return { outcome: 'applied', mutation: { type: 'run-proposal-dismiss', proposal_id: p.id }, result: { proposal_id: p.id } };
+      // Approval queues an ordinary run through the same checks and reservation as the Run dialog.
+      // It suggests rather than applies: whoever proposed it, the owner reviews what it found.
+      const evaluation = evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: proposalNote(p), permissions: p.permissions, access: p.access, suggest: true });
+      if (evaluation.outcome !== 'applied') {
+        if (evaluation.error && evaluation.error.code === 'handoff-reserved') {
+          const existing = state.handoffs.get(evaluation.result.existing_handoff_id);
+          evaluation.error.message = `${ticket.key} already has a ${existing ? existing.state : 'queued'} run (${String(evaluation.result.existing_handoff_id).slice(0, 8)}); approve the proposal again once it finishes`;
+        }
+        return evaluation;
       }
-      const existing = [...state.handoffs.values()].find((h) => h.ticket_id === ticket.id && ['queued', 'running'].includes(h.state));
-      if (existing) return { outcome: 'failed', error: { code: 'handoff-reserved', message: `handoff ${existing.id} is already ${existing.state} for this ticket`, retryable: true, current_revision: ticket.revision }, result: { existing_handoff_id: existing.id } };
-      const handoff = {
-        schema_version: 1, store_id: state.meta.store_id, id: uuid(), revision: 1, created_at: worker.now(), updated_at: worker.now(),
-        ticket_id: ticket.id, request_id: req.id, mode: checked.mode, note: checked.note, permissions: checked.permissions, access: checked.access ?? 'standard',
-        // The next action as queued: a run's own suggestion conflicts only if someone changed it since.
-        base_ticket_revision: ticket.revision, base_next_action: ticket.next_action ?? '', repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
-        requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,
-        children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
-        batch_id: checked.batch_id ?? null, recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
-      };
-      return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
+      evaluation.mutation.proposal_id = p.id;
+      evaluation.mutation.handoff.proposal_id = p.id;
+      evaluation.result.proposal_id = p.id;
+      return evaluation;
     }
     case 'handoff-cancel': {
       const h = state.handoffs.get(req.payload.handoff_id);

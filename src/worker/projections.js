@@ -1,5 +1,6 @@
 // Dashboard projections: one complete generation at a time, published through MANIFEST.json so
 // readers never see a half-written generation (TRD §Durability 4, DATA-CONTRACT §Dashboard projection).
+import { proposalState } from '../publish/run-proposals.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { projectionsDir } from '../lib/paths.js';
@@ -86,6 +87,8 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     schedules,
     recipes,
     publishers,
+    // Runs proposed from shared pages (ADR 0025), with their state as of this snapshot.
+    run_proposals: [...(state.runProposals ?? new Map()).values()].map((p) => { const t = state.tickets.get(p.ticket_id); return { ...p, state: proposalState(p, t, generated_at), ticket_key: t ? t.key : null }; }),
     picknext: derived.picknext ?? [],
     blocked: derived.blocked ?? [],
     deployments_outstanding: derived.deployments_outstanding ?? [],

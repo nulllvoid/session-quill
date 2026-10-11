@@ -1,5 +1,6 @@
 // Integrations: tracker sync, artifact comments, publisher and schedule runs.
 import { timelineEntry } from './common.js';
+import { editorLabel, proposalState, PROPOSAL_KEEP_MS } from '../../publish/run-proposals.js';
 
 export const SCHEDULE_HISTORY = 20;
 
@@ -63,6 +64,37 @@ export function applyArtifactComment(state, ev, result) {
   // with dash runs broken up, so it cannot pose as a prompt's data delimiter, and it is marked.
   const text = p.text.replace(/\s+/g, ' ').replace(/-{3,}/g, '–').trim().slice(0, 500);
   t.timeline.push(timelineEntry(ev, 'comment', `Comment from a page viewer on the ${p.publisher} page: ${text}`));
+  result.changed.add(t.id);
+  return {};
+}
+
+// A run proposed from a two-way page (ADR 0025). It is only recorded: nothing queues until the
+// owner approves it. Like a comment it sits on the timeline without a revision bump, so a page
+// pick can never make an owner's edit conflict. A second pick of the same recipe for the same
+// ticket while one is open adds nothing. Resolved and lapsed proposals are dropped 30 days on.
+const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
+const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+export function applyRunProposal(state, ev, result) {
+  const p = ev.payload;
+  if (!p || typeof p.id !== 'string' || !p.recipe || typeof p.recipe.name !== 'string' || !NAME_RE.test(p.recipe.name) || typeof p.publisher !== 'string' || !NAME_RE.test(p.publisher)) return { rejected: 'proposal-invalid' };
+  const t = state.tickets.get(p.ticket_id);
+  if (!t) return { rejected: 'ticket-unknown' };
+  if (state.runProposals.has(p.id)) return { duplicate: true };
+  for (const [id, x] of state.runProposals) {
+    const last = x.resolved_at && x.resolved_at > x.proposed_at ? x.resolved_at : x.proposed_at;
+    if (proposalState(x, state.tickets.get(x.ticket_id), ev.occurred_at) !== 'proposed' && Date.parse(ev.occurred_at) - Date.parse(last) > PROPOSAL_KEEP_MS) state.runProposals.delete(id);
+  }
+  const open = [...state.runProposals.values()].find((x) => x.ticket_id === t.id && x.recipe.name === p.recipe.name && proposalState(x, t, ev.occurred_at) === 'proposed');
+  if (open) return { rejected: 'run-already-proposed' };
+  const editor = editorLabel(p.editor);
+  const permissions = Object.fromEntries(PERMISSION_KEYS.map((k) => [k, !!(p.permissions && p.permissions[k] === true)]));
+  state.runProposals.set(p.id, {
+    id: p.id, ticket_id: t.id, publisher: p.publisher, editor, edited_at: typeof p.edited_at === 'string' ? p.edited_at : null,
+    recipe: { name: p.recipe.name, source: p.recipe.source ?? null, hash: p.recipe.hash ?? null }, mode: p.mode ?? null, permissions, access: 'standard', read_only: p.read_only === true, auto: p.auto === true,
+    expected_revision: Number.isInteger(p.expected_revision) ? p.expected_revision : null, proposed_at: ev.occurred_at, state: 'proposed', resolved_at: null, resolved_by: null, request_id: null, handoff_id: null,
+  });
+  t.timeline.push(timelineEntry(ev, 'proposal', `Run of ${p.recipe.name} proposed on the ${p.publisher} page${editor ? ` by ${editor}` : ''}; it waits for your approval`));
   result.changed.add(t.id);
   return {};
 }
