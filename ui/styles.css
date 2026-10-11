@@ -832,3 +832,12 @@ body[data-bulk="on"] .main { padding-bottom: 96px; }
 .test-output summary { cursor: pointer; list-style: none; display: inline; }
 .test-output summary::-webkit-details-marker { display: none; }
 .test-output[open] { display: block; }
+
+/* Repository onboarding (ADR 0024) */
+.meta-item.repo-state { gap: 6px; }
+.chip[data-repo-state="cloning"] { background: var(--status-active-bg); color: var(--status-active); }
+.chip[data-repo-state="cloning"] .dot { background: var(--status-active-dot); }
+.chip[data-repo-state="no-code"] { background: var(--surface-inset); color: var(--text-muted); }
+.clone-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 12px 0; }
+.clone-facts dt { color: var(--text-muted); font-size: 12.5px; }
+.clone-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }

@@ -180,7 +180,9 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       if (typeof payload.url !== 'string' || !payload.url.trim()) throw new TrackerError('request-invalid', 'repo-clone needs payload.url, the remote shown to the owner');
       const parsed = parseRemote(payload.url);
       if (parsed.error) throw new TrackerError(parsed.error.code, parsed.error.message);
-      if (cloneHosts && !cloneHosts.includes(parsed.host)) throw new TrackerError('clone-host-refused', `${parsed.host} is not in [tracker] clone_hosts`);
+      // A clone already on disk is only registered, so its host needs no allowance (the worker plans again).
+      const onDisk = !!(target.repo_resolution && target.repo_resolution.existing_path && target.repo_resolution.remote === payload.url.trim());
+      if (cloneHosts && !onDisk && !cloneHosts.includes(parsed.host)) throw new TrackerError('clone-host-refused', `${parsed.host} is not in [tracker] clone_hosts`);
       normalized = { url: payload.url.trim() };
       break;
     }

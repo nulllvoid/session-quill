@@ -161,7 +161,7 @@ export function hasUnlinkedWork(session) {
 }
 
 export function requestFeedback(req, { now }) {
-  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo' }[req.kind] ?? req.kind;
+  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone' }[req.kind] ?? req.kind;
   let body = '';
   if (req.state === 'sending') body = 'Sending to the worker…';
   else if (req.state === 'pending') {
@@ -176,7 +176,7 @@ export function requestFeedback(req, { now }) {
   } else if (req.state === 'failed') body = `<strong>Failed:</strong> ${esc(req.error ? req.error.message : 'unknown error')}${req.error && req.error.retryable ? ` <button type="button" class="btn small" data-action="retry-request" data-request="${attr(req.id)}">Retry</button>` : ''} <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Dismiss</button>`;
   else if (req.state === 'cancelled') body = 'Cancelled.';
   else if (req.state === 'already-applied') body = 'Cancellation lost the race: the edit was already applied. <button type="button" class="btn small" data-action="reverse-request" data-request="${attr(req.id)}">Revert with a new revision-checked edit</button>';
-  const proposedValue = req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? null);
+  const proposedValue = req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? req.payload.url ?? null);
   return `<div class="request-feedback" data-state="${attr(req.state)}" role="group" aria-label="${attr(`Pending ${label} change`)}">${requestChip(req.state)} <span class="label">${esc(label)}</span>${proposedValue ? ` → <span class="proposed">${esc(proposedValue)}</span>` : ''} <span class="feedback-body">${body}</span></div>`;
 }
 
@@ -232,7 +232,7 @@ export function normalizeSnapshot(snapshot) {
 export function matchesFilters(ticket, filters, snapshot) {
   if (filters.project && ticket.project_id !== filters.project) return false;
   if (filters.category && ticket.category !== filters.category) return false;
-  if (filters.repo && ticket.repo_id !== filters.repo) return false;
+  if (filters.repo === NEEDS_CLONE_FILTER) { if (ticket.repo_state !== 'needs-clone') return false; } else if (filters.repo && ticket.repo_id !== filters.repo) return false;
   if (filters.tag && !ticket.tags.includes(filters.tag)) return false;
   if (filters.stale && !ticket.stale) return false;
   if (filters.q) {
@@ -311,6 +311,21 @@ export function viewCounts(snapshot, filters = {}) {
   };
 }
 
+// The repository chip (ADR 0024): Needs clone (with Clone… when the owner can act), Cloning while
+// the worker clones, or No code. Tickets with a repository show its name instead.
+export function repoChip(ticket, snapshot) {
+  const state = ticket.repo_state;
+  if (state === 'needs-clone') {
+    const canClone = !!(snapshot.capabilities && snapshot.capabilities.edit_tickets);
+    return `<span class="meta-item repo-state"><span class="chip warning small" data-repo-state="needs-clone">${icon('branch')}Needs clone</span>${canClone ? `<button type="button" class="btn small" data-action="clone-repo" data-ticket="${attr(ticket.id)}" aria-label="${attr(`Clone the repository for ${ticket.key}`)}">Clone…</button>` : ''}</span>`;
+  }
+  if (state === 'cloning') return `<span class="meta-item repo-state"><span class="chip small" data-repo-state="cloning"><span class="dot pulse" aria-hidden="true"></span>Cloning</span></span>`;
+  if (state === 'no-code') return '<span class="meta-item repo-state"><span class="chip small" data-repo-state="no-code">No code</span></span>';
+  return '';
+}
+
+export const NEEDS_CLONE_FILTER = ':needs-clone';
+
 export function ticketCard(ticket, snapshot, { variant = 'board', now, selected = false, showHandoff = false, entry = null } = {}) {
   const canHandoff = showHandoff && snapshot.capabilities && snapshot.capabilities.handoff && ['todo', 'active', 'review', 'deploy-pending'].includes(ticket.status);
   const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
@@ -318,6 +333,8 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   if (ticket.due) meta.push(`<span class="meta-item">${icon('clock')}Due ${esc(ticket.due)}</span>`);
   const repo = repoName(snapshot, ticket.repo_id);
   if (repo) meta.push(`<span class="meta-item">${icon('branch')}${esc(repo)}</span>`);
+  const chip = repoChip(ticket, snapshot);
+  if (chip) meta.push(chip);
   if (ticket.prs && ticket.prs.length) meta.push(`<span class="meta-item">${icon('link')}${ticket.prs.length} PR${ticket.prs.length === 1 ? '' : 's'}</span>`);
   if (ticket.files_touched_count) meta.push(`<span class="meta-item">${ticket.files_touched_count} file${ticket.files_touched_count === 1 ? '' : 's'}</span>`);
   meta.push(`<span class="meta-item">${icon('clock')}${timeEl(ticket.last_activity, now, tz)}</span>`);

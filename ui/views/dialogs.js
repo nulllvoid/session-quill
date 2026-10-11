@@ -64,6 +64,53 @@ export function renderLinkExternalDialog(rawTicket, rawSnapshot) {
 </form>`;
 }
 
+// The host of an https, ssh:// or git@host:path remote, lower-cased; null for anything else.
+export function remoteHost(url) {
+  const s = String(url ?? '').trim();
+  const scheme = /^(https|ssh):\/\/(?:[^@/]*@)?([^/:?#]+)/i.exec(s);
+  if (scheme) return scheme[2].toLowerCase();
+  const scp = /^[^@/:\s]+@([^@/:\s]+):[^/]/.exec(s);
+  return scp ? scp[1].toLowerCase() : null;
+}
+
+function remoteFolder(url) {
+  const last = String(url ?? '').trim().replace(/\/+$/, '').split(/[/:]/).pop() ?? '';
+  return last.replace(/\.git$/i, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '') || 'repository';
+}
+
+// Clone confirmation (ADR 0024): what will be cloned, from which host, into which folder. Nothing
+// is cloned until the owner presses Clone; the worker checks the host again before it clones.
+export function renderCloneDialog(rawTicket, rawSnapshot) {
+  const ticket = normalizeTicket(rawTicket);
+  const snapshot = normalizeSnapshot(rawSnapshot);
+  const res = ticket.repo_resolution ?? {};
+  const remote = res.remote ?? '';
+  const onboarding = snapshot.meta.onboarding ?? { clone_hosts: [], auto_clone_dir: null };
+  const host = remoteHost(remote);
+  const hosts = onboarding.clone_hosts ?? [];
+  const existing = res.existing_path ?? null;
+  const allowed = !!host && hosts.includes(host);
+  const dir = onboarding.auto_clone_dir ?? '';
+  const sep = dir.includes('\\') ? '\\' : '/';
+  const folder = existing ?? (dir ? `${dir.replace(/[\\/]+$/, '')}${sep}${remoteFolder(remote)}` : remoteFolder(remote));
+  const found = res.rule === 'repo_map' ? `your [tracker.repo_map] entry ${res.via ?? ''}` : res.rule === 'scan' ? 'a clone already on this computer' : 'a link on the tracker issue';
+  const check = existing ? '<span class="chip good small">Already cloned; nothing is downloaded</span>'
+    : allowed ? `<span class="chip good small">${esc(host)} is in clone_hosts</span>`
+      : `<span class="chip critical small">${esc(host ?? 'This address')} is not in clone_hosts</span>`;
+  const ok = !!remote && (existing || allowed);
+  return `<form class="dialog-form clone-dialog" data-form="repo-clone" data-ticket="${attr(ticket.id)}" data-revision="${attr(ticket.revision)}" data-url="${attr(remote)}">
+<h2 id="dialog-title">${icon('branch')}${existing ? 'Register the repository' : 'Clone the repository'} for ${keyEl(ticket.key)}</h2>
+<dl class="clone-facts">
+  <dt>Remote</dt><dd><code>${esc(remote || 'unknown')}</code></dd>
+  <dt>Folder</dt><dd><code>${esc(folder)}</code>${existing ? '' : ' <span class="muted small">(owner-name if that folder is taken)</span>'}</dd>
+  <dt>Host check</dt><dd>${check}</dd>
+</dl>
+<p class="small muted">Found from ${esc(found)}. ${existing ? 'The existing clone is registered like <code>quill repo add</code>' : 'The worker runs <code>git clone</code> over https or ssh with your own git credentials, without submodules, then registers the folder like <code>quill repo add</code>'} and links this ticket to it. Nothing runs inside the repository.</p>
+${ok ? '' : `<p class="small warning-text">${icon('alert')}${remote ? `Add ${esc(host ?? 'the host')} to <code>[tracker] clone_hosts</code> in config.toml to clone from it, or clone it yourself and run <code>quill repo add</code>.` : 'No remote is known for this ticket.'}</p>`}
+<div class="dialog-actions"><button type="submit" class="btn primary"${ok ? '' : ' disabled'}>${existing ? 'Register' : 'Clone'}</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
+</form>`;
+}
+
 export function renderStatusDialog(rawTicket, status) {
   const ticket = normalizeTicket(rawTicket);
   const outstanding = ticket.deployments.filter((d) => d.state === 'pending');

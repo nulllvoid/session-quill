@@ -1,5 +1,5 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
-import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash } from './components.js';
+import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER } from './components.js';
 import { renderHeader, renderSidebar, renderPageHeading } from './views/header.js';
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
@@ -9,7 +9,7 @@ import { renderDeployments } from './views/deployments.js';
 import { renderToday } from './views/today.js';
 import { renderDetail } from './views/detail.js';
 import { renderHandoffForm } from './views/handoff-form.js';
-import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
+import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderCloneDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 import { createDashboardMotion } from './lib/motion.js';
 import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
@@ -268,16 +268,17 @@ function renderFilterBar(s) {
   const tokens = [];
   for (const [k, v] of Object.entries(f)) {
     if (!v || k === 'project') continue;
-    tokens.push(`<button type="button" class="token" data-action="clear-filter" data-filter="${attr(k)}" aria-label="Remove filter ${attr(k)}">${esc(k)}: ${esc(k === 'stale' ? 'stale only' : v)} ${icon('x')}</button>`);
+    tokens.push(`<button type="button" class="token" data-action="clear-filter" data-filter="${attr(k)}" aria-label="Remove filter ${attr(k)}">${esc(k)}: ${esc(k === 'stale' ? 'stale only' : v === NEEDS_CLONE_FILTER ? 'needs clone' : v)} ${icon('x')}</button>`);
   }
   const categories = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
   const repos = s.repos ?? [];
+  const needsClone = s.tickets.some((t) => t.repo_state === 'needs-clone');
   const tags = [...new Set(s.tickets.flatMap((t) => t.tags.filter((x) => !x.startsWith('quill/'))))];
   const projects = [...new Map(s.tickets.map((t) => [t.project_id, t.project_name])).entries()];
   return `<span class="eyebrow">${icon('search')}Filter by</span>
   <label>Project <select data-filter="project" aria-label="Project filter (applies to every view)"><option value="">All</option>${projects.map(([id, name]) => `<option value="${attr(id)}" ${f.project === id ? 'selected' : ''}>${esc(name ?? id)}</option>`).join('')}</select></label>
   <label>Category <select data-filter="category"><option value="">All</option>${categories.map((c) => `<option value="${c}" ${f.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
-  ${repos.length ? `<label>Repo <select data-filter="repo"><option value="">All</option>${repos.map((r) => `<option value="${attr(r.id)}" ${f.repo === r.id ? 'selected' : ''}>${esc(r.display_name)}</option>`).join('')}</select></label>` : ''}
+  ${repos.length || needsClone ? `<label>Repo <select data-filter="repo"><option value="">All</option>${repos.map((r) => `<option value="${attr(r.id)}" ${f.repo === r.id ? 'selected' : ''}>${esc(r.display_name)}</option>`).join('')}${needsClone || f.repo === NEEDS_CLONE_FILTER ? `<option value="${NEEDS_CLONE_FILTER}" ${f.repo === NEEDS_CLONE_FILTER ? 'selected' : ''}>Needs clone</option>` : ''}</select></label>` : ''}
   ${tags.length ? `<label>Tag <select data-filter="tag"><option value="">All</option>${tags.map((t) => `<option value="${attr(t)}" ${f.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
   <label class="check"><input type="checkbox" data-filter="stale" ${f.stale ? 'checked' : ''}> Stale only</label>
   ${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
@@ -321,6 +322,11 @@ function renderDialog() {
     if (!sess) { appState.dialog = null; return renderDialog(); }
     html = renderAttachDialog(sess, s, { mode: d.mode });
   } else if (d.type === 'link-external') html = renderLinkExternalDialog(ticketById(s, d.ticket), s);
+  else if (d.type === 'repo-clone') {
+    const t = ticketById(s, d.ticket);
+    if (!t || t.repo_state !== 'needs-clone') { appState.dialog = null; return renderDialog(); }
+    html = renderCloneDialog(t, s);
+  }
   else if (d.type === 'recipe-run') {
     const t = ticketById(s, d.ticket);
     const recipe = t ? effectiveRecipes(s, t.repo_id).find((r) => r.name === d.recipe && !r.error) : null;
@@ -487,6 +493,7 @@ function handleAction(el) {
     case 'attach-unbound': appState.dialog = { type: 'attach', session: el.dataset.session, mode: el.dataset.mode === 'create' ? 'create' : 'attach' }; render(); break;
     case 'dismiss-unbound': submit({ kind: 'dismiss-unbound', target_id: el.dataset.session, expected_revision: Number(el.dataset.revision), payload: {} }, { announceText: 'Dismissal queued; undo within 10 seconds' }); break;
     case 'link-external': appState.dialog = { type: 'link-external', ticket: el.dataset.ticket }; render(); break;
+    case 'clone-repo': appState.dialog = { type: 'repo-clone', ticket: el.dataset.ticket }; render(); break;
     case 'schedules': appState.dialog = { type: 'schedules' }; render(); break;
     case 'publishers': appState.dialog = { type: 'publishers' }; render(); break;
     case 'publish': {
@@ -697,6 +704,10 @@ function handleSubmit(form) {
     const url = String(fd.get('url') ?? '').trim();
     closeDialog();
     submit({ kind: 'link-external', target_id: ticketId, expected_revision: revision, payload: url ? { key, url } : { key } }, { announceText: `Linking to ${key}; undo within 10 seconds` });
+  } else if (kind === 'repo-clone') {
+    const url = form.dataset.url;
+    closeDialog();
+    submit({ kind: 'repo-clone', target_id: ticketId, expected_revision: revision, payload: { url } }, { announceText: `Cloning the repository for ${t ? t.key : 'the ticket'}` });
   } else if (kind === 'bulk-handoff') {
     submitBulkHandoff(form);
   } else if (kind === 'bulk-status') {

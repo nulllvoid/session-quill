@@ -15,6 +15,7 @@ import { TrackerError } from '../lib/errors.js';
 import { storeLayout } from '../config/store.js';
 import { loadUserConfig } from '../config/config.js';
 import { buildRuntimeIdentity, identityStamp } from '../config/runtime.js';
+import { onboardSettings } from '../onboard/settings.js';
 import { keyExample } from '../core/external-keys.js';
 import { acquireLock } from './lock.js';
 import { writeBindingSnapshot, readBindingSnapshot, writeHeartbeat, writeRuntimeIdentity, snapshotFileName } from '../hooks/binding-snapshot.js';
@@ -441,6 +442,7 @@ export class Worker {
       environmentsFor: (repoId) => this.environmentsFor(repoId),
       publishers: this.publishInfo ? this.publishInfo() : [],
       handoff_limits: this.handoffLimits ? this.handoffLimits() : null,
+      onboarding: (({ clone_hosts, auto_clone_dir, import_assigned }) => ({ clone_hosts, auto_clone_dir, import_assigned }))(onboardSettings(this.config.tracker)),
     };
   }
 
