@@ -23,9 +23,9 @@ export async function push(ctx, io, args, flags, { fetchImpl } = {}) {
   const found = findTicketByKey(ctx, key);
   if (!found) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
   const ticket = latestTicketDetail(ctx, found.id) ?? found;
-  if (!linkedTo(ticket, tracker)) throw new TrackerError('not-linked', `${ticket.key} is not linked to an issue on your ${tracker.system} tracker; link it with ticket relink ${ticket.key} --external <KEY>`);
   // A local-only ticket never reaches a tracker, even when it carries an external link.
-  if (ticket.local_only === true) throw new TrackerError('local-only', `${ticket.key} is local-only; it is never sent to a tracker`);
+  if (ticket.local_only === true || found.local_only === true) throw new TrackerError('local-only', `${ticket.key} is local-only; it is never sent to a tracker`);
+  if (!linkedTo(ticket, tracker)) throw new TrackerError('not-linked', `${ticket.key} is not linked to an issue on your ${tracker.system} tracker; link it with ticket relink ${ticket.key} --external <KEY>`);
   const issueKey = ticket.external.key;
   const to = typeof flags.to === 'string' ? flags.to.trim() : targetStatus(tracker.system, ticket.status, settings);
   const comment = typeof flags.comment === 'string' ? flags.comment : null;

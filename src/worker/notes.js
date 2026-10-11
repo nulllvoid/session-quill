@@ -21,6 +21,9 @@ function block(section, body) {
 
 function frontmatterFor(ticket) {
   const fm = { ...ticket };
+  // Owner-only run data never goes into a note, even in the owner's vault.
+  delete fm.run_notes;
+  delete fm.critical_spec;
   fm.plans = ticket.plans.map(({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }));
   fm.conclusions = ticket.conclusions.map(({ id, session_id, checkpoint_id, content_ref, recorded_at, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, recorded_at, approved_at, provenance }));
   return fm;
@@ -67,6 +70,8 @@ export function renderTicketNote(ticket, { state, authored = {} } = {}) {
 export function renderSessionNote(session, { state }) {
   const tickets = session.ticket_ids.map((id) => state.tickets.get(id)).filter(Boolean);
   const fm = { ...session };
+  delete fm.run_notes;
+  delete fm.critical_spec;
   const body = [
     `## Session ${session.host_session_id}${session.agent_id ? ` / agent ${session.agent_id}` : ''}`,
     `- State: ${session.state}${session.ended_at ? ` (ended ${session.ended_at})` : ''}`,

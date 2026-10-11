@@ -10,7 +10,7 @@ import { buildStaticHtml } from '../../src/export/static.js';
 import { writeMirror } from '../../src/mirror/mirror.js';
 import { rowsFor } from '../../src/publish/content.js';
 import { PUBLISH_FIELDS } from '../../src/publish/config.js';
-import { renderHandoffNote, HANDOFF_NOTE_FIELDS } from '../../src/worker/notes.js';
+import { renderHandoffNote, renderTicketNote, renderSessionNote, HANDOFF_NOTE_FIELDS } from '../../src/worker/notes.js';
 import { syncable } from '../../src/tracker/client.js';
 import { snapshot, TID } from '../ui/fixtures.js';
 
@@ -89,4 +89,16 @@ test('local-only tickets are never exportable or synced to a tracker', () => {
   const linked = { status: 'active', external: { system: 'jira', key: 'PROJ-1', url: 'https://example.atlassian.net/browse/PROJ-1' } };
   assert.equal(syncable(linked, tracker), true);
   assert.equal(syncable({ ...linked, local_only: true }, tracker), false);
+});
+
+test('vault ticket and session notes never contain run notes or the critical spec (local-only tickets stay in the vault)', () => {
+  const s = fixture();
+  const state = { tickets: new Map(s.tickets.map((t) => [t.id, t])), handoffs: new Map(s.handoffs.map((h) => [h.id, h])) };
+  const base = { plans: [], conclusions: [], timeline: [], files_touched: [], prs: [], deployments: [], children_ids: [], handoff_ids: [], tags: [] };
+  const ticket = { ...base, ...s.tickets[0], run_notes: [S], critical_spec: { rule: S } };
+  assert.equal(renderTicketNote(ticket, { state }).includes(S), false);
+  const local = { ...base, ...s.tickets[s.tickets.length - 1] };
+  assert.equal(renderTicketNote(local, { state }).includes('local_only: true'), true, 'local-only ticket notes are still written for the owner');
+  const session = { ...s.sessions[0], run_notes: [S], critical_spec: S, bindings: s.sessions[0].bindings, ticket_ids: [] };
+  assert.equal(renderSessionNote(session, { state }).includes(S), false);
 });
