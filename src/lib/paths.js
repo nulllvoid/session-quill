@@ -14,6 +14,11 @@ export const stateDir = (env) => path.join(quillHome(env), 'state');
 export const projectionsDir = (env) => path.join(quillHome(env), 'projections');
 export const runDir = (env) => path.join(quillHome(env), 'run');
 export const handoffsDir = (env) => path.join(quillHome(env), 'handoffs');
+// One run's local files (ledger, grant, run settings, env, context): handoffs/runs/<run-id>.
+export function handoffRunDir(env, id) {
+  if (typeof id !== 'string' || !/^[\w-]{1,100}$/.test(id)) throw new Error(`invalid run id: ${id}`);
+  return path.join(handoffsDir(env), 'runs', id);
+}
 export const logsDir = (env) => path.join(quillHome(env), 'logs');
 export const healthErrorsPath = (env) => path.join(stateDir(env), 'health-errors.jsonl');
 export const heartbeatPath = (env) => path.join(stateDir(env), 'heartbeat.json');

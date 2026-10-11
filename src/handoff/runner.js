@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
+import { createStreamCollector } from './stream.js';
 import { descriptionProblems, normalizeDescription, DESCRIPTION_TEMPLATE } from '../core/description.js';
 
 const MODE_INSTRUCTIONS = {
@@ -293,19 +294,14 @@ export const CONFIDENCE = ['high', 'medium', 'low'];
 
 // `problems` lists what breaks the reply contract (ADR 0013); a non-empty list earns one repair turn.
 // Descriptions are enforced only for outputs the run declared (`outputs`; null means every output).
-export function parseAgentResult(stdout, { outputs = null } = {}) {
+// The input is the final stream `result` event (`resultFromStream`): its text is the only place the
+// fenced JSON block is read from, never a tool result elsewhere in the stream (spec §5.4).
+export function parseAgentResult(result, { outputs = null } = {}) {
   const declared = (o) => !outputs || outputs.includes(o);
-  let text = typeof stdout === 'string' ? stdout : '';
-  let isError = false;
-  let sessionId = null;
-  try {
-    const obj = JSON.parse(text);
-    if (obj && typeof obj === 'object') {
-      isError = obj.is_error === true;
-      sessionId = typeof obj.session_id === 'string' && /^[\w-]{1,100}$/.test(obj.session_id) ? obj.session_id : null;
-      text = typeof obj.result === 'string' ? obj.result : JSON.stringify(obj);
-    }
-  } catch { /* plain text output */ }
+  const r = result && typeof result === 'object' ? result : { text: typeof result === 'string' ? result : '' };
+  const text = typeof r.text === 'string' ? r.text : '';
+  const isError = r.is_error === true;
+  const sessionId = typeof r.session_id === 'string' && /^[\w-]{1,100}$/.test(r.session_id) ? r.session_id : null;
   const blocks = [...text.matchAll(/```json\s*([\s\S]*?)```/g)];
   const parsed = { summary: null, next_action: null, blocker: null, description: null, delete_files: [], children: [], test_results: [], changed_files: [], deploy_evidence: [], comment_draft: null, confidence: null, sources: [], raw: text, is_error: isError, session_id: sessionId, problems: [] };
   if (!blocks.length) parsed.problems.push('the reply has no fenced ```json block');
@@ -383,8 +379,16 @@ export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {},
 
 // The prompt goes to the runtime on stdin: with full notes and a diff it can exceed what a command
 // line may carry (about 32 KiB on Windows). `resume` continues an earlier session of the same run.
-export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd, tools, env = {}, permissions = {}, logPath, maxTurns = 40, model = null, resume = null, permissionMode = 'dontAsk', keepCredentials = false }) {
-  const args = [...claudeArgs, '-p', '--output-format', 'json', '--permission-mode', permissionMode, '--max-turns', String(maxTurns)];
+// Output is stream-json, fed line by line to a collector (spec §5.4): `onInit` gets the init event
+// as soon as it arrives, `ledgerPath` receives the redacted tool ledger, and the log keeps only
+// assistant text, tool names, the init summary and the result. `done` resolves to
+// { code, signal, collected, error }, where `collected` is the collector's end() value.
+export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd, tools, env = {}, permissions = {}, logPath, ledgerPath = null, onInit = null, maxTurns = 40, maxBudgetUsd = null, settingsPath = null, addDirs = [], permissionPrompts = null, model = null, resume = null, permissionMode = 'dontAsk', keepCredentials = false }) {
+  const args = [...claudeArgs, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode, '--max-turns', String(maxTurns)];
+  if (Number.isFinite(maxBudgetUsd) && maxBudgetUsd > 0) args.push('--max-budget-usd', String(maxBudgetUsd));
+  if (settingsPath) args.push('--settings', settingsPath);
+  for (const dir of addDirs ?? []) args.push('--add-dir', dir);
+  if (permissionPrompts) args.push('--permission-prompts', permissionPrompts);
   if (resume) args.push('--resume', resume);
   if (tools.allowed.length) args.push('--allowedTools', ...tools.allowed);
   if (tools.disallowed.length) args.push('--disallowedTools', ...tools.disallowed);
@@ -393,16 +397,19 @@ export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd
   const log = fs.openSync(logPath, 'a');
   if (resume) { try { fs.writeSync(log, `\n--- follow-up turn (resume ${resume}) ---\n`); } catch { /* ignore */ } }
   const childEnv = childEnvFor(permissions, process.env, env, { keepCredentials });
+  const collector = createStreamCollector({ logPath, ledgerPath, onInit, cwd });
   const child = spawn(claudePath, args, { cwd, env: childEnv, detached: process.platform !== 'win32', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => { /* the runtime may exit before reading; its exit code reports that */ });
   child.stdin.end(prompt);
-  let stdout = '';
-  child.stdout.on('data', (d) => { stdout += d.toString('utf8'); try { fs.writeSync(log, d); } catch { /* ignore */ } });
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (d) => collector.push(d));
   child.stderr.on('data', (d) => { try { fs.writeSync(log, d); } catch { /* ignore */ } });
+  let collected = null;
+  const finish = () => { if (!collected) collected = collector.end(); return collected; };
   const done = new Promise((resolve) => {
-    child.on('error', (err) => { try { fs.writeSync(log, `spawn error: ${err.message}\n`); fs.closeSync(log); } catch { /* ignore */ } resolve({ code: null, signal: null, stdout, error: err }); });
-    // 'close' waits for stdout to drain, so the reply is complete when it is parsed.
-    child.on('close', (code, signal) => { try { fs.closeSync(log); } catch { /* ignore */ } resolve({ code, signal, stdout, error: null }); });
+    child.on('error', (err) => { try { fs.writeSync(log, `spawn error: ${err.message}\n`); fs.closeSync(log); } catch { /* ignore */ } resolve({ code: null, signal: null, collected: finish(), error: err }); });
+    // 'close' waits for stdout to drain, so the stream is complete when it is collected.
+    child.on('close', (code, signal) => { try { fs.closeSync(log); } catch { /* ignore */ } resolve({ code, signal, collected: finish(), error: null }); });
   });
   return { child, done };
 }

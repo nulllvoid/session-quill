@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { gatherContext, gatherDiff, dataBlock, ticketCommits } from '../../src/handoff/context.js';
 import { buildPrompt, parseAgentResult, spawnAgent, repairPrompt, METHOD } from '../../src/handoff/runner.js';
+import { resultFromStream } from '../../src/handoff/stream.js';
 import { normalizeRecipe } from '../../src/agents/recipes.js';
 import { makeRepo, git, FAKE_CLAUDE } from './helpers.js';
 
@@ -78,7 +79,7 @@ test('the prompt carries the context, the method and the confidence and sources 
 });
 
 test('parseAgentResult reports contract problems and reads confidence, sources and the session', () => {
-  const wrap = (text) => JSON.stringify({ type: 'result', result: text, session_id: 'sess-1', is_error: false });
+  const wrap = (text) => ({ text, session_id: 'sess-1', is_error: false });
   const good = parseAgentResult(wrap('```json\n{"summary":"s","confidence":"medium","sources":["src/a.js:3"," "]}\n```'));
   assert.deepEqual([good.problems, good.confidence, good.sources, good.session_id], [[], 'medium', ['src/a.js:3'], 'sess-1']);
   assert.match(parseAgentResult(wrap('no block')).problems[0], /no fenced/);
@@ -119,5 +120,5 @@ test('the prompt reaches the runtime on stdin, so it may exceed the Windows comm
   const seen = JSON.parse(fs.readFileSync(capture, 'utf8'));
   assert.equal(seen.prompt, prompt);
   assert.ok(!seen.args.some((a) => a.length > 1000), 'nothing large on the command line');
-  assert.equal(parseAgentResult(outcome.stdout).session_id, 'fake-session');
+  assert.equal(parseAgentResult(resultFromStream(outcome.collected)).session_id, 'fake-session');
 });

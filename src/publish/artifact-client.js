@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnAgent, killTree } from '../handoff/runner.js';
+import { resultFromStream } from '../handoff/stream.js';
 import { resolvePlan } from './artifact.js';
 import { TrackerError } from '../lib/errors.js';
 
@@ -37,9 +38,10 @@ export function executorPrompt(plan) {
   ].join('\n');
 }
 
-function parseResult(stdout) {
-  let text = stdout;
-  try { const obj = JSON.parse(stdout); if (obj && typeof obj.result === 'string') text = obj.result; } catch { /* plain text */ }
+// The executor's reply comes only from the final stream `result` event (spec §5.4).
+function parseResult(collected) {
+  let text;
+  try { text = resultFromStream(collected).text; } catch { return null; }
   const blocks = [...String(text).matchAll(/```json\s*([\s\S]*?)```/g)];
   if (!blocks.length) return null;
   try { return JSON.parse(blocks[blocks.length - 1][1]); } catch { return null; }
@@ -60,7 +62,7 @@ export function createArtifactClient({ claudePath = 'claude', claudeArgs = [], s
       const timer = setTimeout(() => killTree(child), timeoutMs);
       const outcome = await done.finally(() => { clearTimeout(timer); LIVE.delete(child); });
       if (outcome.error) throw new TrackerError('runtime-missing', `Claude Code runtime (${claudePath}) could not start: ${outcome.error.message}; install and sign in to it to publish artifacts`);
-      const result = parseResult(outcome.stdout);
+      const result = parseResult(outcome.collected);
       if (!result || !Array.isArray(result.steps)) throw new TrackerError('executor-failed', `the artifact executor returned no result (exit code ${outcome.code}); see ${path.join(dir, 'executor.log')}`);
       return { result, dir };
     },

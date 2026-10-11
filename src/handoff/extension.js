@@ -13,7 +13,8 @@ import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
 import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
 import { recordResult, updateHandoff } from './results.js';
-import { handoffsDir, logsDir } from '../lib/paths.js';
+import { resultFromStream, sessionIdOf } from './stream.js';
+import { handoffsDir, handoffRunDir, logsDir } from '../lib/paths.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
 
@@ -58,12 +59,36 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code, message }, extra });
   }
 
+  // The reply of one turn, read only from its final stream `result` event (spec §5.4). A turn with
+  // no result event parses as empty and is flagged `no_result`.
+  function parseOutcome(outcome, opts) {
+    let r = null;
+    try { r = resultFromStream(outcome && outcome.collected); } catch { /* no result event */ }
+    const parsed = parseAgentResult(r ?? { text: '' }, opts);
+    if (!r) parsed.no_result = true;
+    return parsed;
+  }
+
+  // The session id is recorded on the run the moment init arrives, so a run cut off by a worker
+  // restart can still be resumed later (spec §5.4). A resumed turn that reports a new id moves it on.
+  function onInitFor(worker, id) {
+    return (event) => {
+      const sid = sessionIdOf(event);
+      const entry = running.get(id);
+      if (!sid || !entry || entry.sessionId === sid) return;
+      entry.sessionId = sid;
+      const h = worker.state.handoffs.get(id);
+      if (!h || h.state !== 'running') return;
+      try { updateHandoff(worker, id, { session_id: sid }); } catch (err) { worker.log(`handoff session id not recorded: ${err.message}`); }
+    };
+  }
+
   // A follow-up turn in the same runtime session. It is tracked like the first turn, so the
   // deadline and cancellation stop it too; null means it did not finish cleanly.
   async function followUp(entry, prompt, { tools, maxTurns, permissionMode = entry.permissionMode }) {
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, model, resume: entry.sessionId, maxTurns, permissionMode, keepCredentials: entry.keepCredentials });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, ledgerPath: entry.ledgerPath, onInit: entry.onInit, model, resume: entry.sessionId, maxTurns, permissionMode, keepCredentials: entry.keepCredentials });
     } catch {
       return null;
     }
@@ -81,9 +106,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   async function improve(worker, entry, outcome) {
     const parseOpts = { outputs: entry.outputs };
     const quality = { problems: [], repaired: false, self_checked: false };
-    let parsed = parseAgentResult(outcome.stdout, parseOpts);
+    let parsed = parseOutcome(outcome, parseOpts);
     quality.problems = parsed.problems;
-    entry.sessionId = parsed.session_id;
+    if (parsed.no_result) return { outcome, quality };
+    entry.sessionId = parsed.session_id ?? entry.sessionId;
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
     if (parsed.is_error || !entry.sessionId) {
       if (entry.selfCheck) quality.self_check_skipped = parsed.is_error ? 'the agent reported an error' : 'the reply carried no session id to resume';
@@ -91,8 +117,8 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     }
     if (parsed.problems.length && !entry.reason && timeLeft()) {
       const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: 2 });
-      const fixed = next ? parseAgentResult(next.stdout, parseOpts) : null;
-      if (fixed && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
+      const fixed = next ? parseOutcome(next, parseOpts) : null;
+      if (fixed && !fixed.no_result && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
         outcome = next;
         parsed = fixed;
         quality.repaired = true;
@@ -103,8 +129,8 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       // The check re-reads sources; it never edits, whatever the run was allowed to do.
       const readOnly = selfCheckTools(entry.permissions);
       const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: 12, permissionMode: 'dontAsk' });
-      const checked = next ? parseAgentResult(next.stdout, parseOpts) : null;
-      if (checked && !checked.is_error && !checked.problems.length) {
+      const checked = next ? parseOutcome(next, parseOpts) : null;
+      if (checked && !checked.no_result && !checked.is_error && !checked.problems.length) {
         outcome = next;
         quality.self_checked = true;
       } else if (!entry.reason) quality.self_check_skipped = 'the self-check turn did not finish cleanly; the earlier reply stands';
@@ -138,14 +164,16 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (gate) delete gate.total_ms;
     const record = (w, id, parsed, opts) => recordResult(w, id, parsed, timings ? { ...opts, extra: { ...(opts.extra ?? {}), timings } } : opts);
     const reason = entry ? entry.reason : null;
-    if (reason === 'timeout') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'cancel') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'stopped') { record(worker, h.id, parseAgentResult(outcome.stdout, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'cancel') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'stopped') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
     if (outcome.error) { record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
     const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
     const explicit = readJsonIfExists(resultFile);
-    const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: outcome.stdout } : parseAgentResult(outcome.stdout, parseOpts);
+    const streamed = parseOutcome(outcome, parseOpts);
+    const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: streamed.raw } : streamed;
     if (outcome.code !== 0) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
+    if (!explicit && streamed.no_result) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'no-result', message: 'the agent exited without a final result event; its log and tool ledger show how far it got' }, extra: await fixExtras(worker, current) }); return; }
     if (parsed.is_error) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
     // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
     // ticket change, only the diff for the owner to inspect and the reason (ADR 0023).
@@ -204,8 +232,8 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   // ADR 0023: run the repository's tests in the run's checkout; on a failure, one repair turn
   // with the failing output, then the tests again. Only a real pass is ever reported as one.
   async function testGate(worker, entry, h, outcome) {
-    const parsed = parseAgentResult(outcome.stdout, { outputs: entry.outputs });
-    if (parsed.is_error || !h.worktree_path) return { outcome, gate: null };
+    const parsed = parseOutcome(outcome, { outputs: entry.outputs });
+    if (parsed.is_error || parsed.no_result || !h.worktree_path) return { outcome, gate: null };
     let changed = [];
     try { changed = await changedFiles(h.worktree_path); } catch { /* treated as no diff */ }
     if (!changed.length) return { outcome, gate: { status: 'skipped', reason: 'no changes to test' } };
@@ -227,8 +255,8 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
       const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: 40 });
       if (entry.reason) return { outcome, gate: null };
-      const repaired = next ? parseAgentResult(next.stdout, { outputs: entry.outputs }) : null;
-      if (repaired && !repaired.is_error && repaired.problems.length <= parsed.problems.length) outcome = next;
+      const repaired = next ? parseOutcome(next, { outputs: entry.outputs }) : null;
+      if (repaired && !repaired.no_result && !repaired.is_error && repaired.problems.length <= parsed.problems.length) outcome = next;
       attempts = 2;
       result = await once();
       total += result.ms;
@@ -311,17 +339,23 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const tools = { allowed: rt.allowed, disallowed: rt.disallowed };
     const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
     if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
-    let run;
-    try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, model, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
-    } catch (err) {
-      return fail(worker, h, 'spawn-failed', err.message);
-    }
-    const spawnedAt = performance.now();
+    // The run's own directory holds its tool ledger (spec §5.4); every turn appends to it.
+    const ledgerPath = path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl');
+    const onInit = onInitFor(worker, h.id);
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
-    running.set(h.id, { child: run.child, done: run.done, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, spawnedAt });
-    running.get(h.id).finished = run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
+    // The entry exists before the process does, so the init event always finds it.
+    const entry = { child: null, done: null, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials };
+    running.set(h.id, entry);
+    let run;
+    try {
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, ledgerPath, onInit, model, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
+    } catch (err) {
+      running.delete(h.id);
+      return fail(worker, h, 'spawn-failed', err.message);
+    }
+    Object.assign(entry, { child: run.child, done: run.done, spawnedAt: performance.now() });
+    entry.finished = run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
   }
 
   function killWithReason(id, reason) {

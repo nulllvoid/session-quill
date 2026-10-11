@@ -3,13 +3,15 @@
 // CLI. Behaviour is driven by environment variables:
 //   FAKE_CLAUDE_SLEEP_MS  — how long to run before answering (default 50)
 //   FAKE_CLAUDE_MODE      — 'ok' (default) | 'crash' | 'garbage' | 'malformed' (a reply without a
-//                           JSON block, wrapped like a real result so it can be resumed)
+//                           JSON block, wrapped like a real result so it can be resumed) | 'no-result'
+//                           (init and assistant text, then exit 0 without a result event)
 //   FAKE_CLAUDE_EDIT      — path of a file to modify inside the cwd before answering
 //   FAKE_CLAUDE_REPAIR_EDIT — path of a file to mark "repaired" when a --resume turn is asked to fix
 //                           failing tests (the worker's test gate repair turn)
 //   FAKE_CLAUDE_RESULT    — JSON to answer with instead of the default structured result
 //   FAKE_CLAUDE_RESUME_RESULT — JSON to answer a --resume turn with (default: FAKE_CLAUDE_RESULT
 //                           or the default result); 'malformed' answers it without a JSON block
+//   FAKE_CLAUDE_SESSION   — session id to report (default 'fake-session'; a --resume turn keeps its id)
 //   FAKE_CLAUDE_CAPTURE   — file to write { prompt, args } to; --resume turns append to
 //                           <capture>.resume as one JSON line each
 import fs from 'node:fs';
@@ -26,8 +28,13 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => { prompt += d; });
 process.stdin.on('end', run);
 
+// stream-json, as `claude -p --output-format stream-json --verbose` writes it: the init event as
+// soon as the run starts, then the assistant's reply, then the final result event.
+const SESSION = resumed ?? process.env.FAKE_CLAUDE_SESSION ?? 'fake-session';
+const line = (obj) => `${JSON.stringify(obj)}\n`;
 function wrap(text) {
-  return JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: resumed ?? 'fake-session', num_turns: 3, total_cost_usd: 0.01 });
+  return line({ type: 'assistant', session_id: SESSION, message: { role: 'assistant', content: [{ type: 'text', text }] } })
+    + line({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: SESSION, num_turns: 3, total_cost_usd: 0.01 });
 }
 
 function run() {
@@ -36,6 +43,7 @@ function run() {
   // Whether a provider token reached the agent, for credential tests; never its value.
   else if (capture) fs.writeFileSync(capture, JSON.stringify({ prompt, args, gh_token: !!process.env.GH_TOKEN }));
   process.stderr.write(`fake-claude cwd=${process.cwd()} args=${args.join(' ')}\n`);
+  if (mode !== 'garbage') process.stdout.write(line({ type: 'system', subtype: 'init', session_id: SESSION, tools: ['Bash', 'Read'], mcp_servers: [] }));
   setTimeout(() => {
     if (process.env.FAKE_CLAUDE_EDIT && !resumed) {
       const file = path.join(process.cwd(), process.env.FAKE_CLAUDE_EDIT);
@@ -46,6 +54,7 @@ function run() {
       fs.appendFileSync(file, '\n// repaired by fake-claude\n');
     }
     if (mode === 'crash') process.exit(3);
+    if (mode === 'no-result') { process.stdout.write(line({ type: 'assistant', session_id: SESSION, message: { content: [{ type: 'text', text: 'working' }] } })); process.exit(0); }
     if (mode === 'garbage') { process.stdout.write('not json at all'); process.exit(0); }
     if (mode === 'malformed' || (resumed && process.env.FAKE_CLAUDE_RESUME_RESULT === 'malformed')) { process.stdout.write(wrap('I looked at the ticket but forgot the JSON block.')); process.exit(0); }
     const source = resumed && process.env.FAKE_CLAUDE_RESUME_RESULT ? process.env.FAKE_CLAUDE_RESUME_RESULT : process.env.FAKE_CLAUDE_RESULT;

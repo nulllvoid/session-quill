@@ -58,8 +58,9 @@ test('the agent environment cannot supply an external diff program or config ove
   assert.equal(childEnvFor({ read_source: true, push_branch: true }, { GIT_EXTERNAL_DIFF: 'x' }).GIT_EXTERNAL_DIFF, undefined, 'push permission does not bring the external diff back');
 });
 
-test('parseAgentResult extracts the structured block and tolerates garbage', () => {
-  const ok = parseAgentResult(JSON.stringify({ type: 'result', result: 'text\n```json\n{"summary":"s","children":[{"title":"c"}]}\n```' }));
+test('parseAgentResult extracts the structured block from the result text and tolerates garbage', () => {
+  const ok = parseAgentResult({ text: 'text\n```json\n{"summary":"s","children":[{"title":"c"}]}\n```', is_error: false, session_id: 'sess-1' });
+  assert.equal(ok.session_id, 'sess-1');
   assert.equal(ok.summary, 's');
   assert.equal(ok.children.length, 1);
   const bad = parseAgentResult('not json');
@@ -224,6 +225,46 @@ test('missing runtime fails at dispatch with a reason; a crash is failed with ex
     assert.equal(h.state, 'failed');
     assert.equal(h.error.code, 'interrupted');
   } finally { await e.w.stop(); }
+});
+
+test('review: the session id is recorded when init arrives and survives a worker restart mid-run; the partial stream is never read as a result', async () => {
+  const d = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: 'sess-early' } });
+  const t = d.ticket(T1, 'LOCAL-a-00000001');
+  d.request(RID(40), { target_id: T1, expected_revision: t.revision, payload: analyse });
+  d.w.tick();
+  const hid = d.w.state.handoffs.keys().next().value;
+  // Recorded while the run is still going, long before any result event.
+  const running = await until(() => { d.w.tick(); const h = d.w.state.handoffs.get(hid); return h.state === 'running' && h.session_id ? h : null; });
+  assert.equal(running.session_id, 'sess-early');
+  await d.w.stop({ flush: false, abandonRuns: true });
+  // The worker died mid-write: the run's ledger ends in a torn line.
+  const ledger = path.join(d.home, 'handoffs', 'runs', hid, 'ledger.jsonl');
+  fs.mkdirSync(path.dirname(ledger), { recursive: true });
+  fs.appendFileSync(ledger, '{"t":"2026-10-02T08:00:00Z","kind":"tool_use","tool":"Bash","input_summary":"npm te');
+  const e = await restartWorker(d);
+  try {
+    const h = e.w.state.handoffs.get(hid);
+    assert.equal(h.state, 'failed');
+    assert.equal(h.error.code, 'interrupted');
+    assert.equal(h.session_id, 'sess-early', 'the recorded session id is kept for a later resume');
+    assert.equal(h.result_summary, null, 'nothing from the cut-off stream poses as a result');
+  } finally { await e.w.stop(); }
+});
+
+test('a run that exits 0 without a result event fails as no-result, keeping its session id and log', async () => {
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_MODE: 'no-result' } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(41), { target_id: T1, expected_revision: t.revision, payload: analyse });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(41)).result.handoff_id;
+    const h = await until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return x.state === 'failed' ? x : null; });
+    assert.equal(h.error.code, 'no-result');
+    assert.equal(h.session_id, 'fake-session');
+    const log = fs.readFileSync(h.log_path, 'utf8');
+    assert.match(log, /\[init\] session=fake-session/);
+    assert.match(log, /\[assistant\] working/);
+  } finally { await b.w.stop(); }
 });
 
 test('hook adapter attributes a handoff agent session to the handoff ticket instead of gating it', () => {
