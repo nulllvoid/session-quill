@@ -11,7 +11,7 @@ The design system for Quill's ticket and agent-orchestration UI.
 
 Preserve the evergreen/Geist identity implemented in `ui/styles.css`. Historical Graphite Ink and Terminal Slate boards in `docs/ui/` are archived references, not the current visual direction. The older `docs/UI-DESIGN.md` remains useful for behavior contracts; its superseded layout descriptions must be read alongside the current design contract.
 
-The reference kit is opt-in. It does not change dashboard styles or create a production Runs view.
+The reference kit is opt-in; the production dashboard keeps its own stylesheet. The Runs page and run detail are shipped (see §7 of the contract).
 
 ```sh
 node scripts/preview-design-system.mjs

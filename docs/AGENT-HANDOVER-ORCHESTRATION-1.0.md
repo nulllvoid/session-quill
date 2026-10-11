@@ -1,5 +1,21 @@
 # Agent handover: Quill UI and orchestration-first 1.0
 
+## Status (runs-first dashboard)
+
+The sections below are the original handover and are kept as written. The `feat/runs-first-dashboard` branch resolved these items:
+
+- P1 full results: run detail offers the full result, or the partial result of an unfinished run.
+- P1 Sessions checkpoint link: resolved on this branch.
+- P2 batch history after reload: batch summaries are derived from run records.
+- The Runs surface: Needs you, Live, Failed and All tabs, rows grouped by batch.
+- Run detail evidence: result, changes, delivery, uncertain effects and suggestions in one panel.
+- Ticket run discovery: a run strip under the title and a ticket Runs tab.
+- Dispatch consolidation: one Run agent dialog for every recipe.
+- Attention dot: Runs shows a separate "needs you" dot beside the live count.
+- Mobile navigation: grouped Work and Track navigation, with five phone items and More.
+
+Still open: authoritative wait reasons and phases, worker readiness projections, and filter-scope labelling beyond the approvals button.
+
 Prepared 11 October 2026 (Asia/Calcutta).
 
 ## Start here

@@ -25,7 +25,7 @@ Preserve the existing green/Geist identity. Use neutral surfaces, one primary ev
 | `ui/styles.css`, `ui/components.js`, current view renderers | Shipped implementation and theme/icon source values |
 | This document | Visual direction, component usage and implementation guidance |
 | `ui/assets/tokens.json` and `tokens.css` | Generated theme snapshot plus additive reference primitives |
-| `docs/design-system/index.html` | Inspectable component examples and proposed orchestration patterns |
+| `docs/design-system/index.html` | Inspectable component examples and the Runs page with example data |
 | `docs/AGENT-HANDOVER-ORCHESTRATION-1.0.md` | Known defects, scope gaps and prior validation limits |
 
 `docs/UI-DESIGN.md` is an older behavioral specification. Its “inbox first”, Today/Tree labels and prior visual layouts are superseded by the current UI. Historical `docs/ui/graphite_ink` and `terminal_slate` directions must not be blended into Fieldnotes.
@@ -47,6 +47,10 @@ Use semantic variables, never copy colors into new components. The generator ext
 | Primary foreground | `--accent-fg` | `#ffffff` | `#142e26` |
 | Accent region | `--accent-soft` | `#e7f0e9` | `#233d33` |
 | Focus indicator | `--focus` | `#23634f` | `#91cebb` |
+| Faint text | `--text-faint` | `#627169` | `#8a9992` |
+| Control boundary | `--border-strong` | `#7f8f86` | `#6f8277` |
+
+Form controls (inputs, selects, textareas) draw their boundary with `--border-strong`, which meets 3:1 against `--bg` and `--surface` in both themes; `tests/ui/tokens.test.js` enforces it.
 
 Use `--border` for separation and `--border-strong` for actionable boundaries. Text and outline colors have different roles; a separator is not necessarily a sufficient control boundary. Avoid lowering opacity on essential text. Validate contrast on the actual background; theme token checks do not certify every component combination.
 
@@ -77,6 +81,7 @@ Use `ui/assets/manifest.json` to discover assets. See the adjacent README for ex
 - **Brand:** light, dark and monochrome marks derived from the existing Quill feather. Use the real bundled Geist text for wordmarks; do not add raster text assets.
 - **Icons:** existing glyphs exported from `ui/components.js`, plus matching orchestration extensions: runs, queue, approve, diff, tests, lock, expand and collapse.
 - **Illustrations:** empty queue, no results, review complete and worker offline. Use sparingly, generally 120–160px wide. Meaning lives in the accompanying text/action.
+  Production views do not reference `/ui/assets/…` images. Static exports inline the stylesheet and bundle the scripts and must not contain `src="/ui/` URLs (`tests/export/static.test.js`), so dashboard empty states are text with a next step. Use illustrations only on surfaces that are never exported, or inline the SVG.
 - **Tokens:** JSON map and standalone CSS. They are generated exports, not a second independently maintained theme.
 - **Components:** `ui/assets/components.css` provides opt-in `q-*` styles. The production dashboard does not load this file automatically.
 
@@ -91,7 +96,14 @@ For decorative SVGs use `aria-hidden="true"` or `<img alt="">`. For icon-only ac
 | Primary action | Verb + object, optional icon | One primary action per decision region; pending label and duplicate-submit protection |
 | Secondary action | Border or quiet treatment | Evidence/navigation actions should not compete with the primary decision |
 | Ticket card | Key, title, status, next action, relevant metadata | Keyboard activation, visible selection, full key copy; preserve independent inner actions |
-| Run row | Recipe, ticket, execution state, phase/wait reason, elapsed time, next decision | Queued, running, completed, failed, cancelled, timed out; loading/unknown must be explicit |
+| Run row | One `<button>` per run: state chip, ticket key (middle-ellipsised, full key in `title`) and title, recipe or mode, access badge (Read-only / Edits source / Changes files, plus Full access when granted), worker test-gate badge, one fact line, requested time | The fact line states only recorded facts: queued → "Queued" plus slot occupancy from `meta.handoff_limits`, and "repository busy" for a queued fix whose repository has a running fix; running → "Running for …" and "setup …" when measured; done → suggestions to review, files changed, draft PR; failed → the error plus "Retried as a new run" or "Superseded by a later run". Nothing interactive nests inside the row button |
+| Run strip | Under the ticket title: the current run (else the latest) with state, recipe, test-gate badge, suggestions to review and time; opens run detail | "No agent runs yet" with a Run agent button when there are none (owner only, ticket not done) |
+| Run detail | Header (state, recipe and source, mode, access, test gate, measured timings, batch, retry relationship); Result; Changes; Delivery (PR, branch, uncertain effects); Where it is (owner-only checkout path as text with copy, never a link); Suggestions; actions | Sections absent from the record or stripped by an export are omitted, never rendered empty; the PR is a link only for http(s) URLs, otherwise text; uncertain effects use warning styling, never success; "Retry as new run" is not offered once a later run superseded the failed one; a stale link shows "Run not found" |
+| Run agent dialog | Step 1 recipe cards (Reads only / Edits source marker, time cap); step 2 permissions with side effects under Advanced, a plain summary of what the run will do, prerequisite blockers and warnings | Queue is disabled while a blocker applies and says why; a missing test command is a warning ("Not test-verified"), not a pass |
+| Status button | One top-bar button: dot and short label (Updated …, provider errors, Offline, Needs attention, Read-only snapshot) opening a popover with connection, health and Refresh | Errors and offline colour the dot and label; offline with provider errors reads "Offline · N provider error(s)"; never hidden behind the popover |
+| Filter button | "Filter · n" opening a popover of the existing filters; active filters stay visible as removable tokens | Same hash parameters as before |
+| Navigation | Grouped Work (Pick next, Board, Runs) and Track (Activity, Sessions, Deployments, Relationships); phones show Pick next, Board, Runs, Activity and More | The Runs badge counts live runs; a separate attention dot means "needs you"; shortcuts 1–6 unchanged, 7 opens Runs. The Runs button's own `aria-label` carries the counts ("Runs, N live, K need(s) you") and the badge and dot are `aria-hidden`; other items read "<Label>, N items". The collapsed 72px rail keeps compact badges and the dot |
+| Top bar | Brand, search, status button, then actions (approvals, Schedules, Publish, Export, theme, help) | Stays one row at every width: below 900px action text labels are hidden, each action keeps an `aria-label`, and the approvals button shows icon plus count |
 | Status chip | Text + semantic color, optional dot/icon | Never communicate status with color alone; “Not test-verified” is not success |
 | Attention item | What needs attention, affected entity, action | Separate run failures, proposals, suggestions and blocked tickets; define count scope |
 | Evidence panel | Source, captured time, status, content preview, full content access | Loading, unavailable, fetch error, retry; fetched content must visibly render |
@@ -99,8 +111,8 @@ For decorative SVGs use `aria-hidden="true"` or `<img alt="">`. For icon-only ac
 | Tab group | Labelled tabs and associated panels | Selected state, arrow/Home/End keys, roving tabindex; hide inactive panel controls |
 | Drawer | Title, close, context, primary actions | Escape, focus placement/restoration; inert background and focus containment when modal |
 | Empty state | Short title, explanation, relevant next step | Distinguish no data, no matches, no permission and offline; do not display invented metrics |
-| Batch summary | Aggregate execution counts, member outcomes, link to detail | Durable after reload; cancellation scope must name queued versus running members |
-| Toast/receipt | Action and confirmed outcome | Supplement inline feedback; never imply queued work has completed |
+| Batch summary | Batch short id, recipe or "mixed", outcome counts across the whole batch, progress bar, "Cancel queued (n)" | Derived from run records, so it survives a reload; cancelling names only queued members and never claims running ones stopped |
+| Toast/receipt | Action and confirmed outcome, LIVE chip, dismiss | Neutral and good receipts clear after 6 s; critical receipts stay until dismissed; never imply queued work has completed |
 
 Prefer flat sections and separators. Use cards to group meaningful work units, not to enclose every label. Avoid nested cards within cards within cards.
 
@@ -117,22 +129,25 @@ These are separate concepts; do not merge their state machines:
 | Session | Live, idle, ended, extinct | Live activity is not proof that a process is running |
 | Deployment | Pending, recorded deployed, waived | Merged PR is not deployment |
 
-Use explicit copy:
+Examples the shipped UI produces:
 
-- “Queued. Waiting for the payments repository.”
-- “Tests passed (worker).”
-- “No test command. This fix is not test-verified.”
-- “Run finished. Two suggestions need review.”
-- “Worker offline. Showing the last snapshot.”
-- “Cancel 3 queued runs” when active runs are unaffected.
+- "Queued · read-only slots 2/2 in use" — occupancy, not a claimed cause.
+- "Queued · fix slots 1/1 in use · repository busy" — only for a queued fix.
+- "Running for 2 min · setup 4 s" — the worker records agent and test time only when a run finishes, so a running row never names a phase.
+- "Tests passed (worker)" / "Not test-verified" / "Tests failed".
+- "2 suggestions to review".
+- "Retried as a new run" / "Superseded by a later run".
+- "Cancel queued (3)" when running members are unaffected.
+
+A row or chip states only what the snapshot records. When the worker starts projecting live phases or wait reasons, add them here first, then to the UI.
 
 Avoid “All good”, “Success!” or “Completed” without an entity. Show measured durations; never fabricate progress percentages or ETAs for unknown agent work.
 
 ## 7. Orchestration information architecture
 
-**Shipped:** Pick next, Board, Relationships, Sessions, Deployments, Activity; ticket Overview/Activity/Delivery tabs. Internal route names `tree` and `today` remain for compatibility.
+**Shipped:** Pick next, Board, Runs, Activity, Sessions, Deployments, Relationships. Runs (`#view=runs`, shortcut 7) has Needs you, Live, Failed and All tabs (`tab=`), rows grouped by batch, and run detail in the side panel (`run=`). Needs you holds open proposals, finished runs with suggestions to decide, and failed or timed-out runs from the last 7 days on open tickets that no later run superseded; cancelled runs never need you; exports have no Needs you. Ticket detail has Overview, Runs, Activity and Delivery tabs (`section=`) and a run strip under the title. Proposed runs live in Runs → Needs you and the ticket's Runs tab; Activity is history only. Internal route names `tree` and `today` remain.
 
-**Proposed:** a global Runs surface and an explicit ticket Runs section. The reference page's Agent runs specimen is an example with static data. It does not add routes, backend phases, capacity projections or result viewers to the app.
+**Not yet built:** worker-projected phases and wait reasons, readiness checks the snapshot cannot answer, prewarmed worktrees, nested run groups.
 
 Recommended Runs workflow:
 
@@ -158,6 +173,7 @@ Repository bindings belong to the checkpoint/event that recorded them. A session
 - Use live regions for meaningful request/run transitions; provide persistent inline failure details.
 - Use 160–200ms feedback and 200–300ms user-triggered transitions. Animate opacity/transform only where useful; respect reduced motion.
 - Never animate every polling update. Skeletons are for unresolved loading, not a substitute for an error or empty state.
+- Runs rows and the run detail panel must fit 390px with no document overflow (the runs-first browser check asserts it).
 - Test text zoom, long titles/keys, keyboard-only interaction, disabled controls and real touch target dimensions.
 
 ## 9. Implementation rules
@@ -177,6 +193,7 @@ Repository bindings belong to the checkpoint/event that recorded them. A session
 
 - Confirm scope: production change, design reference, or proposed feature.
 - Run `node scripts/build-ui-assets.mjs --check` for generated-asset drift.
+- Run `node scripts/build-ui-assets.mjs --check` after any `ui/styles.css` token change; regenerate with `node scripts/build-ui-assets.mjs` when it reports drift.
 - Run `node --test "tests/ui/*.test.js" "tests/export/*.test.js"` after interface changes.
 - Add behavior tests for new state transitions or evidence/ownership fixes; avoid tests that only mirror trivial style declarations.
 - Browser-check light/dark, mobile/desktop, keyboard, long data, loading, error, empty, offline and read-only states relevant to the change.
