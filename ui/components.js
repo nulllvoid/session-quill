@@ -128,6 +128,14 @@ export function keyEl(key) {
   return `<code class="key" data-copy="${attr(key)}" title="${attr(key)} · Click to copy">${esc(key)}</code>`;
 }
 
+// Long local keys keep their prefix and unique suffix; the full key stays in titles and copies.
+export function shortKey(key, max = 22) {
+  const k = String(key ?? '');
+  if (k.length <= max) return k;
+  const tail = Math.floor((max - 1) / 2);
+  return `${k.slice(0, max - 1 - tail)}…${k.slice(-tail)}`;
+}
+
 export const SYSTEM_LABELS = { jira: 'Jira', linear: 'Linear', github: 'GitHub', custom: 'Tracker' };
 
 // The ticket's tracker link, from `external` or the legacy `jira` field; only https URLs count.

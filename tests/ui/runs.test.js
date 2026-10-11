@@ -1,8 +1,9 @@
 // Runs model (spec §2): tabs, grouping and the facts a row may state, from snapshot records only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeSnapshot, EMPTY_FILTERS } from '../../ui/components.js';
+import { normalizeSnapshot, EMPTY_FILTERS, shortKey } from '../../ui/components.js';
 import { runTabs, needsYou, groupRuns, runFacts, supersededBy, defaultRunTab, visibleRunTabs, liveRunCount, needsYouCount, ticketRuns, RUN_TABS } from '../../ui/lib/runs.js';
+import { renderRuns, runRow } from '../../ui/views/runs.js';
 import { snapshot, TID } from './fixtures.js';
 
 const NOW = '2026-10-10T12:00:00Z';
@@ -130,4 +131,61 @@ test('tabs, defaults and counts', () => {
   assert.equal(defaultRunTab({ needs: [], live: [], failed: [], all: [] }, RUN_TABS), 'all');
   assert.equal(liveRunCount(s), 1);
   assert.equal(ticketRuns(snap([run({ requested_at: '1' }), run({ requested_at: '2' })]), TID(1))[0].requested_at, '2');
+});
+
+test('shortKey keeps short keys and middle-ellipsises long ones', () => {
+  assert.equal(shortKey('PROJ-44'), 'PROJ-44');
+  const k = 'LOCAL-preserve-session-checkpoints-00000001';
+  const out = shortKey(k);
+  assert.ok(out.length <= 22);
+  assert.ok(out.startsWith('LOCAL-pre') && out.endsWith('00000001') && out.includes('…'));
+});
+
+test('the Runs page shows tabs with counts, batch groups with Cancel queued, and escaped rows', () => {
+  const b1 = run({ state: 'queued', batch_id: 'batch-7f3a0000', ticket_id: TID(1) });
+  const b2 = run({ state: 'done', batch_id: 'batch-7f3a0000', ticket_id: TID(2), suggestions: [{ id: 's', state: 'proposed' }] });
+  const solo = run({ state: 'running', ticket_id: TID(5), recipe: { name: '<img src=x>', source: 'personal' } });
+  const s = snap([b1, b2, solo]);
+  const html = renderRuns(s, EMPTY_FILTERS, { now: NOW, tab: 'all' });
+  assert.match(html, /role="tablist"/);
+  assert.match(html, /data-tab="needs"[^>]*>Needs you <span class="count">1<\/span>/);
+  assert.match(html, /data-tab="live"[^>]*>Live <span class="count">2<\/span>/);
+  assert.match(html, /data-batch="batch-7f3a0000"/);
+  assert.match(html, /Batch batch-7f/);
+  assert.match(html, /data-action="cancel-batch" data-batch="batch-7f3a0000">Cancel queued \(1\)/);
+  assert.match(html, /data-action="open-run" data-run="run-\d+"/);
+  assert.match(html, /&lt;img src=x&gt;/);
+  assert.doesNotMatch(html, /<img src=x>/);
+});
+
+test('rows survive a missing ticket and pick the default tab', () => {
+  const orphan = run({ state: 'running', ticket_id: 'gone' });
+  const html = renderRuns(snap([orphan]), EMPTY_FILTERS, { now: NOW });
+  assert.match(html, /aria-selected="true"[^>]*data-tab="live"|data-tab="live"[^>]*aria-selected="true"/);
+  assert.match(html, /Ticket not in view/);
+});
+
+test('proposals: open ones can be approved, expired ones cannot', () => {
+  const open = { id: 'p1', ticket_id: TID(1), ticket_key: 'K', publisher: 'team', editor: 'ed', state: 'proposed', proposed_at: '2026-10-10T11:00:00Z', recipe: { name: 'analyse' }, access: 'standard', permissions: {}, read_only: true };
+  const expired = { ...open, id: 'p2', state: 'expired', proposed_at: '2026-09-01T11:00:00Z' };
+  const html = renderRuns(snap([], { run_proposals: [open, expired] }), EMPTY_FILTERS, { now: NOW, tab: 'all' });
+  assert.match(html, /data-action="approve-run"[^>]*data-proposal="p1"/);
+  assert.doesNotMatch(html, /data-proposal="p2" aria-label="Approve/);
+  assert.match(html, /data-proposal="p2"[^>]*data-state="expired"/);
+  assert.match(html, /Expired · older than 7 days/);
+});
+
+test('an export shows no Needs you tab and no controls', () => {
+  const s = snap([run({ state: 'queued', batch_id: 'b' })], { meta: { ...snapshot().meta, exported_at: NOW }, capabilities: { read: true } });
+  const html = renderRuns(s, EMPTY_FILTERS, { now: NOW });
+  assert.doesNotMatch(html, /data-tab="needs"/);
+  assert.doesNotMatch(html, /cancel-batch|approve-run|dismiss-run/);
+});
+
+test('a row is one button with the state in its label and a plain test-gate chip', () => {
+  const h = run({ test_gate: { status: 'failed', command: 'npm test', tail: 'boom' } });
+  const html = runRow(snap([h]), h, { now: NOW, tz: 'UTC' });
+  assert.match(html, /<button type="button" class="run-open" data-action="open-run" data-run="run-\d+" aria-label="[^"]*done[^"]*"/i);
+  assert.match(html, /Tests failed/);
+  assert.doesNotMatch(html, /<details/, 'nothing interactive nests inside the row button');
 });

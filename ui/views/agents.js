@@ -2,7 +2,7 @@
 // the permissions each may use, and every run with the suggestions it left.
 import { esc, attr, icon, timeEl, handoffChip, keyEl, normalizeSnapshot, normalizeTicket, accessFieldset, formatDuration, contentViewer } from '../components.js';
 
-const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 'repository' };
+export const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 'repository' };
 const ACTIVE = new Set(['pending', 'applying']);
 
 // Repository recipes replace global ones of the same name for that repository only.
@@ -81,6 +81,21 @@ export function testGateChip(g) {
   if (g.status === 'skipped') return `<span class="chip small" title="${attr(g.reason ?? 'the worker did not run tests')}">Not test-verified</span>`;
   const label = g.status === 'timeout' ? 'Tests timed out' : 'Tests failed';
   return `<details class="test-output small"><summary><span class="chip critical small">${label}</span></summary><p class="muted small">${esc(g.command ?? '')}${Number.isInteger(g.exit_code) ? ` exited with code ${esc(g.exit_code)}` : ''}${g.attempts > 1 ? ' after one repair turn' : ''}</p><pre class="preview">${esc(g.tail ?? '')}</pre></details>`;
+}
+
+// The test gate as a plain chip, for places where a disclosure cannot nest (row buttons).
+export function testGateBadge(g) {
+  if (!g || !g.status) return '';
+  if (g.status === 'passed') return '<span class="chip good small">Tests passed (worker)</span>';
+  if (g.status === 'skipped') return '<span class="chip small">Not test-verified</span>';
+  return `<span class="chip critical small">${g.status === 'timeout' ? 'Tests timed out' : 'Tests failed'}</span>`;
+}
+
+// Whether a run reads or edits, and Full access as a warning.
+export function accessBadge(h) {
+  const p = h.permissions ?? {};
+  const kind = p.edit_source ? '<span class="chip warning small">Edits source</span>' : p.edit_files || p.delete_files ? '<span class="chip warning small">Changes files</span>' : '<span class="chip small">Read-only</span>';
+  return h.access === 'full' ? `${kind} <span class="chip warning small">Full access</span>` : kind;
 }
 
 // The test gate a fix will get, said where a fix is queued.
