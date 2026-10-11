@@ -362,7 +362,7 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   ${ticket.blocker ? `<p class="card-blocker">${icon('alert')}<span><span class="eyebrow">Blocker</span> ${esc(ticket.blocker)}</span></p>` : ''}
   ${entry && (leadingReason(entry) || (entry.limitations ?? []).length) ? `<ul class="reasons">${leadingReason(entry) ? `<li>${esc(leadingReason(entry))}</li>` : ''}${(entry.limitations ?? []).map((l) => `<li class="limitation">${icon('alert')}${esc(l)}</li>`).join('')}</ul>` : ''}
   <footer class="card-meta">${meta.join('')}</footer>
-  ${canHandoff ? `<div class="card-actions"><button type="button" class="btn small" data-action="handoff" data-ticket="${attr(ticket.id)}">${icon('play')}Handoff</button></div>` : ''}
+  ${canHandoff ? `<div class="card-actions"><button type="button" class="btn small" data-action="handoff" data-ticket="${attr(ticket.id)}">${icon('play')}Run agent</button></div>` : ''}
 </article>`;
 }
 

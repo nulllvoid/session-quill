@@ -973,3 +973,12 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; width: 100%; margin: 10px 0 4px; padding: 8px 12px; border: 0; border-radius: var(--radius-ctl); background: var(--surface-inset); color: var(--text); font: inherit; text-align: left; box-shadow: inset 0 0 0 1px var(--hairline); min-height: 44px; }
 button.run-strip { cursor: pointer; }
 button.run-strip:hover { box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+
+.recipe-cards { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
+.recipe-card { width: 100%; display: flex; flex-direction: column; gap: 4px; text-align: left; font: inherit; color: var(--text); background: var(--surface-raised); border: 0; border-radius: var(--radius-ctl); padding: 10px 12px; cursor: pointer; box-shadow: inset 0 0 0 1px var(--hairline-strong); min-height: 44px; }
+.recipe-card:hover { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.recipe-card-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.handoff-form .advanced { margin-top: 8px; }
+.handoff-form .advanced > summary { cursor: pointer; color: var(--text-muted); font-size: 13px; }
+.run-summary { margin: 12px 0 0; padding: 8px 12px; border-radius: var(--radius-ctl); background: var(--surface-inset); font-size: 13px; }
+.issues li[data-level="blocker"] { color: var(--critical); }

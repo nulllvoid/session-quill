@@ -10,11 +10,11 @@ import { renderSessions } from './views/sessions.js';
 import { renderDeployments } from './views/deployments.js';
 import { renderToday } from './views/today.js';
 import { renderDetail, DETAIL_TABS } from './views/detail.js';
-import { renderHandoffForm } from './views/handoff-form.js';
+import { renderRunAgentDialog } from './views/run-dialog.js';
 import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderCloneDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 import { createDashboardMotion } from './lib/motion.js';
-import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
+import { effectiveRecipes, runSummary } from './views/agents.js';
 import { renderBulkActionBar, bulkBarShape, renderBulkHandoffForm, renderBulkResults, renderBulkStatusDialog, renderBatchStrips } from './views/bulk.js';
 import { freshProposals, proposalNotice } from './lib/proposals.js';
 import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, mergeUndo, batchDialogUpdate, withoutIds, pruneChecked, activeBatches } from './lib/bulk.js';
@@ -369,8 +369,7 @@ function renderDialog() {
   if (!d) { if (host.open) host.close(); host.innerHTML = ''; return; }
   const s = appState.snapshot;
   let html = '';
-  if (d.type === 'handoff') html = renderHandoffForm(ticketById(s, d.ticket), s, { retryOf: d.retryOf });
-  else if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status);
+  if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status);
   else if (d.type === 'deployment') html = renderDeploymentDialog(ticketById(s, d.ticket), { mode: d.mode, deploymentId: d.deploymentId });
   else if (d.type === 'export') html = renderExportDialog(s, d.preview);
   else if (d.type === 'help') html = renderHelpDialog();
@@ -384,11 +383,10 @@ function renderDialog() {
     if (!t || t.repo_state !== 'needs-clone') { appState.dialog = null; return renderDialog(); }
     html = renderCloneDialog(t, s);
   }
-  else if (d.type === 'recipe-run') {
+  else if (d.type === 'run-agent') {
     const t = ticketById(s, d.ticket);
-    const recipe = t ? effectiveRecipes(s, t.repo_id).find((r) => r.name === d.recipe && !r.error) : null;
-    if (!recipe) { appState.dialog = null; return renderDialog(); }
-    html = renderRecipeRunDialog(recipe, t, s, { retryOf: d.retryOf });
+    if (!t) { appState.dialog = null; return renderDialog(); }
+    html = renderRunAgentDialog(t, s, { recipe: d.recipe, retryOf: d.retryOf });
   } else if (d.type === 'bulk-handoff') html = renderBulkHandoffForm(s, d.ids, { mode: d.mode });
   else if (d.type === 'bulk-results') html = renderBulkResults(s, { batchId: d.batchId, rows: d.rows, requests: [...appState.requests.values()] });
   else if (d.type === 'bulk-status') html = renderBulkStatusDialog(appState.checked.size);
@@ -567,7 +565,10 @@ function handleAction(el) {
     case 'cancel-next': appState.editingNext = null; render(); break;
     case 'toggle-blocked': appState.blockedExpanded = !appState.blockedExpanded; render(); break;
     case 'close-dialog': closeDialog(); break;
-    case 'handoff': appState.dialog = { type: 'handoff', ticket: el.dataset.ticket, retryOf: el.dataset.retryOf ?? null }; render(); break;
+    case 'handoff':
+    case 'run-agent': appState.dialog = { type: 'run-agent', ticket: el.dataset.ticket, recipe: el.dataset.recipe ?? null, retryOf: el.dataset.retryOf ?? null }; render(); break;
+    case 'run-agent-pick': appState.dialog = { ...appState.dialog, recipe: el.dataset.recipe }; render(); break;
+    case 'run-agent-back': appState.dialog = { ...appState.dialog, recipe: null }; render(); break;
     case 'record-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'record', deploymentId: el.dataset.deployment ?? null }; render(); break;
     case 'attach-unbound': appState.dialog = { type: 'attach', session: el.dataset.session, mode: el.dataset.mode === 'create' ? 'create' : 'attach' }; render(); break;
     case 'dismiss-unbound': submit({ kind: 'dismiss-unbound', target_id: el.dataset.session, expected_revision: Number(el.dataset.revision), payload: {} }, { announceText: 'Dismissal queued; undo within 10 seconds' }); break;
@@ -607,7 +608,6 @@ function handleAction(el) {
       break;
     }
     case 'undo-file-effect': submit({ kind: 'undo-file-effect', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff, effect_id: el.dataset.effect } }, { announceText: 'Undo queued; the file is restored within 10 seconds' }); break;
-    case 'run-recipe': appState.dialog = { type: 'recipe-run', ticket: el.dataset.ticket, recipe: el.dataset.recipe, retryOf: el.dataset.retryOf ?? null }; render(); break;
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
       const accept = el.dataset.action === 'accept-suggestion';
@@ -787,13 +787,6 @@ function handleSubmit(form) {
     if (!items.length) { appState.dialog = { ...appState.dialog, error: 'Select at least one obligation.' }; render(); return; }
     closeDialog();
     submit({ kind: 'record-deployment', target_id: ticketId, expected_revision: revision, payload: { items } });
-  } else if (kind === 'handoff') {
-    const permissions = {};
-    for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr']) permissions[k] = fd.get(k) === 'on';
-    const payload = { mode: fd.get('mode'), note: String(fd.get('note') ?? '').trim(), permissions, access: fd.get('access') || 'settings', branch: String(fd.get('branch') ?? '').trim() || null };
-    const retryOf = form.dataset.retryOf || null;
-    closeDialog();
-    submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: retryOf }, { announceText: 'Handoff request accepted; execution is tracked separately' });
   } else if (kind === 'recipe-run') {
     // Disabled boxes are not submitted: permissions the recipe requires come from the form itself.
     const required = form.dataset.requiresEdit === 'true';
@@ -879,7 +872,7 @@ function onKey(e) {
     $(`#main [data-ticket="${CSS.escape(bulkKey.id)}"][role=button]`)?.focus();
     return;
   }
-  if (card && e.key === 'h' && card.querySelector('[data-action="handoff"]')) { e.preventDefault(); appState.lastFocus = card; appState.dialog = { type: 'handoff', ticket: card.dataset.ticket }; render(); return; }
+  if (card && e.key === 'h' && card.querySelector('[data-action="handoff"]')) { e.preventDefault(); appState.lastFocus = card; appState.dialog = { type: 'run-agent', ticket: card.dataset.ticket, recipe: null, retryOf: null }; render(); return; }
   if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && target && target.dataset && target.dataset.action === 'detail-nav' && appState.selected) {
     e.preventDefault();
     stepDetail(e.key === 'ArrowRight' ? 1 : -1);
@@ -918,6 +911,16 @@ function onChange(e) {
     render();
     if (el.dataset.filter === 'q') { const s = $('#search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
     return;
+  }
+  const runForm = el.closest && el.closest('form[data-form="recipe-run"]');
+  if (runForm) {
+    const t = ticketById(appState.snapshot, runForm.dataset.ticket);
+    const recipe = t ? effectiveRecipes(appState.snapshot, t.repo_id).find((r) => r.name === runForm.dataset.recipe) : null;
+    const repo = t ? (appState.snapshot.repos ?? []).find((r) => r.id === t.repo_id) ?? null : null;
+    const fd = new FormData(runForm);
+    const choices = Object.fromEntries(['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'].map((k) => [k, fd.get(k) === 'on' || !!runForm.querySelector(`[name="${k}"][disabled][checked]`)]));
+    const out = runForm.querySelector('.run-summary');
+    if (recipe && out) out.textContent = runSummary(recipe, choices, repo);
   }
   if (el.dataset.action === 'status-select') {
     const status = el.value;

@@ -1,8 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { renderRecipeRunDialog } from '../../ui/views/agents.js';
+import { renderRunAgentDialog } from '../../ui/views/run-dialog.js';
 import { renderRunDetail } from '../../ui/views/run-detail.js';
-import { renderHandoffForm } from '../../ui/views/handoff-form.js';
 import { sanitizeSnapshot } from '../../src/export/sanitize.js';
 import { snapshot, ticket } from './fixtures.js';
 
@@ -28,16 +27,19 @@ test('runs show the worker test gate: passed is good, failed is critical with it
   assert.match(html, /Queue wait 0 ms · Setup 900 ms · Agent 30 s · Tests 12 s/);
 });
 
-test('the handoff form names the test command, or says fixes are not test-verified', () => {
+const RECIPES = [
+  { name: 'attempt-fix', source: 'builtin', mode: 'attempt-fix', description: 'Fix it', permissions: { read_source: true, edit_source: true }, timeout_min: 20, legacy: true, repo_id: null },
+  { name: 'analyse', source: 'builtin', mode: 'analyse', description: 'Look', permissions: { read_source: true }, timeout_min: 20, legacy: true, repo_id: null },
+];
+
+test('the run dialog names the test command, or says fixes are not test-verified', () => {
   const t = ticket(1);
-  const withCmd = renderHandoffForm(t, snapshot({ tickets: [t], repos: [{ ...REPO, test_command: 'npm test' }] }));
-  assert.match(withCmd, /Fixes are checked with <code>npm test<\/code>, run by the worker/);
-  const without = renderHandoffForm(t, snapshot({ tickets: [t], repos: [REPO] }));
-  assert.match(without, /No test command: fixes are not test-verified/);
-  const recipe = { name: 'attempt-fix', source: 'builtin', mode: 'attempt-fix', description: 'Fix it', permissions: { read_source: true, edit_source: true }, timeout_min: 20, outputs: [], legacy: true };
-  assert.match(renderRecipeRunDialog(recipe, t, snapshot({ tickets: [t], repos: [REPO] })), /No test command: fixes are not test-verified/);
-  const analyse = { ...recipe, name: 'analyse', mode: 'analyse', permissions: { read_source: true } };
-  assert.doesNotMatch(renderRecipeRunDialog(analyse, t, snapshot({ tickets: [t], repos: [REPO] })), /test-verified/, 'only fixes are gated');
+  const withCmd = renderRunAgentDialog(t, snapshot({ tickets: [t], repos: [{ ...REPO, test_command: 'npm test' }], recipes: RECIPES }), { recipe: 'attempt-fix' });
+  assert.match(withCmd, /tests: npm test run by the worker/);
+  const without = renderRunAgentDialog(t, snapshot({ tickets: [t], repos: [REPO], recipes: RECIPES }), { recipe: 'attempt-fix' });
+  assert.match(without, /Not test-verified/);
+  assert.match(without, /not test-verified \(no test command\)/);
+  assert.doesNotMatch(renderRunAgentDialog(t, snapshot({ tickets: [t], repos: [REPO], recipes: RECIPES }), { recipe: 'analyse' }), /test-verified/, 'only fixes are gated');
 });
 
 test('an export keeps the gate result but never the test output or command', () => {

@@ -12,7 +12,7 @@ import { renderDeployments } from '../../ui/views/deployments.js';
 import { renderToday } from '../../ui/views/today.js';
 import { renderDetail, DETAIL_TABS } from '../../ui/views/detail.js';
 import { renderRunDetail } from '../../ui/views/run-detail.js';
-import { renderHandoffForm } from '../../ui/views/handoff-form.js';
+import { renderRunAgentDialog } from '../../ui/views/run-dialog.js';
 import { renderHeader } from '../../ui/views/header.js';
 import { renderRecipeRunDialog, effectiveRecipes } from '../../ui/views/agents.js';
 import { snapshot, TID, ticket } from './fixtures.js';
@@ -172,13 +172,12 @@ test('renderDetail surfaces pending, conflict and failed request states for the 
   assert.match(html, /Retry/);
 });
 
-test('renderHandoffForm defaults to analyse-followups with source off and shows permission dependencies', () => {
+test('renderRunAgentDialog step 1 offers the three built-in recipes as cards', () => {
   const s = snapshot();
-  const html = renderHandoffForm(s.tickets[0], s, {});
-  assert.match(html, /value="analyse-followups"[^>]*checked/);
-  assert.match(html, /name="read_source"(?![^>]*checked)/);
-  assert.match(html, /requires push branch/i);
-  assert.match(html, /maxlength="280"/);
+  s.recipes = ['analyse', 'analyse-followups', 'attempt-fix'].map((name) => ({ name, source: 'builtin', mode: name, description: name, permissions: { read_source: true }, timeout_min: 20, legacy: true, repo_id: null }));
+  const html = renderRunAgentDialog(s.tickets[0], s, { recipe: null });
+  for (const name of ['analyse', 'analyse-followups', 'attempt-fix']) assert.match(html, new RegExp(`data-action="run-agent-pick"[^>]*data-recipe="${name}"`));
+  assert.doesNotMatch(html, /<form/);
 });
 
 test('every view renders a field-restricted sanitized export without throwing', async () => {
