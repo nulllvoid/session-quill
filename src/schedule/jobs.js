@@ -107,7 +107,7 @@ export async function resolveTickets(worker, client, tracker, onboard, { originO
     .slice(0, RESOLVE_LIMIT);
   if (!candidates.length) return [];
   const repos = worker.config.repos ?? {};
-  const index = createOriginIndex({ repos, autoCloneDir: onboard.auto_clone_dir, ...(originOf ? { originOf } : {}) });
+  const index = await createOriginIndex({ repos, autoCloneDir: onboard.auto_clone_dir, ...(originOf ? { originOf } : {}) });
   const out = [];
   for (const t of candidates) {
     let hints;

@@ -4,6 +4,7 @@ import { createTrackerClient } from '../../src/tracker/client.js';
 import { createJobs } from '../../src/schedule/jobs.js';
 import { planImport, githubPrefix } from '../../src/onboard/import.js';
 import { scenario, T1 } from '../acceptance/scenario.js';
+import { track } from './cleanup.js';
 
 const JIRA = { system: 'jira', domain: 'https://example.atlassian.net', url_template: '{domain}/browse/{key}', repo: '', prefixes: ['PROJ'] };
 const GITHUB = { system: 'github', domain: 'https://github.com', url_template: '{domain}/{repo}/issues/{number}', repo: 'acme/web-app', prefixes: [] };
@@ -73,6 +74,7 @@ test('tracker-sync imports assigned issues as tickets once when import_assigned 
     return null;
   });
   const s = scenario({ jobOpts: { trackerFetch: r.fetchImpl } });
+  track(s.home);
   s.config.tracker = { ...JIRA, sync_token_env: 'JIRA_TOKEN' };
   s.env.JIRA_TOKEN = 'tok';
   await s.start();
@@ -102,6 +104,7 @@ test('tracker-sync imports assigned issues as tickets once when import_assigned 
 test('tracker-sync reports an assigned issue whose key another ticket holds, and imports nothing over it', async () => {
   const r = recorder((url) => (url.includes('/search/jql?') ? { status: 200, body: { issues: [jiraIssue('PROJ-6', 'Remote six')] } } : null));
   const s = scenario({ jobOpts: { trackerFetch: r.fetchImpl } });
+  track(s.home);
   s.config.tracker = { ...JIRA, sync_token_env: 'JIRA_TOKEN', import_assigned: true };
   s.env.JIRA_TOKEN = 'tok';
   await s.start();

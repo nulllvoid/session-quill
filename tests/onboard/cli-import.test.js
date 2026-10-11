@@ -5,6 +5,7 @@ import { bootstrapFromTracker } from '../../src/cli/commands/init.js';
 import { loadContext } from '../../src/cli/context.js';
 import { saveUserConfig, loadUserConfig } from '../../src/config/config.js';
 import { makeHome, startWorker } from '../cli/helpers.js';
+import { track } from './cleanup.js';
 
 const JIRA = { system: 'jira', domain: 'https://example.atlassian.net', prefixes: ['PROJ'], sync_token_env: 'JIRA_TOKEN' };
 
@@ -25,6 +26,7 @@ function io() {
 
 test('quill tracker import creates tickets for new assigned issues through the worker, and only once', async () => {
   const fx = makeHome();
+  track(fx.home);
   fx.config.tracker = JIRA;
   saveUserConfig(fx.config, fx.env);
   const w = await startWorker(fx);
@@ -46,6 +48,7 @@ test('quill tracker import creates tickets for new assigned issues through the w
 
 test('init --bootstrap-from-tracker turns the import on, keeps the reconcile schedule, adds tracker-sync and imports once', async () => {
   const fx = makeHome();
+  track(fx.home);
   fx.config.tracker = JIRA;
   saveUserConfig(fx.config, fx.env);
   const out = io();
@@ -67,6 +70,7 @@ test('init --bootstrap-from-tracker turns the import on, keeps the reconcile sch
 
 test('init --bootstrap-from-tracker explains what is missing when no Jira or GitHub tracker is configured', async () => {
   const fx = makeHome();
+  track(fx.home);
   await assert.rejects(bootstrapFromTracker(fx.env, io().io, {}), (e) => e.code === 'tracker-unsupported' && /\[tracker\] table/.test(e.message));
   assert.equal(loadUserConfig(fx.env).tracker, undefined);
 });

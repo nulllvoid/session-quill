@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRemote, remoteKey, checkCloneUrl, repoUrlFromLink, cloneFolderName } from '../../src/onboard/remotes.js';
+import { parseRemote, remoteKey, checkCloneUrl, repoUrlFromLink, cloneFolderName, safeFolderName, normalizeRemote } from '../../src/onboard/remotes.js';
 
 const HOSTS = ['github.com', 'gitlab.com', 'bitbucket.org'];
 
@@ -62,4 +62,19 @@ test('clone folder names are safe on every platform', () => {
   assert.equal(cloneFolderName(parseRemote('https://github.com/acme/My.App.git')), 'My.App');
   assert.equal(cloneFolderName(parseRemote('git@github.com:acme/hidden-.git')), 'hidden');
   assert.throws(() => cloneFolderName(parseRemote('https://github.com/acme/CON')), (e) => e.code === 'clone-url-invalid');
+});
+
+test('folder names are cleaned again after the cut and never a device name with an extension', () => {
+  assert.equal(safeFolderName(`${'a'.repeat(63)}.git-x`), 'a'.repeat(63));
+  assert.equal(safeFolderName(`${'b'.repeat(63)}-tail`), 'b'.repeat(63));
+  for (const bad of ['con.txt', 'NUL.git', 'com1.repo', 'lpt9', 'aux', '...', '-']) assert.throws(() => safeFolderName(bad), (e) => e.code === 'clone-url-invalid', bad);
+  assert.equal(safeFolderName('console'), 'console');
+});
+
+test('remotes are kept in a normal form with no userinfo beyond the ssh login', () => {
+  assert.equal(normalizeRemote('https://github.com/Acme/App/'), 'https://github.com/Acme/App.git');
+  assert.equal(normalizeRemote('git@github.com:acme/app'), 'git@github.com:acme/app.git');
+  assert.equal(normalizeRemote('ssh://git@host.example:2222/a/b.git'), 'ssh://git@host.example:2222/a/b.git');
+  assert.equal(normalizeRemote('https://token@github.com/acme/app'), null);
+  assert.equal(normalizeRemote('file:///x'), null);
 });

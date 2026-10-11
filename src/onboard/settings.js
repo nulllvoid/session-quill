@@ -2,7 +2,7 @@
 // repository's .quill.toml can never turn on importing, add a clone host or move the clone folder.
 import path from 'node:path';
 import os from 'node:os';
-import { normalizeHosts } from './remotes.js';
+import { normalizeHosts, parseRemote, normalizeRemote } from './remotes.js';
 
 export const DEFAULT_CLONE_HOSTS = ['github.com', 'gitlab.com', 'bitbucket.org'];
 export const DEFAULT_CLONE_DIR = 'quill-repos';
@@ -40,7 +40,10 @@ export function onboardSettings(rawTracker, { home = os.homedir() } = {}) {
     else {
       for (const [k, v] of Object.entries(t.repo_map)) {
         if (!MAP_KEY_RE.test(k) || typeof v !== 'string' || !v.trim() || v.length > 300) { warnings.push(`tracker.repo_map entry "${k}" is not a project, component or owner/repo mapped to a repository id or remote; ignored`); continue; }
-        repoMap[k.toLowerCase()] = v.trim();
+        // A remote is kept in normal form; one carrying credentials is refused, never stored or shown.
+        const remote = parseRemote(v);
+        if (remote.error && remote.error.code === 'clone-credentials') { warnings.push(`tracker.repo_map entry "${k}" carries credentials in its remote; remove them and let git use your credential helper or ssh key; ignored`); continue; }
+        repoMap[k.toLowerCase()] = remote.error ? v.trim() : normalizeRemote(v);
       }
     }
   }

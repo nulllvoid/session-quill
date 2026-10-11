@@ -27,3 +27,10 @@ test('onboarding settings are validated: hosts lower-cased, ~ expanded, repo_map
 test('a [tracker] table holding only onboarding settings turns on no key recognition', () => {
   assert.equal(resolveTracker({ tracker: { import_assigned: true, clone_hosts: ['github.com'], auto_clone_dir: '~/x', repo_map: { PROJ: 'a' } } }), null);
 });
+
+test('repo_map remotes with credentials are refused, and remotes are kept in normal form', () => {
+  const s = onboardSettings({ repo_map: { A: 'https://user:pw@github.com/acme/a.git', B: 'https://tok@github.com/acme/b', C: 'https://github.com/acme/c/', D: 'backend' } }, { home: HOME });
+  assert.deepEqual(s.repo_map, { c: 'https://github.com/acme/c.git', d: 'backend' });
+  assert.equal(s.warnings.filter((w) => /carries credentials/.test(w)).length, 2);
+  assert.ok(s.warnings.every((w) => !w.includes('pw') && !w.includes('tok@')), 'the secret never reaches a warning');
+});

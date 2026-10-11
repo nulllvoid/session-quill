@@ -9,47 +9,80 @@
 // disk to register) or `none`. Nothing is cloned or registered here.
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { remoteKey, repoUrlFromLink } from './remotes.js';
+import { execFile } from 'node:child_process';
+import { remoteKey, repoUrlFromLink, normalizeRemote } from './remotes.js';
 import { NO_CODE_TAG } from '../core/reduce/tickets.js';
 
 export { NO_CODE_TAG };
 const MAX_SCAN_ENTRIES = 200;
+export const ORIGIN_CONCURRENCY = 4;
 
-export function originUrl(dir) {
-  const r = spawnSync('git', ['-C', dir, 'remote', 'get-url', 'origin'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
-  return r.status === 0 ? r.stdout.trim() : null;
+// What changes when a clone's origin can: its .git/config (or the .git file of a worktree).
+function originStamp(dir) {
+  for (const f of [path.join(dir, '.git', 'config'), path.join(dir, '.git')]) {
+    try { const st = fs.statSync(f); if (st.isFile()) return `${st.mtimeMs}:${st.size}`; } catch { /* next */ }
+  }
+  return null;
 }
 
-// Remote key → registered repository id, and (scanned on first use) remote key → clone folder.
-export function createOriginIndex({ repos = {}, autoCloneDir = null, originOf = originUrl }) {
+const originCache = new Map();
+
+// `git remote get-url origin` without blocking the worker's thread, cached by folder until its git
+// config changes.
+export async function originUrl(dir) {
+  const stamp = originStamp(dir);
+  const cached = originCache.get(dir);
+  if (stamp && cached && cached.stamp === stamp) return cached.url;
+  const url = await new Promise((resolve) => {
+    execFile('git', ['-C', dir, 'remote', 'get-url', 'origin'], { encoding: 'utf8', windowsHide: true, timeout: 5000 }, (err, stdout) => resolve(err ? null : String(stdout).trim() || null));
+  });
+  if (stamp) originCache.set(dir, { stamp, url });
+  if (originCache.size > 2000) originCache.delete(originCache.keys().next().value);
+  return url;
+}
+
+// Runs fn over items, at most `limit` at a time.
+async function pool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const i = next; next += 1; out[i] = await fn(items[i]); }
+  }));
+  return out;
+}
+
+async function keyOf(originOf, dir) {
+  try { return remoteKey(await originOf(dir)); } catch { return null; }
+}
+
+// Remote key → registered repository id, and remote key → clone folder in auto_clone_dir or beside
+// a registered repository. Origins are read concurrently (a few at a time) before any lookup, so
+// the lookups themselves are synchronous.
+export async function createOriginIndex({ repos = {}, autoCloneDir = null, originOf = originUrl, scan = true } = {}) {
   const registered = new Map();
   const roots = new Set();
-  for (const [id, r] of Object.entries(repos)) {
-    if (!r || !r.canonical_path) continue;
-    roots.add(path.dirname(path.resolve(r.canonical_path)));
-    let key = null;
-    try { key = remoteKey(originOf(r.canonical_path)); } catch { key = null; }
-    if (key && !registered.has(key)) registered.set(key, id);
-  }
-  let clones = null;
-  function scan() {
-    clones = new Map();
+  const entries = Object.entries(repos).filter(([, r]) => r && r.canonical_path);
+  for (const [, r] of entries) roots.add(path.dirname(path.resolve(r.canonical_path)));
+  const keys = await pool(entries, ORIGIN_CONCURRENCY, ([, r]) => keyOf(originOf, r.canonical_path));
+  entries.forEach(([id], i) => { if (keys[i] && !registered.has(keys[i])) registered.set(keys[i], id); });
+  const clones = new Map();
+  if (scan) {
+    const dirs = [];
     for (const dir of [autoCloneDir, ...roots].filter(Boolean)) {
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-      for (const e of entries.filter((x) => x.isDirectory() && !x.name.startsWith('.')).slice(0, MAX_SCAN_ENTRIES)) {
+      let list;
+      try { list = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const e of list.filter((x) => x.isDirectory() && !x.name.startsWith('.')).slice(0, MAX_SCAN_ENTRIES)) {
         const sub = path.join(dir, e.name);
-        if (!fs.existsSync(path.join(sub, '.git'))) continue;
-        let key = null;
-        try { key = remoteKey(originOf(sub)); } catch { key = null; }
-        if (key && !clones.has(key)) clones.set(key, sub);
+        if (fs.existsSync(path.join(sub, '.git'))) dirs.push(sub);
       }
     }
+    const found = await pool(dirs, ORIGIN_CONCURRENCY, (d) => keyOf(originOf, d));
+    dirs.forEach((d, i) => { if (found[i] && !clones.has(found[i])) clones.set(found[i], d); });
   }
   return {
     registered: (key) => registered.get(key) ?? null,
-    clone: (key) => { if (!clones) scan(); return clones.get(key) ?? null; },
+    clone: (key) => clones.get(key) ?? null,
+    originKey: (dir) => keyOf(originOf, dir),
   };
 }
 
@@ -61,7 +94,8 @@ function linkHosts(settings, tracker) {
   return hosts;
 }
 
-function fromRemote(url, key, index, rule, via) {
+function fromRemote(raw, key, index, rule, via) {
+  const url = normalizeRemote(raw) ?? raw;
   const id = index.registered(key);
   if (id) return { state: 'linked', repo_id: id, rule, via };
   const existing = index.clone(key);

@@ -105,7 +105,7 @@ export function renderCloneDialog(rawTicket, rawSnapshot) {
   <dt>Folder</dt><dd><code>${esc(folder)}</code>${existing ? '' : ' <span class="muted small">(owner-name if that folder is taken)</span>'}</dd>
   <dt>Host check</dt><dd>${check}</dd>
 </dl>
-<p class="small muted">Found from ${esc(found)}. ${existing ? 'The existing clone is registered like <code>quill repo add</code>' : 'The worker runs <code>git clone</code> over https or ssh with your own git credentials, without submodules, then registers the folder like <code>quill repo add</code>'} and links this ticket to it. Nothing runs inside the repository.</p>
+<p class="small muted">Found from ${esc(found)}. ${existing ? 'The existing clone is registered like <code>quill repo add</code>' : 'The worker runs <code>git clone</code> over https or ssh with your own git credentials, without submodules, Git LFS downloads or redirects to another host, then registers the folder like <code>quill repo add</code>'} and links this ticket to it. Nothing from the repository is run; hooks are never cloned, though your own git configuration and templates still apply.</p>
 ${ok ? '' : `<p class="small warning-text">${icon('alert')}${remote ? `Add ${esc(host ?? 'the host')} to <code>[tracker] clone_hosts</code> in config.toml to clone from it, or clone it yourself and run <code>quill repo add</code>.` : 'No remote is known for this ticket.'}</p>`}
 <div class="dialog-actions"><button type="submit" class="btn primary"${ok ? '' : ' disabled'}>${existing ? 'Register' : 'Clone'}</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;

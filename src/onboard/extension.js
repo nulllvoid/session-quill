@@ -1,7 +1,8 @@
 // Runs the dashboard's repo-clone requests (ADR 0024), one at a time: plan again against the
 // current config and disk, clone (or reuse a clone that exists), register it in config.toml like
 // `quill repo add`, and link the ticket. A request names the remote the owner saw and confirmed.
-import { planClone, executeClone, registerClone, runGit } from './clone.js';
+import { planClone, executeClone, registerClone, runGit, sweepPartials } from './clone.js';
+import { onboardSettings } from './settings.js';
 
 export function createExtension(ctx, { git = runGit, originOf = null, timeoutMs } = {}) {
   let running = null;
@@ -12,7 +13,7 @@ export function createExtension(ctx, { git = runGit, originOf = null, timeoutMs 
   async function perform(worker, req) {
     const ticket = worker.state.tickets.get(req.target_id);
     try {
-      const plan = planClone({ config: worker.config, ticket, url: req.payload.url, ...(originOf ? { originOf } : {}) });
+      const plan = await planClone({ config: worker.config, ticket, url: req.payload.url, ...(originOf ? { originOf } : {}) });
       let repoId = plan.repo_id ?? null;
       if (plan.action !== 'link') {
         const dir = await executeClone(plan, { git, signal: controller.signal, ...(timeoutMs ? { timeoutMs } : {}) });
@@ -33,8 +34,11 @@ export function createExtension(ctx, { git = runGit, originOf = null, timeoutMs 
     name: 'onboard',
     async idle() { while (running) await running; },
     onStart(worker) {
-      // A clone interrupted by a stop or crash never finished: say so. Its partial folder is hidden
-      // and never taken for a clone.
+      // A clone interrupted by a stop or crash never finished: say so, and remove its partial folder.
+      try {
+        const removed = sweepPartials(onboardSettings(worker.config.tracker).auto_clone_dir);
+        if (removed) worker.log(`repo-clone: removed ${removed} unfinished clone folder${removed === 1 ? '' : 's'}`);
+      } catch (err) { worker.log(`repo-clone: sweeping unfinished clones failed: ${err.message}`); }
       for (const req of [...worker.state.requests.values()]) {
         if (req.kind === 'repo-clone' && req.state === 'applying') fail(worker, req, { code: 'interrupted', message: 'the worker stopped before this clone finished; try again', retryable: true });
       }

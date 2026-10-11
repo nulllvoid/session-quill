@@ -83,7 +83,7 @@ export async function clone(io, args, flags, env, { git } = {}) {
   const found = findTicketByKey(ctx, key);
   if (!found) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
   const ticket = latestTicketDetail(ctx, found.id) ?? found;
-  const plan = planClone({ config: ctx.config, ticket, url: typeof flags.url === 'string' ? flags.url : null });
+  const plan = await planClone({ config: ctx.config, ticket, url: typeof flags.url === 'string' ? flags.url : null });
   const what = { link: `link ${ticket.key} to repository ${plan.repo_id} (${plan.path}), which is already a clone of it`, register: `register the existing clone ${plan.path} and link ${ticket.key} to it; nothing is cloned`, clone: `clone it over ${plan.protocol} into ${plan.path}, register it and link ${ticket.key} to it` }[plan.action];
   if (!flags.confirm) {
     if (flags.json) { io.json({ preview: true, ...plan }); return 0; }

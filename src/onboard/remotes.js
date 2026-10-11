@@ -108,8 +108,26 @@ export function repoUrlFromLink(link, hosts) {
 
 // The folder name a clone of `parsed` gets: its repository name, made safe for every platform.
 export function cloneFolderName(parsed) {
-  const name = String(parsed.name ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 64);
-  const reserved = /^(con|prn|aux|nul|com\d|lpt\d)$/i;
+  return safeFolderName(parsed.name);
+}
+
+// Letters, digits, `.`, `_` and `-`, at most 64 characters, cleaned again after the cut so it never
+// ends in `.`, `-` or a space, and never a Windows device name, with or without an extension.
+export function safeFolderName(raw) {
+  const clean = (s) => s.replace(/^[-. ]+|[-. ]+$/g, '');
+  const name = clean(clean(String(raw ?? '').replace(/[^A-Za-z0-9._-]+/g, '-')).slice(0, 64));
+  const reserved = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³]|conin\$|conout\$)(\..*)?$/i;
   if (!name || reserved.test(name)) throw refuse('clone-url-invalid', 'the repository name cannot be used as a folder name');
   return name;
+}
+
+// The address to keep and show: rebuilt from its parts, so it carries no password, no user in an
+// https address, and no trailing slash; ssh keeps its (non-secret) login name, which git needs.
+export function normalizeRemote(input) {
+  const p = parseRemote(input);
+  if (p.error) return null;
+  const repoPath = `${p.segments.join('/')}.git`;
+  if (p.protocol === 'https') return `https://${p.host}${p.port ? `:${p.port}` : ''}/${repoPath}`;
+  if (/^ssh:\/\//i.test(String(input).trim())) return `ssh://${p.user ? `${p.user}@` : ''}${p.host}${p.port ? `:${p.port}` : ''}/${repoPath}`;
+  return `${p.user}@${p.host}:${repoPath}`;
 }
