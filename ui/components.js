@@ -376,6 +376,7 @@ export function contentViewer(ref, { content = {}, status = {}, generation = '',
   if (!ref) return '';
   if (Object.hasOwn(content, ref)) return `<div class="content-viewer" data-ref="${attr(ref)}"><button type="button" class="link small" data-action="hide-content" data-hash="${attr(ref)}">Hide</button><pre class="full">${esc(content[ref])}</pre></div>`;
   const st = status[ref];
+  if (st === 'reloading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">The snapshot changed; reloading…</span></div>`;
   if (st === 'loading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">Loading…</span></div>`;
   if (st && st.error) return `<div class="content-viewer" data-ref="${attr(ref)}"><span class="small critical" role="alert">Could not load: ${esc(st.error)}</span> <button type="button" class="btn small ghost" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">Retry</button></div>`;
   return `<button type="button" class="link small" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">${esc(label)}</button>`;

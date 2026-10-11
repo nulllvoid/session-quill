@@ -289,7 +289,7 @@ async function loadContent(hash, generation, retried = false) {
     delete appState.contentStatus[hash];
     appState.content[hash] = text ?? '(content unavailable: capture incomplete)';
   } catch (err) {
-    if (err.code === 'generation-expired' && !retried) { await poll(); return loadContent(hash, appState.snapshot.generation_id, true); }
+    if (err.code === 'generation-expired' && !retried) { appState.contentStatus[hash] = 'reloading'; render(); await poll(); return loadContent(hash, appState.snapshot.generation_id, true); }
     appState.contentStatus[hash] = { error: err.message || 'the request failed' };
   }
   render();
@@ -405,7 +405,7 @@ async function poll() {
     appState.online = true;
     appState.error = null;
     syncRequests(snap);
-    if (changed) { appState.content = {}; appState.contentStatus = {}; appState.loadedTicket = null; }
+    if (changed) { appState.content = {}; appState.contentStatus = Object.fromEntries(Object.entries(appState.contentStatus).filter(([, v]) => v === 'loading' || v === 'reloading')); appState.loadedTicket = null; }
     render();
   } catch (err) {
     if (err.code === 'unauthenticated') { appState.error = err.message; appState.online = false; }

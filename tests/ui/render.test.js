@@ -594,6 +594,10 @@ test('contentViewer shows a load button, loading, the escaped text with Hide, an
   const loading = contentViewer(ref, { content: {}, status: { [ref]: 'loading' }, generation: 'g1', label: 'x' });
   assert.match(loading, /aria-busy="true"/);
   assert.match(loading, /Loading/);
+  const reloading = contentViewer(ref, { content: {}, status: { [ref]: 'reloading' }, generation: 'g1', label: 'x' });
+  assert.match(reloading, /aria-busy="true"/);
+  assert.match(reloading, /The snapshot changed; reloading…/);
+  assert.doesNotMatch(reloading, /Retry|<button/);
   const loaded = contentViewer(ref, { content: { [ref]: '<b>done</b>' }, status: {}, generation: 'g1', label: 'x' });
   assert.match(loaded, /<pre class="full">&lt;b&gt;done&lt;\/b&gt;<\/pre>/);
   assert.match(loaded, /data-action="hide-content" data-hash="c{64}"/);
