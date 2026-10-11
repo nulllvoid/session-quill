@@ -709,3 +709,11 @@ test('statusLabel: offline without errors, plural errors, needs attention', asyn
   const snap = snapshot(); snap.meta.exported_at = NOW;
   assert.deepEqual(statusLabel(snap, { now: NOW, online: false }), { text: 'Read-only snapshot', tone: 'muted' });
 });
+
+test('cards show a shortened key with the full key in title and copy; Hide is an icon button', () => {
+  const long = { ...snapshot().tickets[0], key: 'LOCAL-preserve-session-checkpoints-00000001' };
+  const card = ticketCard(long, snapshot(), { variant: 'board', now: NOW });
+  assert.match(card, /data-copy="LOCAL-preserve-session-checkpoints-00000001"[^>]*title="LOCAL-preserve-session-checkpoints-00000001[^"]*">LOCAL-pre[^<]*…[^<]*00000001</);
+  const board = renderBoard(snapshot(), noFilters, { now: NOW, layout: 'columns', toggled: new Set(), pages: {} });
+  assert.match(board, /class="btn small ghost icon-only" data-action="toggle-column"[^>]*aria-label="Hide To do"/);
+});

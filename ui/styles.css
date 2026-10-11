@@ -10,9 +10,9 @@
   --surface-inset: #111716;
   --text: #e9efec;
   --text-muted: #acb9b3;
-  --text-faint: #9baaa3;
+  --text-faint: #8a9992;
   --border: #35413c;
-  --border-strong: #526159;
+  --border-strong: #6f8277;
   --accent: #91cebb;
   --accent-fill: #91cebb;
   --accent-fg: #142e26;
@@ -60,7 +60,7 @@
   --text-muted: #58685f;
   --text-faint: #627169;
   --border: #d9e0da;
-  --border-strong: #a0aea4;
+  --border-strong: #7f8f86;
   --accent: #23634f;
   --accent-fill: #245c49;
   --accent-fg: #ffffff;
@@ -251,7 +251,7 @@ body[data-layout="medium"] .detail-panel { left: auto; width: var(--detail-w); m
 /* Controls */
 input, select, textarea, button { font: inherit; color: inherit; }
 input[type="text"], input[type="search"], input[type="datetime-local"], select, textarea {
-  background: var(--surface-inset); border: 1px solid var(--border); border-radius: var(--radius-ctl); padding: 6px 10px; min-height: 34px; width: 100%; max-width: 100%; color: var(--text);
+  background: var(--surface-inset); border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); padding: 6px 10px; min-height: 34px; width: 100%; max-width: 100%; color: var(--text);
   transition: border-color 200ms var(--ease), box-shadow 200ms var(--ease);
 }
 input[type="text"]:focus, input[type="datetime-local"]:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-fill) 22%, transparent); }

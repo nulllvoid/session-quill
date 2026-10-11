@@ -124,8 +124,8 @@ export function requestChip(state) {
   return `<span class="chip request" data-state="${attr(state)}">${esc(REQUEST_LABELS[state] ?? state)}</span>`;
 }
 
-export function keyEl(key) {
-  return `<code class="key" data-copy="${attr(key)}" title="${attr(key)} · Click to copy">${esc(key)}</code>`;
+export function keyEl(key, { short = false } = {}) {
+  return `<code class="key" data-copy="${attr(key)}" title="${attr(key)} · Click to copy">${esc(short ? shortKey(key) : key)}</code>`;
 }
 
 // Long local keys keep their prefix and unique suffix; the full key stays in titles and copies.
@@ -147,11 +147,11 @@ export function externalLink(ticket) {
 }
 
 // A key that names an external ticket opens it in a new tab; the copy button copies the key.
-export function ticketKey(ticket) {
+export function ticketKey(ticket, { short = false } = {}) {
   const link = externalLink(ticket);
-  if (!link || !link.url || link.key !== ticket.key) return keyEl(ticket.key);
+  if (!link || !link.url || link.key !== ticket.key) return keyEl(ticket.key, { short });
   const where = SYSTEM_LABELS[link.system] ?? 'tracker';
-  return `<span class="key-group"><a class="key key-link" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer" title="${attr(`Open ${ticket.key} in ${where} (new tab)`)}">${esc(ticket.key)}</a><button type="button" class="copy-key" data-copy="${attr(ticket.key)}" aria-label="${attr(`Copy ${ticket.key}`)}" title="Copy key">${icon('copy')}</button></span>`;
+  return `<span class="key-group"><a class="key key-link" href="${attr(link.url)}" target="_blank" rel="noopener noreferrer" title="${attr(`Open ${ticket.key} in ${where} (new tab)`)}">${esc(short ? shortKey(ticket.key) : ticket.key)}</a><button type="button" class="copy-key" data-copy="${attr(ticket.key)}" aria-label="${attr(`Copy ${ticket.key}`)}" title="Copy key">${icon('copy')}</button></span>`;
 }
 
 export function externalChip(ticket) {
@@ -351,7 +351,7 @@ export function ticketCard(ticket, snapshot, { variant = 'board', now, selected 
   return `<article class="card card-${attr(variant)}${selected ? ' selected' : ''}${entry && entry.rank === 1 ? ' top' : ''}" data-ticket="${attr(ticket.id)}" tabindex="0" role="button" aria-label="${attr(`${ticket.key} ${ticket.title}`)}" aria-pressed="${selected ? 'true' : 'false'}">
   <header class="card-head">
     ${entry ? `<span class="rank" aria-label="Rank ${attr(entry.rank)}">${esc(entry.rank)}</span>` : ''}
-    ${ticketKey(ticket)}
+    ${ticketKey(ticket, { short: true })}
     ${statusChip(ticket.status, { stale: ticket.stale, staleAge: staleAgeLabel(ticket, now) })}
     ${priorityMark(ticket.priority)}
     ${entry ? scoreBadge(entry) : ''}

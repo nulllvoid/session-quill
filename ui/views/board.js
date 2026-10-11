@@ -1,4 +1,4 @@
-import { esc, attr, ticketCard, filterTickets, STATUS_ORDER, STATUS_LABELS, emptyState, normalizeSnapshot } from '../components.js';
+import { esc, attr, icon, ticketCard, filterTickets, STATUS_ORDER, STATUS_LABELS, emptyState, normalizeSnapshot } from '../components.js';
 import { canSelect, renderSelectToggle, selectableCard } from './bulk.js';
 
 export const BOARD_PAGE_SIZE = 40;
@@ -30,7 +30,7 @@ export function renderBoard(rawSnapshot, filters, { now, layout = 'columns', tog
     return `<section class="column" data-column="${attr(status)}" data-collapsed="${collapsed ? 'true' : 'false'}" aria-labelledby="col-${attr(status)}">
   <header class="column-head">
     <h3 id="col-${attr(status)}">${esc(STATUS_LABELS[status])} <span class="count" aria-label="${esc(all.length)} ticket${all.length === 1 ? '' : 's'}">${esc(all.length)}</span></h3>
-    <button type="button" class="btn small" data-action="toggle-column" data-column="${attr(status)}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${attr(`${collapsed ? 'Show' : 'Hide'} ${STATUS_LABELS[status]}`)}">${collapsed ? 'Show' : 'Hide'}</button>
+    <button type="button" class="btn small ghost${collapsed ? '' : ' icon-only'}" data-action="toggle-column" data-column="${attr(status)}" aria-expanded="${collapsed ? 'false' : 'true'}" aria-label="${attr(`${collapsed ? 'Show' : 'Hide'} ${STATUS_LABELS[status]}`)}" title="${attr(`${collapsed ? 'Show' : 'Hide'} ${STATUS_LABELS[status]}`)}">${collapsed ? 'Show' : icon('x')}</button>
   </header>
   <div class="column-body">${cards || (collapsed ? '' : '<p class="muted small empty-column">Empty</p>')}${!collapsed && more > 0 ? `<button type="button" class="btn small" data-action="column-page" data-column="${attr(status)}" data-page="${page + 1}">Show ${more > BOARD_PAGE_SIZE ? BOARD_PAGE_SIZE : more} more</button>` : ''}</div>
 </section>`;
