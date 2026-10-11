@@ -200,16 +200,19 @@ function withOps(plan) {
   return { plan, ops: plan.steps.map((s) => s.op) };
 }
 
-// Phase 1. Returns { plan, files, context } for the first executor run.
-export function beginArtifactPublish(publisher, rows, { prior = null, now }) {
+// Phase 1. Returns { plan, files, context } for the first executor run. `runRecipes` are the
+// recipes a run_agent page offers (ADR 0025); each row then carries an empty `run` field that a
+// page editor's pick changes, and the next publish clears again.
+export function beginArtifactPublish(publisher, rows, { prior = null, now, runRecipes = [] }) {
   const twoWay = publisher.two_way === true;
-  const page = renderArtifactPage({ title: publisher.title ?? publisher.name, fields: publisher.fields, twoWay });
+  const runAgent = twoWay && publisher.run_agent === true;
+  const page = renderArtifactPage({ title: publisher.title ?? publisher.name, fields: publisher.fields, twoWay, runRecipes: runAgent ? runRecipes : [] });
   const pageHash = crypto.createHash('sha256').update(page).digest('hex');
-  const local = Object.fromEntries(rows.map((r) => [docId(r.key), r]));
+  const local = Object.fromEntries(rows.map((r) => [docId(r.key), runAgent ? { ...r, run: '' } : r]));
   const meta = { title: publisher.title ?? publisher.name, fields: publisher.fields, published_at: now, publisher: publisher.name, generator: 'session-quill' };
   const url = (prior && prior.url) || publisher.url || null;
   const publishStep = { op: 'publish', file: 'page.html', title: meta.title, capabilities: twoWay ? { ...PAGE_CAPABILITIES, user: {} } : PAGE_CAPABILITIES };
-  const editable = twoWay ? ['status', 'next'].filter((f) => publisher.fields.includes(f)) : null;
+  const editable = twoWay ? [...['status', 'next'].filter((f) => publisher.fields.includes(f)), ...(runAgent ? ['run'] : [])] : null;
   const keys = Object.fromEntries(rows.filter((r) => r._ticket).map((r) => [r.key, r._ticket.id]));
   const base = { url, page_hash: pageHash, local, last: (prior && prior.rows) || {}, meta, now, rows: rows.length, two_way: twoWay, editable, keys, seen_comments: (prior && prior.seen_comments) || [] };
   if (!url) {
@@ -272,8 +275,8 @@ function summarize({ added, updated, out, foreign = 0, missing = 0 }, kept) {
 }
 
 // The headless executor path: run every phase through `client.run`.
-export async function publishArtifact(publisher, rows, { client, prior = null, now }) {
-  let step = beginArtifactPublish(publisher, rows, { prior, now });
+export async function publishArtifact(publisher, rows, { client, prior = null, now, runRecipes = [] }) {
+  let step = beginArtifactPublish(publisher, rows, { prior, now, runRecipes });
   for (;;) {
     const { result, dir } = await client.run(step.plan, step.files);
     const next = continueArtifactPublish(step.context, result, dir);

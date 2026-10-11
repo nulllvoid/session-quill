@@ -13,13 +13,14 @@ const FIELD_ALIASES = { next_action: 'next', last_activity: 'updated', prs: 'pr'
 export const DEFAULT_PUBLISH_FIELDS = ['key', 'title', 'status', 'next', 'pr', 'deployments', 'updated'];
 export const KIND_LABELS = { artifact: 'Live', html: 'Copy', markdown: 'Note' };
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+const RECIPE_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
 export const ARTIFACT_URL_RE = /^https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9-]+(?:[/?#][^\s"'<>]*)?$/;
 
 // What the owner consents to (ADR 0010): the destination and what is sent there. Changing the path or
-// URL, the fields, the projects, links or two-way makes it a new consent. A fingerprint, so neither
-// the snapshot nor the journal carries the local path.
+// URL, the fields, the projects, links, two-way or Run agent (ADR 0025) makes it a new consent. A
+// fingerprint, so neither the snapshot nor the journal carries the local path.
 export function consentId(p) {
-  const scope = { d: destinationOf(p), f: [...(p.fields ?? [])].sort(), p: p.projects ? [...p.projects].sort() : null, l: !!p.include_links, t: !!p.two_way };
+  const scope = { d: destinationOf(p), f: [...(p.fields ?? [])].sort(), p: p.projects ? [...p.projects].sort() : null, l: !!p.include_links, t: !!p.two_way, ...(p.run_agent === true ? { r: true } : {}) };
   return crypto.createHash('sha256').update(JSON.stringify(scope)).digest('hex').slice(0, 16);
 }
 
@@ -69,7 +70,19 @@ export function normalizePublishers(config = {}) {
     const executor = p.kind === 'artifact' ? (p.executor ?? 'session') : null;
     if (p.kind === 'artifact' && !['session', 'cli'].includes(executor)) { warnings.push(`${where}: executor must be session or cli`); return; }
     const title = typeof p.title === 'string' && p.title.trim() ? p.title.trim().slice(0, 120) : p.name;
-    publishers.push({ name: p.name, kind: p.kind, fields, projects: projects && projects.length ? [...projects] : null, include_links: p.include_links === true, path: target, url, title, after_reconcile: on.includes('reconcile'), executor, two_way: p.kind === 'artifact' && p.two_way === true });
+    const twoWay = p.kind === 'artifact' && p.two_way === true;
+    // Run agent (ADR 0025): page editors may propose runs; the owner approves each one.
+    const lists = {};
+    for (const k of ['run_recipes', 'auto_run_editors', 'auto_run_recipes']) {
+      const v = p[k] ?? [];
+      if (!Array.isArray(v) || v.some((x) => typeof x !== 'string' || !x.trim() || x.length > 200)) { warnings.push(`${where}: ${k} must be a list of names`); return; }
+      lists[k] = [...new Set(v.map((x) => x.trim()))];
+    }
+    const badRecipe = [...lists.run_recipes, ...lists.auto_run_recipes].find((x) => !RECIPE_NAME_RE.test(x));
+    if (badRecipe) { warnings.push(`${where}: "${badRecipe.slice(0, 40)}" is not a recipe name`); return; }
+    if (p.run_agent === true && !twoWay) warnings.push(`${where}: run_agent needs two_way = true on an artifact publisher; ignored`);
+    const runAgent = twoWay && p.run_agent === true;
+    publishers.push({ name: p.name, kind: p.kind, fields, projects: projects && projects.length ? [...projects] : null, include_links: p.include_links === true, path: target, url, title, after_reconcile: on.includes('reconcile'), executor, two_way: twoWay, run_agent: runAgent, run_recipes: runAgent ? lists.run_recipes : [], auto_run_editors: runAgent ? lists.auto_run_editors : [], auto_run_recipes: runAgent ? lists.auto_run_recipes : [] });
     names.add(p.name);
   });
   return { publishers, warnings };

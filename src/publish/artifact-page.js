@@ -3,13 +3,13 @@
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 // Page code only a two-way page carries (ADR 0011): editors' controls and the viewer's identity.
-const EDIT_JS = `function save(r, field, value) {
+const EDIT_JS = `function save(r, field, value, done) {
   const edits = {};
   edits[field] = { by: uid, at: new Date().toISOString() };
   const patch = { _edits: edits };
   patch[field] = value;
   dbRef.doc('tickets/' + r.__id).update(patch).then(() => {
-    document.getElementById('status').textContent = 'Saved. Session Quill applies it on its next publish.';
+    document.getElementById('status').textContent = done || 'Saved. Session Quill applies it on its next publish.';
   }, (e) => { document.getElementById('status').textContent = 'Could not save (' + (e && e.code ? e.code : 'error') + ').'; });
 }
 function editCell(r) {
@@ -32,6 +32,15 @@ function editCell(r) {
     btn.addEventListener('click', () => save(r, 'next', input.value.trim()));
     td.append(input, btn);
   }
+  if (EDITABLE.includes('run') && RUN_RECIPES.length) {
+    // Run agent (ADR 0025): a pick only proposes a run; the owner approves it in Session Quill.
+    const run = node('select');
+    run.setAttribute('aria-label', 'Run agent on ' + r.key);
+    const none = node('option', 'Run agent…'); none.value = ''; run.append(none);
+    for (const name of RUN_RECIPES) { const o = node('option', name); o.value = name; if (name === r.run) o.selected = true; run.append(o); }
+    run.addEventListener('change', () => { if (run.value) save(r, 'run', run.value, 'Proposed. Session Quill asks the owner to approve it on its next publish.'); });
+    td.append(run);
+  }
   return td;
 }
 `;
@@ -42,14 +51,19 @@ const USER_JS = `if (db && EDITABLE.length) {
 }
 `;
 
+// Recipe names only (ADR 0008), so a name can never break out of the page's script.
+const RECIPE_NAME_RE = /^[a-z][a-z0-9-]{0,39}$/;
+
 export const PAGE_CAPABILITIES = { db: { rules: [{ path: '', read: 'view', write: 'admin' }] } };
 
 const LABELS = { key: 'Key', title: 'Title', status: 'Status', category: 'Category', priority: 'Priority', next: 'Next', blocker: 'Blocker', due: 'Due', updated: 'Updated', pr: 'PRs', deployments: 'Deployments', stale: 'Stale', external: 'Tracker' };
 
 // twoWay (ADR 0011): editors get status and next-action controls; each edit records who and when,
-// and Session Quill brings it back as a revision-checked request on its next publish.
-export function renderArtifactPage({ title, fields, twoWay = false }) {
-  const editable = twoWay ? ['status', 'next'].filter((f) => fields.includes(f)) : [];
+// and Session Quill brings it back as a revision-checked request on its next publish. runRecipes
+// (ADR 0025): the recipes a two-way page's Run agent select offers; a pick becomes a proposal.
+export function renderArtifactPage({ title, fields, twoWay = false, runRecipes = [] }) {
+  const run = twoWay ? runRecipes.filter((n) => typeof n === 'string' && RECIPE_NAME_RE.test(n)) : [];
+  const editable = twoWay ? [...['status', 'next'].filter((f) => fields.includes(f)), ...(run.length ? ['run'] : [])] : [];
   const cols = fields.filter((f) => f !== 'status');
   return `<title>${esc(title)}</title>
 <style>
@@ -83,6 +97,7 @@ td.edit :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; 
 <script type="module">
 const COLS = ${JSON.stringify(cols)};
 const EDITABLE = ${JSON.stringify(editable)};
+const RUN_RECIPES = ${JSON.stringify(run)};
 let canEdit = false;
 let uid = null;
 let dbRef = null;

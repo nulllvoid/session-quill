@@ -13,6 +13,7 @@ import { normalizePublishers, consentId, KIND_LABELS } from '../publish/config.j
 import { rowsFor } from '../publish/content.js';
 import { publishMarkdown, publishHtml } from '../publish/writers.js';
 import { publishArtifact, editRequestId } from '../publish/artifact.js';
+import { proposalFromEdit, runChoices, autoApprovalId } from '../publish/run-proposals.js';
 import { createArtifactClient } from '../publish/artifact-client.js';
 import { createTrackerClient, syncSettings, syncable } from '../tracker/client.js';
 import { onboardSettings } from '../onboard/settings.js';
@@ -40,19 +41,40 @@ function previousDate(date) {
   return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
 }
 
+// A Run agent pick (ADR 0025) becomes a proposal and nothing more. Only when the owner allowlisted
+// both the editor and a read-only recipe for this publisher is it approved at once, under the
+// publisher's auto-run actor, through the same request path as the dashboard's Approve.
+export function proposeRun(worker, publisher, e) {
+  const ticket = worker.state.tickets.get(e.ticket_id);
+  if (!ticket) { worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} names an unknown ticket`); return; }
+  const out = proposalFromEdit(publisher, e, { recipes: catalogFor(worker), ticket, repoRegistered: !!repoFor(worker.state, ticket.repo_id) });
+  if (out.skip) return;
+  if (out.error) { worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} refused: ${out.error}`); return; }
+  const { result } = worker.emit('run-proposal', out.proposal, { source_identity: `run-proposal:${out.proposal.id}`, ticket_id: ticket.id });
+  if (result.rejected) { worker.log(`publish ${publisher.name}: Run agent pick on ${e.key} not recorded: ${result.rejected}`); return; }
+  // A retry after a crash between the two steps still approves it: the request id is per proposal.
+  if (!out.proposal.auto || (worker.state.runProposals.get(out.proposal.id) ?? {}).state !== 'proposed') return;
+  try {
+    submitRequest(worker, { id: autoApprovalId(out.proposal.id), kind: 'approve-run', target_id: ticket.id, expected_revision: null, payload: { proposal_id: out.proposal.id } }, { actor: `auto-run:${publisher.name}` });
+  } catch (err) {
+    worker.log(`publish ${publisher.name}: auto-run of ${out.proposal.recipe.name} on ${e.key} refused: ${err.message}`);
+  }
+}
+
 // Two-way artifacts (ADR 0011): page edits become revision-checked requests with the normal undo
 // window; comments join their ticket's timeline. Invalid edits (an unknown status) are skipped.
 export function applyFeedback(worker, publisher, done) {
   for (const e of done.edits ?? []) {
+    if (e.field === 'run') { proposeRun(worker, publisher, e); continue; }
     const body = e.field === 'status' ? { kind: 'set-status', payload: { status: e.value } } : { kind: 'set-next-action', payload: { next_action: String(e.value ?? '') } };
     try {
-      submitRequest(worker, { id: editRequestId(publisher, e), target_id: e.ticket_id, expected_revision: e.expected_revision, ...body }, { actor: `artifact:${publisher}` });
+      submitRequest(worker, { id: editRequestId(publisher.name, e), target_id: e.ticket_id, expected_revision: e.expected_revision, ...body }, { actor: `artifact:${publisher.name}` });
     } catch (err) {
-      worker.log(`publish ${publisher}: page edit of ${e.key} ${e.field} refused: ${err.message}`);
+      worker.log(`publish ${publisher.name}: page edit of ${e.key} ${e.field} refused: ${err.message}`);
     }
   }
   for (const c of done.comments ?? []) {
-    worker.emit('artifact-comment', { publisher, ...c }, { source_identity: `artifact-comment:${publisher}:${c.comment_id}` });
+    worker.emit('artifact-comment', { publisher: publisher.name, ...c }, { source_identity: `artifact-comment:${publisher.name}:${c.comment_id}` });
   }
 }
 
@@ -189,7 +211,7 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
             const sidecar = path.join(quillHome(worker.env), 'publish', p.name, 'state.json');
             const prior = readJsonIfExists(sidecar);
             try {
-              out = await publishArtifact(p, rowsFor(snapshot, p, { exportedAt: now }), { client: artifactClientFor(p, worker), prior: prior && (!p.url || prior.url === p.url) ? prior : null, now });
+              out = await publishArtifact(p, rowsFor(snapshot, p, { exportedAt: now }), { client: artifactClientFor(p, worker), prior: prior && (!p.url || prior.url === p.url) ? prior : null, now, runRecipes: runChoices(catalogFor(worker), p) });
             } catch (err) {
               // A page that was created before the failure is kept, so the next publish updates it.
               if (err.url && !(prior && prior.url === err.url)) writeJsonAtomic(sidecar, { url: err.url, page_hash: null, rows: {}, seen_comments: [] });
@@ -197,7 +219,7 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
             }
             // Edits and comments are journaled before the state that acknowledges them is saved; their
             // ids are derived from the edits, so a retry after a crash in between makes no duplicates.
-            applyFeedback(worker, p.name, out);
+            applyFeedback(worker, p, out);
             writeJsonAtomic(sidecar, out.state);
           }
           worker.emit('publish-run', { ...base, outcome: 'ok', summary: out.summary, url: out.url ?? null }, { source_identity: `publish-run:${run_id}:${p.name}` });
