@@ -670,7 +670,8 @@ test('navigation is grouped, Runs has a live count and an attention dot, phones 
   const s = { ...base, handoffs: [{ ...base.handoffs[0], id: 'f', ticket_id: base.tickets[0].id, state: 'failed', finished_at: '2026-10-02T11:00:00Z' }] };
   const side = renderSidebar(s, { view: 'sessions', now: NOW });
   assert.match(side, /<span class="nav-caption">Work<\/span>[\s\S]*data-view="runs"[\s\S]*<span class="nav-caption">Track<\/span>/);
-  assert.match(side, /data-view="runs"[\s\S]*?class="attention-dot" role="img" aria-label="1 needs you"/);
+  assert.match(side, /aria-label="Runs, \d+ live, 1 needs you" data-view="runs"/);
+  assert.match(side, /data-view="runs"[\s\S]*?class="attention-dot" aria-hidden="true"/);
   assert.match(side, /data-view="sessions"[^>]*class="nav-item nav-overflow"|class="nav-item nav-overflow"[^>]*data-view="sessions"/);
   assert.match(side, /data-action="toggle-more" aria-expanded="false" aria-controls="more-sheet" aria-current="page"/, 'More is current when an overflow view is open');
   const open = renderSidebar(s, { view: 'board', now: NOW, moreOpen: true });

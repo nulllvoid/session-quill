@@ -24,8 +24,9 @@ export function logoSvg() {
 function navButton(item, { view, counts, needs }) {
   const [id, label, ic, key] = item;
   const badge = counts[id] ?? 0;
-  const dot = id === 'runs' && needs ? `<span class="attention-dot" role="img" aria-label="${attr(`${needs} need${needs === 1 ? 's' : ''} you`)}"></span>` : '';
-  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${esc(label)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}">${icon(ic)}<span class="nav-label">${esc(label)}</span>${dot}<span class="badge" aria-label="${attr(`${badge} ${id === 'runs' ? 'live' : 'items'}, shortcut ${key}`)}" title="Shortcut ${key}">${esc(badge)}</span></button>`;
+  const dot = id === 'runs' && needs ? '<span class="attention-dot" aria-hidden="true"></span>' : '';
+  const name = id === 'runs' ? `${label}, ${badge} live${needs ? `, ${needs} need${needs === 1 ? 's' : ''} you` : ''}` : `${label}, ${badge} items`;
+  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${attr(name)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}">${icon(ic)}<span class="nav-label">${esc(label)}</span>${dot}<span class="badge" aria-hidden="true" title="Shortcut ${key}">${esc(badge)}</span></button>`;
 }
 
 function navGroups(opts) {

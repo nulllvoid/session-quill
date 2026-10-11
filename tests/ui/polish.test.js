@@ -66,7 +66,7 @@ test('#10 sidebar badges count what each view shows under the active filters', (
   assert.equal(counts.board, 2);
   assert.equal(counts.tree, 2);
   const side = renderSidebar(s, { view: 'board', filters });
-  assert.match(side, /data-view="board"[^]*?<span class="badge" aria-label="2 items/);
+  assert.match(side, /aria-label="Board, 2 items" data-view="board"/);
   assert.equal(viewCounts(s, EMPTY_FILTERS).picknext, 5);
 });
 
