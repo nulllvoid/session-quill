@@ -25,8 +25,20 @@ export function applyTrackerSync(state, ev, result) {
   // itself is a separate ticket-update; this records what the resolver found and when.
   for (const r of Array.isArray(p.resolutions) ? p.resolutions : []) {
     const t = r && state.tickets.get(r.ticket_id);
-    if (!t || !RESOLUTION_STATES.includes(r.state)) continue;
-    const next = { state: r.state, repo_id: r.repo_id ?? null, remote: r.remote ?? null, existing_path: r.existing_path ?? null, rule: r.rule ?? null, via: r.via ?? null, checked_at: p.synced_at ?? ev.occurred_at };
+    if (!t) continue;
+    const checkedAt = p.synced_at ?? ev.occurred_at;
+    // A failed read of the issue's hints keeps what was known, moves the ticket to the back of the
+    // queue and, when the tracker said not found or forbidden, waits before asking again.
+    if (r.failed === true) {
+      const prev = t.repo_resolution ?? { state: 'none', repo_id: null, remote: null, existing_path: null, rule: null, via: null };
+      const failures = (prev.failures ?? 0) + 1;
+      const backoff = r.error_kind === 'not-found' || r.error_kind === 'forbidden' ? Math.min(RESOLVE_BACKOFF_MS * 2 ** (failures - 1), RESOLVE_BACKOFF_MAX_MS) : 0;
+      t.repo_resolution = { ...prev, checked_at: checkedAt, error: String(r.error ?? 'unknown error').slice(0, 300), error_kind: r.error_kind ?? 'error', failures, retry_after: backoff ? new Date(Date.parse(checkedAt) + backoff).toISOString().replace(/\.\d{3}Z$/, 'Z') : null };
+      result.changed.add(t.id);
+      continue;
+    }
+    if (!RESOLUTION_STATES.includes(r.state)) continue;
+    const next = { state: r.state, repo_id: r.repo_id ?? null, remote: r.remote ?? null, existing_path: r.existing_path ?? null, rule: r.rule ?? null, via: r.via ?? null, checked_at: checkedAt, error: null, error_kind: null, failures: 0, retry_after: null };
     const prev = t.repo_resolution ?? null;
     const same = prev && prev.state === next.state && prev.repo_id === next.repo_id && prev.remote === next.remote && prev.existing_path === next.existing_path;
     t.repo_resolution = next;
@@ -39,6 +51,9 @@ export function applyTrackerSync(state, ev, result) {
 }
 
 export const RESOLUTION_STATES = ['linked', 'needs-clone', 'none'];
+// Back-off after a hint read the tracker answered with not found or forbidden: 1 day, doubling, at most 7.
+export const RESOLVE_BACKOFF_MS = 24 * 3_600_000;
+export const RESOLVE_BACKOFF_MAX_MS = 7 * 24 * 3_600_000;
 
 // A confirmed write to the ticket's tracker issue (ADR 0018), or its failure. Only the timeline
 // records it: the ticket's own fields and revision are untouched.

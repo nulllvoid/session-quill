@@ -97,11 +97,12 @@ export async function importAssigned(worker, client, tracker) {
 export const RESOLVE_LIMIT = 25;
 
 // Resolves the repository of open tickets linked to this tracker that have none, least recently
-// checked first. Tickets marked quill/no-code are skipped. A ticket whose hints cannot be read is
-// left for the next run.
+// checked first. Tickets marked quill/no-code are skipped, and so are tickets whose last hint read
+// was refused (not found or forbidden) until their back-off ends.
 export async function resolveTickets(worker, client, tracker, onboard, { originOf } = {}) {
+  const now = worker.now();
   const candidates = [...worker.state.tickets.values()]
-    .filter((t) => syncable(t, tracker) && !t.repo_id && !(t.tags ?? []).includes(NO_CODE_TAG))
+    .filter((t) => syncable(t, tracker) && !t.repo_id && !(t.tags ?? []).includes(NO_CODE_TAG) && !(t.repo_resolution && t.repo_resolution.retry_after && t.repo_resolution.retry_after > now))
     .sort((a, b) => ((a.repo_resolution?.checked_at ?? '') < (b.repo_resolution?.checked_at ?? '') ? -1 : (a.repo_resolution?.checked_at ?? '') > (b.repo_resolution?.checked_at ?? '') ? 1 : a.key < b.key ? -1 : 1))
     .slice(0, RESOLVE_LIMIT);
   if (!candidates.length) return [];
@@ -110,7 +111,13 @@ export async function resolveTickets(worker, client, tracker, onboard, { originO
   const out = [];
   for (const t of candidates) {
     let hints;
-    try { hints = await client.repoHints(t.external.key); } catch (err) { worker.log(`tracker-sync: repository hints for ${t.external.key}: ${err.message}`); continue; }
+    try { hints = await client.repoHints(t.external.key); } catch (err) {
+      // Recorded, so the ticket goes to the back of the queue (and waits after not found or forbidden).
+      worker.log(`tracker-sync: repository hints for ${t.external.key}: ${err.message}`);
+      const kind = err.code === 'not-found' ? 'not-found' : /HTTP 40[13]/.test(err.message) ? 'forbidden' : 'error';
+      out.push({ ticket_id: t.id, failed: true, error: err.message, error_kind: kind });
+      continue;
+    }
     const r = resolveRepo({ ticket: t, hints, settings: onboard, repos, index, tracker });
     if (r.state === 'no-code') continue;
     out.push({ ticket_id: t.id, ...r });

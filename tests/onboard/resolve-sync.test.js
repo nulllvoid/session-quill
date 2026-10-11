@@ -119,3 +119,35 @@ test('quill ticket set --no-code yes|no marks a ticket as needing no repository,
     assert.ok(!t2.tags.includes('quill/no-code'));
   } finally { await w.stop(); }
 });
+
+test('a ticket whose hints cannot be read is recorded as checked, goes to the back of the queue, and waits after a 404 or 403', async () => {
+  const issue = { status: 200, body: { fields: { summary: 'x', status: { name: 'To Do' } } } };
+  const r = routes({
+    'PROJ-1?fields=summary': issue, 'PROJ-1?fields=project,components': { status: 404 },
+    'PROJ-2?fields=summary': issue, 'PROJ-2?fields=project,components': { status: 500 },
+    'PROJ-3?fields=summary': issue, 'PROJ-3?fields=project,components': { status: 200, body: { fields: { project: { key: 'PROJ' }, components: [] } } }, 'PROJ-3/remotelink': { status: 200, body: [] },
+  });
+  const s = scenario({ jobOpts: { trackerFetch: r.fetchImpl } });
+  s.config.tracker = { ...JIRA, auto_clone_dir: path.join(s.home, 'clones'), import_assigned: false, repo_map: { OTHER: 'demo' } };
+  s.env.JIRA_TOKEN = 'tok';
+  await s.start();
+  try {
+    for (const n of [1, 2, 3]) s.ingest('ticket-create', { ticket: { id: id(n), key: `PROJ-${n}`, title: `t${n}`, project_id: 'demo', category: 'feature', priority: 'P2', repo_id: null, external: { system: 'jira', key: `PROJ-${n}`, url: `https://example.atlassian.net/browse/PROJ-${n}`, validation: 'pending', validated_at: null, error: null } } });
+    s.w.tick();
+    const jobs = createJobs({ providers: null, trackerFetch: r.fetchImpl });
+    await jobs['tracker-sync'](s.w, { settings: { limit: 100 } });
+    const res = (n) => s.w.state.tickets.get(id(n)).repo_resolution;
+    assert.deepEqual([res(1).error_kind, res(1).failures, res(1).retry_after, res(1).state], ['not-found', 1, '2026-10-03T08:00:00Z', 'none']);
+    assert.deepEqual([res(2).error_kind, res(2).retry_after, typeof res(2).checked_at], ['error', null, 'string']);
+    assert.deepEqual([res(3).state, res(3).error], ['none', null]);
+    const hintCalls = (n) => r.calls.filter((c) => c.url.includes(`PROJ-${n}?fields=project`)).length;
+    s.advance(60_000);
+    await jobs['tracker-sync'](s.w, { settings: { limit: 100 } });
+    assert.deepEqual([hintCalls(1), hintCalls(2), hintCalls(3)], [1, 2, 2], 'the 404 waits; the 500 is retried');
+    s.advance(24 * 3_600_000);
+    await jobs['tracker-sync'](s.w, { settings: { limit: 100 } });
+    assert.equal(hintCalls(1), 2, 'asked again once the back-off ended');
+    assert.equal(res(1).failures, 2);
+    assert.equal(res(1).retry_after, '2026-10-05T08:01:00Z', 'the back-off doubles');
+  } finally { await s.stop(); }
+});
