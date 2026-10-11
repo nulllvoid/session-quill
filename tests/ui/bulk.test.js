@@ -55,15 +55,15 @@ test('Board and Pick next offer a Select toggle; in select mode every card has a
   assert.match(renderSelectToggle({ selecting: true, count: 2 }), /Done selecting \(2\)/);
 });
 
-test('the bulk action bar is a labelled toolbar with the count and the four actions, plus Undo all while edits can be undone', () => {
+test('the bulk action bar is a labelled group with the count and the four actions, plus Undo all while edits can be undone', () => {
   const html = renderBulkActionBar({ count: 5 });
-  assert.match(html, /<div class="bulk-bar" role="toolbar" aria-label="Bulk actions">/);
+  assert.match(html, /<div class="bulk-bar" role="group" aria-label="Bulk actions"/);
   assert.match(html, /<span class="bulk-count">5 selected<\/span>/);
   for (const [action, label] of [['bulk-handoff" data-mode="analyse', 'Analyze'], ['bulk-handoff" data-mode="attempt-fix', 'Attempt fix'], ['bulk-status', 'Change status'], ['bulk-clear', 'Clear']]) {
     assert.match(html, new RegExp(`data-action="${action}"[^>]*>(<svg[\\s\\S]*?</svg>)?${label}<`), label);
   }
   assert.doesNotMatch(html, /Undo all/);
-  assert.match(renderBulkActionBar({ count: 0, undo: 3 }), /data-action="bulk-undo-all"[^>]*>(<svg[\s\S]*?<\/svg>)?Undo all \(3\)/);
+  assert.match(renderBulkActionBar({ count: 0, undo: 3 }), /data-action="bulk-undo-all"[^>]*>(<svg[\s\S]*?<\/svg>)?Undo all \(<span class="bulk-undo-count">3<\/span>\)/);
   assert.doesNotMatch(renderBulkActionBar({ count: 0, undo: 3 }), /data-action="bulk-handoff"/, 'no actions on an empty selection');
 });
 
@@ -172,4 +172,50 @@ test('bulk runs get a progress strip per batch with Cancel batch while runs are 
   const finished = renderBatchStrips(s, ['old'], { canCancel: true });
   assert.doesNotMatch(finished, /cancel-batch/);
   assert.match(finished, /data-action="dismiss-batch"/);
+});
+
+test('x with ctrl, meta or alt held is left to the browser', async () => {
+  for (const mod of ['ctrlKey', 'metaKey', 'altKey']) assert.equal(selectionKey('x', { focusedId: 't1', [mod]: true }), null, mod);
+  assert.deepEqual(selectionKey('x', { focusedId: 't1', shiftKey: true }), { type: 'toggle', id: 't1' }, 'shift alone does not block it');
+});
+
+test('a bulk submit updates only its own results dialog and clears only the tickets it submitted', async () => {
+  const { batchDialogUpdate, withoutIds } = await import('../../ui/lib/bulk.js');
+  const rows = [{ ticketId: 'a', requestId: 'r1' }];
+  assert.deepEqual(batchDialogUpdate({ type: 'bulk-results', batchId: 'B', rows: [] }, 'B', rows), { type: 'bulk-results', batchId: 'B', rows });
+  assert.equal(batchDialogUpdate(null, 'B', rows), null, 'a closed dialog is not reopened');
+  const other = { type: 'bulk-results', batchId: 'C', rows: [] };
+  assert.equal(batchDialogUpdate(other, 'B', rows), other, 'another batch keeps its dialog');
+  const help = { type: 'help' };
+  assert.equal(batchDialogUpdate(help, 'B', rows), help);
+  assert.deepEqual([...withoutIds(new Set(['a', 'b', 'c']), ['a', 'c'])], ['b'], 'tickets checked meanwhile stay checked');
+});
+
+test('Undo all counts edits still being sent and keeps earlier bulk edits inside their window', async () => {
+  const { mergeUndo } = await import('../../ui/lib/bulk.js');
+  const requests = new Map([['a', { id: 'a', state: 'pending' }], ['b', { id: 'b', state: 'applied' }], ['s', { id: 's', state: 'sending' }]]);
+  assert.deepEqual(pendingUndo(requests, ['a', 'b', 's']), ['a', 's'], 'a request still being sent can be undone once it lands');
+  assert.deepEqual(mergeUndo(requests, ['a', 'b'], ['n1', 'n2']), ['a', 'n1', 'n2'], 'a second bulk change adds to the set');
+  assert.deepEqual(mergeUndo(requests, ['a'], ['a']), ['a'], 'no duplicates');
+});
+
+test('changing filters drops checked tickets the filters now hide', async () => {
+  const { pruneChecked } = await import('../../ui/lib/bulk.js');
+  const s = bulkSnapshot();
+  const all = new Set([1, 4, 5].map(TID));
+  const key = s.tickets.find((t) => t.id === TID(1)).key;
+  const kept = pruneChecked(s, all, { q: key });
+  assert.deepEqual([...kept], [TID(1)]);
+  assert.equal(pruneChecked(s, all, {}).size, 3, 'no filter, nothing hidden');
+});
+
+test('the bulk bar is a labelled group whose count can change without replacing its buttons', async () => {
+  const { bulkBarShape } = await import('../../ui/views/bulk.js');
+  const html = renderBulkActionBar({ count: 3 });
+  assert.match(html, /<div class="bulk-bar" role="group" aria-label="Bulk actions" data-shape="[^"]+">/);
+  assert.doesNotMatch(html, /role="toolbar"/, 'no toolbar role without roving focus');
+  assert.equal(bulkBarShape({ count: 3, undo: 0 }), bulkBarShape({ count: 7, undo: 0 }), 'a new count keeps the same buttons');
+  assert.notEqual(bulkBarShape({ count: 3, undo: 0 }), bulkBarShape({ count: 3, undo: 2 }));
+  assert.notEqual(bulkBarShape({ count: 3, undo: 0 }), bulkBarShape({ count: 0, undo: 2 }));
+  assert.match(renderBulkActionBar({ count: 0, undo: 2 }), /<span class="bulk-undo-count">2<\/span>/);
 });

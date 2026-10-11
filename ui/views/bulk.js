@@ -17,13 +17,21 @@ export function selectableCard(cardHtml, ticket, { checked = false } = {}) {
   return `<div class="card-pick"><input type="checkbox" class="card-check" data-check="${attr(ticket.id)}" aria-label="${attr(`Select ${ticket.key} ${ticket.title}`)}"${checked ? ' checked' : ''}>${cardHtml}</div>`;
 }
 
+// Which buttons the bar holds. While it stays the same, the shell updates the counts in place, so
+// focus stays on the button the owner is on and the entrance animation does not replay.
+export function bulkBarShape({ count = 0, undo = 0 } = {}) {
+  return `${count ? 'actions' : 'none'}-${undo ? 'undo' : 'no-undo'}`;
+}
+
+// A labelled group, not a toolbar: a toolbar promises arrow-key roving focus, and these few
+// buttons are reached with Tab like any other.
 export function renderBulkActionBar({ count = 0, undo = 0 } = {}) {
   const actions = count ? `<button type="button" class="btn small" data-action="bulk-handoff" data-mode="analyse">${icon('analysis')}Analyze</button>
   <button type="button" class="btn small" data-action="bulk-handoff" data-mode="attempt-fix">${icon('play')}Attempt fix</button>
   <button type="button" class="btn small" data-action="bulk-status">Change status</button>
   <button type="button" class="btn small ghost" data-action="bulk-clear">Clear</button>` : '';
-  const undoBtn = undo ? `<button type="button" class="btn small" data-action="bulk-undo-all">${icon('undo')}Undo all (${esc(undo)})</button>` : '';
-  return `<div class="bulk-bar" role="toolbar" aria-label="Bulk actions">${count ? `<span class="bulk-count">${esc(count)} selected</span>` : ''}${actions}${undoBtn}</div>`;
+  const undoBtn = undo ? `<button type="button" class="btn small" data-action="bulk-undo-all">${icon('undo')}Undo all (<span class="bulk-undo-count">${esc(undo)}</span>)</button>` : '';
+  return `<div class="bulk-bar" role="group" aria-label="Bulk actions" data-shape="${bulkBarShape({ count, undo })}">${count ? `<span class="bulk-count">${esc(count)} selected</span>` : ''}${actions}${undoBtn}</div>`;
 }
 
 const ENTRY_LABELS = { ready: 'Ready', running: 'Already running', 'no-repo': 'No repo', 'not-eligible': 'Not eligible' };

@@ -13,8 +13,8 @@ import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderH
 import { createApi, uuidv4 } from './lib/api.js';
 import { createDashboardMotion } from './lib/motion.js';
 import { renderRecipeRunDialog, effectiveRecipes } from './views/agents.js';
-import { renderBulkActionBar, renderBulkHandoffForm, renderBulkResults, renderBulkStatusDialog, renderBatchStrips } from './views/bulk.js';
-import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, activeBatches } from './lib/bulk.js';
+import { renderBulkActionBar, bulkBarShape, renderBulkHandoffForm, renderBulkResults, renderBulkStatusDialog, renderBatchStrips } from './views/bulk.js';
+import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, mergeUndo, batchDialogUpdate, withoutIds, pruneChecked, activeBatches } from './lib/bulk.js';
 
 const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today'];
 const POLL_VISIBLE_MS = 2000;
@@ -48,6 +48,8 @@ const appState = {
   checkAnchor: null,
   batches: [],
   bulkUndo: [],
+  // Request id -> the submit still sending it, so Undo all can cancel it once it lands.
+  sending: new Map(),
 };
 
 const BULK_VIEWS = new Set(['board', 'picknext']);
@@ -171,11 +173,24 @@ function render() {
 function renderBulkBar(s) {
   const host = $('#bulk');
   if (!host) return;
-  const visible = new Set((s.tickets ?? []).map((t) => t.id));
-  for (const id of appState.checked) if (!visible.has(id)) appState.checked.delete(id);
+  // Tickets the filters hide (or that left the snapshot) drop out of the selection (ADR 0023).
+  const kept = pruneChecked(s, appState.checked, appState.filters);
+  if (kept.size !== appState.checked.size) {
+    const hidden = appState.checked.size - kept.size;
+    appState.checked = kept;
+    announce(`${hidden} hidden ticket${hidden === 1 ? '' : 's'} removed from the selection; ${kept.size} selected`);
+  }
   const undo = pendingUndo(appState.requests, appState.bulkUndo).length;
   const show = BULK_VIEWS.has(appState.view) && (appState.checked.size > 0 || undo > 0);
-  setMarkup(host, show ? renderBulkActionBar({ count: appState.checked.size, undo }) : '');
+  const counts = { count: appState.checked.size, undo };
+  const bar = host.querySelector('.bulk-bar');
+  // Same buttons as before: update the numbers in place, keeping focus and skipping the entrance.
+  if (show && bar && bar.dataset.shape === bulkBarShape(counts)) {
+    const c = bar.querySelector('.bulk-count');
+    if (c) c.textContent = `${counts.count} selected`;
+    const u = bar.querySelector('.bulk-undo-count');
+    if (u) u.textContent = String(counts.undo);
+  } else setMarkup(host, show ? renderBulkActionBar(counts) : '');
   document.body.dataset.bulk = show ? 'on' : 'off';
 }
 
@@ -209,11 +224,13 @@ async function submitBulkHandoff(form) {
   for (const body of bodies) {
     const row = rows.find((r) => r.ticketId === body.target_id);
     row.requestId = uuidv4();
-    appState.dialog = { type: 'bulk-results', batchId, rows: rows.map((r) => ({ ...r })) };
+    // Only while the dialog still shows this batch: a closed dialog is not reopened.
+    appState.dialog = batchDialogUpdate(appState.dialog, batchId, rows.map((r) => ({ ...r })));
     await submit({ ...body, id: row.requestId }, { announceText: `${mode} queued for ${appState.snapshot.tickets.find((t) => t.id === body.target_id)?.key ?? 'a ticket'}` });
   }
   announce(`${bodies.length} run${bodies.length === 1 ? '' : 's'} requested as one batch`);
-  appState.checked = new Set();
+  // Tickets checked while the batch was being sent stay checked.
+  appState.checked = withoutIds(appState.checked, ids);
   render();
 }
 
@@ -228,9 +245,12 @@ function submitBulkStatus(form) {
   for (const { original, ...body } of bodies) {
     const id = uuidv4();
     ids.push(id);
-    submit({ ...body, id }, { original, announceText: `Status change queued; undo within 10 seconds` });
+    const sent = submit({ ...body, id }, { original, announceText: `Status change queued; undo within 10 seconds` });
+    appState.sending.set(id, sent);
+    sent.finally(() => appState.sending.delete(id));
   }
-  appState.bulkUndo = ids;
+  // Earlier bulk changes still inside their window stay in Undo all.
+  appState.bulkUndo = mergeUndo(appState.requests, appState.bulkUndo, ids);
   announce(`${bodies.length} status change${bodies.length === 1 ? '' : 's'} queued; Undo all within 10 seconds${skipped.length ? `; ${skipped.length} skipped` : ''}`);
   if (skipped.length) setReceipt(`Skipped ${skipped.length}: ${skipped.map((x) => `${ticketById(appState.snapshot, x.ticketId)?.key ?? x.ticketId} (${x.reason})`).join(', ')}`, 'neutral');
   render();
@@ -524,8 +544,9 @@ function handleAction(el) {
     case 'bulk-status': appState.dialog = { type: 'bulk-status' }; render(); break;
     case 'bulk-undo-all': {
       const ids = pendingUndo(appState.requests, appState.bulkUndo);
-      for (const id of ids) cancelRequest(id);
       announce(`Undoing ${ids.length} change${ids.length === 1 ? '' : 's'}`);
+      // A change still being sent is cancelled as soon as the server has it.
+      for (const id of ids) Promise.resolve(appState.sending.get(id)).then(() => { if (appState.requests.get(id)?.state === 'pending') cancelRequest(id); });
       break;
     }
     case 'cancel-batch': cancelBatch(el.dataset.batch); break;
@@ -707,7 +728,7 @@ function onKey(e) {
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
-  const bulkKey = BULK_VIEWS.has(appState.view) && appState.snapshot && appState.snapshot.capabilities && (appState.snapshot.capabilities.handoff || appState.snapshot.capabilities.edit_tickets) ? selectionKey(e.key, { focusedId: card ? card.dataset.ticket : null, checkedSize: appState.checked.size }) : null;
+  const bulkKey = BULK_VIEWS.has(appState.view) && appState.snapshot && appState.snapshot.capabilities && (appState.snapshot.capabilities.handoff || appState.snapshot.capabilities.edit_tickets) ? selectionKey(e.key, { focusedId: card ? card.dataset.ticket : null, checkedSize: appState.checked.size, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey }) : null;
   if (bulkKey && bulkKey.type === 'toggle') {
     e.preventDefault();
     setChecked(toggleChecked(appState.checked, bulkKey.id), { anchor: bulkKey.id });

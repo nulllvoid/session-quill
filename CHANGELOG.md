@@ -26,6 +26,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- Dashboard bulk selection: a bulk run no longer reopens its results dialog after you close it or overwrite another batch's, and clears only the tickets it submitted. **Undo all** also covers changes still being sent and keeps earlier bulk changes inside their window. Changing filters drops checked tickets they hide. `x` with ctrl, meta or alt is left to the browser. The bulk bar is a labelled group and updates its count in place, keeping focus and not replaying its entrance.
 - Queued runs of a built-in recipe no longer fail with `recipe-changed` after an upgrade changes the built-in's text; they run the current built-in. Personal and repository recipes still must match the hash that was reviewed.
 - `quill handoff cancel --batch` without a value no longer cancels the first run it finds; it, an empty batch id, and `quill handoff cancel` without a run id are usage errors.
 - Fix runs could reach Claude Code subagents (`Task`/`Agent`) under `settings` or `full` access, and a fix run's self-check turn was given them. Only read-only `analyse` and `analyse-followups` runs get subagents now, under every access level, and the self-check never does.
