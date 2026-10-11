@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { normalizeSnapshot, EMPTY_FILTERS, shortKey } from '../../ui/components.js';
 import { runTabs, needsYou, groupRuns, runFacts, supersededBy, defaultRunTab, visibleRunTabs, liveRunCount, needsYouCount, ticketRuns, RUN_TABS } from '../../ui/lib/runs.js';
 import { renderRuns, runRow } from '../../ui/views/runs.js';
+import { renderDetail } from '../../ui/views/detail.js';
 import { snapshot, TID } from './fixtures.js';
 
 const NOW = '2026-10-10T12:00:00Z';
@@ -107,9 +108,37 @@ test('a running run without a started_at says Running, with no elapsed time', ()
 test('running facts never claim an agent or test phase', () => {
   const r = run({ state: 'running', started_at: '2026-10-10T11:58:00Z', timings: { queue_wait_ms: 1000, worktree_ms: 4000 } });
   const facts = runFacts(snap([r]), r, NOW);
-  assert.match(facts[0], /^Running for /);
+  assert.equal(facts[0], 'Running for 2 min');
   assert.match(facts[1], /^setup /);
   assert.equal(facts.some((f) => /agent|tests?/i.test(f)), false);
+});
+
+test('running elapsed time is minute-granular', () => {
+  const at = (started) => { const r = run({ state: 'running', started_at: started }); return runFacts(snap([r]), r, NOW)[0]; };
+  assert.equal(at('2026-10-10T11:59:30Z'), 'Running for under a minute');
+  assert.equal(at('2026-10-10T11:58:31Z'), 'Running for 1 min');
+  assert.equal(at('2026-10-10T11:57:01Z'), 'Running for 2 min');
+  assert.equal(at('2026-10-10T10:55:00Z'), 'Running for 1 h 5 min');
+  assert.equal(at('2026-10-10T11:00:00Z'), 'Running for 1 h');
+});
+
+test('a running run renders identical Runs and ticket detail markup 2 s apart', () => {
+  const later = new Date(Date.parse(NOW) + 2000).toISOString();
+  const r = run({ state: 'running', requested_at: '2026-10-10T11:58:20Z', started_at: '2026-10-10T11:58:29Z', timings: { worktree_ms: 4000 } });
+  const s = snap([r]);
+  for (const tab of ['live', 'all']) assert.equal(renderRuns(s, EMPTY_FILTERS, { now: NOW, tab }), renderRuns(s, EMPTY_FILTERS, { now: later, tab }));
+  for (const tab of ['overview', 'runs']) assert.equal(renderDetail(s.tickets[0], s, { now: NOW, tab }), renderDetail(s.tickets[0], s, { now: later, tab }));
+});
+
+test('a failed run without an error message falls back to the test-gate outcome', () => {
+  const tf = run({ state: 'failed', test_gate: { status: 'failed' } });
+  assert.equal(runFacts(snap([tf]), tf, NOW)[0], 'Tests failed');
+  const tt = run({ state: 'failed', test_gate: { status: 'timeout' } });
+  assert.equal(runFacts(snap([tt]), tt, NOW)[0], 'Tests timed out');
+  const plain = run({ state: 'failed' });
+  assert.equal(runFacts(snap([plain]), plain, NOW)[0], 'Failed');
+  const msg = run({ state: 'failed', error: { message: 'boom' }, test_gate: { status: 'failed' } });
+  assert.equal(runFacts(snap([msg]), msg, NOW)[0], 'boom');
 });
 
 test('done and failed facts', () => {
@@ -173,6 +202,12 @@ test('proposals: open ones can be approved, expired ones cannot', () => {
   assert.doesNotMatch(html, /data-proposal="p2" aria-label="Approve/);
   assert.match(html, /data-proposal="p2"[^>]*data-state="expired"/);
   assert.match(html, /Expired · older than 7 days/);
+  const done = snap([], { run_proposals: [{ ...expired, ticket_id: TID(2) }] });
+  done.tickets.find((t) => t.id === TID(2)).status = 'done';
+  assert.match(renderRuns(done, EMPTY_FILTERS, { now: NOW, tab: 'all' }), /Expired · ticket is done/);
+  const missing = renderRuns(snap([], { run_proposals: [{ ...expired, ticket_id: 'gone' }] }), EMPTY_FILTERS, { now: NOW, tab: 'all' });
+  assert.match(missing, /Expired · ticket not found/);
+  assert.doesNotMatch(missing, /ticket is done/);
 });
 
 test('an export shows no Needs you tab and no controls', () => {

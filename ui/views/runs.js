@@ -24,7 +24,7 @@ export function runRow(snapshot, h, { now, tz, selected = false }) {
 function proposalRow(snapshot, p, { now, pending }) {
   if (p.state !== 'expired') return proposalItem(p, snapshot, { now, pending, withTicket: true }).replace('<li class="proposal"', '<li class="proposal run-row" data-state="proposed"');
   const t = ticketById(snapshot, p.ticket_id);
-  const why = !t || t.status === 'done' ? 'ticket is done' : 'older than 7 days';
+  const why = !t ? 'ticket not found' : t.status === 'done' ? 'ticket is done' : 'older than 7 days';
   return `<li class="proposal run-row" data-proposal="${attr(p.id)}" data-state="expired"><strong>${esc(p.recipe.name)}</strong> <span class="muted small">${t ? esc(t.key) : ''} proposed ${timeEl(p.proposed_at, now, snapshot.meta.timezone)}</span> <span class="chip small">Expired · ${esc(why)}</span></li>`;
 }
 

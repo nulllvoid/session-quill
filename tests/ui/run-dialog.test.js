@@ -18,8 +18,16 @@ test('step 1 shows a card per recipe with what it may do', () => {
   const s = snap();
   const html = renderRunAgentDialog(s.tickets[0], s, { recipe: null });
   assert.match(html, /data-action="run-agent-pick" data-ticket="[^"]+" data-recipe="analyse"/);
-  assert.match(html, /data-recipe="attempt-fix"[\s\S]*?Edits source/);
+  const card = (name) => new RegExp(`data-recipe="${name}"[^]*?</button>`).exec(html)[0];
+  assert.match(card('attempt-fix'), /<span class="chip small warning">Edits source<\/span>/);
+  assert.match(card('analyse'), /<span class="chip small">Reads source<\/span>/);
+  assert.match(card('standup'), /<span class="chip small">Notes only<\/span>/);
+  assert.doesNotMatch(html, /Reads only/);
   assert.match(html, /Standup &lt;b&gt;/);
+  const tidy = { name: 'tidy', source: 'personal', mode: 'files', description: 'Tidy', permissions: { edit_files: true }, timeout_min: 10, legacy: false, repo_id: null };
+  const withFiles = snap({ recipes: [...recipes, tidy] });
+  const files = renderRunAgentDialog({ ...withFiles.tickets[0], files_touched: ['C:/notes/a.txt'] }, withFiles, { recipe: null });
+  assert.match(/data-recipe="tidy"[\s\S]*?<\/button>/.exec(files)[0], /<span class="chip small warning">Changes files<\/span>/);
   assert.doesNotMatch(html, /<form/);
 });
 
@@ -30,6 +38,15 @@ test('step 2 is the recipe form with Advanced side effects, a summary and a Back
   assert.match(html, /<details class="advanced"><summary>Advanced: commit, push, PR<\/summary>[\s\S]*name="commit"/);
   assert.match(html, /<p class="run-summary"[^>]*>Edits in an isolated checkout · tests: npm test run by the worker · no commit, push or PR · applies its next action and follow-ups directly<\/p>/);
   assert.match(html, /data-action="run-agent-back"/);
+});
+
+test('Advanced options say what they require and start disabled until their parent is ticked', () => {
+  const html = renderRunAgentDialog(snap().tickets[0], snap(), { recipe: 'attempt-fix' });
+  assert.match(html, /<input type="checkbox" name="commit"> Commit locally <span class="muted small">\(requires edit source\)<\/span>/);
+  assert.match(html, /<input type="checkbox" name="push_branch" disabled> Push a branch <span class="muted small">\(requires commit; never a default or protected branch\)<\/span>/);
+  assert.match(html, /<input type="checkbox" name="open_draft_pr" disabled> Open a draft PR <span class="muted small">\(requires push branch\)<\/span>/);
+  const withProvider = snap({ repos: [{ ...REPO, test_command: 'npm test', provider: 'github' }] });
+  assert.match(renderRunAgentDialog(withProvider.tickets[0], withProvider, { recipe: 'attempt-fix' }), /name="open_draft_pr" disabled>/, 'PR stays disabled until Push is ticked, even with a provider');
 });
 
 test('runSummary says what the run will do', () => {

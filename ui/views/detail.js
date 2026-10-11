@@ -63,7 +63,7 @@ function runStrip(t, snapshot, { now, tz }) {
   const runs = ticketRuns(snapshot, t.id);
   const current = runs.find((h) => h.state === 'queued' || h.state === 'running') ?? runs[0];
   const caps = snapshot.capabilities ?? {};
-  if (!current) return caps.handoff && t.status !== 'done' ? `<div class="run-strip" data-empty="true"><span class="muted small">No agent runs yet</span> <button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}">${icon('play')}Run agent</button></div>` : '';
+  if (!current) return caps.handoff && t.status !== 'done' ? `<div class="run-strip" data-empty="true"><span class="muted small">No agent runs yet</span></div>` : '';
   const name = current.recipe ? current.recipe.name : current.mode;
   const open = openSuggestions(current).length;
   return `<button type="button" class="run-strip" data-action="open-run" data-run="${attr(current.id)}" aria-label="${attr(`Open run: ${name}, ${current.state}`)}">${handoffChip({ ...current, error: null })} <strong>${esc(name)}</strong> ${testGateBadge(current.test_gate)}${open ? ` <span class="chip small">${esc(open)} suggestion${open === 1 ? '' : 's'} to review</span>` : ''} <span class="muted small">${timeEl(current.requested_at, now, tz)}</span></button>`;

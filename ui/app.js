@@ -409,7 +409,8 @@ async function poll() {
     appState.online = true;
     appState.error = null;
     syncRequests(snap);
-    if (changed) { appState.content = {}; appState.contentStatus = Object.fromEntries(Object.entries(appState.contentStatus).filter(([, v]) => v === 'loading' || v === 'reloading')); appState.loadedTicket = null; }
+    // Content refs are content-addressed, so loaded text stays valid across generations.
+    if (changed) { appState.contentStatus = Object.fromEntries(Object.entries(appState.contentStatus).filter(([, v]) => v === 'loading' || v === 'reloading')); appState.loadedTicket = null; }
     render();
   } catch (err) {
     if (err.code === 'unauthenticated') { appState.error = err.message; appState.online = false; }
@@ -836,9 +837,9 @@ function onKey(e) {
   }
   if (e.key === 'Escape') {
     if (appState.moreOpen) { e.preventDefault(); appState.moreOpen = false; render(); $('.nav-more')?.focus(); return; }
+    if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
     const pop = document.querySelector('.health-pop[open]');
     if (pop) { e.preventDefault(); pop.open = false; pop.querySelector('summary')?.focus(); return; }
-    if (dialogOpen) { e.preventDefault(); closeDialog(); return; }
     if (appState.selected && !inInput) { e.preventDefault(); closeDetail(); return; }
     if (appState.selectedRun && !inInput) { e.preventDefault(); closeRun(); return; }
     if (!dialogOpen && selectionKey('Escape', { checkedSize: appState.checked.size }) && (!inInput || target.dataset.check)) { e.preventDefault(); setChecked(new Set(), { anchor: null }); return; }
@@ -906,6 +907,11 @@ function onChange(e) {
     const t = ticketById(appState.snapshot, runForm.dataset.ticket);
     const recipe = t ? effectiveRecipes(appState.snapshot, t.repo_id).find((r) => r.name === runForm.dataset.recipe) : null;
     const repo = t ? (appState.snapshot.repos ?? []).find((r) => r.id === t.repo_id) ?? null : null;
+    // Spec §5: Push needs Commit and a draft PR needs Push (and a PR provider); clearing a parent clears its dependants.
+    const box = (n) => runForm.querySelector(`input[name="${n}"]`);
+    const commit = box('commit'), push = box('push_branch'), pr = box('open_draft_pr');
+    if (push) { push.disabled = !(commit && commit.checked); if (push.disabled) push.checked = false; }
+    if (pr) { pr.disabled = !(push && push.checked) || !(repo && repo.provider); if (pr.disabled) pr.checked = false; }
     const fd = new FormData(runForm);
     const choices = Object.fromEntries(['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'].map((k) => [k, fd.get(k) === 'on' || !!runForm.querySelector(`[name="${k}"][disabled][checked]`)]));
     const out = runForm.querySelector('.run-summary');

@@ -439,9 +439,11 @@ test('the recipe run dialog shows what the run may do and pre-selects only sourc
   assert.match(fix, /name="branch"/);
   assert.match(fix, /applies its next action and follow-ups directly/);
   const hasProvider = !!(s.repos ?? []).find((r) => r.id === t.repo_id)?.provider;
-  assert.match(fix, hasProvider ? /name="open_draft_pr">/ : /name="open_draft_pr" disabled> Open a draft PR <span class="muted small">\(no PR provider configured/);
+  const noProvider = /\(no PR provider configured for this repository\)/;
+  assert.match(fix, /name="open_draft_pr" disabled> Open a draft PR <span class="muted small">\(requires push branch\)<\/span>/, 'PR starts disabled until Push is ticked');
+  (hasProvider ? assert.doesNotMatch : assert.match)(fix, noProvider);
   const other = { ...s, repos: (s.repos ?? []).map((r) => (r.id === t.repo_id ? { ...r, provider: hasProvider ? null : 'github' } : r)) };
-  assert.match(renderRecipeRunDialog(other.recipes.find((r) => r.name === 'attempt-fix'), t, other), hasProvider ? /name="open_draft_pr" disabled/ : /name="open_draft_pr">/, 'the box follows the repository provider');
+  (hasProvider ? assert.match : assert.doesNotMatch)(renderRecipeRunDialog(other.recipes.find((r) => r.name === 'attempt-fix'), t, other), noProvider, 'the provider note follows the repository provider');
   const standup = renderRecipeRunDialog(s.recipes.find((r) => r.source === 'repo' && r.name === 'standup'), t, s);
   assert.match(standup, /works from the ticket notes only/);
   assert.doesNotMatch(standup, /type="checkbox"/);
@@ -658,8 +660,10 @@ test('ticket detail: a run strip under the title and a Runs tab with runs, propo
   const idle = renderDetail(t, { ...s, handoffs: [done] }, { now: NOW, pending: [], content: {}, tab: 'runs' });
   assert.match(idle, /data-action="run-agent" data-ticket="[^"]+" data-recipe="analyse"/);
   const none = renderDetail(t, { ...s, handoffs: [] }, { now: NOW, pending: [], content: {} });
-  assert.match(none, /No agent runs yet/);
-  assert.match(none, /data-action="run-agent" data-ticket="[^"]+">/);
+  const strip = /<div class="run-strip" data-empty="true">[\s\S]*?<\/div>/.exec(none)[0];
+  assert.match(strip, /No agent runs yet/);
+  assert.doesNotMatch(strip, /data-action="run-agent"/, 'the empty strip has no button of its own');
+  assert.match(none, /class="status-controls"[\s\S]*?data-action="run-agent" data-ticket="[^"]+">/, 'the status controls keep Run agent');
 });
 
 test('navigation is grouped, Runs has a live count and an attention dot, phones get More', async () => {

@@ -12,8 +12,10 @@ export function renderRunAgentDialog(rawTicket, rawSnapshot, { recipe = null, re
   if (chosen) return renderRecipeRunDialog(chosen, ticket, snapshot, { retryOf });
   const cards = recipes.map((r) => {
     if (r.error) return `<li class="recipe-card" data-invalid="true"><strong>${esc(r.name)}</strong> <span class="small critical">${icon('alert')}Invalid: ${esc(r.error)}</span></li>`;
-    const edits = r.permissions && (r.permissions.edit_source || r.permissions.edit_files || r.permissions.delete_files);
-    return `<li><button type="button" class="recipe-card" data-action="run-agent-pick" data-ticket="${attr(ticket.id)}" data-recipe="${attr(r.name)}"${retryOf ? ` data-retry-of="${attr(retryOf)}"` : ''}><span class="recipe-card-head"><strong>${esc(r.name)}</strong> <span class="chip small">${esc(SOURCE_LABELS[r.source] ?? r.source)}</span> <span class="chip small${edits ? ' warning' : ''}">${edits ? 'Edits source' : 'Reads only'}</span></span><span class="small">${esc(r.description)}</span><span class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(r.timeout_min)} min</span></button></li>`;
+    const p = r.permissions ?? {};
+    const access = p.edit_source ? 'Edits source' : p.edit_files || p.delete_files ? 'Changes files' : p.read_source ? 'Reads source' : 'Notes only';
+    const edits = !!(p.edit_source || p.edit_files || p.delete_files);
+    return `<li><button type="button" class="recipe-card" data-action="run-agent-pick" data-ticket="${attr(ticket.id)}" data-recipe="${attr(r.name)}"${retryOf ? ` data-retry-of="${attr(retryOf)}"` : ''}><span class="recipe-card-head"><strong>${esc(r.name)}</strong> <span class="chip small">${esc(SOURCE_LABELS[r.source] ?? r.source)}</span> <span class="chip small${edits ? ' warning' : ''}">${access}</span></span><span class="small">${esc(r.description)}</span><span class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(r.timeout_min)} min</span></button></li>`;
   }).join('');
   return `<div class="dialog-form run-agent"><h2 id="dialog-title">${icon('play')}Run agent on ${keyEl(ticket.key)}</h2>
 <p class="muted small">${esc(ticket.title)}. Pick what to run; you choose its permissions next.</p>

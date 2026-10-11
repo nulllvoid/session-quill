@@ -13,6 +13,15 @@ const ALL_WINDOW_MS = 30 * DAY_MS;
 const newestFirst = (a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0);
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// Whole minutes only, so a running row's markup changes at most once a minute and a poll does not
+// rebuild the list (and drop focus) every 2 s.
+function runningFor(ms) {
+  const mins = Math.floor(ms / 60_000);
+  if (mins < 1) return 'Running for under a minute';
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return `Running for ${h ? `${h} h${m ? ` ${m} min` : ''}` : `${m} min`}`;
+}
+
 export function isStaticSnapshot(snapshot) {
   return !!(snapshot.meta && snapshot.meta.exported_at);
 }
@@ -106,7 +115,7 @@ export function runFacts(snapshot, h, now) {
     if (Number.isInteger(cap) && running.length >= cap) facts.push(`${fix ? 'fix' : 'read-only'} slots ${running.length}/${cap} in use`);
     if (fix && h.repo_id && running.some((x) => x.repo_id === h.repo_id)) facts.push('repository busy');
   } else if (h.state === 'running') {
-    facts.push(Number.isFinite(Date.parse(h.started_at)) ? `Running for ${formatDuration(Math.max(0, Date.parse(now) - Date.parse(h.started_at)))}` : 'Running');
+    facts.push(Number.isFinite(Date.parse(h.started_at)) ? runningFor(Math.max(0, Date.parse(now) - Date.parse(h.started_at))) : 'Running');
     if (h.timings && Number.isFinite(h.timings.worktree_ms)) facts.push(`setup ${formatDuration(h.timings.worktree_ms)}`);
   } else if (h.state === 'done') {
     const open = openSuggestions(h).length;
@@ -115,7 +124,8 @@ export function runFacts(snapshot, h, now) {
     if (h.pr_url) facts.push('draft PR opened');
     if (!facts.length) facts.push('Finished');
   } else {
-    facts.push(h.error && h.error.message ? h.error.message : h.state === 'cancelled' ? 'Cancelled' : h.state === 'timed-out' ? 'Timed out' : 'Failed');
+    const gate = h.test_gate && h.test_gate.status;
+    facts.push(h.error && h.error.message ? h.error.message : h.state === 'cancelled' ? 'Cancelled' : h.state === 'timed-out' ? 'Timed out' : gate === 'failed' ? 'Tests failed' : gate === 'timeout' ? 'Tests timed out' : 'Failed');
     const next = supersededBy(snapshot, h);
     if (next) facts.push(next.retried ? 'Retried as a new run' : 'Superseded by a later run');
   }

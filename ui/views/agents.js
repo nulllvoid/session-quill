@@ -170,8 +170,9 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
   const advanced = [];
   if (p.read_source) boxes.push(`<label><input type="checkbox" name="read_source" ${repo ? 'checked' : ''}${fix || !repo ? ' disabled' : ''}> Read source in an isolated checkout${repo ? '' : ' <span class="muted small">(no registered repository)</span>'}</label>`);
   if (p.edit_source) boxes.push(`<label><input type="checkbox" name="edit_source" ${repo ? 'checked' : ''} disabled> Edit source in that checkout <span class="muted small">(required by this recipe)</span></label>`);
-  if (p.commit) advanced.push('<label><input type="checkbox" name="commit"> Commit locally</label>');
-  if (p.push_branch) advanced.push('<label><input type="checkbox" name="push_branch"> Push a branch <span class="muted small">(never a default or protected branch)</span></label><label class="indent">Branch <input type="text" name="branch" placeholder="feat/agent-..." pattern="[A-Za-z0-9._/-]+"></label>');
+  // Each delivery step needs the one before it (spec §5); app.js enables a dependant when its parent is ticked.
+  if (p.commit) advanced.push('<label><input type="checkbox" name="commit"> Commit locally <span class="muted small">(requires edit source)</span></label>');
+  if (p.push_branch) advanced.push('<label><input type="checkbox" name="push_branch" disabled> Push a branch <span class="muted small">(requires commit; never a default or protected branch)</span></label><label class="indent">Branch <input type="text" name="branch" placeholder="feat/agent-..." pattern="[A-Za-z0-9._/-]+"></label>');
   if (recipe.mode === 'files') {
     const files = attachedFilePaths(ticket);
     boxes.push(`<p class="small">Works on copies of these attached files only; nothing else on this computer is in reach:</p><ul class="small run-files">${files.map((f) => `<li><code>${esc(f)}</code></li>`).join('')}</ul>`);
@@ -180,7 +181,7 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
   }
   // The worker refuses a draft PR without a PR provider, so the box is offered only when one is set.
   const provider = !!(repo && repo.provider);
-  if (p.open_draft_pr) advanced.push(`<label><input type="checkbox" name="open_draft_pr"${provider ? '' : ' disabled'}> Open a draft PR${provider ? '' : ' <span class="muted small">(no PR provider configured for this repository)</span>'}</label>`);
+  if (p.open_draft_pr) advanced.push(`<label><input type="checkbox" name="open_draft_pr" disabled> Open a draft PR <span class="muted small">(requires push branch)</span>${provider ? '' : ' <span class="muted small">(no PR provider configured for this repository)</span>'}</label>`);
   const blockers = runBlockers(ticket, snapshot, recipe);
   const blocked = blockers.some((b) => b.level === 'blocker');
   const defaults = { read_source: !!(p.read_source && repo), edit_source: !!(p.edit_source && repo) };

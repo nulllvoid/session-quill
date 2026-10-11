@@ -316,7 +316,7 @@ export function viewCounts(snapshot, filters = {}) {
     tree: tickets.filter((t) => !t.parent_id).length,
     sessions: filterSessions(snapshot, filters).filter((s) => s.state === 'live' || s.state === 'idle').length,
     deployments: snapshot.deployments_outstanding.filter((o) => ids.has(o.ticket_id)).length,
-    runs: (snapshot.handoffs ?? []).filter((h) => h.state === 'queued' || h.state === 'running').length,
+    runs: (snapshot.handoffs ?? []).filter((h) => (h.state === 'queued' || h.state === 'running') && ids.has(h.ticket_id)).length,
     today: today ? today.tickets.filter((t) => ids.has(t.ticket_id) || !ticketById(snapshot, t.ticket_id)).length : 0,
   };
 }
