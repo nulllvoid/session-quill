@@ -237,3 +237,39 @@ claude -p --output-format stream-json --verbose
 5. **`defer` for mid-flight approval.** `permissionDecision: "defer"` plus `--resume` could pause a run for owner approval instead of spawning a ticket. It is ignored with parallel tool calls and leaves a session on disk indefinitely. It needs a design decision against R6.
 6. **Inventory without a model call.** `--init-only` emitted nothing and `/mcp` in `-p` hung under Git Bash. Worth retesting from Node `spawn` (the worker's path) before relying on the `system/init` of real runs only.
 7. **Default changes.** If `--bare` becomes the `-p` default, connectors and plugins disappear silently. Gate on `claude_code_version` from init, and fail the run setup if `mcp_servers` is unexpectedly empty.
+
+## P0 results (2026-10-12)
+
+claude 2.1.296 (Claude Code), Windows 11, haiku, `node scripts/probe-autonomous.mjs` (exit 0). Setup: `-p --output-format stream-json --verbose --permission-mode dontAsk --permission-prompts none --max-turns 4 --settings <file>` with a PreToolUse hook (`onFailure: "block"`, matcher Bash|PowerShell|Monitor|mcp__.*|Read|Glob|Grep|Edit|Write|MultiEdit|NotebookEdit|Task|Agent) and no allow rules.
+
+| probe | verdict | note |
+| --- | --- | --- |
+| hookAllowBash | true | ok |
+| hookAllowPowerShell | true | ok |
+| hookAllowEdit | true | Write |
+| hookAllowMonitor | true | ok; Monitor in tools: true; hook saw: true |
+| hookDenyHonoured | true | deny reason reached the model as tool error |
+| onFailureBlock | true | crash w/o onFailure: Read ran=true; with block: Read ran=false |
+| settingsMergeWithPlugin | true | injected hook fired 1x; plugin hook events seen: true |
+| subagentsCarryGuard | true | agent called: true; parent Bash: false; hook saw subagent Bash: 1x |
+| initHasMcpSource | true | sources: plugin,claudeai; 25 servers |
+| credRedirectHonoured | true |  |
+| disableAutoMemory | true | with flag: 0 memory files; control without flag: 2 |
+| addDirReadable | true | result: PROBE-TOKEN-7731 |
+| maxBudgetFlag | true | flag accepted; cap 0.0005; result subtype "error_max_budget_usd" (0.01 was not exceeded by one short haiku reply) |
+| permissionPromptsNoneFlag | true | exit 0; flag accepted by this CLI |
+| timeoutBlock | true | hook sleep 15s, timeout 2, onFailure block: Read ran=false |
+| credRedirectHonoured.kubectl | n/a | CLI not installed on this machine |
+| credRedirectHonoured.aws | n/a | CLI not installed on this machine |
+| credRedirectHonoured.gcloud | n/a | CLI not installed on this machine |
+| credRedirectHonoured.az | n/a | CLI not installed on this machine |
+| credRedirectHonoured.psql | n/a | CLI not installed on this machine |
+| credRedirectHonoured.git | true | owner env had one; redirect hid it |
+
+Notes:
+- `--permission-prompts none` exists on 2.1.296 (choices host|none).
+- `onFailureBlock` was tested on a Read inside cwd (which dontAsk would otherwise allow): a crashing hook without `onFailure` let it run, with `onFailure: "block"` it was blocked; a hook sleeping 15 s with `timeout: 2` was also blocked.
+- `subagentsCarryGuard`: a Bash call made by a subagent reached the hook, so `Task`/`Agent` can be allowed when the recipe allows fan-out.
+- Credential redirect: only `git` is installed here (kubectl, aws, gcloud, az, psql absent: n/a). With `GIT_CONFIG_GLOBAL` stub and `GIT_CONFIG_NOSYSTEM=1` the owner's credential helper was hidden. `GIT_CONFIG_NOSYSTEM=1` is needed because Git for Windows sets the helper at system level; spec §4.4 should list it.
+- `maxBudgetFlag`: a 0.01 cap was not reached by one short haiku reply; 0.0005 produced `error_max_budget_usd`.
+- All required hook-allow probes passed, so no P0 fallback to spec §3 is needed.
