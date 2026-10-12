@@ -1,9 +1,9 @@
 // Per-run guard decisions (spec §4.1–4.3, §7.5). Turns a classification from prod-classify.js and
 // the run's frozen grant (src/handoff/grant.js) into allow or deny, with a reason that tells the
 // agent what to do instead. Synchronous, and side-effect free apart from realpath, lstat, readlink
-// and readdir lookups: every path is compared after links are resolved (ruling R10), and a shell
-// wildcard is expanded against the real directories, which is what stops a junction or symlink
-// inside the checkout from reaching past the run's roots.
+// and readdir lookups: every path is compared after links are resolved (ruling R10), and every
+// entry beside a shell wildcard is checked too (ruling R15), which is what stops a junction or
+// symlink inside the checkout from reaching past the run's roots.
 //
 // Order of checks in enforce mode (the first that fails decides the reason):
 //   1. MCP server source  — an untrusted server is refused whatever the call is
@@ -47,7 +47,6 @@ const WIN = process.platform === 'win32';
 // File names are compared case-insensitively where the usual file system ignores case.
 const NAMES_FOLD_CASE = WIN || process.platform === 'darwin';
 const MAX_LINK_HOPS = 32;
-const GLOB_META = /[*?[]/;
 const TOOL_NAME_SAFE = /^[A-Za-z0-9_-]+$/;
 
 const CRITICAL_TAIL = 'Record it in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.';
@@ -58,7 +57,9 @@ const REASONS = {
   privileged: (why) => `QUILL_DENIED quill-privileged: ${why}. A run may use only Quill's read commands (status, ticket show|list|children, agent list|show|suggestions, handoff list, repo list, doctor); put what you wanted Quill to do in the result instead.`,
   outsideReadable: (p, via) => `QUILL_DENIED outside-readable: ${p ?? 'this location'}${via && via !== p ? ` reaches ${via}, which` : ''} is outside what this run may read (its checkout, run directory, context snapshot, temp directory and plugin directories). Work from those, and record in attempts what you could not reach.`,
   patternClimbs: (pattern) => `QUILL_DENIED outside-readable: the pattern ${pattern} climbs out of its search directory ('..' after a wildcard or brace), so the guard cannot tell what it reaches. Search from an explicit path inside the readable area instead.`,
-  tooBroad: (p) => `QUILL_DENIED wildcard-too-broad: ${p} can match more than ${MAX_GLOB_MATCHES} entries, too many for the guard to check where each one leads. Name the files, or narrow the pattern to a smaller directory.`,
+  tooBroad: (p) => `QUILL_DENIED wildcard-too-broad: ${p} can reach more than ${MAX_GLOB_MATCHES} entries, too many for the guard to check where each one leads. List the explicit paths you need instead.`,
+  unlisted: (p, dir) => `QUILL_DENIED wildcard-unchecked: ${p} has a wildcard below ${dir}, which cannot be listed, so the guard cannot check what it reaches. List the explicit paths you need instead.`,
+  wildcardReach: (p, via, verb) => `QUILL_DENIED ${verb === 'read' ? 'outside-readable' : 'outside-writable'}: ${p} has a wildcard that can reach ${via ?? 'an entry whose links cannot be resolved'}, which this run may not ${verb}. The guard does not evaluate wildcards, it checks every entry beside them, so list the explicit paths you need instead.`,
   protectedPath: (p, via) => `QUILL_DENIED protected-path: ${p}${via && via !== p ? ` reaches ${via}, which` : ''} is protected (Quill's guard and store, this run's grant, settings, ledger and credential stubs, Claude settings or credentials) and cannot change in a run. Leave it as it is and continue with the rest of the task.`,
   protectedGit: (p) => `QUILL_DENIED protected-path: ${p} is inside git's own files (.git: hooks, config, the git dir pointer), which later run with the owner's credentials, so a run cannot change them. Use git commands for repository changes and describe anything else in the result.`,
   protectedConfig: (p) => `QUILL_DENIED protected-path: ${p} is Claude Code or MCP configuration in the checkout (.claude/ or .mcp.json); changing it needs a full-access run or a manual edit by the owner. Describe the change in the result and continue with the rest of the task.`,
@@ -143,7 +144,7 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
   if (climbing) return deny(REASONS.patternClimbs(climbing));
   const perms = isPlainObject(g.permissions) ? g.permissions : {};
   const reads = readPathsOf(tool, c.tool_input, cls, ctx, home);
-  const writes = writePathsOf(tool, cls);
+  const writes = writePathsOf(tool, cls, ctx);
   if (reads.length || writes.length) {
     const roots = rootsOf(g, e, vars, home, perms, writes.length > 0);
     for (const r of reads) {
@@ -289,92 +290,131 @@ function rootsOf(g, e, vars, home, perms, forWrites) {
       ...under(runDir, RUN_DIR_FILES),
       ...canon([varOf(vars, 'CLAUDE_PLUGIN_ROOT')]),
       ...grantWritable.map((w) => path.join(w, '.git')),
+      ...grantWritable.flatMap(linkedConfig),
     ],
   };
 }
 
-// The concrete paths an entry can reach, canonical; null when a wildcard matches too much.
-// A file tool's path is literal. A shell path with a wildcard is expanded against the real
-// directories (C1): every wildcard segment is matched against the directory listing as a superset
-// of what bash or PowerShell would match (case-insensitive, dot entries included, `[...]` as any
-// one character, `**` at any depth), entries that are links are resolved, and the literal path is
-// kept as well because an unmatched pattern stays literal.
-function candidatesOf(entry, roots) {
-  if (typeof entry.p !== 'string' || !path.isAbsolute(entry.p)) return [null];
-  if (entry.literal || !GLOB_META.test(entry.p)) return [roots.canonical(entry.p)];
+// Where a writable root's `.claude` and `.mcp.json` lead when they are links (R13b), so the
+// configuration cannot be changed under the link target's name either. Kept for the life of the
+// process like the root cache: a run cannot create, remove or relink these names, because the
+// name rule protects them.
+const linkedConfigCache = new Map();
+function linkedConfig(w) {
+  const hit = linkedConfigCache.get(w);
+  if (hit) return hit;
+  const out = [];
+  for (const name of ['.claude', '.mcp.json']) {
+    const p = path.join(w, name);
+    let st;
+    try { st = fs.lstatSync(p, { throwIfNoEntry: false }); } catch { st = undefined; }
+    if (!st || !st.isSymbolicLink()) continue;
+    const c = canonicalPath(p);
+    if (c) out.push(c);
+  }
+  if (linkedConfigCache.size < 64) linkedConfigCache.set(w, out);
+  return out;
+}
+
+// Checks everything an entry can reach, as canonical paths, with `check(c, wildcard)` (a deny
+// reason or null); returns the first reason, or null. A file tool's path is literal. A shell path
+// is scanned for wildcards (ruling R15), which are over-approximated rather than evaluated, so no
+// glob dialect (bash brackets and classes, extglob, PowerShell wildcards and escapes, case rules)
+// needs emulating:
+//  1. only the text the call supplied is scanned; the directory it was resolved against (the
+//     call's cwd, which may itself contain `[`, `]` or spaces) is literal;
+//  2. a supplied segment with `*`, `?`, `[`, `]`, `{` or `}` (or a backtick in PowerShell) matches
+//     EVERY entry of each directory reached so far; one containing `**` matches every entry at any
+//     depth, links included;
+//  3. every entry reached is resolved and checked like the path itself, directories go on to the
+//     next segment, and more than MAX_GLOB_MATCHES entries refuse the call;
+//  4. a directory that cannot be listed refuses the call: an empty listing is not a pass.
+// Entries are checked as they are reached, so a refused wildcard stops at its first bad entry.
+function reach(entry, roots, check) {
+  if (typeof entry.p !== 'string' || !path.isAbsolute(entry.p)) return check(null, false);
+  if (entry.literal) return check(roots.canonical(entry.p), false);
   const abs = path.resolve(entry.p);
-  const { root } = path.parse(abs);
-  const segs = abs.slice(root.length).split(/[\\/]+/).filter(Boolean);
-  const first = segs.findIndex((s) => GLOB_META.test(s));
-  let frontier = [roots.canonical(path.join(root, ...segs.slice(0, first)))];
-  let matched = 0;
+  const wild = (s) => /[*?[\]{}]/.test(s) || (entry.dialect === 'powershell' && s.includes('`'));
+  const cwd = typeof entry.base === 'string' && path.isAbsolute(entry.base) ? path.resolve(entry.base) : null;
+  const base = cwd && isWithin(abs, cwd) ? cwd : path.parse(abs).root;
+  const segs = path.relative(base, abs).split(/[\\/]+/).filter(Boolean);
+  const first = segs.findIndex(wild);
+  if (first < 0) return check(roots.canonical(abs), false);
+  let frontier = [roots.canonical(path.join(base, ...segs.slice(0, first)))];
+  let visited = 0;
   for (const seg of segs.slice(first)) {
-    if (frontier.includes(null)) return [null];
-    if (!GLOB_META.test(seg)) {
+    if (frontier.includes(null)) return check(null, true);
+    if (!wild(seg)) {
       frontier = frontier.map((d) => roots.canonical(path.join(d, seg)));
       continue;
     }
-    const re = globSegment(seg);
-    const deep = seg === '**';
+    const deep = seg.includes('**');
     const next = deep ? [...frontier] : [];
     const stack = [...frontier];
+    const seen = new Set(frontier);
     while (stack.length) {
       const dir = stack.pop();
       let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return REASONS.unlisted(entry.p, dir); }
       for (const ent of entries) {
-        if (!re.test(ent.name)) continue;
-        if ((matched += 1) > MAX_GLOB_MATCHES) return null;
+        if ((visited += 1) > MAX_GLOB_MATCHES) return REASONS.tooBroad(entry.p);
         const full = path.join(dir, ent.name);
-        next.push(ent.isSymbolicLink() ? canonicalPath(full) : full);
-        if (deep && ent.isDirectory()) stack.push(full);
+        const link = ent.isSymbolicLink();
+        const real = link ? canonicalPath(full) : full;
+        const why = check(real, true);
+        if (why) return why;
+        if (!(link ? isDirectory(real) : ent.isDirectory())) continue;
+        next.push(real);
+        if (deep && !seen.has(real)) { seen.add(real); stack.push(real); }
       }
     }
     frontier = next;
   }
-  return [...frontier, roots.canonical(abs)];
-}
-
-function globSegment(seg) {
-  let out = '';
-  for (let i = 0; i < seg.length; i += 1) {
-    const ch = seg[i];
-    if (ch === '*') out += '.*';
-    else if (ch === '?') out += '.';
-    else if (ch === '[' && seg.indexOf(']', i + 2) > 0) { out += '.'; i = seg.indexOf(']', i + 2); }
-    else out += ch.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  }
-  return new RegExp(`^${out}$`, 'is');
-}
-
-function readProblem(entry, roots) {
-  const list = candidatesOf(entry, roots);
-  if (list === null) return REASONS.tooBroad(entry.p);
-  for (const c of list) {
-    const r = c ? deepest(roots.readable, c) : -1;
-    if (r < 0 || deepest(roots.unreadable, c) >= r) return REASONS.outsideReadable(entry.p, c);
-  }
-  return null;
-}
-
-// Null when the write may go ahead, else the deny reason. The most specific root decides, and a
-// protected root wins a tie with a writable one.
-function writeProblem(entry, roots) {
-  const list = candidatesOf(entry, roots);
-  if (list === null) return REASONS.tooBroad(entry.p);
-  for (const c of list) {
-    const why = writeProblemAt(entry.p, c, roots);
+  for (const c of [...frontier, roots.canonical(abs)]) {
+    const why = check(c, true);
     if (why) return why;
   }
   return null;
 }
 
-function writeProblemAt(p, c, roots) {
-  if (!c) return REASONS.outsideWritable(p);
+function isDirectory(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+function readProblem(entry, roots) {
+  return reach(entry, roots, (c, wildcard) => {
+    const r = c ? deepest(roots.readable, c) : -1;
+    if (r >= 0 && deepest(roots.unreadable, c) < r) return null;
+    return wildcard ? REASONS.wildcardReach(entry.p, c, 'read') : REASONS.outsideReadable(entry.p, c);
+  });
+}
+
+// Null when the write may go ahead, else the deny reason. The most specific root decides, and a
+// protected root wins a tie with a writable one.
+function writeProblem(entry, roots) {
+  // R13b: names are checked on the path as written too, before links are resolved
+  if (typeof entry.p === 'string' && path.isAbsolute(entry.p)) {
+    const why = namedProblem(entry.p, path.resolve(entry.p), roots);
+    if (why) return why;
+  }
+  return reach(entry, roots, (c, wildcard) => {
+    const why = writeProblemAt(entry.p, c, roots);
+    return why && wildcard ? REASONS.wildcardReach(entry.p, c, 'change') : why;
+  });
+}
+
+function namedProblem(p, c, roots) {
   const base = deepestRoot(roots.readable, c);
   const named = base ? protectedName(c, base) : null;
   if (named === 'git') return REASONS.protectedGit(p);
   if (named === 'config') return REASONS.protectedConfig(p);
+  return null;
+}
+
+function writeProblemAt(p, c, roots) {
+  if (!c) return REASONS.outsideWritable(p);
+  const named = namedProblem(p, c, roots);
+  if (named) return named;
   const w = deepest(roots.writable, c);
   const prot = deepest(roots.protected, c);
   if (w >= 0 && w > prot) {
@@ -401,11 +441,13 @@ function protectedName(c, base) {
   return null;
 }
 
-// Each entry is { p, literal }: `literal` paths come from a file tool and are never expanded.
+// Each entry is { p, literal } or, for a shell path, { p, literal: false, base, dialect }:
+// `literal` paths come from a file tool and are never scanned for wildcards; `base` is the cwd the
+// shell path was resolved against.
 function readPathsOf(tool, input, cls, ctx, home) {
   const out = [];
   if (READ_TOOLS.has(tool)) out.push({ p: cls.path ?? null, literal: true });
-  if (Array.isArray(cls.readPaths)) for (const p of cls.readPaths) out.push({ p, literal: false });
+  if (Array.isArray(cls.readPaths)) for (const p of cls.readPaths) out.push({ p, literal: false, base: ctx.cwd, dialect: SHELLS[tool] });
   for (const pattern of patternsOf(tool, input)) {
     const base = patternBase(pattern, cls.path ?? ctx.cwd, home);
     if (base !== undefined) out.push({ p: base, literal: true });
@@ -413,10 +455,10 @@ function readPathsOf(tool, input, cls, ctx, home) {
   return out;
 }
 
-function writePathsOf(tool, cls) {
+function writePathsOf(tool, cls, ctx) {
   const out = [];
   if (WRITE_TOOLS.has(tool)) out.push({ p: cls.path ?? null, literal: true });
-  if (Array.isArray(cls.paths)) for (const p of cls.paths) out.push({ p, literal: false });
+  if (Array.isArray(cls.paths)) for (const p of cls.paths) out.push({ p, literal: false, base: ctx.cwd, dialect: SHELLS[tool] });
   return out;
 }
 

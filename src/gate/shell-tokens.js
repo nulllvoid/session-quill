@@ -482,6 +482,9 @@ class Lexer {
         continue;
       }
       if (c === '(') {
+        // `?(…)`, `*(…)`, `+(…)`, `@(…)` and `!(…)` inside a word are extglob patterns when
+        // extglob is on, not subshells: their matches cannot be known here
+        if (w !== null && /[?*+@!]$/.test(w.text)) this.fail('extglob pattern');
         // subshell: its commands are lexed as their own segments; `name()` starts a function
         // definition, so the body that follows is a segment of its own
         const hadWords = seg.argv.length > 0 || w !== null;

@@ -135,8 +135,10 @@ function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
     }
     const base = cwd ?? 'C:\\';
     let r = path.win32.resolve(base, p);
-    // Windows ignores trailing dots and spaces and treats name:stream as the same file
+    // Windows ignores trailing dots and spaces and treats name:stream as the same file; a wildcard
+    // word with a colon is a pattern such as [[:alpha:]], not a stream name, so it is not literal
     const colon = r.indexOf(':', 2);
+    if (colon >= 0 && /[*?[\]{}]/.test(r)) return null;
     if (colon >= 0) r = r.slice(0, colon);
     r = r.split('\\').map((c, i) => (i === 0 ? c : c.replace(/[. ]+$/, ''))).join('\\');
     return r;
@@ -548,6 +550,7 @@ function classifyCommand(name, seg, ctx, h) {
       return unknownProd(`${name} reaches a remote or management interface`);
     }
     case 'invoke-sqlcmd': return invokeSqlcmd(args, ak, h);
+    case 'shopt': return unparseable('shopt changes how the shell expands words (extglob, globstar, nocaseglob …)');
     case 'export': case 'declare': case 'typeset': case 'local': case 'readonly': case 'set': {
       // NAME=value sets NAME; a bare NAME exports (or declares) a value assigned elsewhere
       const env = {};

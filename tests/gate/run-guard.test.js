@@ -206,9 +206,30 @@ const ROWS = [
   ['a ** wildcard through the junction', bash('cat **/credentials'), {}, denied('outside-readable')],
   ['a PowerShell wildcard through the junction', pwsh('Get-Content es*/credentials'), {}, denied('outside-readable')],
   ['copying through the junction with a wildcard', bash('cp esc*/credentials copy.txt'), { grant: { permissions: EDIT } }, denied('outside-readable')],
-  ['a wildcard over a plain directory', bash('cat sr*/app.js'), {}, 'allow'],
   ['a wildcard over plain files', bash('cat src/*.js'), {}, 'allow'],
-  ['a ? wildcard over a plain directory', bash('cat s?c/app.js'), {}, 'allow'],
+  ['a ? wildcard over plain files', bash('cat src/a?p.js'), {}, 'allow'],
+  // R15's accepted cost: a wildcard beside a link that leads outside is refused even when its
+  // pattern would not match the link, and the reason says to list explicit paths
+  ['R15: a wildcard beside the junction, pattern aside', bash('cat sr*/app.js'), {}, /^QUILL_DENIED outside-readable: .*list the explicit paths/],
+  ['R15: a ? wildcard beside the junction', bash('cat s?c/app.js'), {}, /^QUILL_DENIED outside-readable: .*list the explicit paths/],
+  ['R15: a wildcard below a directory that cannot be listed', bash('cat nothere/*.js'), {}, denied('wildcard-unchecked')],
+
+  // fix round 2, C1a: bracket expressions with classes, equivalence classes and collating symbols
+  ['C1a: [[=e=]] through the junction', bash('cat [[=e=]]sc/credentials'), {}, denied('outside-readable')],
+  ['C1a: [[.e.]] through the junction', bash('cat [[.e.]]sc/credentials'), {}, denied('outside-readable')],
+  ['C1a: [[=s=]] inside the word', bash('cat e[[=s=]]c/credentials'), {}, denied('outside-readable')],
+  ['C1a: copying with [[=e=]]', bash('cp [[=e=]]sc/credentials src/x.txt'), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['C1a: [[:alpha:]] through the junction', bash('cat [[:alpha:]]sc/credentials'), {}, /^QUILL_DENIED (outside-readable|unparseable): /],
+
+  // fix round 2, C1c: extglob words and shopt
+  ['C1c: ?(…) extglob', bash('cat ?(esc)/credentials'), {}, denied('unparseable')],
+  ['C1c: @(…) extglob', bash('cat @(esc)/credentials'), {}, denied('unparseable')],
+  ['C1c: +(…) extglob', bash('cat +(esc)/credentials'), {}, denied('unparseable')],
+  ['C1c: !(…) extglob', bash('cat !(src)/credentials'), {}, denied('unparseable')],
+  ['C1c: *(…) extglob', bash('cat *(esc)/credentials'), {}, denied('unparseable')],
+  ['C1c: shopt', bash('shopt -s extglob'), {}, denied('unparseable')],
+  ['C1c: shopt before a wildcard', bash('shopt -s nocaseglob; cat src/*.js'), {}, denied('unparseable')],
+  ['C1c: a subshell still parses', bash('(cd src && ls)'), {}, 'allow'],
 
   // fix round 1, I1: a shell pin is exactly its command, without environment or wrappers
   ['pin: an environment prefix', bash("ARGOCD_OPTS='--server evil.example' argocd app sync pay-stg"), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
@@ -470,6 +491,48 @@ test('decide stays quick on every tool call (M7)', () => {
     p95 = Math.min(p95, times[Math.floor(times.length * 0.95)]);
   }
   assert.ok(p95 < 5, `p95 ${p95.toFixed(3)} ms`);
+});
+
+test('a checkout whose own path has brackets: only the supplied text is scanned (C1b, R15)', () => {
+  for (const name of ['proj [1]', 'proj[ab]']) {
+    const co = dir(name);
+    fs.mkdirSync(path.join(co, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(co, 'src', 'app.js'), 'x\n');
+    fs.symlinkSync(outside, path.join(co, 'esc'), 'junction');
+    const env = { ...ENV, cwd: co };
+    const grant = grantWith({ readableRoots: [co, runDir, tmp], writableRoots: [runDir, tmp] });
+    for (const command of ['cat esc*/credentials', 'cat e?c/credentials', 'cat */credentials']) {
+      const r = decide(bash(command), grant, env);
+      assert.equal(r.decision, 'deny', `${name}: ${command}: ${r.reason}`);
+      assert.match(r.reason, denied('outside-readable'));
+    }
+    const ok = decide(bash('cat src/*.js'), grant, env);
+    assert.equal(ok.decision, 'allow', `${name}: the brackets in the checkout path are literal: ${ok.reason}`);
+  }
+});
+
+test('Claude configuration behind a link in the checkout stays protected (R13b)', (t) => {
+  const co = dir('linked');
+  const target = dir('linked', 'config', 'claude');
+  fs.writeFileSync(path.join(target, 'settings.json'), '{}');
+  fs.symlinkSync(target, path.join(co, '.claude'), 'junction');
+  t.after(() => fs.rmSync(path.join(co, '.claude'), { force: true }));
+  const env = { ...ENV, cwd: co };
+  const grant = grantWith({ permissions: EDIT, readableRoots: [co, runDir, tmp], writableRoots: [co, runDir, tmp] });
+  const cases = [
+    [call('Write', { file_path: path.join(co, '.claude', 'settings.local.json'), content: '{}' }), /needs a full-access run or a manual edit/],
+    [call('Edit', { file_path: path.join(co, '.claude', 'settings.json'), old_string: '{', new_string: '[' }), /needs a full-access run or a manual edit/],
+    [bash('echo x > .claude/settings.local.json'), /needs a full-access run or a manual edit/],
+    [call('Write', { file_path: path.join(target, 'settings.json'), content: '{}' }), denied('protected-path')],
+    [bash('rm -rf config'), denied('protected-path')],
+  ];
+  for (const [c, want] of cases) {
+    const r = decide(c, grant, env);
+    assert.equal(r.decision, 'deny', `${JSON.stringify(c.tool_input)}: ${r.reason}`);
+    assert.match(r.reason, want);
+  }
+  const ok = decide(call('Write', { file_path: path.join(co, 'config', 'other.txt'), content: 'x' }), grant, env);
+  assert.equal(ok.decision, 'allow', ok.reason);
 });
 
 test('GUARD_CODE covers every local module the guard loads', () => {
