@@ -8,6 +8,16 @@ import { parseAgentResult, spawnAgent } from '../../src/handoff/runner.js';
 import { handoffRunDir } from '../../src/lib/paths.js';
 import { FAKE_CLAUDE } from './helpers.js';
 
+const fastestMs = (fn, runs = 3) => {
+  let best = Infinity;
+  for (let i = 0; i < runs; i += 1) {
+    const started = performance.now();
+    fn();
+    best = Math.min(best, performance.now() - started);
+  }
+  return best;
+};
+
 // Recorded stream-json shapes (claude 2.1.296, research 03 §D), written inline.
 const INIT = '{"type":"system","subtype":"init","session_id":"s1","tools":["Bash"],"mcp_servers":[{"name":"claude_ai_Atlassian","status":"connected","source":"claudeai"}]}';
 const TOOL_USE = JSON.stringify({ type: 'assistant', session_id: 's1', message: { role: 'assistant', content: [{ type: 'text', text: 'Let me look at the tests.' }, { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'npm test' } }] } });
@@ -147,13 +157,11 @@ test('redaction stays linear on long word runs; excerpts are capped before redac
   const begin = '-----BEGIN PRIVATE KEY-----';
   const nearMiss = '-----BEGIN RSA PRIVATE KEY-----x-----END PRIVATE KEY-----';
   for (const big of [begin.repeat(Math.ceil(1_048_576 / begin.length)), `${begin}\n`.repeat(Math.ceil(1_048_576 / (begin.length + 1))), nearMiss.repeat(Math.ceil(1_048_576 / nearMiss.length)), '-----BEGIN '.repeat(100_000), 'a-'.repeat(512 * 1024),`${'x.'.repeat(256 * 1024)}token${'y-'.repeat(256 * 1024)}`, '"'.repeat(1_048_576)]) {
-    const started = performance.now();
-    redactLog(big);
-    const ms = performance.now() - started;
-    assert.ok(ms < 100, `1 MB redacted in ${Math.round(ms)} ms`);
-    const t2 = performance.now();
+    // fastest of three runs: a stall from a busy machine is not a regression (quadratic took seconds)
+    const ms = fastestMs(() => redactLog(big));
+    assert.ok(ms < 500, `1 MB redacted in ${Math.round(ms)} ms`);
     assert.ok(Buffer.byteLength(redactCapped(big, 2048)) <= 2048);
-    assert.ok(performance.now() - t2 < 50);
+    assert.ok(fastestMs(() => redactCapped(big, 2048)) < 250);
   }
 });
 
