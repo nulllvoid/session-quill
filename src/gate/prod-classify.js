@@ -96,6 +96,16 @@ function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
     p = ctx.home + p.slice(1);
   }
   if (p.startsWith('~')) return null; // ~user, ~+ and ~- are not resolvable here
+  // PowerShell provider-qualified paths: only the FileSystem provider names a file (stripped
+  // first, so FileSystem::\\.\GLOBALROOT\… gets the device checks below)
+  p = p.replace(/^(Microsoft\.PowerShell\.Core\\)?FileSystem::/i, '');
+  if (/^[A-Za-z][\w.\\]*::/.test(p) || /^[A-Za-z][A-Za-z0-9_]+:/.test(p)) return null;
+  // Windows accepts / for \ in device and UNC prefixes (//./C:/x, //?/Volume{…}), and passes the
+  // NT prefix \??\ through: normalise them before deciding what they name
+  if (isWin(ctx)) {
+    if (/^[\\/]{2}/.test(p)) p = p.replace(/\//g, '\\');
+    else if (/^[\\/]\?\?[\\/]/.test(p)) p = `\\\\?\\${p.slice(4).replace(/\//g, '\\')}`;
+  }
   // Win32 device and long-path prefixes, and the local admin share, name the same files
   p = p.replace(/^\\\\[?.]\\UNC\\/i, '\\\\');
   if (/^\\\\[?.]\\/.test(p)) {
@@ -103,9 +113,6 @@ function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
     if (!/^\\\\[?.]\\[A-Za-z]:[\\/]/.test(p)) return null;
     p = p.slice(4);
   }
-  // PowerShell provider-qualified paths: only the FileSystem provider names a file
-  p = p.replace(/^(Microsoft\.PowerShell\.Core\\)?FileSystem::/i, '');
-  if (/^[A-Za-z][\w.\\]*::/.test(p) || /^[A-Za-z][A-Za-z0-9_]+:/.test(p)) return null;
   p = p.replace(/^\\\\(localhost|127\.0\.0\.1|\[::1\]|\.)\\([A-Za-z])\$(?=\\|$)/i, (m, h2, d) => `${d.toUpperCase()}:`);
   let unresolved = false;
   // a literal word (quoted or plain text) has no expansions; only expand words the shell expands
@@ -149,10 +156,11 @@ function classifyShell(command, dialect, ctx) {
   return classifyScript(command, dialect, ctx, 0);
 }
 
-function classifyScript(command, dialect, ctx, depth) {
+// `cwd` is where the script starts (a nested script starts where its caller is; null = unknown).
+function classifyScript(command, dialect, ctx, depth, cwd = ctx.cwd ?? null) {
   const parsed = parseShell(command, dialect, depth);
   if (parsed.error) return unparseable(parsed.error);
-  const st = { cwd: ctx.cwd ?? null, paths: [], readPaths: [], depth };
+  const st = { cwd, paths: [], readPaths: [], depth };
   const results = [];
   for (const seg of parsed.segments) results.push(classifySegment(seg, ctx, st));
   return aggregate(results, st);
@@ -181,8 +189,17 @@ function strip(res) {
 
 function classifySegment(seg, ctx, st) {
   if (seg.unparseable) return unparseable(seg.unparseable);
-  const envBad = gitEnvProblem(seg.env);
+  // Prefix assignments (VAR=x cmd) apply to this command only; an assignment on its own, or
+  // environment handed to a nested script, lasts for whatever runs later.
+  const envBad = gitEnvProblem(seg.env, ctx, st.cwd, !seg.argv.length);
   if (envBad) return unparseable(envBad);
+  if (seg.dialect !== 'powershell') {
+    // ${NAME:=value} and ${NAME=value} assign NAME as a side effect of the expansion
+    const assigned = {};
+    seg.argv.forEach((word, i) => { if (seg.kinds[i] !== 'lit') for (const m of word.matchAll(/\$\{([A-Za-z_]\w*):?=/g)) assigned[m[1]] = null; });
+    const why = gitEnvProblem(assigned, ctx, null, true);
+    if (why) return unparseable(why);
+  }
   const h = helpers(seg, ctx, st);
   for (const red of seg.redirects) {
     const op = red.op.replace(/^\d+|^\*/, '');
@@ -192,6 +209,9 @@ function classifySegment(seg, ctx, st) {
     if (op === '<<' || op === '<<<' || op === '<<-') continue;
     if (!h.write(red.target, red.kind)) return unparseable('redirect target is not a literal path');
   }
+  // PowerShell ${C:\path} variable notation reads or writes the file's content
+  for (const p of seg.psWrites ?? []) if (!h.write(p, 'lit')) return unparseable(h.bad);
+  for (const p of seg.psReads ?? []) if (!h.read(p, 'lit')) return unparseable(h.bad);
   if (!seg.argv.length) return local('redirect or assignment only');
   const name = binName(seg.argv[0]);
   const res = classifyCommand(name, seg, ctx, h);
@@ -214,7 +234,7 @@ const DATA_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg',
 const SED_EXEC_RE = /(^|[\s;{}0-9$\/,'"])e(\s|$)|\/[gpiImMw0-9]*e[gpiImMw0-9]*(\s|;|$|'|")/;
 let backstopReCache = null;
 const backstopRe = () => (backstopReCache ??= new RegExp(`(^|[^A-Za-z0-9_-])(${[...PROD_BINS, 'quill', 'session-quill'].map((b) => b.replace(/-/g, '\\-')).join('|')})(\\.exe|\\.cmd|\\.ps1)?($|[^A-Za-z0-9_.-])`, 'i'));
-const NOOP_H = { bad: null, write: () => true, read: () => true, chdir: () => {}, script: () => local('nested script') };
+const NOOP_H = { bad: null, write: () => true, read: () => true, chdir: () => {}, cwd: () => null, script: () => local('nested script') };
 
 function backstop(name, seg, ctx) {
   const text = [seg.argv.slice(1).join(' '), seg.stdin ?? ''].join(' ');
@@ -233,25 +253,27 @@ function backstop(name, seg, ctx) {
 }
 
 function helpers(seg, ctx, st) {
+  // `base` resolves relative paths somewhere other than the current directory (git -C); null = unknown
   const h = {
     bad: null,
-    write(word, kind = 'lit') {
+    write(word, kind = 'lit', base = st.cwd) {
       if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'write target is not literal'; return false; }
       if (/[*?[]/.test(String(word).replace(/^\\\\[?.]\\/, '')) || hasBraceExpansion(word)) { h.bad = `write target has wildcards: ${String(word).slice(0, 80)}`; return false; }
       if (NULL_TARGETS.has(String(word).toLowerCase())) return true;
-      const p = st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined, kind);
+      const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `write target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.paths.push(p);
       return true;
     },
-    read(word, kind = 'lit') {
+    read(word, kind = 'lit', base = st.cwd) {
       if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'read target is not literal'; return false; }
       if (NULL_TARGETS.has(String(word).toLowerCase()) || word === '-') return true;
-      const p = st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined, kind);
+      const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `read target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.readPaths.push(p);
       return true;
     },
+    cwd: () => st.cwd,
     chdir(word, kind) {
       st.cds = (st.cds ?? 0) + 1;
       if (st.cds > 256) { h.bad = 'too many directory changes to follow'; st.cwd = null; return; }
@@ -259,8 +281,13 @@ function helpers(seg, ctx, st) {
       const p = word === undefined ? ctx.home ?? null : st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined);
       st.cwd = p ?? null;
     },
-    script(text, dialect) {
-      return classifyScript(text, dialect, ctx, st.depth + 1);
+    // A nested script starts in the caller's directory, and the files it reads or writes are
+    // reported with the caller's.
+    script(text, dialect, base = st.cwd) {
+      const res = classifyScript(text, dialect, ctx, st.depth + 1, base);
+      if (res.paths) st.paths.push(...res.paths);
+      if (res.readPaths) st.readPaths.push(...res.readPaths);
+      return res;
     },
   };
   return h;
@@ -513,17 +540,85 @@ function classifyCommand(name, seg, ctx, h) {
       return unknownProd(`${name} reaches a remote or management interface`);
     }
     case 'invoke-sqlcmd': return invokeSqlcmd(args, ak, h);
-    case 'export': case 'declare': case 'typeset': case 'set': case 'setx': case 'set-item': case 'si': {
+    case 'export': case 'declare': case 'typeset': case 'local': case 'readonly': case 'set': {
+      // NAME=value sets NAME; a bare NAME exports (or declares) a value assigned elsewhere
       const env = {};
+      const printOnly = args.some((t) => /^-[a-zA-Z]*[pfF]/.test(t));
+      const unexport = (name === 'export' && args.some((t) => /^-[a-zA-Z]*n/.test(t))) || args.some((t) => /^\+[a-zA-Z]*x/.test(t));
+      let end = false;
       for (let i = 0; i < args.length; i += 1) {
-        const a0 = args[i].replace(/^env:\\?/i, '');
-        const eq = a0.indexOf('=');
-        if (eq > 0) env[a0.slice(0, eq)] = ak[i] === 'lit' ? a0.slice(eq + 1) : null;
-        else if (/^env:/i.test(args[i]) || name === 'setx') env[a0] = ak[i + 1] === 'lit' ? args[i + 1] : null;
+        const t = args[i];
+        if (!end && t === '--') { end = true; continue; }
+        if (!end && /^[-+]/.test(t)) continue;
+        const eq = t.indexOf('=');
+        if (eq > 0) env[t.slice(0, eq).replace(/\[.*$/, '').replace(/\+$/, '')] = ak[i] === 'lit' ? t.slice(eq + 1) : null;
+        else if (name !== 'set' && !printOnly && !unexport && /^[A-Za-z_]\w*$/.test(t)) env[t] = null;
       }
-      const bad = gitEnvProblem(env);
+      const bad = gitEnvProblem(env, ctx, null, true);
       if (bad) return unparseable(bad);
       return local(`${name}`);
+    }
+    case 'setx': {
+      // setx NAME VALUE writes the user environment for later processes; /K and /F read the value elsewhere
+      const pos = [];
+      let fromElsewhere = false;
+      for (let i = 0; i < args.length; i += 1) {
+        if (/^\/[sudpkfar]$/i.test(args[i])) { if (/^\/[kf]$/i.test(args[i])) fromElsewhere = true; i += 1; continue; }
+        if (args[i].startsWith('/')) continue;
+        pos.push(i);
+      }
+      const env = {};
+      if (pos.length) env[args[pos[0]]] = !fromElsewhere && pos.length > 1 && ak[pos[1]] === 'lit' ? args[pos[1]] : null;
+      const bad = gitEnvProblem(env, ctx, null, true);
+      if (bad) return unparseable(bad);
+      return local('setx');
+    }
+    case 'set-item': case 'si': {
+      // Set-Item on env: sets a variable; on function: or alias: it defines a command
+      if (!ps) return local(name);
+      const s = psParams(args, ak, { values: ['path', 'literalpath', 'value', 'filter', 'include', 'exclude', 'credential'], switches: ['force', 'passthru', 'whatif', 'confirm'] });
+      const target = s.get('path') ?? s.get('literalpath') ?? s.pos[0];
+      const named = !!(s.get('path') ?? s.get('literalpath'));
+      const value = s.get('value') ?? s.pos[named ? 0 : 1];
+      if (!target || target.v === true || target.kind !== 'lit') return unparseable('Set-Item target is not a literal path');
+      const env = {};
+      for (const one of splitPs(target.v)) {
+        const m = /^(?:Microsoft\.PowerShell\.Core\\)?(env|environment|variable|function|alias)(?:::?)[\\/]?(.*)$/i.exec(one);
+        if (!m) return unparseable(`Set-Item on ${one.slice(0, 60)} changes state the guard cannot follow`);
+        const drive = m[1].toLowerCase();
+        if (drive === 'function' || drive === 'alias') return unparseable('Set-Item defines a PowerShell function or alias');
+        if (drive === 'variable') continue;
+        env[m[2]] = value && value.v !== true && value.kind === 'lit' ? value.v : null;
+      }
+      const bad = gitEnvProblem(env, ctx, null, true);
+      if (bad) return unparseable(bad);
+      return local('Set-Item');
+    }
+    case 'read': case 'mapfile': case 'readarray': case 'getopts': case 'for': case 'select': case 'printf': {
+      // builtins that assign shell variables from input: the values are unknown (in PowerShell
+      // these are external programs, which cannot change the session's variables)
+      if (ps || (name === 'printf' && !args.some((t) => t.startsWith('-v')))) return local(name);
+      if (name === 'mapfile' || name === 'readarray') {
+        // -C runs a callback every few lines
+        for (let i = 0; i < args.length; i += 1) {
+          if (args[i] !== '-C' && !args[i].startsWith('-C')) continue;
+          const cb = args[i] === '-C' ? args[i + 1] : args[i].slice(2);
+          const kind = args[i] === '-C' ? ak[i + 1] : ak[i];
+          if (cb === undefined || kind !== 'lit') return unparseable(`${name} -C callback is not literal`);
+          const res = h.script(cb, 'bash');
+          if (res.class !== 'local') return res;
+        }
+      }
+      const env = {};
+      const vi = args.findIndex((t) => t.startsWith('-v'));
+      const names = name === 'for' || name === 'select' ? args.slice(0, 1) : name === 'printf' ? [args[vi] === '-v' ? args[vi + 1] ?? '' : args[vi]] : args;
+      for (const t of names) {
+        const m = /^(?:-v)?([A-Za-z_]\w*)$/.exec(t);
+        if (m) env[m[1]] = null;
+      }
+      const bad = gitEnvProblem(env, ctx, null, true);
+      if (bad) return unparseable(bad);
+      return local(name);
     }
     case 'at': case 'batch': case 'crontab': {
       if (name === 'crontab') {
@@ -567,14 +662,18 @@ function classifyCommand(name, seg, ctx, h) {
       if (sub[0] === 'fsinfo' || (sub[1] !== undefined && (sub[1].startsWith('query') || sub[1] === 'list'))) return local('fsutil query');
       return unparseable('fsutil changes file-system state the guard cannot follow');
     }
-    case 'mountvol': return args.length === 0 || args.some((x) => /^\/l$/i.test(x)) ? local('mountvol listing') : unparseable('mountvol changes volume mount points');
+    // only `mountvol` and `mountvol <dir> /L` list; every other form changes mount points
+    case 'mountvol': return args.length === 0 || (args.length === 2 && /^\/l$/i.test(args[1]) && !args[0].startsWith('/')) ? local('mountvol listing') : unparseable('mountvol changes volume mount points');
     case 'link': {
-      if (args.some((x) => /^\/[A-Za-z]/.test(x))) {
-        // MSVC link.exe: it writes only its /OUT: file
+      if ((ps || cmdD) && args.some((x) => /^\/[A-Za-z]+(:|$)/.test(x))) {
+        // MSVC link.exe (/nologo, /OUT:x): it writes only its /OUT: file
         for (const x of args) if (/^\/out:/i.test(x)) h.write(x.slice(5), 'lit');
         return local('MSVC link');
       }
-      const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('-'));
+      // coreutils link FILE1 FILE2 makes a hard link; Git Bash paths such as /c/Users/… are files
+      const pos = [];
+      let end = false;
+      args.forEach((t, i) => { if (!end && t === '--') end = true; else if (end || !t.startsWith('-') || t === '-') pos.push({ v: t, kind: ak[i] }); });
       if (pos.length !== 2) { h.bad = 'link needs a target and a name'; return local('link'); }
       for (const x of pos) h.write(x.v, x.kind);
       return local('link');
@@ -1080,12 +1179,49 @@ function isProtected(ctx, name) {
 }
 
 // Environment that makes git read other config or run other programs.
-const GIT_EXEC_ENV_RE = /^(GIT_CONFIG_PARAMETERS|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG|GIT_SSH|GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_PAGER|GIT_EDITOR|GIT_SEQUENCE_EDITOR|GIT_ASKPASS|SSH_ASKPASS|GIT_EXTERNAL_DIFF|GIT_PROXY_COMMAND|GIT_TEMPLATE_DIR|GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)$/i;
+const GIT_EXEC_ENV_RE = /^(GIT_CONFIG_PARAMETERS|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG|GIT_SSH|GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_ASKPASS|SSH_ASKPASS|GIT_EXTERNAL_DIFF|GIT_PROXY_COMMAND|GIT_TEMPLATE_DIR|GIT_INDEX_FILE)$/i;
+// Programs git starts (pager, editor); git falls back to PAGER, VISUAL and EDITOR.
+const GIT_PROGRAM_ENV_RE = /^(GIT_PAGER|GIT_EDITOR|GIT_SEQUENCE_EDITOR|PAGER|EDITOR|VISUAL)$/i;
+const HARMLESS_PROGRAMS = new Set(['', 'cat', 'true', 'false', ':', 'less', 'more']);
+// Where git finds the repository and its work tree.
+const GIT_PATH_ENV_RE = /^(GIT_DIR|GIT_WORK_TREE)$/i;
 
-function gitEnvProblem(env) {
+function samePath(a, b, ctx) {
+  return isWin(ctx) ? String(a).toLowerCase() === String(b).toLowerCase() : a === b;
+}
+
+// A path value that resolves inside the run's checkout (ctx.cwd). `base` resolves a relative value;
+// null means a relative value cannot be trusted (it is resolved wherever git later runs).
+function insideCheckout(v, ctx, base) {
+  if (typeof v !== 'string' || !v || typeof ctx.cwd !== 'string' || !ctx.cwd) return false;
+  if (base === null && !isAbsLike(v)) return false;
+  const p = resolveLiteral(v, ctx, base ?? undefined, 'lit');
+  if (!p) return false;
+  const win = isWin(ctx);
+  const root = normalizeAbs(ctx.cwd, ctx);
+  const sep = win ? '\\' : '/';
+  const [pp, rr] = win ? [p.toLowerCase(), root.toLowerCase()] : [p, root];
+  return pp === rr || pp.startsWith(rr.endsWith(sep) ? rr : rr + sep);
+}
+
+// env: name → literal value, or null when the value is not known. `persistent`: the assignment
+// outlives this command (export, $env:X = …), so a relative path is not trusted.
+function gitEnvProblem(env, ctx = {}, base = null, persistent = true) {
   if (!env || typeof env !== 'object') return null;
   for (const [k, v] of Object.entries(env)) {
     if (GIT_EXEC_ENV_RE.test(k)) return `${k} changes what git runs or reads`;
+    if (GIT_PROGRAM_ENV_RE.test(k)) {
+      if (typeof v === 'string' && HARMLESS_PROGRAMS.has(v)) continue;
+      return `${k} makes git run a program the guard cannot see`;
+    }
+    if (GIT_PATH_ENV_RE.test(k)) {
+      if (insideCheckout(v, ctx, persistent ? null : base)) continue;
+      return `${k} points git outside the checkout (or is not a literal path)`;
+    }
+    if (/^GIT_TRACE\w*$/i.test(k)) {
+      if (typeof v === 'string' && /^(|[0-9]|true|false|yes|no|on|off)$/i.test(v)) continue;
+      return `${k} makes git write trace output to a file`;
+    }
     if (/^GIT_CONFIG_KEY_\d+$/i.test(k)) {
       if (typeof v !== 'string') return `${k} is not literal`;
       if (GIT_EXEC_CONFIG_RE.test(v) || /^(push|remote|branch)\./i.test(v)) return `${k}=${v} can make git run arbitrary commands`;
@@ -1095,7 +1231,8 @@ function gitEnvProblem(env) {
 }
 
 const GIT_GLOBAL_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix']);
-const GIT_EXEC_CONFIG_RE = /^(core\.(sshcommand|pager|editor|hookspath|fsmonitor|gitproxy|askpass)|credential\..*|diff\..*\.(textconv|command)|diff\.external|merge\..*\.driver|filter\..*|sequence\.editor|gpg\..*program|pager\..*|uploadpack\..*|alias\..*|remote\..*\.(receivepack|uploadpack|vcs)|protocol\..*|url\..*|include\.path|includeif\..*\.path|submodule\..*\.update|init\.templatedir|(merge|diff)tool\..*\.(cmd|path)|interactive\.difffilter|trailer\..*\.(command|cmd)|sendemail\..*|browser\..*\.(cmd|path)|man\..*\.(cmd|path)|web\.browser|ssh\.variant|core\.(sshcommand|editor|pager|askpass)|gpg\.program)$/i;
+// core.worktree points later git commands (reset --hard, checkout) at another directory.
+const GIT_EXEC_CONFIG_RE = /^(core\.(sshcommand|pager|editor|hookspath|fsmonitor|gitproxy|askpass|worktree)|credential\..*|diff\..*\.(textconv|command)|diff\.external|merge\..*\.driver|filter\..*|sequence\.editor|gpg\..*program|pager\..*|uploadpack\..*|alias\..*|remote\..*\.(receivepack|uploadpack|vcs)|protocol\..*|url\..*|include\.path|includeif\..*\.path|submodule\..*\.update|init\.templatedir|(merge|diff)tool\..*\.(cmd|path)|interactive\.difffilter|trailer\..*\.(command|cmd)|sendemail\..*|browser\..*\.(cmd|path)|man\..*\.(cmd|path)|web\.browser|ssh\.variant|core\.(sshcommand|editor|pager|askpass)|gpg\.program)$/i;
 const GIT_LOCAL = new Set(['status', 'log', 'diff', 'show', 'branch', 'checkout', 'switch', 'add', 'rm', 'mv', 'restore', 'reset', 'stash', 'fetch', 'pull', 'clone', 'init', 'rev-parse', 'rev-list',
   'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'blame', 'grep', 'remote', 'tag', 'config', 'worktree', 'clean', 'describe', 'shortlog', 'reflog', 'merge-base', 'name-rev', 'for-each-ref', 'show-ref',
   'symbolic-ref', 'notes', 'bisect', 'apply', 'format-patch', 'archive', 'bundle', 'sparse-checkout', 'gc', 'fsck', 'prune', 'count-objects', 'var', 'version', 'help', 'diff-tree', 'diff-index',
@@ -1105,12 +1242,32 @@ const GIT_LOCAL = new Set(['status', 'log', 'diff', 'show', 'branch', 'checkout'
 const GIT_COMMIT = new Set(['commit', 'revert', 'am', 'cherry-pick', 'rebase', 'merge']);
 
 function git(args, ak, seg, ctx, h) {
-  const envBad = gitEnvProblem(seg.env);
-  if (envBad) return unparseable(envBad);
   let i = 0;
   let pushConfig = false;
+  // git -C <dir> runs in <dir>: relative paths, --git-dir and GIT_DIR resolve there (null = unknown)
+  let base = h.cwd();
+  let moved = 0; // number of -C options
   while (i < args.length && args[i].startsWith('-')) {
     const t = args[i];
+    if (t === '-C') {
+      const v = args[i + 1];
+      if (++moved > 16) return unparseable('too many git -C directory changes to follow');
+      if (v !== undefined) {
+        base = ak[i + 1] !== 'lit' || (base === null && !isAbsLike(v)) ? null : resolveLiteral(v, ctx, base ?? undefined, 'lit') ?? null;
+      }
+      i += 2;
+      continue;
+    }
+    // --git-dir and --work-tree are trusted only inside the checkout, like GIT_DIR and GIT_WORK_TREE
+    const dirOpt = /^--(git-dir|work-tree)(=|$)/.exec(t);
+    if (dirOpt) {
+      const attached = dirOpt[2] === '=';
+      const v = attached ? t.slice(dirOpt[0].length) : args[i + 1];
+      const kind = attached ? ak[i] : ak[i + 1];
+      if (kind !== 'lit' || !insideCheckout(v, ctx, base)) return unparseable(`git --${dirOpt[1]} points git outside the checkout (or is not a literal path)`);
+      i += attached ? 1 : 2;
+      continue;
+    }
     if (t === '-c' || t.startsWith('-c')) {
       const kv = t === '-c' ? args[i + 1] : t.slice(2);
       const key = String(kv ?? '').split('=')[0];
@@ -1130,6 +1287,14 @@ function git(args, ak, seg, ctx, h) {
     if (GIT_GLOBAL_VALUES.has(t)) { i += 2; continue; }
     i += 1;
   }
+  if (moved) {
+    // a relative GIT_DIR or GIT_WORK_TREE is resolved in the -C directory
+    const why = gitEnvProblem(seg.env, ctx, base, false);
+    if (why) return unparseable(why);
+  }
+  // rebase -x and bisect run commands run at the top of the work tree: known only when git runs
+  // at the top of the checkout
+  const top = base !== null && typeof ctx.cwd === 'string' && samePath(normalizeAbs(base, ctx), normalizeAbs(ctx.cwd, ctx), ctx) ? base : null;
   const sub = args[i];
   const rest = args.slice(i + 1);
   const restK = ak.slice(i + 1);
@@ -1151,9 +1316,9 @@ function git(args, ak, seg, ctx, h) {
     const cs = scan(rest, restK, { values: new Set(['-u', '--upload-pack', '-c', '--config', '-b', '--branch', '-o', '--origin', '--depth', '--reference', '--separate-git-dir', '--template', '-j', '--jobs', '--filter', '--shallow-since', '--shallow-exclude', '--server-option']) });
     if (cs.has('-u', '--upload-pack', '--template')) return unparseable('git clone with a custom upload-pack or template');
     for (const c of cs.all('-c', '--config')) if (GIT_EXEC_CONFIG_RE.test(String(c.v ?? '').split('=')[0])) return unparseable('git clone --config can run arbitrary commands');
-    if (cs.pos[1] !== undefined) h.write(cs.pos[1], cs.posKinds[1]);
-    else if (cs.pos[0] !== undefined) h.write(String(cs.pos[0]).replace(/[\\/]+$/, '').replace(/^.*[\\/:]/, '').replace(/\.git$/, '') || '.', cs.posKinds[0]);
-    for (const d of cs.all('--separate-git-dir')) h.write(d.v, d.kind);
+    if (cs.pos[1] !== undefined) h.write(cs.pos[1], cs.posKinds[1], base);
+    else if (cs.pos[0] !== undefined) h.write(String(cs.pos[0]).replace(/[\\/]+$/, '').replace(/^.*[\\/:]/, '').replace(/\.git$/, '') || '.', cs.posKinds[0], base);
+    for (const d of cs.all('--separate-git-dir')) h.write(d.v, d.kind, base);
     return local('git clone');
   }
   if (sub === 'push') return pushConfig ? write('git.protected', undefined, 'git push with push/remote configuration overrides') : gitPush(rest, restK, ctx);
@@ -1164,13 +1329,13 @@ function git(args, ak, seg, ctx, h) {
   if (sub === 'submodule' && rest.includes('foreach')) {
     const cmd = rest[rest.length - 1];
     if (restK[rest.length - 1] !== 'lit') return unparseable('git submodule foreach command is not literal');
-    return h.script(cmd, 'bash');
+    return h.script(cmd, 'bash', null); // runs in each submodule
   }
   if (sub === 'bisect' && rest[0] === 'run') {
     const inner = rest.slice(1);
     if (!inner.length) return local('git bisect');
     if (restK.slice(1).some((x) => x !== 'lit')) return unparseable('git bisect run command is not literal');
-    return h.script(inner.map((x) => (/^[\w./:=@%+,-]+$/.test(x) ? x : `'${x.replace(/'/g, "'\\''")}'`)).join(' '), 'bash');
+    return h.script(inner.map((x) => (/^[\w./:=@%+,-]+$/.test(x) ? x : `'${x.replace(/'/g, "'\\''")}'`)).join(' '), 'bash', top);
   }
   if (sub === 'rebase' || sub === 'difftool') {
     for (let j = 0; j < rest.length; j += 1) {
@@ -1180,12 +1345,18 @@ function git(args, ak, seg, ctx, h) {
       else if (t.startsWith('--exec=') || t.startsWith('--extcmd=')) cmd = { v: t.slice(t.indexOf('=') + 1), k: restK[j] };
       if (cmd) {
         if (cmd.k !== 'lit' || typeof cmd.v !== 'string') return unparseable(`git ${sub} exec command is not literal`);
-        const inner = h.script(cmd.v, 'bash');
+        const inner = h.script(cmd.v, 'bash', top);
         if (inner.class !== 'local') return inner;
       }
     }
   }
-  if (sub === 'rm') for (let j = 0; j < rest.length; j += 1) if (!rest[j].startsWith('-')) h.write(rest[j], restK[j]);
+  if (sub === 'rm') {
+    let end = false;
+    for (let j = 0; j < rest.length; j += 1) {
+      if (!end && rest[j] === '--') { end = true; continue; }
+      if (end || !rest[j].startsWith('-')) h.write(rest[j], restK[j], base);
+    }
+  }
   if (sub === 'merge') {
     if (rest.some((x) => x === '--abort' || x === '--quit')) return local('git merge --abort');
     if (ctx.currentBranch && isProtected(ctx, ctx.currentBranch)) return write('git.protected', ctx.currentBranch, 'git merge into a protected branch');
@@ -1459,7 +1630,8 @@ const CURL_VALUES = new Set(['-H', '--header', '-o', '--output', '-A', '--user-a
   '-X', '--request', '-d', '--data', '--data-raw', '--data-binary', '--data-urlencode', '--data-ascii', '--json', '-F', '--form', '--form-string', '-T', '--upload-file', '--limit-rate', '-Y', '-y',
   '--interface', '--dns-servers', '--oauth2-bearer', '--aws-sigv4', '-z', '--time-cond', '--max-filesize', '--unix-socket', '--abstract-unix-socket', '--variable', '--trace', '--trace-ascii', '--stderr',
   '-D', '--dump-header', '--output-dir', '--ciphers', '--pinnedpubkey', '--request-target', '--connect-to', '-Q', '--quote', '--mail-from', '--mail-rcpt', '--mail-auth', '--keepalive-time', '--local-port',
-  '--noproxy', '--proto', '--proto-redir', '--socks5', '--socks5-hostname', '--netrc-file', '--service-name', '--parallel-max', '--rate', '-P', '--ftp-port', '-t', '--telnet-option', '--expand-url', '--expand-data']);
+  '--noproxy', '--proto', '--proto-redir', '--socks5', '--socks5-hostname', '--netrc-file', '--service-name', '--parallel-max', '--rate', '-P', '--ftp-port', '-t', '--telnet-option', '--expand-url', '--expand-data',
+  '--url-query']);
 const CURL_DATA = ['-d', '--data', '--data-raw', '--data-binary', '--data-urlencode', '--data-ascii', '--json', '-F', '--form', '--form-string', '-T', '--upload-file', '-Q', '--quote', '--mail-rcpt', '--expand-data'];
 
 function hiddenArgs(ak) {
@@ -1480,6 +1652,12 @@ function curl(args, ak, seg, h) {
   const method = String(s.first('-X', '--request') ?? '').toUpperCase();
   const data = s.has(...CURL_DATA);
   if (s.has('-G', '--get') && (s.all(...CURL_DATA).some((x) => String(x.v ?? '').startsWith('@')) || s.all('--data-urlencode').some((x) => /^[^=]*@/.test(String(x.v ?? ''))))) return xwrite('http.write', host, 'curl --get sends a file\'s contents');
+  // --url-query [+]name@file and @file put a file's contents into the URL
+  if (s.all('--url-query').some((x) => /^\+?[^=]*@/.test(String(x.v ?? '')))) return xwrite('http.write', host, 'curl --url-query sends a file\'s contents');
+  // --variable name@file loads a file that an --expand-* option can put into the request
+  const fileVars = s.all('--variable').filter((x) => /^[^=@%]*@/.test(String(x.v ?? '')));
+  for (const x of fileVars) h.read(String(x.v).slice(String(x.v).indexOf('@') + 1), x.kind);
+  if (fileVars.length && args.some((t) => t.startsWith('--expand-'))) return xwrite('http.write', host, 'curl sends a file loaded with --variable');
   if (method && method !== 'GET' && method !== 'HEAD') return xwrite('http.write', host, `curl ${method}`);
   if (data && !(s.has('-G', '--get') && !s.has('-F', '--form', '--form-string', '-T', '--upload-file', '-Q', '--quote', '--mail-rcpt'))) return xwrite('http.write', host, 'curl sends a body');
   return read('curl GET', host ? { host } : {});
@@ -1538,6 +1716,8 @@ function psParams(rawArgs, rawAk, { values = [], switches = [] }) {
   const pos = [];
   for (let i = 0; i < args.length; i += 1) {
     const t = args[i];
+    // `--` ends the parameters: everything after it is positional (Remove-Item -- -x)
+    if (t === '--') { for (let j = i + 1; j < args.length; j += 1) pos.push({ v: args[j], kind: ak[j] }); break; }
     if (t.startsWith('-') && t.length > 1 && !/^-\d/.test(t)) {
       let p = t.slice(1).toLowerCase();
       let inline;
@@ -1622,14 +1802,18 @@ function rsync(args, ak, h) {
 // ---------------------------------------------------------------- file commands (write roots)
 
 function posixFileCommand(name, args, ak, h) {
-  const opt = (t) => t.startsWith('-') && t !== '-';
-  const positional = () => { const out = []; let end = false; for (let i = 0; i < args.length; i += 1) { if (!end && args[i] === '--') { end = true; continue; } if (end || !opt(args[i])) out.push(i); } return out; };
+  // after `--` every word is an operand, even one that starts with a dash
+  const ends = [];
+  for (let i = 0, end = false; i < args.length; i += 1) { ends.push(end); if (args[i] === '--') end = true; }
+  const opt = (t, i) => t.startsWith('-') && t !== '-' && !ends[i];
+  const positional = () => { const out = []; for (let i = 0; i < args.length; i += 1) { if (!ends[i] && args[i] === '--') continue; if (!opt(args[i], i)) out.push(i); } return out; };
   switch (name) {
     case 'rm': case 'rmdir': case 'unlink': case 'shred': case 'touch': case 'mkdir': case 'tee': case 'truncate': {
       const skipNext = { touch: ['-d', '-t', '-r'], mkdir: ['-m'], truncate: ['-s', '-r'], shred: ['-n', '-s'] }[name] ?? [];
       for (let i = 0; i < args.length; i += 1) {
-        if (skipNext.includes(args[i])) { i += 1; continue; }
-        if (opt(args[i])) continue;
+        if (!ends[i] && args[i] === '--') continue;
+        if (!ends[i] && skipNext.includes(args[i])) { i += 1; continue; }
+        if (opt(args[i], i)) continue;
         h.write(args[i], ak[i]);
       }
       return local(`${name} files`);
@@ -1637,12 +1821,16 @@ function posixFileCommand(name, args, ak, h) {
     case 'mv': case 'cp': case 'install': case 'ln': {
       let tdir = null;
       const pos = [];
+      const opts = [];
       for (let i = 0; i < args.length; i += 1) {
         const t = args[i];
-        if (t === '-t' || t === '--target-directory') { tdir = i + 1; i += 1; continue; }
-        if (t.startsWith('--target-directory=')) { h.write(t.slice(19), ak[i]); tdir = -1; continue; }
-        if (t === '-S' || t === '--suffix' || t === '-m' || t === '-o' || t === '-g') { i += 1; continue; }
-        if (opt(t)) continue;
+        if (!ends[i]) {
+          if (t === '--') continue;
+          if (t === '-t' || t === '--target-directory') { tdir = i + 1; i += 1; continue; }
+          if (t.startsWith('--target-directory=')) { h.write(t.slice(19), ak[i]); tdir = -1; continue; }
+          if (t === '-S' || t === '--suffix' || t === '-m' || t === '-o' || t === '-g') { i += 1; continue; }
+        }
+        if (opt(t, i)) { opts.push(t); continue; }
         pos.push(i);
       }
       if (tdir !== null && tdir >= 0) h.write(args[tdir], ak[tdir]);
@@ -1653,7 +1841,7 @@ function posixFileCommand(name, args, ak, h) {
         if (name === 'ln' && pos.length === 1 && tdir === null) h.write(String(args[pos[0]]).replace(/^.*[\\/]/, ''), ak[pos[0]]);
         if (name === 'ln') for (const i of pos) h.write(args[i], ak[i]); // writes through a link land on its target
         // GNU accepts unambiguous prefixes: --l… is only --link, --sy… only --symbolic-link
-        const linking = name === 'cp' && args.some((t) => (t.length >= 3 && '--link'.startsWith(t)) || (t.length >= 4 && '--symbolic-link'.startsWith(t)) || (/^-[a-zA-Z]+$/.test(t) && /[ls]/.test(t)));
+        const linking = name === 'cp' && opts.some((t) => (t.length >= 3 && '--link'.startsWith(t)) || (t.length >= 4 && '--symbolic-link'.startsWith(t)) || (/^-[a-zA-Z]+$/.test(t) && /[ls]/.test(t)));
         // cp -l/-s makes links: a later write through the copy lands on the source
         if (name === 'cp') for (const i of pos.slice(0, tdir !== null ? pos.length : -1)) (linking ? h.write : h.read)(args[i], ak[i]);
       }
@@ -1679,7 +1867,8 @@ function posixFileCommand(name, args, ak, h) {
         const t = args[i];
         if (t === '-e' || t === '--expression' || t === '-f' || t === '--file') { scriptGiven = true; i += 1; continue; }
         if (t === '-l' || t === '--line-length') { i += 1; continue; }
-        if (opt(t)) continue;
+        if (!ends[i] && t === '--') continue;
+        if (opt(t, i)) continue;
         files.push(i);
       }
       for (const i of scriptGiven ? files : files.slice(1)) h.write(args[i], ak[i]);
@@ -1721,13 +1910,13 @@ function posixFileCommand(name, args, ak, h) {
       return local(`${name} searches files`);
     }
     case 'ls': case 'dir': case 'tree': case 'du': case 'stat': case 'file': case 'exa': case 'eza': {
-      for (let i = 0; i < args.length; i += 1) if (!opt(args[i])) h.read(args[i], ak[i]);
+      for (let i = 0; i < args.length; i += 1) if (!opt(args[i], i) && (ends[i] || args[i] !== '--')) h.read(args[i], ak[i]);
       return local(`${name} lists files`);
     }
     case 'cat': case 'head': case 'tail': case 'less': case 'more': case 'base64': case 'xxd': case 'od': case 'hexdump': case 'strings': case 'nl': case 'wc': {
       for (let i = 0; i < args.length; i += 1) {
         if (['-n', '-c', '--lines', '--bytes', '-w', '-s', '-l', '-o', '-x'].includes(args[i]) && i + 1 < args.length && /^[+-]?\d/.test(args[i + 1])) { i += 1; continue; }
-        if (opt(args[i])) continue;
+        if (opt(args[i], i)) continue;
         h.read(args[i], ak[i]);
       }
       return local(`${name} reads files`);
@@ -1788,8 +1977,9 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
   }
   const itemTypeArg = s.get('itemtype') ?? s.get('type');
   const itemType = String(itemTypeArg?.v ?? '').toLowerCase();
-  // -ItemType is wildcard-matched by PowerShell ('j*', '?unction') and may come from a variable
-  const maybeLink = !!itemTypeArg && (itemTypeArg.kind !== 'lit' || /[*?[]/.test(itemType));
+  // -ItemType is wildcard-matched by PowerShell ('j*', '?unction', 'Junc`tion' with the wildcard
+  // escape) and may come from a variable
+  const maybeLink = !!itemTypeArg && (itemTypeArg.kind !== 'lit' || /[*?[`]/.test(itemType));
   const isLink = !!itemType && ['symboliclink', 'junction', 'hardlink'].some((x) => x.startsWith(itemType));
   if (canon === 'new-item' && (isLink || maybeLink)) {
     const t = s.get('target') ?? s.get('value');

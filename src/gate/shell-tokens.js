@@ -12,8 +12,10 @@ class ShellParseError extends Error {}
 
 // Word kinds: 'lit' plain text; 'dyn' contains an expansion whose value is unknown; 'group' is
 // only a nested command group ($(…), (…), {…}) whose commands were lexed separately.
+// PowerShell words also keep where their unquoted `=` signs are (eqs) and where quoted text starts
+// (qs), so an assignment statement can be split into its target and the pipeline it runs.
 function newSeg(dialect) {
-  return { dialect, argv: [], kinds: [], quoted: [], assign: [], redirects: [], stdin: null, stdinDyn: false, piped: false, call: false, nested: false, env: {}, unparseable: null, pending: null };
+  return { dialect, argv: [], kinds: [], quoted: [], assign: [], eqs: [], qs: [], redirects: [], stdin: null, stdinDyn: false, piped: false, call: false, nested: false, env: {}, unparseable: null, pending: null };
 }
 
 const PS_SINGLE = new Set(["'", '‘', '’', '‚', '‛']);
@@ -56,7 +58,10 @@ class Lexer {
     if (this.nest > 1) seg.nested = true;
     let w = null;
     const start = () => { if (!w) w = { text: '', lit: false, dyn: false, group: false, quoted: false, qpos: -1, split: false, unq: '' }; return w; };
-    const quote = () => { start(); if (w.qpos < 0) w.qpos = w.text.length; w.quoted = true; };
+    // Quoted text after a bare comma is the next array element, so the comma no longer trails.
+    const quote = () => { start(); if (w.qpos < 0) w.qpos = w.text.length; w.quoted = true; w.commaAt = undefined; (w.qs ??= []).push(w.text.length); };
+    // PowerShell: the current word ends in a bare (unquoted, unescaped) comma.
+    const afterComma = () => !!w && w.commaAt !== undefined && w.commaAt === w.text.length;
     const flush = () => {
       if (!w) return;
       // bash brace expansion ({a,b}, {1..3}) turns one word into several
@@ -80,7 +85,7 @@ class Lexer {
         // Stop-parsing token: the rest of the line is passed verbatim.
         let j = s.indexOf('\n', this.i);
         if (j < 0) j = this.n;
-        for (const t of s.slice(this.i, j).split(/\s+/).filter(Boolean)) { seg.argv.push(t); seg.kinds.push('lit'); seg.quoted.push(false); seg.assign.push(false); }
+        for (const t of s.slice(this.i, j).split(/\s+/).filter(Boolean)) { seg.argv.push(t); seg.kinds.push('lit'); seg.quoted.push(false); seg.assign.push(false); seg.eqs.push(null); seg.qs.push(null); }
         this.i = j;
         return;
       }
@@ -88,6 +93,8 @@ class Lexer {
       seg.argv.push(word.text);
       seg.kinds.push(kind);
       seg.quoted.push(word.qpos === 0);
+      seg.eqs.push(word.eqs ?? null);
+      seg.qs.push(word.qs ?? null);
       const eq = word.text.indexOf('=');
       seg.assign.push(eq > 0 && (word.qpos < 0 || eq < word.qpos) && /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?$/.test(word.text.slice(0, eq)));
     };
@@ -109,6 +116,8 @@ class Lexer {
     const redirect = (c) => {
       let fd = '';
       if (w && !w.quoted && !w.dyn && !w.group && (/^\d+$/.test(w.text) || (ps && w.text === '*'))) { fd = w.text; w = null; } else flush();
+      // PowerShell rejects a redirect after a trailing comma; never let it continue onto the next line
+      seg.trailComma = false;
       let op;
       if (c === '<') {
         if (!ps && !cmd && s.startsWith('<<<', this.i)) op = '<<<';
@@ -286,7 +295,7 @@ class Lexer {
       }
       // PowerShell continues an array onto the next line after a trailing comma
       // (only a bare comma: a quoted 'a,' or escaped a`, ends the statement as usual)
-      if (c === '\n' && ps && (w ? w.commaAt === w.text.length : seg.trailComma)) { this.i += 1; continue; }
+      if (c === '\n' && ps && (w ? !seg.pending && afterComma() : seg.trailComma)) { this.i += 1; continue; }
       if (c === '\n') {
         end(false);
         this.i += 1;
@@ -297,8 +306,9 @@ class Lexer {
 
       if (ps) {
         if (isPsSpace(c)) { flush(); this.i += 1; continue; }
-        if (c === '#' && !w) { while (this.i < this.n && s[this.i] !== '\n') this.i += 1; continue; }
-        if (c === '<' && s[this.i + 1] === '#' && !w) {
+        // a comment starts a token, and a bare comma ends one (`x,#c` continues the array)
+        if (c === '#' && (!w || afterComma())) { while (this.i < this.n && s[this.i] !== '\n') this.i += 1; continue; }
+        if (c === '<' && s[this.i + 1] === '#' && (!w || afterComma())) {
           const j = s.indexOf('#>', this.i + 2);
           if (j < 0) this.fail('unterminated block comment');
           this.i = j + 2;
@@ -312,9 +322,22 @@ class Lexer {
           this.i += 2;
           continue;
         }
-        if (PS_SINGLE.has(c)) { psSquote(); continue; }
-        if (PS_DOUBLE.has(c)) { psDquote(); continue; }
-        if (c === '@' && (s[this.i + 1] === "'" || s[this.i + 1] === '"') && /^\r?\n/.test(s.slice(this.i + 2, this.i + 4))) { psHereString(s[this.i + 1]); continue; }
+        const hereString = c === '@' && (s[this.i + 1] === "'" || s[this.i + 1] === '"') && /^\r?\n/.test(s.slice(this.i + 2, this.i + 4));
+        if (PS_SINGLE.has(c) || PS_DOUBLE.has(c) || hereString) {
+          // A token (or array element) that starts with a quote ends at the closing quote:
+          // `& 'kubectl'delete` runs kubectl with the argument delete. Member access or an
+          // index right after it ('a'.Length) computes a value instead.
+          const head = !w || afterComma();
+          if (hereString) psHereString(s[this.i + 1]);
+          else if (PS_SINGLE.has(c)) psSquote();
+          else psDquote();
+          if (head) {
+            const nx = s[this.i];
+            if (nx === '.' || nx === '[') w.dyn = true;
+            else if (nx !== ',' && nx !== undefined) flush();
+          }
+          continue;
+        }
         if (c === '@' && s[this.i + 1] === '(') { group(2, ')', '@(…)'); continue; }
         if (c === '@' && s[this.i + 1] === '{') { group(2, '}', '@{…}'); continue; }
         if (c === '$') { psDollar(true); continue; }
@@ -349,6 +372,7 @@ class Lexer {
         if (c === '>' || c === '<') { redirect(c); continue; }
         if (PS_DASH.has(c) && !w) { start(); w.text += '-'; w.lit = true; this.i += 1; continue; }
         start();
+        if (c === '=') (w.eqs ??= []).push(w.text.length);
         w.text += c;
         if (c === ',') w.commaAt = w.text.length;
         w.lit = true;
@@ -667,6 +691,64 @@ function decodePsBase64(v) {
   return text;
 }
 
+// Drive-qualified variable references in PowerShell text. ${env:X} and $env:X name environment
+// variables; $function:f and $alias:a define commands; ${C:\path} and $c:name read or write a
+// file's content; scopes ($global:x, $using:x) are plain variables; any other provider item
+// (${HKCU:\…}, a custom drive) is not followed.
+const PS_SCOPES = new Set(['global', 'script', 'local', 'private', 'using', 'workflow', 'variable']);
+const PS_REF_RE = /\$\{([^}]*)\}|\$([A-Za-z0-9_?^]+):(?!:)([A-Za-z0-9_?^]*)/g;
+
+function psRefs(text) {
+  const out = [];
+  for (const m of String(text).matchAll(PS_REF_RE)) {
+    let qual;
+    let rest;
+    let ref;
+    if (m[1] !== undefined) {
+      const c = /^([^:\\/]*):(?!:)[\\/]?(.*)$/s.exec(m[1]);
+      if (!c) { if (m[1].includes(':')) out.push({ kind: 'provider', text: m[1] }); continue; }
+      [, qual, rest] = c;
+      ref = m[1];
+    } else {
+      [, qual, rest] = m.slice(1);
+      ref = `${m[2]}:${m[3]}`;
+    }
+    const ql = qual.toLowerCase();
+    if (ql === 'env') out.push({ kind: 'env', name: rest });
+    else if (ql === 'function' || ql === 'alias') out.push({ kind: 'define', text: ref });
+    else if (PS_SCOPES.has(ql)) continue;
+    else if (/^[a-z]$/.test(ql)) out.push({ kind: 'file', path: ref });
+    else if (rest !== '') out.push({ kind: 'provider', text: ref });
+  }
+  return out;
+}
+
+const PS_ASSIGN_OP = /^[+\-*/%]?=$/;
+
+// The first assignment operator of a PowerShell statement that starts with a target ($x = …,
+// [string]$x=…, $a, $b = …): { lhs: target texts, op, at: index of the first word after it,
+// head: the text after an attached `=` (or null) }, or null when there is none.
+function psSplitAssignment(a, k, q, eqs, qss) {
+  for (let j = 0; j < a.length; j += 1) {
+    if (PS_ASSIGN_OP.test(a[j]) && k[j] === 'lit' && !q[j]) return { lhs: a.slice(0, j), op: a[j], at: j + 1, head: null };
+    const e = eqs[j];
+    if (!e || !e.length) continue;
+    const pos = e[0];
+    const compound = pos > 0 && /[+\-*/%]/.test(a[j][pos - 1]);
+    const lhsText = a[j].slice(0, compound ? pos - 1 : pos);
+    const rhsText = a[j].slice(pos + 1);
+    const head = rhsText === '' ? null : {
+      text: rhsText,
+      kind: /[$…]/.test(rhsText) ? 'dyn' : 'lit',
+      quoted: (qss[j] ?? []).includes(pos + 1),
+      eqs: e.slice(1).map((x) => x - pos - 1),
+      qs: (qss[j] ?? []).filter((x) => x > pos).map((x) => x - pos - 1),
+    };
+    return { lhs: [...a.slice(0, j), ...(lhsText ? [lhsText] : [])], op: compound ? `${a[j][pos - 1]}=` : '=', at: j + 1, head };
+  }
+  return null;
+}
+
 // Expands one lexed segment into the commands it would actually run.
 function expand(seg, depth, out) {
   if (seg.unparseable) { out.push(seg); return; }
@@ -675,11 +757,19 @@ function expand(seg, depth, out) {
   const k = seg.kinds.slice();
   const q = seg.quoted.slice();
   const as = (seg.assign ?? []).slice();
+  const eqs = seg.eqs?.length === a.length ? seg.eqs.slice() : a.map(() => null);
+  const qss = seg.qs?.length === a.length ? seg.qs.slice() : a.map(() => null);
   const env = { ...seg.env };
   let call = seg.call;
-  const shift = (n = 1) => { a.splice(0, n); k.splice(0, n); q.splice(0, n); as.splice(0, n); };
+  const shift = (n = 1) => { a.splice(0, n); k.splice(0, n); q.splice(0, n); as.splice(0, n); eqs.splice(0, n); qss.splice(0, n); };
   const bad = (reason) => out.push({ ...seg, argv: a.slice(), kinds: k.slice(), quoted: q.slice(), env, unparseable: reason });
-  const redirectsOnly = () => { if (seg.redirects.length) out.push({ ...seg, argv: [], kinds: [], quoted: [], stdin: null }); };
+  const ps = seg.dialect === 'powershell';
+  // PowerShell file content read or written through ${C:\path} variable notation
+  // (each segment is expanded once; the lists are filled before any copy of it is pushed)
+  const addPs = (key, p) => { (seg[key] ??= []).push(p); };
+  // Before handing over to a nested script, keep what this segment itself does: its redirects,
+  // the environment it passes on (checked as if exported) and any PowerShell file access.
+  const redirectsOnly = () => { if (seg.redirects.length || seg.psWrites?.length || seg.psReads?.length || Object.keys(env).length) out.push({ ...seg, argv: [], kinds: [], quoted: [], stdin: null, env }); };
   const script = (text, dialect) => {
     redirectsOnly();
     let segs;
@@ -689,13 +779,32 @@ function expand(seg, depth, out) {
     }
     for (const s2 of segs) expand(s2, depth + 1, out);
   };
-  const ps = seg.dialect === 'powershell';
   if (ps) {
     for (let x = 0; x < a.length; x += 1) {
       if (k[x] === 'split' && /^@\w/.test(a[x])) { bad('splatted parameters are not visible'); return; }
       if (PS_DANGER_RE.test(a[x]) && !/^\[(system\.)?console\]::/i.test(a[x])) { bad('.NET method call that can run code, send data or write files'); return; }
+      if (k[x] === 'lit') continue;
+      for (const ref of psRefs(a[x])) {
+        if (ref.kind === 'file') addPs('psReads', ref.path);
+        else if (ref.kind === 'provider') { bad(`PowerShell provider item ${ref.text.slice(0, 60)} is not followed`); return; }
+      }
     }
   }
+  // Records the targets of a PowerShell assignment; returns a reason when one cannot be followed.
+  const psTargets = (lhs, op, rhs) => {
+    const refs = lhs.flatMap((t) => psRefs(t));
+    for (const ref of refs) {
+      if (ref.kind === 'define') return 'assignment defines a PowerShell function or alias';
+      if (ref.kind === 'provider') return `assignment to PowerShell provider item ${ref.text.slice(0, 60)}`;
+      if (ref.kind === 'file') addPs('psWrites', ref.path);
+    }
+    const envRefs = refs.filter((ref) => ref.kind === 'env');
+    // a literal value only for `$env:X = 'text'`; a command's output or an expression is unknown
+    const single = envRefs.length === 1 && lhs.length === 1 && op === '=' && /^\$(\{env:[^}]*\}|env:[A-Za-z0-9_?^]*)$/i.test(lhs[0]);
+    const value = single && rhs && rhs.count === 1 && rhs.kind === 'lit' && (rhs.quoted || /^\d+$/.test(rhs.text)) ? rhs.text : null;
+    for (const ref of envRefs) env[ref.name] = value;
+    return null;
+  };
 
   for (let guard = 0; guard < 64; guard += 1) {
     if (!a.length) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
@@ -710,14 +819,33 @@ function expand(seg, depth, out) {
       continue;
     }
     if (ps && !call) {
-      if (/^\$[\w:{}]+\s*[+\-*/]?=/.test(w0)) {
-        const m = /^\$(?:env:)?([\w]+)=(.*)$/i.exec(w0);
-        if (m && /^\$env:/i.test(w0)) env[m[1]] = m[2];
-        shift();
+      // return/throw/exit take a pipeline: `return kubectl delete …` runs kubectl
+      if (k[0] === 'lit' && !q[0] && a.length > 1 && /^(return|throw|exit)$/i.test(w0)) { shift(); continue; }
+      // foreach ($x in <pipeline>): the loop variable is assigned and the collection may be a command
+      if (/^[$[]/.test(w0) && a.length >= 2 && /^in$/i.test(a[1]) && k[1] === 'lit' && !q[1]) {
+        const why = psTargets([w0], 'foreach', null);
+        if (why) { bad(why); return; }
+        shift(2);
         continue;
       }
-      if (w0.startsWith('$') && a.length > 1 && /^[+\-*/]?=$/.test(a[1])) { shift(2); continue; }
-      if (q[0] || w0.startsWith('$') || k[0] === 'group' || /^(\d[\d.]*|\.\d[\d.]*)$/.test(w0) || w0.startsWith('@')) {
+      // assignment: the targets are recorded and the right-hand side is a pipeline of its own
+      // ($x = kubectl delete …, $x=kubectl …, $a, $b = …, $x = $y = …)
+      if (/^[$[]/.test(w0)) {
+        const asg = psSplitAssignment(a, k, q, eqs, qss);
+        if (asg) {
+          const count = a.length - asg.at + (asg.head ? 1 : 0);
+          const first = asg.head ?? (asg.at < a.length ? { text: a[asg.at], kind: k[asg.at], quoted: q[asg.at] } : null);
+          const why = psTargets(asg.lhs, asg.op, first ? { ...first, count } : null);
+          if (why) { bad(why); return; }
+          shift(asg.at);
+          if (asg.head) {
+            a.unshift(asg.head.text); k.unshift(asg.head.kind); q.unshift(asg.head.quoted); as.unshift(false);
+            eqs.unshift(asg.head.eqs.length ? asg.head.eqs : null); qss.unshift(asg.head.qs.length ? asg.head.qs : null);
+          }
+          continue;
+        }
+      }
+      if (q[0] || /^[$@(]/.test(w0) || k[0] === 'group' || /^(\d[\d.]*|\.\d[\d.]*)$/.test(w0)) {
         // an expression, not a command; nested groups were lexed separately
         out.push({ ...seg, argv: [], kinds: [], quoted: [], env });
         return;
@@ -737,7 +865,7 @@ function expand(seg, depth, out) {
 
     // cmd/c and Git Bash's cmd //c
     const glued = /^((?:.*[\\/])?cmd(?:\.exe)?)(\/\/?[ckr])$/i.exec(w0);
-    if (glued) { a.splice(0, 1, glued[1], glued[2]); k.splice(0, 1, 'lit', 'lit'); q.splice(0, 1, false, false); as.splice(0, 1, false, false); continue; }
+    if (glued) { a.splice(0, 1, glued[1], glued[2]); k.splice(0, 1, 'lit', 'lit'); q.splice(0, 1, false, false); as.splice(0, 1, false, false); eqs.splice(0, 1, null, null); qss.splice(0, 1, null, null); continue; }
     const name = binName(w0);
     const rest = () => a.slice(1);
 
@@ -815,10 +943,10 @@ function expand(seg, depth, out) {
         bad(`unknown option for xargs: ${t}`);
         return;
       }
-      if (j >= a.length) { a.splice(0, a.length, 'echo'); k.splice(0, k.length, 'lit'); q.splice(0, q.length, false); continue; }
+      if (j >= a.length) { a.splice(0, a.length, 'echo'); k.splice(0, k.length, 'lit'); q.splice(0, q.length, false); as.splice(0, as.length, false); eqs.splice(0, eqs.length, null); qss.splice(0, qss.length, null); continue; }
       shift(j);
       for (let x = 0; x < a.length; x += 1) if (repl && a[x].includes(repl)) k[x] = 'dyn';
-      if (!repl) { a.push('{xargs}'); k.push('dyn'); q.push(false); }
+      if (!repl) { a.push('{xargs}'); k.push('dyn'); q.push(false); as.push(false); eqs.push(null); qss.push(null); }
       seg = { ...seg, piped: false };
       continue;
     }
@@ -928,7 +1056,7 @@ function expand(seg, depth, out) {
         const sw = a[j].toLowerCase().replace(/^\/\//, '/');
         j += 1;
         if (sw === '/c' || sw === '/k' || sw === '/r') { run = true; break; }
-        if (/^\/[ck]./.test(sw)) { a.splice(j, 0, a[j - 1].slice(2)); k.splice(j, 0, 'lit'); q.splice(j, 0, false); run = true; break; }
+        if (/^\/[ck]./.test(sw)) { a.splice(j, 0, a[j - 1].slice(2)); k.splice(j, 0, 'lit'); q.splice(j, 0, false); as.splice(j, 0, false); eqs.splice(j, 0, null); qss.splice(j, 0, null); run = true; break; }
       }
       if (run) {
         if (j >= a.length) { out.push({ ...seg, argv: [], kinds: [], quoted: [], env }); return; }

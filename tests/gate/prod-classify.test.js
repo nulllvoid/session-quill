@@ -95,6 +95,25 @@ test('PowerShell comma-newline input near the size cap is classified in linear t
   }
 });
 
+test('assignment, comment, git -C and end-of-options input near the size cap is classified in linear time', () => {
+  const inputs = [
+    ['PowerShell', `${'$a='.repeat(24_000)}kubectl delete ns x`],
+    ['PowerShell', `Write-Output ${"a,''\n".repeat(19_000)}`],
+    ['PowerShell', `Remove-Item x${',#c\n'.repeat(24_000)}y`],
+    ['PowerShell', `Write-Output "${'${C:\\a}'.repeat(12_000)}"`],
+    ['Bash', `git ${'-C a '.repeat(19_000)}status`],
+    ['Bash', `rm ${'-- '.repeat(33_000)}`],
+    ['Bash', `export ${'A '.repeat(49_000)}`],
+  ];
+  for (const [tool_name, command] of inputs) {
+    const t0 = process.hrtime.bigint();
+    const r = classifyCall({ tool_name, tool_input: { command } }, baseCtx);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(CLASSES.has(r.class));
+    assert.ok(ms < 500, `${JSON.stringify(command.slice(0, 20))}… took ${ms.toFixed(1)} ms`);
+  }
+});
+
 test('garbage inputs never throw', () => {
   const inputs = [undefined, null, 0, 'x', [], { command: {} }, { command: Symbol.iterator.toString() }, { command: '\u0000kubectl delete pod p' }];
   for (const tool_name of ['Bash', 'PowerShell', 'Edit', 'mcp__a__b', '', undefined, 7]) {
