@@ -10,7 +10,7 @@
 //        trackerHosts?: string[] }
 // Git returns internal pseudo-scopes (ruling R2): git.commit, git.push, git.pr, git.protected.
 import path from 'node:path';
-import { parseShell, binName, MAX_COMMAND } from './shell-tokens.js';
+import { parseShell, binName, MAX_COMMAND, hasBraceExpansion } from './shell-tokens.js';
 
 const RANK = { local: 0, read: 1, 'external.write': 2, write: 3, 'unknown-prod': 4, unparseable: 5, privileged: 6 };
 
@@ -96,9 +96,12 @@ function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
     p = ctx.home + p.slice(1);
   }
   if (p.startsWith('~')) return null; // ~user, ~+ and ~- are not resolvable here
+  // Win32 device and long-path prefixes, and the local admin share, name the same files
+  p = p.replace(/^\\\\[?.]\\UNC\\/i, '\\\\').replace(/^\\\\[?.]\\/, '');
   // PowerShell provider-qualified paths: only the FileSystem provider names a file
   p = p.replace(/^(Microsoft\.PowerShell\.Core\\)?FileSystem::/i, '');
   if (/^[A-Za-z][\w.\\]*::/.test(p) || /^[A-Za-z][A-Za-z0-9_]+:/.test(p)) return null;
+  p = p.replace(/^\\\\(localhost|127\.0\.0\.1|\[::1\]|\.)\\([A-Za-z])\$(?=\\|$)/i, '$2:');
   let unresolved = false;
   // a literal word (quoted or plain text) has no expansions; only expand words the shell expands
   if (kind !== 'lit') {
@@ -227,7 +230,7 @@ function helpers(seg, ctx, st) {
     bad: null,
     write(word, kind = 'lit') {
       if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'write target is not literal'; return false; }
-      if (/[*?[]|\{[^{}]*(,|\.\.)[^{}]*\}/.test(String(word))) { h.bad = `write target has wildcards: ${String(word).slice(0, 80)}`; return false; }
+      if (/[*?[]/.test(String(word).replace(/^\\\\[?.]\\/, '')) || hasBraceExpansion(word)) { h.bad = `write target has wildcards: ${String(word).slice(0, 80)}`; return false; }
       if (NULL_TARGETS.has(String(word).toLowerCase())) return true;
       const p = st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined, kind);
       if (!p) { h.bad = `write target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
@@ -321,6 +324,7 @@ function inlineCode(code, kind, lang) {
   if (kind !== 'lit') return unknownProd(`${lang} inline code is not literal`);
   if (QUILL_IN_CODE_RE.test(code)) return privileged(`${lang} inline code invokes the Quill CLI`);
   if (PROD_BIN_RE.test(code) || SDK_RE.test(code) || PG_RE.test(code)) return unknownProd(`${lang} inline code names a prod binary or SDK client`);
+  if (/\b(symlink|symlinkSync|link|linkSync|hardlink_to|symlink_to|CreateSymbolicLink|CreateHardLink)\s*\(/i.test(code)) return unparseable(`${lang} inline code creates links the guard cannot follow`);
   if (PROCESS_IN_CODE_RE.test(code) || (BACKTICK_LANGS.has(lang) && /`[^`]+`/.test(code)) || (lang === 'awk' && /getline|\|\s*"|print[^;]*\|/.test(code))) return unknownProd(`${lang} inline code starts processes or evaluates code the guard cannot follow`);
   if (HTTP_WRITE_IN_CODE_RE.test(code) || (HTTP_LIB_RE.test(code) && /\.\s*(post|put|patch|delete|request|send|upload)\w*\s*\(/i.test(code))) return xwrite('http.write', undefined, `${lang} inline code sends data over the network`);
   return local(`${lang} inline code`);
@@ -533,6 +537,22 @@ function classifyCommand(name, seg, ctx, h) {
       if (!pos.length) return local(name);
       h.write(pos[0].v, pos[0].kind);
       return local(`${name} changes file attributes`);
+    }
+    case 'fsutil': {
+      const sub = args.map((x) => x.toLowerCase());
+      if (sub[0] === 'hardlink' && sub[1] === 'create') {
+        if (args.length < 4) h.bad = 'fsutil hardlink create without both paths';
+        for (const i of [2, 3]) if (args[i] !== undefined) h.write(args[i], ak[i]);
+        return local('fsutil hardlink create');
+      }
+      if (sub[0] === 'fsinfo' || sub.some((x) => x === 'query' || x === 'list' || x === 'queryvalue')) return local('fsutil query');
+      return unparseable('fsutil changes file-system state the guard cannot follow');
+    }
+    case 'link': {
+      const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('-'));
+      if (pos.length !== 2) { h.bad = 'link needs a target and a name'; return local('link'); }
+      for (const x of pos) h.write(x.v, x.kind);
+      return local('link');
     }
     case 'mklink': {
       const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/'));
@@ -1035,7 +1055,7 @@ function isProtected(ctx, name) {
 }
 
 const GIT_GLOBAL_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix']);
-const GIT_EXEC_CONFIG_RE = /^(core\.(sshcommand|pager|editor|hookspath|fsmonitor|gitproxy|askpass)|credential\..*|diff\..*\.(textconv|command)|diff\.external|merge\..*\.driver|filter\..*|sequence\.editor|gpg\..*program|pager\..*|uploadpack\..*|alias\..*|remote\..*\.(receivepack|uploadpack|vcs)|protocol\..*|url\..*)$/i;
+const GIT_EXEC_CONFIG_RE = /^(core\.(sshcommand|pager|editor|hookspath|fsmonitor|gitproxy|askpass)|credential\..*|diff\..*\.(textconv|command)|diff\.external|merge\..*\.driver|filter\..*|sequence\.editor|gpg\..*program|pager\..*|uploadpack\..*|alias\..*|remote\..*\.(receivepack|uploadpack|vcs)|protocol\..*|url\..*|include\.path|includeif\..*\.path|submodule\..*\.update|init\.templatedir|(merge|diff)tool\..*\.(cmd|path)|core\.(attributesfile|excludesfile|worktree)|safe\.directory)$/i;
 const GIT_LOCAL = new Set(['status', 'log', 'diff', 'show', 'branch', 'checkout', 'switch', 'add', 'rm', 'mv', 'restore', 'reset', 'stash', 'fetch', 'pull', 'clone', 'init', 'rev-parse', 'rev-list',
   'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'blame', 'grep', 'remote', 'tag', 'config', 'worktree', 'clean', 'describe', 'shortlog', 'reflog', 'merge-base', 'name-rev', 'for-each-ref', 'show-ref',
   'symbolic-ref', 'notes', 'bisect', 'apply', 'format-patch', 'archive', 'bundle', 'sparse-checkout', 'gc', 'fsck', 'prune', 'count-objects', 'var', 'version', 'help', 'diff-tree', 'diff-index',
@@ -1068,6 +1088,7 @@ function git(args, ak, seg, ctx, h) {
   if (sub === undefined) return local('git info');
   if (ak[i] !== 'lit') return unparseable('git subcommand is not literal');
   if (rest.some((t) => /^--(upload-pack|receive-pack|exec)(=|$)/.test(t))) return unparseable(`git ${sub} with a custom remote program`);
+  if (sub === 'remote' && ['set-url', 'add', 'set-head', 'rename'].includes(rest.find((x) => !x.startsWith('-')))) return unparseable(`git remote ${rest.find((x) => !x.startsWith('-'))} changes where pushes go`);
   if (sub === 'config') {
     const cs = scan(rest, restK, { values: new Set(['-f', '--file', '--blob', '--type', '--default', '--comment']) });
     const reading = cs.has('--get', '--get-all', '--get-regexp', '--get-urlmatch', '--list', '-l', '--unset', '--unset-all', '--remove-section', '--rename-section', '-e', '--edit') || (cs.pos[0] && ['get', 'list'].includes(cs.pos[0]) );
@@ -1151,6 +1172,7 @@ function gitPush(args, ak, ctx) {
     let dst = colon >= 0 ? spec.slice(colon + 1) : spec;
     const src = colon >= 0 ? spec.slice(0, colon) : spec;
     if (colon >= 0 && !src) return prot(dst, 'deleting a remote branch');
+    if (/@\{/.test(dst)) return prot(dst, 'push to a reflog or upstream shorthand');
     if (dst === 'HEAD' || dst === '@') {
       if (!ctx.currentBranch) return prot(undefined, 'push of HEAD with an unknown current branch');
       dst = ctx.currentBranch;
@@ -1409,6 +1431,7 @@ function curl(args, ak, seg, h) {
   if (urls.some((x) => /[?&]_method=(post|put|patch|delete)/i.test(String(x)))) return xwrite('http.write', host, 'curl overrides the method in the query');
   const method = String(s.first('-X', '--request') ?? '').toUpperCase();
   const data = s.has(...CURL_DATA);
+  if (s.has('-G', '--get') && s.all(...CURL_DATA).some((x) => String(x.v ?? '').startsWith('@'))) return xwrite('http.write', host, 'curl --get sends a file\'s contents');
   if (method && method !== 'GET' && method !== 'HEAD') return xwrite('http.write', host, `curl ${method}`);
   if (data && !(s.has('-G', '--get') && !s.has('-F', '--form', '--form-string', '-T', '--upload-file', '-Q', '--quote', '--mail-rcpt'))) return xwrite('http.write', host, 'curl sends a body');
   return read('curl GET', host ? { host } : {});
@@ -1581,7 +1604,9 @@ function posixFileCommand(name, args, ak, h) {
         if (dstIdx !== null) h.write(args[dstIdx], ak[dstIdx]);
         if (name === 'ln' && pos.length === 1 && tdir === null) h.write(String(args[pos[0]]).replace(/^.*[\\/]/, ''), ak[pos[0]]);
         if (name === 'ln') for (const i of pos) h.write(args[i], ak[i]); // writes through a link land on its target
-        if (name === 'cp') for (const i of pos.slice(0, tdir !== null ? pos.length : -1)) h.read(args[i], ak[i]);
+        const linking = name === 'cp' && args.some((t) => t === '--link' || t === '--symbolic-link' || (/^-[a-zA-Z]+$/.test(t) && /[ls]/.test(t)));
+        // cp -l/-s makes links: a later write through the copy lands on the source
+        if (name === 'cp') for (const i of pos.slice(0, tdir !== null ? pos.length : -1)) (linking ? h.write : h.read)(args[i], ak[i]);
       }
       return local(`${name} files`);
     }
@@ -1712,7 +1737,8 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
     if (idx === 0 && named0) continue;
     if (slots[slot]) writes.push(slots[slot]);
   }
-  if (canon === 'new-item' && /^(symboliclink|junction|hardlink)$/i.test(String(s.get('itemtype')?.v ?? s.get('type')?.v ?? ''))) {
+  const itemType = String(s.get('itemtype')?.v ?? s.get('type')?.v ?? '').toLowerCase();
+  if (canon === 'new-item' && itemType && ['symboliclink', 'junction', 'hardlink'].some((x) => x.startsWith(itemType))) {
     const t = s.get('target') ?? s.get('value');
     if (!t || t.v === true) h.bad = 'link without a literal target';
     else for (const one of splitPs(t.v)) h.write(one, t.kind);
@@ -1739,7 +1765,6 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
 const MCP_READ_VERBS = new Set(['get', 'list', 'search', 'fetch', 'read', 'describe', 'lookup', 'view', 'find', 'show', 'count', 'status', 'logs']);
 const MCP_WRITE_VERBS = new Set(['create', 'update', 'edit', 'delete', 'remove', 'send', 'post', 'reply', 'forward', 'transition', 'add', 'schedule', 'share', 'trash', 'merge', 'sync', 'apply', 'rollback',
   'terminate', 'restart', 'scale', 'deploy', 'publish', 'upload', 'copy', 'move', 'label', 'mark', 'respond', 'complete', 'approve', 'assign', 'invite', 'set']);
-const MCP_DEFAULT_READ = ['mcp__claude_ai_Slack__slack_send_message_draft', 'mcp__*slack*__slack_send_message_draft', 'mcp__*Slack*__slack_send_message_draft'];
 // Words that change state even though they are not in the spec's write-verb list.
 const MCP_MUTATING = new Set(['purge', 'drop', 'truncate', 'destroy', 'kill', 'reset', 'modify', 'replace', 'push', 'insert', 'upsert', 'save', 'put', 'patch', 'grant', 'revoke', 'enable', 'disable',
   'stop', 'start', 'restore', 'import', 'submit', 'trigger', 'invoke', 'call', 'write', 'undelete', 'archive', 'unarchive', 'notify', 'comment', 'cancel', 'abort', 'reboot', 'shutdown', 'resize', 'rename',
@@ -1772,7 +1797,7 @@ function classifyMcp(name, input, ctx) {
   }
   const reads = Array.isArray(policy.read) ? policy.read : [];
   if (reads.some((p) => globMatch(p, name))) return read('owner MCP read override');
-  if (MCP_DEFAULT_READ.some((p) => globMatch(p, name))) return read('built-in MCP read override');
+  if (tool === 'slack_send_message_draft' && /slack/i.test(server) && !server.includes('__')) return read('built-in MCP read override (Slack draft)');
   let hasRead = false;
   let hasWrite = false;
   let unknown = null;

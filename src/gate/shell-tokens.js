@@ -60,7 +60,7 @@ class Lexer {
     const flush = () => {
       if (!w) return;
       // bash brace expansion ({a,b}, {1..3}) turns one word into several
-      if (!ps && !cmd && w.unq && /\{[^{}]*(,|\.\.)[^{}]*\}/.test(w.unq)) { w.split = true; w.dyn = true; }
+      if (!ps && !cmd && w.unq && hasBraceExpansion(w.unq)) { w.split = true; w.dyn = true; }
       const kind = w.split ? 'split' : w.dyn || (w.group && w.lit) ? 'dyn' : w.group ? 'group' : 'lit';
       const word = w;
       w = null;
@@ -283,6 +283,8 @@ class Lexer {
         this.nest -= 1;
         return;
       }
+      // PowerShell continues an array onto the next line after a trailing comma
+      if (c === '\n' && ps && ((w && w.text.endsWith(',')) || (!w && seg.argv.length && seg.argv[seg.argv.length - 1].endsWith(',')))) { this.i += 1; continue; }
       if (c === '\n') {
         end(false);
         this.i += 1;
@@ -549,6 +551,12 @@ class Lexer {
       }
     }
   }
+}
+
+// `{a,b}` or `{1..3}` anywhere in the text. Linear: each brace group is scanned once.
+export function hasBraceExpansion(text) {
+  for (const m of String(text).matchAll(/\{[^{}]*\}/g)) if (m[0].includes(',') || m[0].includes('..')) return true;
+  return false;
 }
 
 function psEscape(c) {

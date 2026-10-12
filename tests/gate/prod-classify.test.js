@@ -73,6 +73,17 @@ test('thousands of cd commands are refused quickly, not followed one by one', ()
   assert.ok(ms < 1000, `${ms.toFixed(0)} ms`);
 });
 
+test('brace-like input near the size cap is classified in linear time', () => {
+  const inputs = [`echo x > {${','.repeat(99_000)}`, `echo ${'{'.repeat(99_000)}`, `echo {${'a,'.repeat(49_000)}`, `rm ${'{a,'.repeat(33_000)}`];
+  for (const command of inputs) {
+    const t0 = process.hrtime.bigint();
+    const r = classifyCall({ tool_name: 'Bash', tool_input: { command } }, baseCtx);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(CLASSES.has(r.class));
+    assert.ok(ms < 50, `${command.slice(0, 20)}… took ${ms.toFixed(1)} ms`);
+  }
+});
+
 test('garbage inputs never throw', () => {
   const inputs = [undefined, null, 0, 'x', [], { command: {} }, { command: Symbol.iterator.toString() }, { command: '\u0000kubectl delete pod p' }];
   for (const tool_name of ['Bash', 'PowerShell', 'Edit', 'mcp__a__b', '', undefined, 7]) {
