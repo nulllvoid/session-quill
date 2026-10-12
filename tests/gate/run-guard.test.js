@@ -81,6 +81,10 @@ const KUBECTL_ONLY = { name: 'k8s.write', target: 'stg', matchers: { bash: ['kub
 
 const CRITICAL_TAIL = 'Record it in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.';
 const denied = (code) => new RegExp(`^QUILL_DENIED ${code}: `);
+// R17.1: `..` after a name in one path word, refused with a reason that says what to write instead
+const CLIMBS = /^QUILL_DENIED unparseable: the path .* has '\.\.' after a directory name.*Write the path without 'name\/\.\.'/;
+// outside the writable roots (the fixture's outside directories sit under the protected Quill home)
+const OUT_W = /^QUILL_DENIED (outside-writable|protected-path): /;
 const critical = (scope, target) => new RegExp(`^QUILL_CRITICAL_CHANGE scope=${scope.replace(/\./g, '\\.')} target=${target === undefined ? '' : target.replace(/\./g, '\\.')}`);
 
 // Install root used as the checkout (Review Focus 2): edits must work, the guard code must not change.
@@ -221,13 +225,97 @@ const ROWS = [
   ['C1a: copying with [[=e=]]', bash('cp [[=e=]]sc/credentials src/x.txt'), { grant: { permissions: EDIT } }, denied('outside-readable')],
   ['C1a: [[:alpha:]] through the junction', bash('cat [[:alpha:]]sc/credentials'), {}, /^QUILL_DENIED (outside-readable|unparseable): /],
 
-  // fix round 3, P1: `..` after a link is applied physically, as the shell does
-  ['P1: link then ..', bash('cat esc/../credentials'), {}, denied('outside-readable')],
-  ['P1: wildcard then ..', bash('cat */../credentials'), {}, denied('outside-readable')],
-  ['P1: ? wildcard then ..', bash('cat e?c/../credentials'), {}, denied('outside-readable')],
+  // fix round 3, P1: `..` after a link is applied physically, as the shell does; fix round 4
+  // (R17.1): `..` after a name in one path word is refused outright
+  ['P1: link then ..', bash('cat esc/../credentials'), {}, CLIMBS],
+  ['P1: wildcard then ..', bash('cat */../credentials'), {}, CLIMBS],
+  ['P1: ? wildcard then ..', bash('cat e?c/../credentials'), {}, CLIMBS],
   ['P1: cd into the link, then ..', bash('cd esc && cat ../credentials'), {}, denied('outside-readable')],
-  ['P1: write through link then ..', bash('echo x > esc/../x.txt'), { grant: { permissions: EDIT } }, /^QUILL_DENIED (outside-writable|protected-path): /],
-  ['P1: .. over plain directories', bash('cat src/../src/app.js'), {}, 'allow'],
+  ['P1: write through link then ..', bash('echo x > esc/../x.txt'), { grant: { permissions: EDIT } }, CLIMBS],
+  ['R17.1: .. after a name, even over plain directories', bash('cat src/../src/app.js'), {}, CLIMBS],
+  ['R17.1: a/..', bash('cat a/..'), {}, CLIMBS],
+  ['R17.1: .. after a name in a Read path', call('Read', { file_path: [checkout, 'src', '..', 'src', 'app.js'].join(path.sep) }), {}, denied('unparseable')],
+  ['R17.1: cd then a leading .. over plain directories', bash('cd src && cat ../src/app.js'), {}, 'allow'],
+  ['R17.1: a leading .. back into the checkout', bash(`cat ../${path.basename(checkout)}/src/app.js`), {}, 'allow'],
+  ['R17.1: a leading .. out of the checkout', bash('cat ../../../../outside/credentials'), {}, denied('outside-readable')],
+  ['R17.1: .. from a directory that does not exist (the cd failed)', bash('cd nothere; cat ../../../../outside/credentials'), {}, denied('(unparseable|outside-readable)')],
+  ['R17.1: .. from a directory that does not exist yet', bash('cd nothere; cat ../src/app.js'), {}, /^QUILL_DENIED unparseable: .*not an existing directory/],
+  ['R17.1: PowerShell .. after a name', pwsh('Get-Content esc\\..\\credentials'), {}, CLIMBS],
+
+  // fix round 4, R17.2 and P1r: directory options take the same `..` rules
+  ['P1r: git -C .. from inside the link, clone', bash('cd esc && git -C .. clone https://github.com/x/y zA'), { grant: { permissions: EDIT } }, /^QUILL_DENIED (outside-writable|outside-readable): /],
+  ['P1r: git -C .. from inside the link, init', bash('cd esc && git -C .. init zA'), { grant: { permissions: EDIT } }, /^QUILL_DENIED (outside-writable|outside-readable): /],
+  ['P1r: git -C esc/.. init', bash('git -C esc/.. init zA'), { grant: { permissions: EDIT } }, CLIMBS],
+  ['P1r: git -C .. rm from inside the link', bash('cd esc && git -C .. rm credentials'), { grant: { permissions: EDIT } }, /^QUILL_DENIED (outside-writable|outside-readable): /],
+  ['R17.2: git -C a directory outside the readable roots', bash(`git -C ${q(outside)} log`), {}, denied('outside-readable')],
+  ['R17.2: git -C a subdirectory', bash('git -C src log'), {}, 'allow'],
+  ['R17.2: git -C src clone', bash('git -C src clone https://github.com/x/y zB'), { grant: { permissions: EDIT } }, 'allow'],
+  ['R17.2: make -C esc/..', bash('make -C esc/.. test'), {}, CLIMBS],
+  ['R17.2: make -C through the link', bash('make -C esc test'), {}, denied('outside-readable')],
+  ['R17.2: tar -C esc/..', bash('tar -C esc/.. -cf /tmp/out.tar credentials'), {}, CLIMBS],
+  ['R17.2: tar -C home', bash('tar -C ~ -czf /tmp/x.tgz .aws'), {}, denied('outside-readable')],
+  ['R17.2: npm --prefix esc/..', bash('npm --prefix esc/.. test'), {}, CLIMBS],
+  ['R17.2: pushd esc/..', bash('pushd esc/.. && cat credentials'), {}, CLIMBS],
+  ['R17.2: cd -P esc/..', bash('cd -P esc/.. && cat credentials'), {}, CLIMBS],
+  ['R17.2: Set-Location esc\\..', pwsh('Set-Location esc\\..; Get-Content credentials'), {}, CLIMBS],
+  ['R17.2: Push-Location esc\\..', pwsh('Push-Location esc\\..; Get-Content credentials'), {}, CLIMBS],
+  ['R17.2: env -C esc/..', bash('env -C esc/.. cat credentials'), {}, CLIMBS],
+  ['R17.2: env -C home', bash('env -C ~ cat .aws/credentials'), {}, denied('outside-readable')],
+  ['R17.2: env -C into the link then ..', bash('env -C esc cat ../credentials'), {}, denied('outside-readable')],
+  ['R17.2: env -C src', bash('env -C src cat app.js'), {}, 'allow'],
+  ['R17.2: env -C keeps the redirect where the shell opens it', bash('env -C src cat app.js > out.txt'), { grant: { permissions: EDIT } }, 'allow'],
+  ['R17.2: sudo -D home', bash('sudo -D ~ cat .aws/credentials'), {}, denied('outside-readable')],
+  ['R17.2: a cd inside bash -c ends with it', bash(`cd ~; bash -c ${q(`cd ${checkout.replace(/\\/g, '/')}`)}; cat .aws/credentials`), {}, denied('outside-readable')],
+  ['R17.2: a cd inside bash -c applies inside it', bash(`bash -c 'cd src && cat app.js'`), {}, 'allow'],
+  ['R17.2: a cd inside eval lasts', bash(`eval 'cd ~'; cat .aws/credentials`), {}, denied('outside-readable')],
+  ['R17.2: Set-Location inside Invoke-Expression lasts', pwsh(`Invoke-Expression 'Set-Location ~'; Get-Content .aws/credentials`), {}, denied('outside-readable')],
+  ['R17.2: Start-Process -WorkingDirectory', pwsh(`Start-Process -WorkingDirectory ${q(home)} -FilePath cat -ArgumentList .aws/credentials`), {}, denied('outside-readable')],
+  ['R17.2: pwsh -WorkingDirectory', pwsh(`pwsh -WorkingDirectory ${q(home)} -Command 'Get-Content .aws/credentials'`), {}, denied('outside-readable')],
+  ['R17.2: cmd start /D', bash(`cmd /c 'start /D "${home}" type .aws\\credentials'`), {}, denied('outside-readable')],
+
+  // fix round 4, R17.3: CDPATH
+  ['OOS-C1: CDPATH prefix on cd', bash(`CDPATH=${q(home)} cd .aws && cat credentials`), {}, denied('unparseable')],
+  ['OOS-C1: export CDPATH', bash(`export CDPATH=${q(home)}; cd .aws; cat credentials`), {}, denied('unparseable')],
+  ['OOS-C1: CDPATH assignment', bash(`CDPATH=${q(home)}; cd .aws && cat credentials`), {}, denied('unparseable')],
+  ['OOS-C1: export a CDPATH set elsewhere', bash('export CDPATH; cd .aws'), {}, denied('unparseable')],
+  ['OOS-C1: PowerShell $env:CDPATH', pwsh(`$env:CDPATH = ${q(home)}; bash -c 'cd .aws && cat credentials'`), {}, denied('unparseable')],
+  ['OOS-C1: CDPATH in the hook environment', bash('cd .aws && cat credentials'), { env: { vars: { ...VARS, CDPATH: home } } }, denied('unparseable')],
+
+  // fix round 4, R17.4: a symbolic link's target is resolved where the link is
+  ['OOS-C2: ln -s with the link one level up', bash('cd src && ln -s ../outside ../lnk && cat ../lnk/credentials'), { grant: { permissions: EDIT } }, OUT_W],
+  ['R17.4: ln -s into a subdirectory with a climbing target', bash('ln -s ../../outside src/lnk'), { grant: { permissions: EDIT } }, OUT_W],
+  ['R17.4: ln -s with a target beside the link', bash('ln -s app.js src/app2.js'), { grant: { permissions: EDIT } }, 'allow'],
+  ['R17.4: ln -s with a relative target into the checkout', bash('ln -s ../src/app.js src/again.js'), { grant: { permissions: EDIT } }, 'allow'],
+  ['R17.4: ln -s into an existing directory', bash('ln -s ../../outside src'), { grant: { permissions: EDIT } }, OUT_W],
+  ['R17.4: New-Item SymbolicLink with a target relative to the link', pwsh('New-Item -ItemType SymbolicLink -Path src\\lnk -Target ..\\..\\outside'), { grant: { permissions: EDIT } }, OUT_W],
+  ['R17.4: mklink with a target relative to the link', bash(`cmd /c 'mklink /D src\\lnk ..\\..\\outside'`), { grant: { permissions: EDIT } }, OUT_W],
+
+  // fix round 4, R17.5: cmd copy concatenation
+  ['OOS-C3: copy a+<outside file>', bash(`cmd /c 'copy /b src\\app.js+"${path.join(outside, 'credentials')}" out.txt'`), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['OOS-C3: copy a+<outside file> from PowerShell', pwsh(`cmd /c "copy /b src\\app.js+\`"${path.join(outside, 'credentials')}\`" out.txt"`), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['OOS-C3: copy a + b with spaces', bash(`cmd /c 'copy src\\app.js + "${path.join(outside, 'credentials')}" /b out.txt'`), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['OOS-C3: copy a+b with no destination writes into a', bash(`cmd /c 'copy src\\app.js+"${path.join(outside, 'credentials')}"'`), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['OOS-C3: copy a+b of plain files', bash(`cmd /c 'copy /b src\\app.js+src\\app.js out.txt'`), { grant: { permissions: EDIT } }, 'allow'],
+
+  // fix round 4, R17.6: copies and moves with no destination land in the current directory
+  ['OOS-I: Copy-Item .mcp.json, no destination', pwsh(`Copy-Item ${q(path.join(tmp, '.mcp.json'))}`), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['OOS-I: Copy-Item -Recurse .claude, no destination', pwsh(`Copy-Item -Path ${q(path.join(tmp, 'stage', '.claude'))} -Recurse -Force`), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['OOS-I: cmd copy .mcp.json, one operand', bash(`cmd /c 'copy "${path.join(tmp, '.mcp.json')}"'`), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['OOS-I: Move-Item, no destination, read-only run', pwsh(`Move-Item ${q(path.join(tmp, 'note3.txt'))}`), {}, denied('no-edit-permission')],
+  ['OOS-I: Copy-Item, no destination, read-only run', pwsh(`Copy-Item ${q(path.join(tmp, 'note2.txt'))}`), {}, denied('no-edit-permission')],
+  ['OOS-I: cmd copy, one operand, read-only run', bash(`cmd /c 'copy "${path.join(tmp, 'note.txt')}"'`), {}, denied('no-edit-permission')],
+  ['OOS-I: xcopy, one operand', bash(`cmd /c 'xcopy "${path.join(tmp, 'stage')}" /E /I'`), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['OOS-I: robocopy without a destination', bash(`robocopy ${q(path.join(tmp, 'stage'))}`), {}, /^QUILL_DENIED (no-edit-permission|protected-path): /],
+  ['R17.6: Copy-Item -Path with a positional destination', pwsh(`Copy-Item -Path ${q(path.join(tmp, '.mcp.json'))} .mcp.json`), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['R17.6: Copy-Item into a named destination', pwsh(`Copy-Item ${q(path.join(tmp, 'note2.txt'))} -Destination src\\note2.txt`), { grant: { permissions: EDIT } }, 'allow'],
+  ['R17.6: Compress-Archive reads its sources', pwsh(`Compress-Archive -Path ${q(path.join(home, '.aws'))} ${q(path.join(tmp, 'x.zip'))}`), {}, denied('outside-readable')],
+
+  // fix round 4, R17.7 and P2r: a new name with a path in it
+  ['P2r: Rename-Item -NewName an absolute path', pwsh(`Rename-Item -Path y -NewName ${q(path.join(checkout, '.mcp.json'))}`), { grant: { permissions: EDIT } }, denied('unparseable')],
+  ['P2r: Rename-Item to an absolute path, positional', pwsh(`Rename-Item y ${q(path.join(checkout, '.claude'))}`), { grant: { permissions: EDIT } }, denied('unparseable')],
+  ['P2r: Rename-Item -NewName with a directory', pwsh('Rename-Item x -NewName .\\.claude'), { grant: { permissions: EDIT } }, denied('unparseable')],
+  ['P2r: cmd ren to a path', bash(`cmd /c 'ren x sub\\.claude'`), { grant: { permissions: EDIT } }, denied('unparseable')],
+  ['P2r: Rename-Item to a plain name', pwsh('Rename-Item -Path src\\app.js -NewName app2.js'), { grant: { permissions: EDIT } }, 'allow'],
 
   // fix round 3, N3: cmd's DOS wildcards < > "
   ['N3: cmd < wildcard beside the junction', bash(`cmd /c 'type "es<"'`), {}, denied('outside-readable')],
@@ -597,6 +685,55 @@ test('one wildcard budget per call, with memoised listings, keeps a decision qui
   const ms2 = fastestMs(() => { r = run(linkPaths, {}); });
   assert.match(r.reason, denied('wildcard-too-broad'));
   assert.ok(ms2 < 250, `20 wildcard paths over 200 junctions took ${ms2.toFixed(1)} ms`);
+});
+
+test('`..` handling is linear in the number of segments (R17.1, NB)', () => {
+  const fastestMs = (fn) => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i += 1) {
+      const t0 = process.hrtime.bigint();
+      fn();
+      best = Math.min(best, Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+    return best;
+  };
+  for (const n of [300, 1200]) {
+    const cases = [
+      [bash(`cat ${'a/'.repeat(n)}..`), CLIMBS],
+      [bash(`cat ${Array.from({ length: n / 4 }, (_, i) => `b${i}/..`).join('/')}/src/app.js`), CLIMBS],
+      [bash(`cat ../${'a/'.repeat(n)}x`), /^QUILL_DENIED (outside-readable|unparseable): /],
+      [bash(`cd src && cat ${'../'.repeat(n)}x`), /^QUILL_DENIED (outside-readable|unparseable): /],
+      [bash(`cd ${'a/'.repeat(n)}; cat ../x`), /^QUILL_DENIED unparseable: /],
+      [bash(`cat src/*/${Array.from({ length: n }, (_, i) => `c${i}`).join('/')}`), 'allow'],
+    ];
+    for (const [c, want] of cases) {
+      let r;
+      const ms = fastestMs(() => { r = run(c, {}); });
+      const label = `${n} segments: ${c.tool_input.command.slice(0, 40)}…`;
+      if (want === 'allow') assert.equal(r.decision, 'allow', `${label}: ${r.reason}`);
+      else assert.match(r.reason, want, label);
+      assert.ok(ms < 250, `${label} took ${ms.toFixed(1)} ms`);
+    }
+  }
+});
+
+test('a symbolic link target is resolved where the link is, also inside an existing directory (R17.4)', (t) => {
+  // `ln -s ../../q x/y/L` where x/y/L is a junction to the shallow directory sh: the link lands
+  // in sh, and its target climbs from there
+  const deep = path.join(checkout, 'x', 'y');
+  const shallow = path.join(checkout, 'sh');
+  fs.mkdirSync(deep, { recursive: true });
+  fs.mkdirSync(shallow);
+  fs.symlinkSync(shallow, path.join(deep, 'L'), 'junction');
+  t.after(() => { fs.rmSync(path.join(checkout, 'x'), { recursive: true, force: true }); fs.rmSync(shallow, { recursive: true, force: true }); });
+  const edit = { grant: { permissions: EDIT } };
+  // from x/y (the cwd and the link's directory) ../../q stays inside the checkout; from sh it
+  // climbs out of it
+  const r = run(bash('cd x/y && ln -s ../../q L'), edit);
+  assert.equal(r.decision, 'deny', r.reason);
+  assert.match(r.reason, /^QUILL_DENIED (outside-writable|protected-path): /);
+  // an existing file as the link path: the link is not made inside it
+  assert.equal(run(bash('ln -sf ../app.js src/app.js'), edit).decision, 'allow');
 });
 
 test('Claude configuration behind a link in the checkout stays protected (R13b)', (t) => {

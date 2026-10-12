@@ -48,6 +48,8 @@ function classifyInner(call, ctx) {
   if (Object.hasOwn(PATH_TOOLS, tool)) {
     const p = input && typeof input === 'object' ? input[PATH_TOOLS[tool]] ?? input.path : undefined;
     if (typeof p !== 'string' || !p) return unparseable(`${tool} without a file path`);
+    const climb = climbProblem(p, ctx, 'lit');
+    if (climb) return unparseable(climb);
     const resolved = resolveLiteral(p, ctx, ctx.cwd);
     if (!resolved) return unparseable(`${tool} path cannot be resolved`);
     return r('local', `${tool} on a file`, { path: resolved });
@@ -55,6 +57,8 @@ function classifyInner(call, ctx) {
   if (DIR_TOOLS.has(tool)) {
     const p = input && typeof input === 'object' ? input.path : undefined;
     if (p !== undefined && typeof p !== 'string') return unparseable(`${tool} path is not a string`);
+    const climb = p ? climbProblem(p, ctx, 'lit') : null;
+    if (climb) return unparseable(climb);
     const resolved = p ? resolveLiteral(p, ctx, ctx.cwd) : ctx.cwd ? normalizeAbs(ctx.cwd, ctx) : undefined;
     if (p && !resolved) return unparseable(`${tool} path cannot be resolved`);
     return r('local', `${tool} search`, resolved ? { path: resolved } : {});
@@ -182,7 +186,31 @@ function rawPath(word, ctx, kind, baseRaw, resolved) {
     rel = p.slice(2);
   }
   if (!baseRaw) return fromRoot();
-  return { root: baseRaw.root, segs: [...baseRaw.segs, ...split(rel)] };
+  return { root: baseRaw.root, segs: [...baseRaw.segs, ...split(rel)], relative: true };
+}
+
+// Ruling R17.1: a `..` after a directory name (`a/..`, `esc/../x`, `*/../x`) is resolved
+// physically by Git Bash and POSIX shells and lexically by PowerShell, cmd and git.exe, so the
+// guard refuses it instead of modelling either. Leading `..` segments (`../x`) stay allowed; the
+// guard applies them to the real directory. On Windows a name of only dots and spaces (`...`,
+// `.. `) may be trimmed to `..`, so it is refused anywhere. The guard words its deny reason from
+// CLIMB_REASON_RE.
+export const CLIMB_REASON_RE = /^path (.*) has '\.\.' after a directory name$/s;
+function climbProblem(word, ctx, kind) {
+  if (typeof word !== 'string' || !word.includes('.')) return null;
+  const win = isWin(ctx);
+  const full = expandLiteral(word, ctx, kind) ?? word;
+  // the root (`/`, `C:\`, `\\server\share\`, or the drive of a drive-relative `C:..\x`) is not a
+  // name: `..` right after it is a leading one
+  const text = full.slice((win ? path.win32 : path.posix).parse(full).root.length);
+  let named = false;
+  for (const s of text.split(win ? /[\\/]+/ : /\/+/)) {
+    if (s === '' || s === '.') continue;
+    const up = s === '..';
+    if ((up && named) || (win && !up && /^[. ]+$/.test(s))) return `path ${word.slice(0, 120)} has '..' after a directory name`;
+    if (!up) named = true;
+  }
+  return null;
 }
 
 const NULL_TARGETS = new Set(['/dev/null', 'nul', '$null', '/dev/stdout', '/dev/stderr', '/dev/tty', 'con']);
@@ -245,7 +273,26 @@ function strip(res) {
   return o;
 }
 
+// Directory scopes from shell-tokens.js: a wrapper's script (`bash -c …`) and `env -C dir cmd` /
+// `sudo -D dir cmd` run in a child process, so a directory change inside ends with them (push and
+// pop); `cd` is the child's own change (R17.2).
+function directoryMark(seg, ctx, st) {
+  if (seg.cwdMark === 'push') { (st.cwdStack ??= []).push({ cwd: st.cwd, cwdRaw: st.cwdRaw }); return local('directory scope'); }
+  if (seg.cwdMark === 'pop') {
+    const top = (st.cwdStack ?? []).pop();
+    if (top) { st.cwd = top.cwd; st.cwdRaw = top.cwdRaw; }
+    return local('directory scope');
+  }
+  const h = helpers(seg, ctx, st);
+  const dir = seg.chdir ?? {};
+  if (typeof dir.v !== 'string' || !dir.v) return unparseable('a directory change without a directory');
+  h.dir(dir.v, dir.kind);
+  h.chdir(dir.v, dir.kind);
+  return h.bad ? unparseable(h.bad) : local('change directory');
+}
+
 function classifySegment(seg, ctx, st) {
+  if (seg.cwdMark) return directoryMark(seg, ctx, st);
   if (seg.unparseable) return unparseable(seg.unparseable);
   // Prefix assignments (VAR=x git …) apply to that command only; an assignment on its own, or
   // environment handed to a nested script, lasts for whatever runs later.
@@ -265,9 +312,9 @@ function classifySegment(seg, ctx, st) {
     const op = red.op.replace(/^\d+|^\*/, '');
     if (red.target.startsWith('&') && /^&(\d+|-)$/.test(red.target)) continue;
     if (NULL_TARGETS.has(red.target.toLowerCase())) continue;
-    if (op === '<') { if (!h.read(red.target, red.kind)) return unparseable('input file is not a literal path'); continue; }
+    if (op === '<') { if (!h.read(red.target, red.kind)) return unparseable(h.bad ?? 'input file is not a literal path'); continue; }
     if (op === '<<' || op === '<<<' || op === '<<-') continue;
-    if (!h.write(red.target, red.kind)) return unparseable('redirect target is not a literal path');
+    if (!h.write(red.target, red.kind)) return unparseable(h.bad ?? 'redirect target is not a literal path');
   }
   // PowerShell ${C:\path} variable notation reads or writes the file's content
   for (const p of seg.psWrites ?? []) if (!h.write(p, 'lit')) return unparseable(h.bad);
@@ -313,39 +360,74 @@ function backstop(name, seg, ctx) {
 }
 
 function helpers(seg, ctx, st) {
-  // `base` resolves relative paths somewhere other than the current directory (git -C); null = unknown
+  // `base` resolves relative paths somewhere other than the current directory (git -C, a link's
+  // directory); null = unknown. `baseRaw` is the same directory as rawPath() describes it; by
+  // default the tracked cwd's when `base` is the cwd, else unknown (the resolved path is scanned).
+  const rawOf = (base, baseRaw) => (baseRaw !== undefined ? baseRaw : base === st.cwd ? st.cwdRaw : null);
   const h = {
     bad: null,
-    write(word, kind = 'lit', base = st.cwd) {
+    write(word, kind = 'lit', base = st.cwd, baseRaw = undefined, ifDir = undefined) {
       if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'write target is not literal'; return false; }
       if (/[*?[]/.test(String(word).replace(/^\\\\[?.]\\/, '')) || hasBraceExpansion(word)) { h.bad = `write target has wildcards: ${String(word).slice(0, 80)}`; return false; }
       if (NULL_TARGETS.has(String(word).toLowerCase())) return true;
+      const climb = climbProblem(word, ctx, kind);
+      if (climb) { h.bad = climb; return false; }
       const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `write target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.paths.push(p);
-      st.writeSpecs.push(h.spec(word, kind, base, p));
+      st.writeSpecs.push(h.spec(word, kind, rawOf(base, baseRaw), p, ifDir));
       return true;
     },
-    read(word, kind = 'lit', base = st.cwd) {
+    read(word, kind = 'lit', base = st.cwd, baseRaw = undefined) {
       if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'read target is not literal'; return false; }
       if (NULL_TARGETS.has(String(word).toLowerCase()) || word === '-') return true;
+      const climb = climbProblem(word, ctx, kind);
+      if (climb) { h.bad = climb; return false; }
       const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `read target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.readPaths.push(p);
-      st.readSpecs.push(h.spec(word, kind, base, p));
+      st.readSpecs.push(h.spec(word, kind, rawOf(base, baseRaw), p));
       return true;
     },
-    // { path, root, segs, dialect } for the guard: a relative word keeps the text `cd` supplied
-    // only when it resolves against the tracked current directory (not git -C and the like)
-    spec(word, kind, base, resolved) {
-      const raw = rawPath(word, ctx, kind, base === st.cwd ? st.cwdRaw : null, resolved);
-      return { path: resolved, root: raw.root, segs: raw.segs, dialect: seg.dialect };
+    // { path, root, segs, dialect } for the guard. `ifDir` (a symbolic link's target read as if
+    // the link's own name were an existing directory): the spec only applies when its first
+    // `ifDir` segments name an existing directory.
+    spec(word, kind, baseRaw, resolved, ifDir) {
+      const raw = rawPath(word, ctx, kind, baseRaw, resolved);
+      const out = { path: resolved, root: raw.root, segs: raw.segs, dialect: seg.dialect };
+      if (ifDir !== undefined && raw.relative && baseRaw) out.ifDir = baseRaw.segs.length;
+      return out;
+    },
+    // A directory a command runs in or works below (git -C, make -C, npm --prefix, tar -C,
+    // env -C …): `..` after a name is refused (R17.2) and the directory itself must be readable.
+    // Returns the resolved directory and its raw form, or null when it is not literal.
+    dir(word, kind = 'lit', base = st.cwd, baseRaw = undefined) {
+      if (word === undefined || word === true) return null;
+      const before = st.readSpecs.length;
+      if (!h.read(String(word), kind, base, baseRaw)) return null;
+      const spec = st.readSpecs[before];
+      return spec ? { cwd: spec.path, raw: { root: spec.root, segs: spec.segs } } : null;
+    },
+    // Where a path word leads, without reporting it: { cwd, raw } or null (h.bad set).
+    place(word, kind = 'lit', base = st.cwd, baseRaw = undefined) {
+      if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'path is not literal'; return null; }
+      const climb = climbProblem(word, ctx, kind);
+      if (climb) { h.bad = climb; return null; }
+      const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
+      if (!p) { h.bad = `path is not literal: ${String(word).slice(0, 80)}`; return null; }
+      return { cwd: p, raw: rawPath(word, ctx, kind, rawOf(base, baseRaw), p) };
     },
     cwd: () => st.cwd,
+    cwdRaw: () => st.cwdRaw,
     chdir(word, kind) {
       st.cds = (st.cds ?? 0) + 1;
       if (st.cds > 256) { h.bad = 'too many directory changes to follow'; st.cwd = null; st.cwdRaw = null; return; }
       if (seg.nested || kind !== 'lit' || word === '-') { st.cwd = null; st.cwdRaw = null; return; }
+      const climb = word === undefined ? null : climbProblem(word, ctx, 'dyn');
+      if (climb) { h.bad = climb; st.cwd = null; st.cwdRaw = null; return; }
+      // CDPATH (R17.3) sends a relative `cd` to a directory the call does not name
+      const cdpath = envLookup(ctx, 'CDPATH');
+      if (seg.dialect !== 'powershell' && typeof cdpath === 'string' && cdpath && word !== undefined && !isAbsLike(word) && !/^\.\.?([\\/]|$)/.test(word)) { st.cwd = null; st.cwdRaw = null; return; }
       const p = word === undefined ? ctx.home ?? null : st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined);
       // `cd` with no word goes home, which the call did not spell; any other target is supplied text
       st.cwdRaw = p === null ? null : word === undefined ? { root: p, segs: [] } : rawPath(word, ctx, 'dyn', st.cwdRaw, p);
@@ -353,8 +435,8 @@ function helpers(seg, ctx, st) {
     },
     // A nested script starts in the caller's directory, and the files it reads or writes are
     // reported with the caller's.
-    script(text, dialect, base = st.cwd) {
-      const res = classifyScript(text, dialect, ctx, st.depth + 1, base, base === st.cwd ? st.cwdRaw : null);
+    script(text, dialect, base = st.cwd, baseRaw = undefined) {
+      const res = classifyScript(text, dialect, ctx, st.depth + 1, base, rawOf(base, baseRaw));
       if (res.paths) st.paths.push(...res.paths);
       if (res.readPaths) st.readPaths.push(...res.readPaths);
       if (res.readSpecs) st.readSpecs.push(...res.readSpecs);
@@ -530,12 +612,12 @@ function classifyCommand(name, seg, ctx, h) {
       return local('change directory');
     }
     case 'popd': case 'pop-location': h.chdir(undefined, 'dyn'); return local('change directory');
-    case 'npm': return npm(args, ak);
-    case 'yarn': return yarn(args, ak);
-    case 'pnpm': return pnpm(args, ak);
+    case 'npm': return npm(args, ak, h);
+    case 'yarn': return yarn(args, ak, h);
+    case 'pnpm': return pnpm(args, ak, h);
     case 'make': case 'gmake': case 'nmake': case 'mingw32-make': case 'just': case 'task': case 'rake': case 'mage': case 'invoke': case 'nx': case 'turbo':
     case 'gradle': case 'gradlew': case 'mvn': case 'mvnw': case 'ant': case 'cake': case 'psake': case 'invoke-build':
-      return taskRunner(name, args, ak);
+      return taskRunner(name, args, ak, h);
     case 'flyway': case 'liquibase': case 'alembic': case 'sqitch': case 'dbmate': case 'goose': case 'atlas':
       return unknownProd(`${name} runs database migrations`);
     case 'prisma': return args.includes('migrate') || (args[0] === 'db' && args[1] === 'push') ? unknownProd('prisma migration') : local('prisma');
@@ -736,7 +818,9 @@ function classifyCommand(name, seg, ctx, h) {
     case 'robocopy': case 'xcopy': {
       const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/') && !x.v.startsWith('-'));
       if (pos[0]) h.read(pos[0].v, pos[0].kind);
-      if (pos[1]) h.write(pos[1].v, pos[1].kind); else h.write('.', 'lit');
+      // without a destination the copy lands in the current directory (R17.6)
+      if (pos[1]) h.write(pos[1].v, pos[1].kind);
+      else { h.write('.', 'lit'); if (pos[0]) h.write(wordBase(pos[0].v), pos[0].kind); }
       return local(`${name} files`);
     }
     case 'icacls': case 'takeown': case 'attrib': case 'cacls': {
@@ -775,6 +859,7 @@ function classifyCommand(name, seg, ctx, h) {
       const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/'));
       for (const x of pos) h.write(x.v, x.kind);
       if (pos.length < 2) h.bad = 'mklink without link and target';
+      else linkTargets(h, [pos[1]], { link: pos[0] }); // a symbolic link's target is resolved where it is (R17.4)
       return local('mklink');
     }
     case 'start-transcript': {
@@ -1290,6 +1375,9 @@ function samePath(a, b, ctx) {
 function gitEnvProblem(env, prefixOnGit = false) {
   if (!env || typeof env !== 'object') return null;
   for (const [k, v] of Object.entries(env)) {
+    // R17.3: CDPATH sends a relative `cd` somewhere the call does not name; any assignment or
+    // export of it is refused, wherever it is made
+    if (/^CDPATH$/i.test(k)) return 'CDPATH changes where cd goes';
     if (GIT_EXEC_ENV_RE.test(k)) return `${k} changes what git runs or reads`;
     if (GIT_PROGRAM_ENV_RE.test(k)) {
       if (prefixOnGit && typeof v === 'string' && HARMLESS_PROGRAMS.has(v)) continue;
@@ -1323,6 +1411,8 @@ function git(args, ak, seg, ctx, h) {
   let pushConfig = false;
   // git -C <dir> runs in <dir>: relative paths resolve there (null = unknown)
   let base = h.cwd();
+  // the same directory as the text supplied it, so the guard applies a leading `..` physically
+  let baseRaw = h.cwdRaw();
   let moved = 0; // number of -C options
   while (i < args.length && args[i].startsWith('-')) {
     const t = args[i];
@@ -1330,7 +1420,16 @@ function git(args, ak, seg, ctx, h) {
       const v = args[i + 1];
       if (++moved > 16) return unparseable('too many git -C directory changes to follow');
       if (v !== undefined) {
-        base = ak[i + 1] !== 'lit' || (base === null && !isAbsLike(v)) ? null : resolveLiteral(v, ctx, base ?? undefined, 'lit') ?? null;
+        if (ak[i + 1] !== 'lit' || (base === null && !isAbsLike(v))) {
+          base = null;
+          baseRaw = null;
+        } else {
+          // R17.2: the directory git runs in is read like a path, with the same `..` rules
+          const d = h.dir(v, 'lit', base, baseRaw);
+          if (!d) return unparseable(h.bad ?? `git -C ${String(v).slice(0, 80)} is not a literal path`);
+          base = d.cwd;
+          baseRaw = d.raw;
+        }
       }
       i += 2;
       continue;
@@ -1360,6 +1459,7 @@ function git(args, ak, seg, ctx, h) {
   // rebase -x and bisect run commands run at the top of the work tree: known only when git runs
   // at the top of the checkout
   const top = base !== null && typeof ctx.cwd === 'string' && samePath(normalizeAbs(base, ctx), normalizeAbs(ctx.cwd, ctx), ctx) ? base : null;
+  const topRaw = top === null ? null : baseRaw;
   const sub = args[i];
   const rest = args.slice(i + 1);
   const restK = ak.slice(i + 1);
@@ -1381,10 +1481,24 @@ function git(args, ak, seg, ctx, h) {
     const cs = scan(rest, restK, { values: new Set(['-u', '--upload-pack', '-c', '--config', '-b', '--branch', '-o', '--origin', '--depth', '--reference', '--separate-git-dir', '--template', '-j', '--jobs', '--filter', '--shallow-since', '--shallow-exclude', '--server-option']) });
     if (cs.has('-u', '--upload-pack', '--template')) return unparseable('git clone with a custom upload-pack or template');
     for (const c of cs.all('-c', '--config')) if (GIT_EXEC_CONFIG_RE.test(String(c.v ?? '').split('=')[0])) return unparseable('git clone --config can run arbitrary commands');
-    if (cs.pos[1] !== undefined) h.write(cs.pos[1], cs.posKinds[1], base);
-    else if (cs.pos[0] !== undefined) h.write(String(cs.pos[0]).replace(/[\\/]+$/, '').replace(/^.*[\\/:]/, '').replace(/\.git$/, '') || '.', cs.posKinds[0], base);
-    for (const d of cs.all('--separate-git-dir')) h.write(d.v, d.kind, base);
+    if (cs.pos[1] !== undefined) h.write(cs.pos[1], cs.posKinds[1], base, baseRaw);
+    else if (cs.pos[0] !== undefined) h.write(String(cs.pos[0]).replace(/[\\/]+$/, '').replace(/^.*[\\/:]/, '').replace(/\.git$/, '') || '.', cs.posKinds[0], base, baseRaw);
+    for (const d of cs.all('--separate-git-dir')) h.write(d.v, d.kind, base, baseRaw);
     return local('git clone');
+  }
+  // init and worktree add create a directory: the repository, or a work tree with its .git file
+  if (sub === 'init') {
+    const cs = scan(rest, restK, { values: new Set(['--template', '--separate-git-dir', '-b', '--initial-branch', '--object-format', '--ref-format']) });
+    if (cs.has('--template')) return unparseable('git init --template copies hooks from another directory');
+    h.write(cs.pos[0] ?? '.', cs.posKinds[0] ?? 'lit', base, baseRaw);
+    for (const d of cs.all('--separate-git-dir')) h.write(d.v, d.kind, base, baseRaw);
+    return local('git init');
+  }
+  if (sub === 'worktree' && rest[0] === 'add') {
+    const cs = scan(rest.slice(1), restK.slice(1), { values: new Set(['-b', '-B', '--reason']) });
+    if (cs.pos[0] === undefined) return unparseable('git worktree add without a path');
+    h.write(cs.pos[0], cs.posKinds[0], base, baseRaw);
+    return local('git worktree add');
   }
   if (sub === 'push') return pushConfig ? write('git.protected', undefined, 'git push with push/remote configuration overrides') : gitPush(rest, restK, ctx);
   if (sub === 'lfs' && rest[0] === 'push') return gitPush(rest.slice(1), restK.slice(1), ctx);
@@ -1400,7 +1514,7 @@ function git(args, ak, seg, ctx, h) {
     const inner = rest.slice(1);
     if (!inner.length) return local('git bisect');
     if (restK.slice(1).some((x) => x !== 'lit')) return unparseable('git bisect run command is not literal');
-    return h.script(inner.map((x) => (/^[\w./:=@%+,-]+$/.test(x) ? x : `'${x.replace(/'/g, "'\\''")}'`)).join(' '), 'bash', top);
+    return h.script(inner.map((x) => (/^[\w./:=@%+,-]+$/.test(x) ? x : `'${x.replace(/'/g, "'\\''")}'`)).join(' '), 'bash', top, topRaw);
   }
   if (sub === 'rebase' || sub === 'difftool') {
     for (let j = 0; j < rest.length; j += 1) {
@@ -1410,7 +1524,7 @@ function git(args, ak, seg, ctx, h) {
       else if (t.startsWith('--exec=') || t.startsWith('--extcmd=')) cmd = { v: t.slice(t.indexOf('=') + 1), k: restK[j] };
       if (cmd) {
         if (cmd.k !== 'lit' || typeof cmd.v !== 'string') return unparseable(`git ${sub} exec command is not literal`);
-        const inner = h.script(cmd.v, 'bash', top);
+        const inner = h.script(cmd.v, 'bash', top, topRaw);
         if (inner.class !== 'local') return inner;
       }
     }
@@ -1419,7 +1533,7 @@ function git(args, ak, seg, ctx, h) {
     let end = false;
     for (let j = 0; j < rest.length; j += 1) {
       if (!end && rest[j] === '--') { end = true; continue; }
-      if (end || !rest[j].startsWith('-')) h.write(rest[j], restK[j], base);
+      if (end || !rest[j].startsWith('-')) h.write(rest[j], restK[j], base, baseRaw);
     }
   }
   if (sub === 'merge') {
@@ -1598,8 +1712,14 @@ function python(args, ak, seg, ctx, h) {
 
 // ---------------------------------------------------------------- package managers and task runners
 
-function npm(args, ak) {
+// Directory options (R17.2): the directory is read like a path, with the same `..` rules.
+function dirOptions(s, h, names) {
+  for (const d of s.all(...names)) if (d.v !== true) h.dir(d.v, d.kind);
+}
+
+function npm(args, ak, h) {
   const s = scan(args, ak, { values: new Set(['--prefix', '-w', '--workspace', '--registry', '--userconfig', '--cache', '--loglevel', '--tag', '--otp', '--access', '-C']) });
+  dirOptions(s, h, ['--prefix', '-C']);
   const [sub, a1, a2] = s.pos;
   if (!sub) return local('npm');
   if (s.has('-g', '--global', '--location') || (sub === 'link' && !a1)) return unknownProd(`npm ${sub} -g changes tools outside the checkout`);
@@ -1618,8 +1738,9 @@ const YARN_BUILTINS = new Set(['add', 'install', 'remove', 'upgrade', 'up', 'why
   'dedupe', 'explain', 'node', 'rebuild', 'patch', 'patch-commit', 'stage', 'unplug', 'upgrade-interactive', 'create', 'login', 'logout', 'licenses', 'list', 'autoclean', 'check', 'generate-lock-entry', 'import',
   'policy', 'help', 'version', 'test', 'start', 'dlx', 'exec', 'search', 'sdks']);
 
-function yarn(args, ak) {
+function yarn(args, ak, h) {
   const s = scan(args, ak, { values: new Set(['--cwd', '--registry', '--cache-folder', '--modules-folder']) });
+  dirOptions(s, h, ['--cwd']);
   const [sub, a1, a2] = s.pos;
   if (!sub) return local('yarn install');
   if (sub === 'global') return unknownProd('yarn global changes tools outside the checkout');
@@ -1636,8 +1757,9 @@ const PNPM_BUILTINS = new Set(['add', 'install', 'i', 'update', 'up', 'remove', 
   'patch-commit', 'patch-remove', 'audit', 'list', 'ls', 'outdated', 'why', 'licenses', 'test', 't', 'start', 'store', 'root', 'bin', 'setup', 'init', 'config', 'c', 'env', 'create', 'pack',
   'dedupe', 'doctor', 'server', 'help', 'exec', 'dlx', 'recursive', 'approve-builds', 'self-update']);
 
-function pnpm(args, ak) {
+function pnpm(args, ak, h) {
   const s = scan(args, ak, { values: new Set(['--filter', '-F', '-C', '--dir', '--workspace-dir', '--reporter', '--loglevel']) });
+  dirOptions(s, h, ['-C', '--dir', '--workspace-dir']);
   const [sub, a1] = s.pos;
   if (!sub) return local('pnpm');
   if (s.has('-g', '--global')) return unknownProd(`pnpm ${sub} -g changes tools outside the checkout`);
@@ -1647,9 +1769,10 @@ function pnpm(args, ak) {
   return scriptByName(sub, [], 'package script');
 }
 
-function taskRunner(name, args, ak) {
-  const values = new Set(['-C', '-f', '--file', '--makefile', '-j', '--jobs', '-I', '-o', '-W', '-l', '-p', '--project', '-D', '-P', '--settings-file', '-s', '--justfile', '-d', '--working-directory', '-t', '--taskfile']);
+function taskRunner(name, args, ak, h) {
+  const values = new Set(['-C', '--directory', '-f', '--file', '--makefile', '-j', '--jobs', '-I', '-o', '-W', '-l', '-p', '--project', '-D', '-P', '--settings-file', '-s', '--justfile', '-d', '--working-directory', '-t', '--taskfile']);
   const s = scan(args, ak, { values });
+  dirOptions(s, h, ['-C', '--directory', '--working-directory']);
   const targets = s.pos.filter((x) => !/^[A-Za-z_][\w.]*=/.test(x));
   const hit = s.pos.find((x) => SCRIPT_NAME_RE.test(x)); // includes VAR=value overrides such as DEPLOY=1
   if (hit) return unknownProd(`${name} ${hit} looks like a deploy/release step`);
@@ -1866,6 +1989,50 @@ function rsync(args, ak, h) {
 
 // ---------------------------------------------------------------- file commands (write roots)
 
+// `ln -s`: -s, --symbolic, or a short cluster holding s (GNU accepts --sym… prefixes).
+function symbolicLn(opts) {
+  return opts.some((t) => (/^-[a-zA-Z]+$/.test(t) && t.includes('s')) || (t.length >= 5 && '--symbolic'.startsWith(t)));
+}
+
+// The directory part of a path word as written: `a/b` → `a`, `b` → `.`, `/x` → `/`.
+function wordDir(word) {
+  const w = String(word).replace(/(.)[\\/]+$/, '$1');
+  const cut = Math.max(w.lastIndexOf('/'), w.lastIndexOf('\\'));
+  if (cut < 0) return /^[A-Za-z]:/.test(w) ? w.slice(0, 2) : '.';
+  const head = w.slice(0, cut);
+  return cut === 0 || /^[A-Za-z]:$/.test(head) ? w.slice(0, cut + 1) : head;
+}
+
+// A symbolic link's relative target is resolved where the link is, not where the command runs
+// (R17.4), and writing through the link lands on the target, so each target is a write path:
+//  - `where.cwd`: the link is made in the cwd (`ln -s target`);
+//  - `where.dir`: links are made in that directory (`-t dir`, `mklink` into a directory);
+//  - `where.link`: the link's own path; its target is resolved in the link's directory, and, when
+//    `asDir`, also inside the link path itself in case it names an existing directory (the
+//    link is then made there). `alsoCwd` adds the cwd (`ln -r`, PowerShell and cmd links whose
+//    targets are resolved where the command runs).
+function linkTargets(h, targets, where) {
+  const bases = [];
+  if (where.cwd || where.alsoCwd) bases.push({ base: undefined });
+  const add = (word, ifDir) => {
+    if (!word || typeof word.v !== 'string') { h.bad = 'link location is not literal'; return; }
+    const p = h.place(word.v, word.kind);
+    if (p) bases.push({ base: p.cwd, raw: p.raw, ifDir });
+  };
+  if (where.dir) add(where.dir, false);
+  if (where.link) {
+    add({ v: wordDir(where.link.v), kind: where.link.kind }, false);
+    if (where.asDir) add(where.link, true);
+  }
+  for (const t of targets) {
+    if (typeof t.v !== 'string') continue;
+    for (const b of bases) {
+      if (b.base === undefined) h.write(t.v, t.kind);
+      else h.write(t.v, t.kind, b.base, b.raw, b.ifDir || undefined);
+    }
+  }
+}
+
 function posixFileCommand(name, args, ak, h) {
   // after `--` every word is an operand, even one that starts with a dash
   const ends = [];
@@ -1885,6 +2052,8 @@ function posixFileCommand(name, args, ak, h) {
     }
     case 'mv': case 'cp': case 'install': case 'ln': {
       let tdir = null;
+      let tdirWord;
+      let tdirKind;
       const pos = [];
       const opts = [];
       for (let i = 0; i < args.length; i += 1) {
@@ -1892,7 +2061,7 @@ function posixFileCommand(name, args, ak, h) {
         if (!ends[i]) {
           if (t === '--') continue;
           if (t === '-t' || t === '--target-directory') { tdir = i + 1; i += 1; continue; }
-          if (t.startsWith('--target-directory=')) { h.write(t.slice(19), ak[i]); tdir = -1; continue; }
+          if (t.startsWith('--target-directory=')) { h.write(t.slice(19), ak[i]); tdir = -1; tdirWord = t.slice(19); tdirKind = ak[i]; continue; }
           if (t === '-S' || t === '--suffix' || t === '-m' || t === '-o' || t === '-g') { i += 1; continue; }
         }
         if (opt(t, i)) { opts.push(t); continue; }
@@ -1904,7 +2073,11 @@ function posixFileCommand(name, args, ak, h) {
         const dstIdx = tdir !== null ? null : pos.length > 1 ? pos[pos.length - 1] : name === 'ln' ? null : null;
         if (dstIdx !== null) h.write(args[dstIdx], ak[dstIdx]);
         if (name === 'ln' && pos.length === 1 && tdir === null) h.write(String(args[pos[0]]).replace(/^.*[\\/]/, ''), ak[pos[0]]);
-        if (name === 'ln') for (const i of pos) h.write(args[i], ak[i]); // writes through a link land on its target
+        // writes through a link land on its target
+        if (name === 'ln' && symbolicLn(opts)) linkTargets(h, pos.slice(0, dstIdx === null ? pos.length : -1).map((i) => ({ v: args[i], kind: ak[i] })), tdir !== null
+          ? { dir: tdir >= 0 ? { v: args[tdir], kind: ak[tdir] } : { v: tdirWord, kind: tdirKind } }
+          : dstIdx === null ? { cwd: true } : { link: { v: args[dstIdx], kind: ak[dstIdx] }, asDir: !opts.some((t) => t === '--no-target-directory' || /^-[a-zA-Z]*T/.test(t)), alsoCwd: opts.some((t) => t === '--relative' || /^-[a-zA-Z]*r/.test(t)) });
+        else if (name === 'ln') for (const i of pos) h.write(args[i], ak[i]);
         // GNU accepts unambiguous prefixes: --l… is only --link, --sy… only --symbolic-link
         const linking = name === 'cp' && opts.some((t) => (t.length >= 3 && '--link'.startsWith(t)) || (t.length >= 4 && '--symbolic-link'.startsWith(t)) || (/^-[a-zA-Z]+$/.test(t) && /[ls]/.test(t)));
         // cp -l/-s makes links: a later write through the copy lands on the source
@@ -1946,6 +2119,7 @@ function posixFileCommand(name, args, ak, h) {
       const dir = s.all('-C', '--directory')[0];
       if (/[cru]/.test(mode) || s.has('--create', '--append', '--update')) { if (file && file.v !== '-') h.write(file.v, file.kind); }
       if (/x/.test(mode) || s.has('--extract', '--get')) { if (dir) h.write(dir.v, dir.kind); else h.write('.', 'lit'); }
+      else for (const d of s.all('-C', '--directory')) h.dir(d.v, d.kind); // members are read below it (R17.2)
       return local('tar');
     }
     case 'unzip': {
@@ -2004,7 +2178,7 @@ const PS_FILE = {
   'export-csv': { write: [0], params: ['path', 'literalpath'] },
   'export-clixml': { write: [0], params: ['path', 'literalpath'] },
   'expand-archive': { write: [1], params: ['destinationpath'], readPos: [0], readParams: ['path', 'literalpath'] },
-  'compress-archive': { write: [1], params: ['destinationpath'] },
+  'compress-archive': { write: [1], params: ['destinationpath'], readPos: [0], readParams: ['path', 'literalpath'] },
   'set-acl': { write: [0], params: ['path', 'literalpath'] },
   'set-itemproperty': { write: [0], params: ['path', 'literalpath'] },
 };
@@ -2014,6 +2188,17 @@ const PS_ALIASES = { ri: 'remove-item', rm: 'remove-item', del: 'remove-item', e
 const PS_FILE_VALUES = ['path', 'literalpath', 'destination', 'filepath', 'destinationpath', 'value', 'target', 'encoding', 'filter', 'include', 'exclude', 'credential', 'stream', 'itemtype', 'type', 'name', 'newname',
   'inputobject', 'width', 'delimiter', 'tosession', 'fromsession', 'aclobject', 'compressionlevel', 'variable', 'depth', 'property', 'propertytype', 'useculture', 'quotefields', 'usequotes'];
 const PS_FILE_SWITCHES = ['recurse', 'force', 'whatif', 'confirm', 'passthru', 'nonewline', 'append', 'noclobber', 'asbytestream', 'container', 'notypeinformation', 'includetypeinformation', 'update'];
+
+// A rename's new name with a directory or drive in it (R17.7).
+const NOT_A_NAME = /[\\/:]/;
+
+// The last name of a path word, as a copy with no destination names it in the current directory
+// (`C:\tmp\x` → `x`, `a\b\` → `b`, `C:x` → `x`).
+function wordBase(word) {
+  const w = String(word).replace(/(.)[\\/]+$/, '$1').replace(/^[A-Za-z]:(?![\\/])/, '');
+  const cut = Math.max(w.lastIndexOf('/'), w.lastIndexOf('\\'));
+  return w.slice(cut + 1) || '.';
+}
 
 // The path a rename creates: the new name in the source's own directory (`x` → `./name`,
 // `a\b\` → `a\name`, `C:\x` → `C:\name`).
@@ -2028,16 +2213,29 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
     const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/'));
     if (['del', 'erase', 'rd', 'rmdir', 'md', 'mkdir'].includes(name)) { for (const p of pos) h.write(p.v, p.kind); return local(`${name} files`); }
     if (name === 'dir') { for (const p of pos) h.read(p.v, p.kind); return local('dir'); }
-    if (name === 'copy' || name === 'xcopy' || name === 'robocopy') {
-      const dest = name === 'robocopy' ? 1 : pos.length - 1;
-      if (pos.length > 1) h.write(pos[dest].v, pos[dest].kind);
-      // what is copied is read: robocopy's source directory, every other operand of copy/xcopy
-      pos.forEach((p, i) => { if (pos.length > 1 ? (name === 'robocopy' ? i === 0 : i !== dest) : true) h.read(p.v, p.kind); });
-      return local(`${name} files`);
+    if (name === 'copy') {
+      // `copy a+b+c out` (or `a + b`) concatenates the sources into one file; /a and /b may follow
+      // any name (R17.5). Without a destination, `copy a+b` writes into a, and `copy x` copies x
+      // into the current directory under its own name (R17.6).
+      const groups = [];
+      let glue = false;
+      for (const p of pos) {
+        if (glue || (groups.length && p.v.startsWith('+'))) groups[groups.length - 1].push(p);
+        else groups.push([p]);
+        glue = p.v.endsWith('+');
+      }
+      const pieces = (g) => g.flatMap((p) => p.v.split('+').map((v) => ({ v: v.replace(/(\/[ab])+$/i, ''), kind: p.kind }))).filter((p) => p.v);
+      const sources = groups.length > 1 ? groups.slice(0, -1).flatMap(pieces) : pieces(groups[0] ?? []);
+      for (const p of sources) h.read(p.v, p.kind);
+      if (groups.length > 1) for (const p of pieces(groups[groups.length - 1])) h.write(p.v, p.kind);
+      else if (sources.length > 1) h.write(sources[0].v, sources[0].kind);
+      else if (sources.length === 1) h.write(wordBase(sources[0].v), sources[0].kind);
+      return local('copy files');
     }
     if (name === 'move') { for (const p of pos) h.write(p.v, p.kind); return local('move files'); }
     if (name === 'ren' || name === 'rename') {
       // the new name lands in the source's directory: `ren x .claude` creates .claude
+      if (pos[1] && NOT_A_NAME.test(pos[1].v)) { h.bad = `${name} to ${pos[1].v.slice(0, 80)}: the new name has a path in it`; return local('rename'); }
       if (pos[0]) h.write(pos[0].v, pos[0].kind);
       if (pos[0] && pos[1]) h.write(renamed(pos[0].v, pos[1].v), pos[0].kind === 'lit' && pos[1].kind === 'lit' ? 'lit' : 'dyn');
       return local('rename');
@@ -2054,10 +2252,21 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
   // positional slots that are not already bound by name
   const slots = s.pos;
   const named0 = spec.params.some((p) => s.get(p) && ['path', 'literalpath', 'filepath'].includes(p));
+  // Copy-Item, Expand-Archive, Compress-Archive: with the source given by name, the first
+  // positional argument is the destination
+  const copyLike = canon === 'copy-item' || canon === 'expand-archive' || canon === 'compress-archive';
+  const srcNamed = copyLike && ['path', 'literalpath'].some((p) => s.get(p) && s.get(p).v !== true);
+  let destSlot = false;
   for (const idx of spec.write) {
-    const slot = named0 && canon !== 'copy-item' && canon !== 'expand-archive' && canon !== 'compress-archive' ? idx - 1 : idx;
+    const slot = (named0 && !copyLike) || srcNamed ? idx - 1 : idx;
     if (idx === 0 && named0) continue;
-    if (slots[slot]) writes.push(slots[slot]);
+    if (slots[slot]) { writes.push(slots[slot]); if (idx === 1) destSlot = true; }
+  }
+  // R17.6: Copy-Item / Move-Item without a destination copy into the current location under the
+  // source's own name; Expand-Archive makes a folder there named after the archive
+  if ((canon === 'copy-item' || canon === 'move-item' || canon === 'expand-archive') && !destSlot && !s.get(canon === 'expand-archive' ? 'destinationpath' : 'destination')) {
+    const src = s.get('path') ?? s.get('literalpath') ?? slots[0];
+    if (src && src.v !== true) for (const one of splitPs(src.v)) writes.push({ v: canon === 'expand-archive' ? wordBase(one).replace(/\.zip$/i, '') : wordBase(one), kind: src.kind });
   }
   const itemTypeArg = s.get('itemtype') ?? s.get('type');
   const itemType = String(itemTypeArg?.v ?? '').toLowerCase();
@@ -2065,18 +2274,26 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
   // escape) and may come from a variable
   const maybeLink = !!itemTypeArg && (itemTypeArg.kind !== 'lit' || /[*?[`]/.test(itemType));
   const isLink = !!itemType && ['symboliclink', 'junction', 'hardlink'].some((x) => x.startsWith(itemType));
-  if (canon === 'new-item' && (isLink || maybeLink)) {
-    const t = s.get('target') ?? s.get('value');
-    if (!t || t.v === true) { if (isLink) h.bad = 'link without a literal target'; }
-    else for (const one of splitPs(t.v)) h.write(one, t.kind);
-  }
   if (canon === 'new-item' && s.get('name') && s.get('name').v !== true) {
     const base = writes[0] ?? { v: '.', kind: 'lit' };
     writes.splice(0, writes.length, { v: `${base.v}/${s.get('name').v}`, kind: base.kind === 'lit' && s.get('name').kind === 'lit' ? 'lit' : 'dyn' });
   }
+  if (canon === 'new-item' && (isLink || maybeLink)) {
+    // the target, where the command runs and where the link is (R17.4)
+    const t = s.get('target') ?? s.get('value');
+    if (!t || t.v === true) { if (isLink) h.bad = 'link without a literal target'; }
+    else {
+      const targets = splitPs(t.v).map((v) => ({ v, kind: t.kind }));
+      const links = writes.length ? splitPs(writes[0].v).map((v) => ({ v, kind: writes[0].kind })) : [];
+      if (!links.length) linkTargets(h, targets, { cwd: true });
+      for (const link of links) linkTargets(h, targets, { link, alsoCwd: true });
+    }
+  }
   if (spec.rename) {
     const target = writes[0];
     const nn = s.get('newname') ?? slots[target === slots[0] ? 1 : 0];
+    // R17.7: PowerShell accepts a full path as the new name; it is refused rather than resolved
+    if (nn && nn.v !== true && NOT_A_NAME.test(String(nn.v))) { h.bad = `Rename-Item -NewName ${String(nn.v).slice(0, 80)}: the new name has a path in it`; return local('rename-item'); }
     if (target && nn && nn.v !== true) writes.push({ v: renamed(String(target.v), String(nn.v)), kind: nn.kind === 'lit' && target.kind === 'lit' ? 'lit' : 'dyn' });
   }
   for (const wv of writes) for (const one of splitPs(wv.v)) h.write(one, wv.kind);

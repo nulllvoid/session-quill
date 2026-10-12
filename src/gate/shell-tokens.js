@@ -787,14 +787,29 @@ function expand(seg, depth, out) {
   // Before handing over to a nested script, keep what this segment itself does: its redirects,
   // the environment it passes on (checked as if exported) and any PowerShell file access.
   const redirectsOnly = () => { if (seg.redirects.length || seg.psWrites?.length || seg.psReads?.length || Object.keys(env).length) out.push({ ...seg, argv: [], kinds: [], quoted: [], stdin: null, env }); };
-  const script = (text, dialect) => {
+  // A wrapper's script runs in a child process: a `cd` inside it ends with it. The classifier
+  // keeps the current directory on a stack between the `cwdMark` push and pop segments; `dir`
+  // (a working-directory option) is where the child starts. `eval`, `source` and
+  // Invoke-Expression run in this shell (`inProcess`), so a `cd` in them lasts.
+  const script = (text, dialect, { inProcess = false, dir = null } = {}) => {
     redirectsOnly();
     let segs;
     try { segs = lex(text, dialect); } catch (e) {
       if (e instanceof ShellParseError) { out.push({ ...newSeg(dialect), unparseable: e.message }); return; }
       throw e;
     }
+    if (!inProcess) out.push({ ...newSeg(dialect), cwdMark: 'push' });
+    if (!inProcess && dir) out.push({ ...newSeg(dialect), cwdMark: 'cd', chdir: dir });
     for (const s2 of segs) expand(s2, depth + 1, out);
+    if (!inProcess) out.push({ ...newSeg(dialect), cwdMark: 'pop' });
+  };
+  // `env -C dir cmd` / `sudo -D dir cmd`: the command (and any script it wraps) runs in `dir`;
+  // its redirects are opened by the calling shell, before the change.
+  const inDir = (dir) => {
+    if (seg.redirects.length || seg.psWrites?.length || seg.psReads?.length) out.push({ ...seg, argv: [], kinds: [], quoted: [], stdin: null, env });
+    out.push({ ...newSeg(seg.dialect), cwdMark: 'push' }, { ...newSeg(seg.dialect), cwdMark: 'cd', chdir: dir });
+    expand({ ...seg, argv: a.slice(), kinds: k.slice(), quoted: q.slice(), assign: as.slice(), eqs: eqs.slice(), qs: qss.slice(), env, call, redirects: [], psWrites: undefined, psReads: undefined }, depth + 1, out);
+    out.push({ ...newSeg(seg.dialect), cwdMark: 'pop' });
   };
   if (ps) {
     for (let x = 0; x < a.length; x += 1) {
@@ -894,7 +909,20 @@ function expand(seg, depth, out) {
       const j = skipOptions(a, 1, PASS[name][0], PASS[name][1], name === 'nice' ? /^-\d+$/ : null);
       if (j < 0) { bad(`unknown option for ${name}`); return; }
       if (j >= a.length) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
+      // sudo -D/--chdir runs the command in another directory; --chroot changes what paths mean
+      let dir = null;
+      if (name === 'sudo') {
+        for (let x = 1; x < j; x += 1) {
+          const t = a[x];
+          if (/^(-R|--chroot)(=|$)|^-R./.test(t)) { bad('sudo --chroot changes the root directory'); return; }
+          if (t === '-D' || t === '--chdir') { dir = { v: a[x + 1], kind: k[x + 1] ?? 'lit' }; x += 1; continue; }
+          if (t.startsWith('--chdir=')) dir = { v: t.slice(8), kind: k[x] };
+          else if (/^-D./.test(t)) dir = { v: t.slice(2), kind: k[x] };
+          else if (PASS.sudo[0].has(t)) x += 1;
+        }
+      }
       shift(j);
+      if (dir) { inDir(dir); return; }
       continue;
     }
     if (name === 'chroot') {
@@ -915,7 +943,7 @@ function expand(seg, depth, out) {
     }
     if (name === 'source' || (name === '.' && !ps)) {
       if ((a[1] === '/dev/stdin' || a[1] === '/proc/self/fd/0' || a[1] === '-') && a.length >= 2) {
-        if (seg.stdin !== null) { if (seg.stdinDyn) { bad('sourced input contains expansions'); return; } script(seg.stdin, 'bash'); return; }
+        if (seg.stdin !== null) { if (seg.stdinDyn) { bad('sourced input contains expansions'); return; } script(seg.stdin, 'bash', { inProcess: true }); return; }
         bad('sourced input is not visible');
         return;
       }
@@ -930,13 +958,17 @@ function expand(seg, depth, out) {
     }
     if (name === 'env') {
       let j = 1;
+      let dir = null;
       while (j < a.length) {
         const t = a[j];
         if (t === '--') { j += 1; break; }
-        if (t === '-u' || t === '--unset' || t === '-C' || t === '--chdir') { j += 2; continue; }
+        if (t === '-C' || t === '--chdir') { dir = { v: a[j + 1], kind: k[j + 1] ?? 'lit' }; j += 2; continue; }
+        if (t.startsWith('--chdir=')) { dir = { v: t.slice(8), kind: k[j] }; j += 1; continue; }
+        if ((t === '-S' || t === '--split-string' || t.startsWith('--split-string=')) && dir) { bad('env -C with -S'); return; }
+        if (t === '-u' || t === '--unset') { j += 2; continue; }
         if (t === '-S' || t === '--split-string') { const str = a[j + 1]; if (k[j + 1] !== 'lit') { bad('env -S with a dynamic string'); return; } script(str ?? '', 'bash'); return; }
         if (t.startsWith('--split-string=')) { if (k[j] !== 'lit') { bad('env -S with a dynamic string'); return; } script(t.slice(15), 'bash'); return; }
-        if (/^--(unset|chdir)=/.test(t)) { j += 1; continue; }
+        if (/^--unset=/.test(t)) { j += 1; continue; }
         if (/^-[i0v]+$/.test(t) || ['--ignore-environment', '--null', '--debug', '-'].includes(t)) { j += 1; continue; }
         if (t.startsWith('-')) { bad(`unknown option for env: ${t}`); return; }
         if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { const eq = t.indexOf('='); env[t.slice(0, eq)] = k[j] === 'lit' ? t.slice(eq + 1) : null; j += 1; continue; }
@@ -944,6 +976,7 @@ function expand(seg, depth, out) {
       }
       if (j >= a.length) { out.push({ ...seg, argv: [], kinds: [], quoted: [], env }); return; }
       shift(j);
+      if (dir) { inDir(dir); return; }
       continue;
     }
     if (name === 'xargs') {
@@ -1029,25 +1062,28 @@ function expand(seg, depth, out) {
     }
     if (POWERSHELLS.has(name)) {
       let j = 1;
+      let wd = null;
       while (j < a.length) {
         const t = a[j];
         if (!(t.startsWith('-') || t.startsWith('/')) || t === '-') break;
         const p = t.slice(1).toLowerCase().replace(/:.*$/, '');
+        // the working directory the child starts in (R17.2)
+        if (p === 'wd' || (p.length >= 2 && 'workingdirectory'.startsWith(p))) { wd = { v: a[j + 1], kind: k[j + 1] ?? 'lit' }; j += 2; continue; }
         if (p === 'e' || p === 'ec' || (p.length >= 2 && 'encodedcommand'.startsWith(p))) {
           const text = decodePsBase64(a[j + 1]);
           if (text === null) { bad('encoded command does not decode'); return; }
-          script(text, 'powershell');
+          script(text, 'powershell', { dir: wd });
           return;
         }
         if (p.length >= 1 && 'command'.startsWith(p)) {
           const parts = a.slice(j + 1);
           if (!parts.length || parts[0] === '-') {
-            if (seg.stdin !== null && !seg.stdinDyn) { script(seg.stdin, 'powershell'); return; }
+            if (seg.stdin !== null && !seg.stdinDyn) { script(seg.stdin, 'powershell', { dir: wd }); return; }
             bad('PowerShell reads its command from input');
             return;
           }
           if (k.slice(j + 1).some((x) => x !== 'lit')) { bad('PowerShell -Command with a dynamic command'); return; }
-          script(parts.join(' '), 'powershell');
+          script(parts.join(' '), 'powershell', { dir: wd });
           return;
         }
         if (p.length >= 1 && 'file'.startsWith(p)) {
@@ -1060,10 +1096,10 @@ function expand(seg, depth, out) {
       if (j < a.length) {
         if (name === 'pwsh' && /\.ps1$/i.test(a[j])) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env, script: a[j], scriptKind: k[j], scriptArgs: a.slice(j + 1) }); return; }
         if (k.slice(j).some((x) => x !== 'lit')) { bad('PowerShell command is dynamic'); return; }
-        script(a.slice(j).join(' '), 'powershell');
+        script(a.slice(j).join(' '), 'powershell', { dir: wd });
         return;
       }
-      if (seg.stdin !== null && !seg.stdinDyn) { script(seg.stdin, 'powershell'); return; }
+      if (seg.stdin !== null && !seg.stdinDyn) { script(seg.stdin, 'powershell', { dir: wd }); return; }
       if (seg.piped) { bad('input is piped into PowerShell'); return; }
       out.push({ ...seg, argv: a, kinds: k, quoted: q, env });
       return;
@@ -1091,7 +1127,7 @@ function expand(seg, depth, out) {
       if (a[1] === '--') shift(1);
       if (a.length === 1) { out.push({ ...seg, argv: [], kinds: [], quoted: [], env }); return; }
       if (k.slice(1).some((x) => x !== 'lit')) { bad('eval of a dynamic string'); return; }
-      script(rest().join(' '), 'bash');
+      script(rest().join(' '), 'bash', { inProcess: true });
       return;
     }
     if (ps && (name === 'invoke-expression' || name === 'iex')) {
@@ -1100,12 +1136,13 @@ function expand(seg, depth, out) {
       const kinds = k.slice(from);
       if (!args.length) { bad(seg.piped ? 'input is piped into Invoke-Expression' : 'Invoke-Expression without a string'); return; }
       if (kinds.some((x) => x !== 'lit')) { bad('Invoke-Expression of a dynamic string'); return; }
-      script(args.join(' '), 'powershell');
+      script(args.join(' '), 'powershell', { inProcess: true });
       return;
     }
     if (ps && (name === 'start-process' || name === 'saps' || name === 'start')) {
       let file = null;
       let fileKind = 'lit';
+      let wd = null;
       let argList = [];
       let argKinds = [];
       const pos = [];
@@ -1117,6 +1154,7 @@ function expand(seg, depth, out) {
           if ('argumentlist'.startsWith(p) || p === 'args') { argList = a[j + 1] === undefined ? [] : [a[j + 1]]; argKinds = [k[j + 1]]; j += 1; continue; }
           if (p.length >= 2 && 'verb'.startsWith(p) && /^runas/i.test(a[j + 1] ?? '')) { bad('Start-Process -Verb RunAs elevates'); return; }
           if (p.length >= 2 && 'credential'.startsWith(p)) { bad('Start-Process as another user'); return; }
+          if (p.length >= 2 && 'workingdirectory'.startsWith(p)) { wd = { v: a[j + 1], kind: k[j + 1] ?? 'lit' }; j += 1; continue; }
           if (['workingdirectory', 'verb', 'windowstyle', 'redirectstandardoutput', 'redirectstandardinput', 'redirectstandarderror'].some((v) => p.length >= 2 && v.startsWith(p))) { j += 1; continue; }
           continue;
         }
@@ -1126,26 +1164,35 @@ function expand(seg, depth, out) {
       if (file === null) { bad('Start-Process without a program'); return; }
       if (fileKind !== 'lit' || argKinds.some((x) => x !== 'lit')) { bad('Start-Process with a dynamic program or arguments'); return; }
       const inner = [file, ...argList.flatMap((x) => x.split(/[,\s]+/)).filter(Boolean)].map(quoteForBash).join(' ');
-      script(inner, 'bash');
+      script(inner, 'bash', { dir: wd });
       return;
     }
     if (!ps && seg.dialect === 'cmd' && name === 'start') {
       let j = 1;
-      while (j < a.length && (a[j].startsWith('/') || (j === 1 && q[j]))) j += a[j].toLowerCase() === '/d' ? 2 : 1;
+      let dir = null; // start /D dir: the program starts there (R17.2)
+      while (j < a.length && (a[j].startsWith('/') || (j === 1 && q[j]))) {
+        if (a[j].toLowerCase() === '/d') dir = { v: a[j + 1], kind: k[j + 1] ?? 'lit' };
+        else if (/^\/d./i.test(a[j]) && !q[j]) dir = { v: a[j].slice(2), kind: k[j] };
+        j += a[j].toLowerCase() === '/d' ? 2 : 1;
+      }
       if (j >= a.length) { out.push({ ...seg, argv: [], kinds: [], quoted: [], env }); return; }
       shift(j);
+      if (dir) { inDir(dir); return; }
       continue;
     }
     if (name === 'wsl') {
       let j = 1;
+      let dir = null; // wsl --cd dir: the command starts there (R17.2)
       while (j < a.length && a[j].startsWith('-')) {
         const t = a[j];
         if (t === '--' || t === '-e' || t === '--exec') { j += 1; break; }
+        if (t === '--cd') dir = { v: a[j + 1], kind: k[j + 1] ?? 'lit' };
         if (t === '-d' || t === '--distribution' || t === '-u' || t === '--user' || t === '--cd') { j += 2; continue; }
         j += 1;
       }
       if (j >= a.length) { out.push({ ...seg, argv: [], kinds: [], quoted: [], env }); return; }
       shift(j);
+      if (dir) { inDir(dir); return; }
       continue;
     }
     if (name === 'find') {

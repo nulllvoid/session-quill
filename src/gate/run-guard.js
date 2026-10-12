@@ -20,7 +20,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyCall } from './prod-classify.js';
+import { classifyCall, CLIMB_REASON_RE } from './prod-classify.js';
 import { parseShell } from './shell-tokens.js';
 import { quillHome, handoffRunDir } from '../lib/paths.js';
 import { isProtectedBranch } from '../handoff/permissions.js';
@@ -54,6 +54,8 @@ const REASONS = {
   tampered: () => "QUILL_DENIED grant-tampered: this run's grant file is missing or no longer matches the hash recorded when the run was queued, so only local commands that touch no files are allowed. Stop changing things, report the problem in the result and finish.",
   untrustedMcp: (server, source) => `QUILL_DENIED untrusted-mcp-server: MCP server ${server} comes from the ${source} configuration and is not in [handoff] trusted_mcp_servers, so this run cannot use it. Use a connector or command that is available, and record the route you tried in attempts.`,
   unparseable: (why) => `QUILL_DENIED unparseable: the guard could not read this command (${why}); rewrite it as one plain command without variables, eval, wrappers or globs in write targets.`,
+  climbs: (p) => `QUILL_DENIED unparseable: the path ${p} has '..' after a directory name, which shells resolve through links differently than the guard can check. Write the path without 'name/..': name the directory you mean directly, or start the path with '..' only.`,
+  climbFrom: (p, dir) => `QUILL_DENIED unparseable: ${p} climbs with '..' from ${dir}, which is not an existing directory, so the guard cannot tell where the shell really is (a cd into it fails, or it is created in the same command). Create the directory or change into it in an earlier command, or write the path without '..'.`,
   privileged: (why) => `QUILL_DENIED quill-privileged: ${why}. A run may use only Quill's read commands (status, ticket show|list|children, agent list|show|suggestions, handoff list, repo list, doctor); put what you wanted Quill to do in the result instead.`,
   outsideReadable: (p, via) => `QUILL_DENIED outside-readable: ${p ?? 'this location'}${via && via !== p ? ` reaches ${via}, which` : ''} is outside what this run may read (its checkout, run directory, context snapshot, temp directory and plugin directories). Work from those, and record in attempts what you could not reach.`,
   patternClimbs: (pattern) => `QUILL_DENIED outside-readable: the pattern ${pattern} climbs out of its search directory ('..' after a wildcard or brace), so the guard cannot tell what it reaches. Search from an explicit path inside the readable area instead.`,
@@ -136,7 +138,10 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
     if (server !== null) return deny(REASONS.untrustedMcp(server, source));
   }
   const bad = cls.class === 'unparseable' ? cls : parts.find((p) => p.class === 'unparseable');
-  if (bad) return deny(REASONS.unparseable(bad.reason));
+  if (bad) {
+    const climb = CLIMB_REASON_RE.exec(String(bad.reason));
+    return deny(climb ? REASONS.climbs(climb[1]) : REASONS.unparseable(bad.reason));
+  }
   const priv = parts.find((p) => p.class === 'privileged');
   if (priv) return deny(REASONS.privileged(priv.reason));
 
@@ -199,6 +204,8 @@ export function canonicalPath(p, hops = 0) {
   const resolved = path.resolve(p);
   const real = realOrNull(resolved);
   if (real) return real;
+  const fast = deepPath(resolved, hops);
+  if (fast !== undefined) return fast;
   const tail = [];
   let cursor = resolved;
   for (;;) {
@@ -215,6 +222,38 @@ export function canonicalPath(p, hops = 0) {
     if (realParent) return path.join(realParent, ...tail);
     cursor = parent;
   }
+}
+
+// canonicalPath for a long path that does not exist: the deepest existing ancestor is found by
+// bisection (a path below one that does not resolve does not resolve either), so a path with
+// thousands of segments costs a dozen lookups rather than one per segment. The first missing
+// segment is then checked as the walk from the leaf would: a dangling link is followed; anything
+// else that unexpectedly exists sends the caller back to that walk (undefined).
+function deepPath(resolved, hops) {
+  const { root } = path.parse(resolved);
+  const parts = resolved.slice(root.length).split(path.sep).filter(Boolean);
+  if (parts.length < 16) return undefined;
+  const prefix = (k) => path.join(root, ...parts.slice(0, k));
+  let lo = 0; // prefix(lo) resolves (the root)
+  let hi = parts.length; // prefix(hi) does not
+  let real = realOrNull(root);
+  if (!real) return undefined;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    const r = realOrNull(prefix(mid));
+    if (r) { lo = mid; real = r; } else hi = mid;
+  }
+  const missing = prefix(lo + 1);
+  const rest = parts.slice(lo + 1);
+  const target = danglingTarget(missing);
+  if (target !== null) {
+    if (hops >= MAX_LINK_HOPS) return null;
+    return canonicalPath(path.join(path.resolve(real, target), ...rest), hops + 1);
+  }
+  let st;
+  try { st = fs.lstatSync(missing, { throwIfNoEntry: false }); } catch { st = null; }
+  if (st !== undefined) return undefined;
+  return path.join(real, ...parts.slice(lo));
 }
 
 // True when `child` is `root` or below it. Case-insensitive on Windows; `C:\repo-other` is not
@@ -340,27 +379,43 @@ const ANY_WILDCARD = /[*?[\]{}`<>"]/;
 function reach(entry, roots, check) {
   if (typeof entry.p !== 'string' || !path.isAbsolute(entry.p)) return check(null, false);
   if (entry.literal || !entry.spec) return check(roots.canonical(entry.p), false);
-  const { root, segs, dialect } = entry.spec;
+  const { root, segs, dialect, ifDir } = entry.spec;
   const wildRe = WILDCARD[dialect] ?? ANY_WILDCARD;
   const wild = (s) => wildRe.test(s);
   const hasWild = segs.some(wild);
   const lexical = check(roots.canonical(entry.p), hasWild);
   if (lexical || (!hasWild && !segs.includes('..'))) return lexical;
-  let frontier = [roots.canonical(root)];
-  for (const seg of segs) {
-    if (frontier.includes(null)) return check(null, hasWild);
+  // Each frontier entry is a directory (`base`, real when `real`) plus literal segments not looked
+  // up yet: a run of literal segments costs nothing until a `..`, a wildcard or the end needs the
+  // real directory, so the walk is linear in the segments (R17.1).
+  const at = (f) => (f.tail.length ? path.join(f.base, ...f.tail) : f.base);
+  let frontier = [{ base: root, tail: [], real: false }];
+  for (let i = 0; i < segs.length; i += 1) {
+    const seg = segs[i];
     if (seg === '..') {
-      frontier = frontier.map((d) => path.dirname(d));
+      // the classifier refuses `..` after a name within one path word (R17.1), so a `..` here
+      // starts a word: the shell takes the parent of the directory it is really in
+      const next = [];
+      for (const f of frontier) {
+        if (f.real && !f.tail.length) { next.push({ base: path.dirname(f.base), tail: [], real: true }); continue; }
+        const up = roots.scan.parentOf(at(f), i === ifDir, roots.canonical);
+        if (up === MOOT) continue;
+        if (up === null) return REASONS.climbFrom(entry.p, at(f));
+        next.push({ base: up, tail: [], real: true });
+      }
+      frontier = next;
       continue;
     }
     if (!wild(seg)) {
-      frontier = frontier.map((d) => roots.canonical(path.join(d, seg)));
+      for (const f of frontier) f.tail.push(seg);
       continue;
     }
+    const dirs = frontier.map((f) => (f.real && !f.tail.length ? f.base : roots.canonical(at(f))));
+    if (dirs.includes(null)) return check(null, hasWild);
     const deep = seg.includes('**');
-    const next = deep ? [...frontier] : [];
-    const stack = [...frontier];
-    const seen = new Set(frontier);
+    const next = deep ? [...dirs] : [];
+    const stack = [...dirs];
+    const seen = new Set(dirs);
     while (stack.length) {
       const dir = stack.pop();
       const entries = roots.scan.list(dir);
@@ -377,22 +432,46 @@ function reach(entry, roots, check) {
         if (deep && !seen.has(real)) { seen.add(real); stack.push(real); }
       }
     }
-    frontier = next;
+    frontier = next.map((d) => ({ base: d, tail: [], real: true }));
   }
-  for (const c of frontier) {
-    const why = check(c, hasWild);
+  for (const f of frontier) {
+    const why = check(f.real && !f.tail.length ? f.base : roots.canonical(at(f)), hasWild);
     if (why) return why;
   }
   return null;
 }
 
+// A `..` from a symbolic link's own path (spec `ifDir`) when that path is not an existing
+// directory: the link is not made there, so that reading of its target does not apply.
+const MOOT = Symbol('moot');
+
 // Per-call state for walking wildcards: the shared visit budget and memoised listings (read with
-// opendir, so a huge directory stops at the budget) and directory checks.
+// opendir, so a huge directory stops at the budget), directory checks, and the real parents `..`
+// leads to.
 function scanState() {
   const listings = new Map();
   const dirs = new Map();
+  const parents = new Map();
   return {
     visited: 0,
+    // Where `..` from `d` leads: the parent of the real directory `d` names, or null when `d` is
+    // not an existing directory (a `cd` into it failed, so the shell is somewhere the guard cannot
+    // tell). With `linkSlot` (`d` is where `ln -s` may put its link): a missing `d` is a directory
+    // the command creates first, an existing non-directory is MOOT.
+    parentOf(d, linkSlot, canonical) {
+      const key = `${linkSlot ? 1 : 0}${d}`;
+      if (parents.has(key)) return parents.get(key);
+      let up = null;
+      const real = realOrNull(d);
+      if (real && this.isDirectory(real)) up = path.dirname(real);
+      else if (linkSlot) {
+        let st;
+        try { st = fs.lstatSync(d, { throwIfNoEntry: false }); } catch { st = null; }
+        if (st === undefined) { const c = canonical(d); up = c ? path.dirname(c) : null; } else if (st) up = MOOT;
+      }
+      parents.set(key, up);
+      return up;
+    },
     list(dir) {
       if (listings.has(dir)) return listings.get(dir);
       let entries = null;
