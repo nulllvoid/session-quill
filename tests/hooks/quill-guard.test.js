@@ -5,10 +5,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { writeGrant } from '../../src/handoff/grant.js';
 import { writeRunSettings, RUN_SETTINGS_FILE, GUARD_MATCHER } from '../../src/handoff/run-settings.js';
+import { reconcileAttempts } from '../../src/handoff/reconcile.js';
 
 const GUARD = fileURLToPath(new URL('../../bin/quill-guard.js', import.meta.url));
 
@@ -246,61 +248,118 @@ test('a critical change is recorded with its scope and target', () => {
   assert.equal(typeof g.scope, 'string');
 });
 
+test('observe mode (full access) allows on the error paths too, and the ledger says what happened (M1)', () => {
+  const run = makeRun({ grant: { access: 'full' } });
+  const observe = envFor(run, { QUILL_HANDOFF_GUARD: 'observe' });
+  const big = JSON.stringify(hookInput(run, 'Write', { file_path: path.join(run.checkout, 'fixture.json'), content: 'x'.repeat(5 * 1024 * 1024) }));
+  const r1 = guard(big, observe);
+  assert.equal(r1.decision, 'allow', r1.reason);
+  const r2 = guard(hookInput(run, 'Bash', { command: 'ls' }), { ...observe, NODE_ENV: 'test', QUILL_GUARD_TEST_THROW: '1' });
+  assert.equal(r2.decision, 'allow', r2.reason);
+  const [l1, l2] = ledgerOf(run);
+  assert.equal(l1.decision, 'allow');
+  assert.equal(l1.error, 'stdin-too-large');
+  assert.equal(l2.decision, 'allow');
+  assert.equal(l2.error, 'Error');
+  // enforce keeps failing closed, and observe without a full grant enforces
+  assert.equal(guard(big, envFor(run)).decision, 'deny');
+  const partial = makeRun({ grant: { access: 'autonomous' } });
+  assert.equal(guard(big, envFor(partial, { QUILL_HANDOFF_GUARD: 'observe' })).decision, 'deny');
+  assert.equal(guard(hookInput(partial, 'Bash', { command: 'ls' }), envFor(partial, { QUILL_HANDOFF_GUARD: 'observe', NODE_ENV: 'test', QUILL_GUARD_TEST_THROW: '1' })).decision, 'deny');
+});
+
+test('the error fallback keeps decide\'s unreadable carve-outs inside a broad readable root (M3)', () => {
+  const run = makeRun({ grant: { readableRoots: [base], writableRoots: [] } });
+  const env = envFor(run, { NODE_ENV: 'test', QUILL_GUARD_TEST_THROW: '1' });
+  const creds = file(path.join(home, '.aws', 'credentials'));
+  const settings = file(path.join(home, '.claude', 'settings.json'));
+  const memory = file(path.join(qh, 'memory', 'notes.md'));
+  for (const p of [creds, settings, memory]) assert.equal(guard(hookInput(run, 'Read', { file_path: p }), env).decision, 'deny', p);
+  assert.equal(guard(hookInput(run, 'Grep', { pattern: 'x', path: path.join(home, '.aws') }), env).decision, 'deny');
+  assert.equal(guard(hookInput(run, 'Read', { file_path: path.join(outside, 'secret.txt') }), env).decision, 'allow', 'not a carve-out: inside the broad root');
+  assert.equal(guard(hookInput(run, 'Read', { file_path: path.join(run.checkout, 'src', 'app.js') }), env).decision, 'deny', 'the checkout below the Quill home is not a root of this grant');
+});
+
+test('the error fallback reads the checkout and run dir below the Quill home when they are roots (M3)', () => {
+  const run = makeRun();
+  const env = envFor(run, { NODE_ENV: 'test', QUILL_GUARD_TEST_THROW: '1' });
+  assert.equal(guard(hookInput(run, 'Read', { file_path: path.join(run.checkout, 'src', 'app.js') }), env).decision, 'allow');
+  assert.equal(guard(hookInput(run, 'Read', { file_path: path.join(run.runDir, 'grant.json') }), env).decision, 'allow');
+  assert.equal(guard(hookInput(run, 'Read', { file_path: path.join(qh, 'memory', 'notes.md') }), env).decision, 'deny');
+});
+
+test('real guard ledger lines reconcile: only the denied call becomes a refused attempt (I2)', () => {
+  const run = makeRun({ grant: { access: 'full' } });
+  const enforce = makeRun();
+  guard(hookInput(run, 'Bash', { command: 'git commit -m x' }, { tool_use_id: 'toolu_obs' }), envFor(run, { QUILL_HANDOFF_GUARD: 'observe' }));
+  guard(hookInput(enforce, 'Bash', { command: 'ls' }, { tool_use_id: 'toolu_ls' }), envFor(enforce));
+  guard(hookInput(enforce, 'Bash', { command: 'git commit -m x' }, { tool_use_id: 'toolu_commit' }), envFor(enforce));
+  const lines = [...ledgerOf(run), ...ledgerOf(enforce)];
+  assert.deepEqual(lines.map((l) => [l.tool_use_id, l.decision, l.enforce_decision ?? null, l.input_summary]), [
+    ['toolu_obs', 'allow', 'deny', 'git commit -m x'], ['toolu_ls', 'allow', null, 'ls'], ['toolu_commit', 'deny', null, 'git commit -m x'],
+  ]);
+  // the stream's own lines for the denied call: tool_use, the hook-error result, permission_denials
+  const stream = [
+    { kind: 'tool_use', tool: 'Bash', input_summary: 'git commit -m x', tool_use_id: 'toolu_commit' },
+    { kind: 'guard', tool: 'Bash', input_summary: 'git commit -m x', decision: 'deny', is_error: true, tool_use_id: 'toolu_commit' },
+    { kind: 'denial', tool: 'Bash', input_summary: 'git commit -m x', decision: 'deny', tool_use_id: 'toolu_commit' },
+  ];
+  const { attempts, added } = reconcileAttempts([{ route: 'list', tool: 'ls', target: '.', outcome: 'worked' }], [...lines, ...stream]);
+  assert.equal(attempts[0].verified, 'seen');
+  assert.deepEqual(added.map((a) => [a.tool, a.target, a.outcome]), [['Bash', 'git commit -m x', 'refused']]);
+});
+
 // ------------------------------------------------------------------ run settings
 
-test('writeRunSettings writes the guard hook into <runDir>/run-settings.json, owner-only', () => {
+test('writeRunSettings writes the guard hook into <runDir>/run-settings.json as command + args, owner-only', () => {
   const runDir = dir('settings', 'r1');
-  const p = writeRunSettings(runDir, { guardCommand: { command: process.execPath, args: [GUARD] }, permissions: { deny: ['WebFetch(domain:evil.example)'] } });
+  const spaced = path.join(base, 'with space', 'bin', 'quill-guard.js');
+  const p = writeRunSettings(runDir, { guardCommand: { command: process.execPath, args: [spaced] }, permissions: { deny: ['WebFetch(domain:evil.example)'] } });
   assert.equal(p, path.join(runDir, RUN_SETTINGS_FILE));
   assert.equal(RUN_SETTINGS_FILE, 'run-settings.json');
-  const s = JSON.parse(fs.readFileSync(p, 'utf8'));
-  assert.deepEqual(s.permissions, { allow: [], deny: ['WebFetch(domain:evil.example)'] });
   assert.equal(GUARD_MATCHER, 'Bash|PowerShell|Monitor|mcp__.*|WebFetch|WebSearch|Read|Glob|Grep|Edit|Write|MultiEdit|NotebookEdit|Task|Agent');
-  assert.deepEqual(Object.keys(s.hooks), ['PreToolUse']);
-  assert.equal(s.hooks.PreToolUse.length, 1);
-  const [entry] = s.hooks.PreToolUse;
-  assert.equal(entry.matcher, GUARD_MATCHER);
-  assert.equal(entry.hooks.length, 1);
-  const [h] = entry.hooks;
-  assert.equal(h.type, 'command');
-  assert.equal(h.timeout, 10);
-  assert.equal(h.onFailure, 'block');
-  const slash = (s2) => s2.replaceAll('\\', '/');
-  assert.equal(h.command, `"${slash(process.execPath)}" "${slash(GUARD)}"`, 'the probe-verified single command string');
+  assert.deepEqual(JSON.parse(fs.readFileSync(p, 'utf8')), {
+    permissions: { allow: [], deny: ['WebFetch(domain:evil.example)'] },
+    hooks: { PreToolUse: [{ matcher: GUARD_MATCHER, hooks: [{ type: 'command', command: process.execPath, args: [spaced], timeout: 10, onFailure: 'block' }] }] },
+  });
   if (process.platform !== 'win32') assert.equal(fs.statSync(p).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(runDir), [RUN_SETTINGS_FILE], 'no temp file left behind');
 });
 
-test('writeRunSettings defaults to this install\'s guard and no deny rules, and replaces an earlier file', () => {
+test('writeRunSettings defaults to this node and this install\'s guard, no deny rules, and replaces an earlier file', () => {
   const runDir = dir('settings', 'r2');
   writeRunSettings(runDir, { permissions: { deny: ['Bash(rm:*)'] } });
   const p = writeRunSettings(runDir, {});
   const s = JSON.parse(fs.readFileSync(p, 'utf8'));
   assert.deepEqual(s.permissions, { allow: [], deny: [] });
-  assert.equal(s.hooks.PreToolUse[0].hooks[0].command, `"${process.execPath.replaceAll('\\', '/')}" "${GUARD.replaceAll('\\', '/')}"`);
+  const [h] = s.hooks.PreToolUse[0].hooks;
+  assert.equal(h.command, process.execPath, 'unchanged: no quoting, no slash rewriting');
+  assert.deepEqual(h.args, [GUARD]);
 });
 
-test('the command written by writeRunSettings runs the guard', () => {
+test('the command and args written by writeRunSettings run the guard without a shell', async () => {
   const run = makeRun();
   const p = writeRunSettings(run.runDir, {});
-  const { command } = JSON.parse(fs.readFileSync(p, 'utf8')).hooks.PreToolUse[0].hooks[0];
-  const parts = [...command.matchAll(/"([^"]*)"/g)].map((m) => m[1]);
-  assert.equal(parts.length, 2);
-  const r = spawnSync(parts[0], parts.slice(1), { input: JSON.stringify(hookInput(run, 'Bash', { command: 'git commit -m x' })), env: envFor(run), encoding: 'utf8' });
-  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, NO_COMMIT);
+  const { command, args } = JSON.parse(fs.readFileSync(p, 'utf8')).hooks.PreToolUse[0].hooks[0];
+  const child = spawn(command, args, { env: envFor(run), shell: false, stdio: ['pipe', 'pipe', 'pipe'] });
+  let stdout = '';
+  child.stdout.setEncoding('utf8').on('data', (d) => { stdout += d; });
+  child.stdin.end(JSON.stringify(hookInput(run, 'Bash', { command: 'git commit -m x' })));
+  const [code] = await once(child, 'close');
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(stdout).hookSpecificOutput.permissionDecisionReason, NO_COMMIT);
 });
 
-test('writeRunSettings refuses relative paths, characters a shell would expand, and bad deny rules', () => {
+test('writeRunSettings refuses relative paths, characters the hook would not pass through, and bad deny rules', () => {
   const runDir = dir('settings', 'r3');
   const bad = [
     { guardCommand: { command: 'node', args: [GUARD] } },
     { guardCommand: { command: process.execPath, args: ['bin/quill-guard.js'] } },
     { guardCommand: { command: process.execPath, args: [] } },
-    { guardCommand: { command: process.execPath, args: [path.join(base, 'a"b.js')] } },
-    { guardCommand: { command: process.execPath, args: [path.join(base, '$HOME.js')] } },
-    { guardCommand: { command: process.execPath, args: [path.join(base, 'a`b`.js')] } },
-    { guardCommand: { command: process.execPath, args: [path.join(base, '%PATH%.js')] } },
+    { guardCommand: { command: process.execPath } },
+    { guardCommand: { command: process.execPath, args: [path.join(base, '${HOME}.js')] } },
     { guardCommand: { command: process.execPath, args: [path.join(base, 'a\nb.js')] } },
+    { guardCommand: { command: process.execPath, args: [path.join(base, 'a\0b.js')] } },
     { permissions: { deny: 'Bash' } },
     { permissions: { deny: [1] } },
   ];

@@ -214,6 +214,26 @@ test('permission denials reach the ledger once, from the event or the result', (
   const denials = readLedger(ledgerPath).filter((l) => l.kind === 'denial');
   assert.deepEqual(denials.map((d) => d.tool).sort(), ['WebFetch', 'mcp__claude_ai_Atlassian__createJiraIssue']);
   assert.ok(denials.every((d) => d.decision === 'deny'));
+  assert.deepEqual(denials.map((d) => d.tool_use_id).sort(), ['toolu_10', 'toolu_9']);
+});
+
+// The shape claude 2.1.296 gives a guard hook's deny (task 8 fix round 1 probe): the tool result is
+// an error whose text is 'PreToolUse:<tool> hook error: ' followed by the guard's reason.
+test('a guard refusal is recognised by the codes the guard emits, and ledger lines carry the tool_use_id', () => {
+  const use = (id, command) => JSON.stringify({ type: 'assistant', session_id: 's1', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } });
+  const res = (id, isError, text) => JSON.stringify({ type: 'user', session_id: 's1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: text }] } });
+  const lines = [
+    use('toolu_a', 'node -e 1 > out.txt'), res('toolu_a', true, 'PreToolUse:Bash hook error: QUILL_DENIED no-edit-permission: this run may read out.txt but not change it.'),
+    use('toolu_b', 'kubectl apply -f x.yaml'), res('toolu_b', true, 'PreToolUse:Bash hook error: QUILL_CRITICAL_CHANGE scope=k8s.write target=stg: not granted for this run.'),
+    use('toolu_c', 'old'), res('toolu_c', true, 'QUILL-GUARD: refused (older wording)'),
+    use('toolu_d', 'cat notes.md'), res('toolu_d', false, 'QUILL_DENIED appears in these notes'),
+    use('toolu_e', 'grep -r QUILL_DENIED .'), res('toolu_e', true, 'Exit code 2\nsrc/x.js: QUILL_DENIED no-edit-permission'),
+  ];
+  const { ledgerPath } = collect([`${lines.join('\n')}\n`]);
+  const ledger = readLedger(ledgerPath);
+  assert.deepEqual(ledger.filter((l) => l.kind === 'tool_use').map((l) => l.tool_use_id), ['toolu_a', 'toolu_b', 'toolu_c', 'toolu_d', 'toolu_e']);
+  const results = ledger.filter((l) => l.kind !== 'tool_use').map((l) => [l.tool_use_id, l.kind, l.decision ?? null]);
+  assert.deepEqual(results, [['toolu_a', 'guard', 'deny'], ['toolu_b', 'guard', 'deny'], ['toolu_c', 'guard', 'deny'], ['toolu_d', 'tool_result', null], ['toolu_e', 'tool_result', null]]);
 });
 
 test('review: a stream cut off by a worker restart leaves no result, keeps the session id, and a torn ledger line is skipped', () => {

@@ -8,6 +8,11 @@ import path from 'node:path';
 import { redactText } from '../export/sanitize.js';
 
 export const EXCERPT_BYTES = 2048;
+// The reason codes bin/quill-guard.js puts first in a refusal, as the host shows them.
+const GUARD_REFUSAL = /QUILL-GUARD|(?:^|hook error: )QUILL_(?:DENIED|CRITICAL_CHANGE)\b/;
+// The host's tool_use_id, kept on ledger lines so one call's lines can be matched up.
+const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const idOf = (id) => (typeof id === 'string' && TOOL_USE_ID.test(id) ? { tool_use_id: id } : {});
 const SUMMARY_CHARS = 300;
 const LOG_TEXT_BYTES = 65_536;
 // A single line longer than this many UTF-8 bytes (no newline in sight) is dropped rather than
@@ -175,7 +180,7 @@ export function createStreamCollector({ logPath = null, ledgerPath = null, onIni
   function denial(tool, toolUseId, input, outcome) {
     if (toolUseId && denied.has(toolUseId)) return;
     if (toolUseId) denied.add(toolUseId);
-    ledger({ kind: 'denial', tool: tool ?? null, input_summary: summarizeInput(tool, input, cwd), decision: 'deny', outcome: outcome ?? null });
+    ledger({ kind: 'denial', tool: tool ?? null, ...idOf(toolUseId), input_summary: summarizeInput(tool, input, cwd), decision: 'deny', outcome: outcome ?? null });
     log(`[denied] ${tool ?? 'unknown tool'}`);
   }
 
@@ -208,7 +213,7 @@ export function createStreamCollector({ logPath = null, ledgerPath = null, onIni
           const summary = summarizeInput(tool, c.input, cwd);
           if (c.id) toolCalls.set(c.id, { tool, summary });
           log(`[tool] ${tool ?? 'unknown'}`);
-          ledger({ kind: 'tool_use', tool, input_summary: summary });
+          ledger({ kind: 'tool_use', tool, ...idOf(c.id), input_summary: summary });
         }
       }
       return;
@@ -220,9 +225,11 @@ export function createStreamCollector({ logPath = null, ledgerPath = null, onIni
         const { tool } = call;
         const text = contentText(c.content);
         const isError = c.is_error === true;
-        // A guard hook's deny reaches the model as a tool error naming QUILL-GUARD (research 03 E3).
-        const guard = isError && /QUILL-GUARD/.test(text);
-        const entry = { kind: guard ? 'guard' : 'tool_result', tool, input_summary: call.summary, is_error: isError, result_excerpt: redactCapped(text, EXCERPT_BYTES) };
+        // A guard hook's deny reaches the model as a tool error carrying the guard's reason:
+        // 'PreToolUse:<tool> hook error: QUILL_DENIED …' on claude 2.1.296 (task 8 fix round 1
+        // probe). QUILL-GUARD is the wording research 03 E3 recorded.
+        const guard = isError && GUARD_REFUSAL.test(text);
+        const entry = { kind: guard ? 'guard' : 'tool_result', tool, ...idOf(c.tool_use_id), input_summary: call.summary, is_error: isError, result_excerpt: redactCapped(text, EXCERPT_BYTES) };
         if (guard) Object.assign(entry, { decision: 'deny' });
         if (SHELL_TOOLS.has(tool)) entry.exit_code = exitCodeOf(c, obj, text);
         ledger(entry);

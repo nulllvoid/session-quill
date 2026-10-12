@@ -14,23 +14,23 @@ export const GUARD_TIMEOUT_S = 10;
 // This install's guard entry point.
 export const GUARD_BIN = fileURLToPath(new URL('../../bin/quill-guard.js', import.meta.url));
 
-// Characters that some shell would still expand or end inside double quotes (bash: " $ ` and
-// newlines; cmd: % and "), so a path holding one cannot be quoted safely and is refused.
-const UNQUOTABLE = /["$`%\r\n\0]/;
+// Line breaks and NUL cannot pass through to an argv unchanged; $ is refused too, because the host
+// may expand ${VAR} in hook commands and arguments (the plugin's own hooks rely on that).
+const UNSAFE = /[$\r\n\0]/;
 
 const invalid = (message) => new TrackerError('run-settings-invalid', message);
 
-// The hook command as one string, the form P0 verified on claude 2.1.296 (`node "<script>"`, see
-// scripts/probe-autonomous.mjs): every part is an absolute path in double quotes. Forward slashes
-// work for node and for both shells, and leave no backslash for bash to read as an escape.
-function commandLine({ command, args } = {}) {
-  const parts = [command, ...(Array.isArray(args) ? args : [])];
+// The host runs the executable with its arguments directly, without a shell (ruling R21): the
+// form of the session-quill plugin's own hooks/hooks.json, verified on claude 2.1.296 for this
+// file too (task 8 fix round 1). Nothing is quoted or rewritten, so spaces and backslashes in a
+// path reach the process as they are.
+function hookCommand({ command, args } = {}) {
   if (!Array.isArray(args) || !args.length) throw invalid('the guard command needs the guard script as its argument');
-  for (const p of parts) {
+  for (const p of [command, ...args]) {
     if (typeof p !== 'string' || !path.isAbsolute(p)) throw invalid('the guard command and its arguments must be absolute paths');
-    if (UNQUOTABLE.test(p)) throw invalid('a guard command path holds a character that cannot be quoted for every shell');
+    if (UNSAFE.test(p)) throw invalid('a guard command path holds a character the hook cannot pass through unchanged');
   }
-  return parts.map((p) => `"${p.replaceAll('\\', '/')}"`).join(' ');
+  return { command, args: [...args] };
 }
 
 /**
@@ -49,7 +49,7 @@ export function writeRunSettings(runDir, { guardCommand = { command: process.exe
   const settings = {
     permissions: { allow: [], deny: [...deny] },
     hooks: {
-      PreToolUse: [{ matcher: GUARD_MATCHER, hooks: [{ type: 'command', command: commandLine(guardCommand), timeout: GUARD_TIMEOUT_S, onFailure: 'block' }] }],
+      PreToolUse: [{ matcher: GUARD_MATCHER, hooks: [{ type: 'command', ...hookCommand(guardCommand), timeout: GUARD_TIMEOUT_S, onFailure: 'block' }] }],
     },
   };
   const dest = path.join(runDir, RUN_SETTINGS_FILE);

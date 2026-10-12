@@ -298,6 +298,31 @@ function canonicalRoot(p) {
   return real;
 }
 
+// What a run never reads, in canonical form: Claude's settings and the credential locations under
+// home, and the Quill home (whose run dir and worktrees are readable as deeper roots).
+function unreadableRoots(vars, home) {
+  const base = canonicalRoot(home);
+  const qh = canonicalRoot(quillHome({ QUILL_HOME: varOf(vars, 'QUILL_HOME') ?? path.join(home, '.claude', 'quill') }));
+  return [...(base ? HOME_SECRETS.map((n) => path.join(base, n)) : []), ...(qh ? [qh] : [])];
+}
+
+/**
+ * Whether decide's read rule lets `p` be read when `readableRoots` are the readable roots: the
+ * deepest readable root containing it must be deeper than the deepest unreadable one (see
+ * unreadableRoots). Links are resolved. Used by the guard's exception fallback (bin/quill-guard.js).
+ * @param {string} p  an absolute path
+ * @param {string[]} readableRoots  absolute roots
+ * @param {object} vars  the hook's environment (HOME/USERPROFILE, QUILL_HOME)
+ */
+export function readableUnder(p, readableRoots, vars) {
+  const v = isPlainObject(vars) ? vars : {};
+  if (typeof p !== 'string' || !path.isAbsolute(p)) return false;
+  const c = canonicalPath(p);
+  if (!c) return false;
+  const r = deepest(strings(readableRoots).map(canonicalRoot).filter(Boolean), c);
+  return r >= 0 && deepest(unreadableRoots(v, homeOf(v)), c) < r;
+}
+
 // Every root in canonical form. Paths the worker or the owner chose (grant roots, home, Quill
 // home, run dir, install root, temp) are resolved; fixed names below them (credential dirs, guard
 // files, run-dir files) are joined onto the resolved base, which keeps one decision to a handful
@@ -315,7 +340,7 @@ function rootsOf(g, e, vars, home, perms, forWrites) {
 
   const qhEnv = { QUILL_HOME: varOf(vars, 'QUILL_HOME') ?? path.join(home, '.claude', 'quill') };
   const grantWritable = canon(strings(g.writableRoots));
-  const unreadable = [...under(canonicalRoot(home), HOME_SECRETS), ...canon([quillHome(qhEnv)])];
+  const unreadable = unreadableRoots(vars, home);
   const roots = { canonical, scan: scanState(), readable: [...canon(strings(g.readableRoots)), ...grantWritable], unreadable };
   if (!forWrites) return roots;
 

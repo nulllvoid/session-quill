@@ -19,9 +19,18 @@ function binaries(command) {
   return out;
 }
 
+// The tool a ledger line is about: `tool_name` on the guard hook's lines (bin/quill-guard.js),
+// `tool` on the stream's lines and older ones.
+const toolOf = (line) => (typeof line.tool_name === 'string' && line.tool_name ? line.tool_name : typeof line.tool === 'string' ? line.tool : '');
+
+// A refusal the ledger recorded: a permission denial, or a guard line whose own decision was deny.
+// An observe-mode (full access) line's enforce_decision says only what enforce would have done;
+// nothing was refused.
+const isRefusal = (l) => l.kind === 'denial' || (l.kind === 'guard' && l.decision === 'deny');
+
 // Names a ledger line counts as a call of: the tool itself, plus the binaries of a shell command.
 function namesOf(line) {
-  const tool = typeof line.tool === 'string' ? line.tool : '';
+  const tool = toolOf(line);
   if (!tool) return [];
   const names = [tool.toLowerCase()];
   if (SHELL.has(tool)) names.push(...binaries(line.input_summary));
@@ -48,15 +57,20 @@ export function reconcileAttempts(attempts, ledgerLines) {
   const added = [];
   const keys = new Set();
   for (const l of ledger) {
-    if (!l || (l.kind !== 'denial' && l.kind !== 'guard') || !l.tool) continue;
+    const tool = l ? toolOf(l) : '';
+    if (!tool || !isRefusal(l)) continue;
     const names = namesOf(l);
     if (names.some((n) => reported.has(n))) continue;
-    const key = `${l.tool}\u0000${l.input_summary ?? ''}`;
-    if (keys.has(key)) continue;
-    keys.add(key);
+    // One refused call can leave several lines (the guard hook's, the stream's hook-error result,
+    // permission_denials): they match by tool_use_id, or by tool and summary on older lines.
+    const lineKeys = [`s\u0000${tool}\u0000${l.input_summary ?? ''}`];
+    if (typeof l.tool_use_id === 'string' && l.tool_use_id) lineKeys.push(`i\u0000${l.tool_use_id}`);
+    const seen = lineKeys.some((k) => keys.has(k));
+    for (const k of lineKeys) keys.add(k);
+    if (seen) continue;
     added.push({
-      route: `Refused: ${l.tool}${l.input_summary ? ` ${String(l.input_summary).slice(0, 100)}` : ''}`,
-      tool: String(l.tool).slice(0, 200),
+      route: `Refused: ${tool}${l.input_summary ? ` ${String(l.input_summary).slice(0, 100)}` : ''}`,
+      tool: String(tool).slice(0, 200),
       target: String(l.input_summary ?? '').slice(0, 300),
       outcome: 'refused',
       reason: l.kind === 'guard' ? 'blocked by the Quill guard' : 'denied by the run\'s permissions',

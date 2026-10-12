@@ -4,15 +4,16 @@
 // the PreToolUse JSON on stdin and the run's QUILL_HANDOFF_* env, decides the call with the run's
 // frozen grant, appends one `guard` line to <runDir>/ledger.jsonl and prints exactly one JSON
 // decision on stdout. It always exits 0: the decision is in the JSON. Fail closed: when anything
-// throws, the call is denied unless it is a Read/Glob/Grep inside the run's readable roots.
+// throws, the call is denied unless it is a Read/Glob/Grep inside the run's readable roots. The one
+// exception is full access (observe mode with a verified full grant), which never denies.
 //
 // Start-up cost is most of the hook's latency, so this loads only what decide() needs, the
 // grant reader, the log redaction and the git HEAD reader; no CLI, no config.
 import fs from 'node:fs';
 import path from 'node:path';
-import { decide, canonicalPath, isWithin } from '../src/gate/run-guard.js';
+import { decide, readableUnder } from '../src/gate/run-guard.js';
 import { readGrant, GRANT_FILE } from '../src/handoff/grant.js';
-import { redactCapped } from '../src/handoff/stream.js';
+import { redactCapped, summarizeInput } from '../src/handoff/stream.js';
 import { handoffRunDir } from '../src/lib/paths.js';
 import { currentBranch } from '../src/lib/git-head.js';
 
@@ -21,11 +22,13 @@ const EXCERPT_BYTES = 2048;
 const LEDGER_FILE = 'ledger.jsonl';
 const FALLBACK_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const OVERSIZE = Symbol('oversize');
+const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 const REASONS = {
   error: 'QUILL_DENIED guard-error: the guard could not check this call, so it is refused. Try a simpler form of the call once; if that is refused too, record the step in attempts and continue with the rest of the task.',
   tooLarge: `QUILL_DENIED unparseable: this tool call is larger than the guard reads (${MAX_STDIN_BYTES / 1024 / 1024} MB). Split it into smaller calls.`,
   fallbackAllow: "guard error: a Read, Glob or Grep inside the run's readable roots is still allowed",
+  observeError: 'full access (observe only): the guard could not check this call; it is allowed and recorded in the ledger',
 };
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -49,9 +52,10 @@ function grantOf(runDir, env) {
 // A Glob pattern or Grep glob the fallback can trust to stay below its search directory.
 const staysBelow = (p) => typeof p === 'string' && !p.includes('..') && !p.startsWith('~') && !path.isAbsolute(p) && !/^[\\/]|^[A-Za-z]:/.test(p);
 
-// The exception fallback: true only for a Read/Glob/Grep whose target resolves inside the readable
-// roots: the grant's when it could be read, else only the checkout (hook cwd) and the run dir.
-// Anything unexpected, including a throw here, means deny.
+// The exception fallback: true only for a Read/Glob/Grep whose target decide's read rule allows
+// under these roots: the grant's when it could be read, else only the checkout (hook cwd) and the
+// run dir. Links are resolved, and the unreadable carve-outs (credentials, Claude's settings, the
+// Quill home outside deeper roots) win over a broader root. Anything unexpected means deny.
 function readableAfterError(s) {
   try {
     const input = s.input;
@@ -67,14 +71,8 @@ function readableAfterError(s) {
       target = ti.path === undefined || ti.path === null ? s.cwd : ti.path;
     }
     if (typeof target !== 'string' || !target) return false;
-    const real = canonicalPath(path.resolve(s.cwd, target));
-    if (!real) return false;
     const roots = s.grant ? [...strings(s.grant.readableRoots), ...strings(s.grant.writableRoots)] : [s.cwd, s.runDir];
-    return roots.some((r) => {
-      if (typeof r !== 'string' || !path.isAbsolute(r)) return false;
-      const root = canonicalPath(r);
-      return !!root && isWithin(real, root);
-    });
+    return readableUnder(path.resolve(s.cwd, target), roots, s.env) === true;
   } catch {
     return false;
   }
@@ -83,19 +81,24 @@ function readableAfterError(s) {
 // Decides one call. Returns { decision, reason, runDir, line } where `line` is the ledger entry: only
 // classified, redacted summaries; never the raw tool input, argv, path specs or env values.
 function check(raw, env) {
-  const s = { input: null, cwd: process.cwd(), runDir: runDirOf(env), grant: null };
+  const s = { input: null, cwd: process.cwd(), runDir: runDirOf(env), grant: null, observe: false, env };
   const line = { kind: 'guard', ts: new Date().toISOString() };
   const done = (decision, reason) => ({ decision, reason, runDir: s.runDir, line });
   try {
+    // Read first: with full access (observe mode and a verified full grant) even the guard's own
+    // failures allow, since a full-access run is never refused; the ledger still records them.
+    s.grant = grantOf(s.runDir, env);
+    s.observe = env.QUILL_HANDOFF_GUARD === 'observe' && !!s.grant && s.grant.access === 'full';
     if (raw === OVERSIZE) {
-      Object.assign(line, { tool_name: null, decision: 'deny', reason: REASONS.tooLarge, error: 'stdin-too-large' });
-      return done('deny', REASONS.tooLarge);
+      const decision = s.observe ? 'allow' : 'deny';
+      const reason = s.observe ? REASONS.observeError : REASONS.tooLarge;
+      Object.assign(line, { tool_name: null, decision, reason, error: 'stdin-too-large' });
+      return done(decision, reason);
     }
     const input = JSON.parse(raw);
     if (!isPlainObject(input)) throw new TypeError('the hook input is not a JSON object');
     s.input = input;
     if (typeof input.cwd === 'string' && path.isAbsolute(input.cwd)) s.cwd = input.cwd;
-    s.grant = grantOf(s.runDir, env);
     if (env.NODE_ENV === 'test' && env.QUILL_GUARD_TEST_THROW === '1') throw new Error('QUILL_GUARD_TEST_THROW');
 
     const call = { tool_name: input.tool_name, tool_input: input.tool_input };
@@ -105,7 +108,7 @@ function check(raw, env) {
     // Observe mode allows everything; the ledger still says what enforce would have decided. That
     // second opinion is for the ledger only, so its failure cannot change the decision.
     let enforced = null;
-    if (r.decision === 'allow' && env.QUILL_HANDOFF_GUARD === 'observe' && s.grant && s.grant.access === 'full') {
+    if (r.decision === 'allow' && s.observe) {
       try {
         enforced = decide(call, s.grant, { ...ctx, vars: { ...env, QUILL_HANDOFF_GUARD: 'enforce' } });
       } catch (err) {
@@ -117,7 +120,7 @@ function check(raw, env) {
     const scope = change ? change.scope : cls.scope;
     const target = change ? change.target : cls.target ?? cls.host;
     Object.assign(line, {
-      tool_name: summary(input.tool_name, 200),
+      ...callFields(s),
       decision: r.decision,
       reason: summary(r.reason, EXCERPT_BYTES),
       class: summary(cls.class, 40),
@@ -125,22 +128,30 @@ function check(raw, env) {
       ...(target ? { target: summary(target, 300) } : {}),
       ...(change ? { critical: true } : {}),
       ...(enforced ? { enforce_decision: enforced.decision, enforce_reason: summary(enforced.reason, EXCERPT_BYTES) } : {}),
-      input_excerpt: excerpt(input.tool_input),
     });
     return done(r.decision, r.reason);
   } catch (err) {
-    const allow = readableAfterError(s);
-    const reason = allow ? REASONS.fallbackAllow : REASONS.error;
-    const input = s.input;
-    Object.assign(line, {
-      tool_name: input ? summary(input.tool_name, 200) : null,
-      decision: allow ? 'allow' : 'deny',
-      reason,
-      error: errorName(err),
-      ...(input ? { input_excerpt: excerpt(input.tool_input) } : {}),
-    });
+    const allow = s.observe || readableAfterError(s);
+    const reason = s.observe ? REASONS.observeError : allow ? REASONS.fallbackAllow : REASONS.error;
+    Object.assign(line, { ...callFields(s), decision: allow ? 'allow' : 'deny', reason, error: errorName(err) });
     return done(allow ? 'allow' : 'deny', reason);
   }
+}
+
+// What the ledger keeps about the call itself: its tool, the host's tool_use_id, the stream's
+// one-line summary (so reconcile can match this line with the stream's lines of the same call)
+// and a capped excerpt of the input, all redacted.
+function callFields(s) {
+  const input = s.input;
+  if (!input) return { tool_name: null };
+  let input_summary = null;
+  try { input_summary = summarizeInput(input.tool_name, input.tool_input, s.cwd); } catch { input_summary = null; }
+  return {
+    tool_name: summary(input.tool_name, 200),
+    ...(typeof input.tool_use_id === 'string' && TOOL_USE_ID.test(input.tool_use_id) ? { tool_use_id: input.tool_use_id } : {}),
+    input_summary,
+    input_excerpt: excerpt(input.tool_input),
+  };
 }
 
 function summary(v, max) {
