@@ -426,7 +426,18 @@ test_timeout_ms = 600000      # default 10 minutes
 [handoff]
 max_concurrent_readonly = 2   # runs that only read (default 2)
 max_concurrent_fix = 1        # runs that edit source (default 1; and one per repository)
+keep_env = []                 # variable names autonomous runs keep although they look like secrets
+api_billing = false           # true keeps ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN
+
+[prod.readonly]               # read-only profiles for autonomous runs, referenced by absolute path
+kubeconfig = "/home/me/.kube/readonly.yaml"
+aws_profile = "readonly"      # only this profile's section is copied into the run
+# also: aws_config_file, aws_credentials_file, gcloud_config, google_application_credentials,
+# azure_config_dir, and [prod.readonly.db_env] / [prod.readonly.argocd_env] tables of
+# NAME = "value" or NAME = "env:OTHER_NAME"
 ```
+
+Autonomous runs never see your normal credentials: kubeconfig, cloud, database, registry, netrc and git credential locations point at these read-only profiles or at empty files in the run's directory, and any other variable whose name looks like a token, secret, password, API key or credential is removed. These settings come from your user config only, never from a repository's `.quill.toml`.
 
 **Bulk runs.** On Board or Pick next, press **Select** (or `x` on a focused card; Shift-click selects a range, Esc clears) and choose **Analyze**, **Attempt fix** or **Change status** for every checked ticket. The bulk dialog shows which tickets are ready, already running, have no repository or are not eligible, and asks once for the recipe and access; bulk fixes need an explicit edit-source confirmation. Each ticket gets its own request, so one stale ticket does not stop the rest, and the runs share a batch id with a progress strip and **Cancel batch** for the queued ones (`quill handoff cancel --batch <id>` from a terminal). Bulk status changes keep their 10-second undo, gathered under **Undo all**. Large analyses may split the work across Claude Code subagents inside the one run ([ADR 0023](docs/decisions/0023-bulk-runs-and-test-gate.md)).
 

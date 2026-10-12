@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { createStreamCollector } from './stream.js';
+import { buildChildEnv, CREDENTIAL_VARS, GIT_PROGRAM_VARS } from './cred-env.js';
 import { STAGES } from './stage.js';
 import { descriptionProblems, normalizeDescription, DESCRIPTION_TEMPLATE } from '../core/description.js';
 
@@ -438,15 +439,13 @@ export function killTree(child) {
   try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* ignore */ } }
 }
 
-const CREDENTIAL_VARS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITLAB_TOKEN', 'BITBUCKET_TOKEN', 'GIT_ASKPASS', 'SSH_ASKPASS'];
-
-// Environment that would name a program for git to run (an external diff) or inject config.
-const GIT_PROGRAM_VARS = /^(GIT_EXTERNAL_DIFF|GIT_CONFIG|GIT_CONFIG_PARAMETERS|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d+|GIT_CONFIG_VALUE_\d+)$/;
-
 // The agent's environment: nested-session markers and git program/config overrides removed, so
 // only the on-disk git config can name a diff program; unless push/PR was explicitly granted,
 // provider tokens are removed and git is told never to prompt, so a non-permitted push fails.
-export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {}, { keepCredentials = false } = {}) {
+// `autonomous` and `full` access delegate to buildChildEnv (spec §4.4), which takes the remaining
+// options (runDir, scopes, readonly, keepEnv, apiBilling, gitUser); standard and settings are as before.
+export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {}, { keepCredentials = false, access, platform = process.platform, ...isolation } = {}) {
+  if (access === 'autonomous' || access === 'full') return buildChildEnv({ ...isolation, baseEnv: { ...baseEnv, ...extra }, access, permissions, platform }).env;
   const childEnv = { ...baseEnv, ...extra };
   delete childEnv.CLAUDECODE;
   delete childEnv.CLAUDE_CODE_ENTRYPOINT;
