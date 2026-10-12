@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { decide, isWithin, INSTALL_ROOT, GUARD_CODE } from '../../src/gate/run-guard.js';
+import { decide, isWithin, INSTALL_ROOT, GUARD_CODE, MAX_GLOB_MATCHES } from '../../src/gate/run-guard.js';
 import { writeGrant, readGrant } from '../../src/handoff/grant.js';
 
 // A throwaway machine: home with credentials and Claude settings, a Quill home with memory and
@@ -36,6 +36,9 @@ file('install', 'src', 'handoff', 'grant.js');
 file('install', 'src', 'lib', 'x.js');
 const outside = dir('outside');
 file('outside', 'secret.txt');
+file('outside', 'credentials');
+// a directory junction (a dir symlink elsewhere) inside the checkout, leading outside every root
+fs.symlinkSync(outside, path.join(checkout, 'esc'), 'junction');
 
 const VARS = { USERPROFILE: home, HOME: home, QUILL_HOME: qh, QUILL_HANDOFF_ID: 'run1', TEMP: tmp, TMP: tmp, TMPDIR: tmp, QUILL_HANDOFF_GUARD: 'enforce' };
 const ENV = { cwd: checkout, vars: VARS, currentBranch: 'feat/x', defaultBranch: 'main', installRoot: install };
@@ -73,6 +76,8 @@ const ARGO = { name: 'argo.sync', matchers: { bash: ['argocd app *'], mcp: ['mcp
 const JIRA = { name: 'jira.write', matchers: { mcp: ['mcp__claude_ai_Atlassian__*'], bash: [], hosts: [] }, fingerprint: 'f-jira' };
 const HTTP_API = { name: 'http.write', target: 'api.example.com', matchers: { hosts: ['api.example.com'], bash: [], mcp: [] }, fingerprint: 'f-http' };
 const PIN = { scope: 'argo.sync', pin: 'argocd app sync pay-stg' };
+const MCP_PIN = { scope: 'argo.sync', pin: 'mcp__argocd__sync_application {"applicationName":"pay-stg"}' };
+const KUBECTL_ONLY = { name: 'k8s.write', target: 'stg', matchers: { bash: ['kubectl *'] }, fingerprint: 'f-kubectl' };
 
 const CRITICAL_TAIL = 'Record it in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.';
 const denied = (code) => new RegExp(`^QUILL_DENIED ${code}: `);
@@ -130,8 +135,8 @@ const ROWS = [
   ['MCP write without a scope', call('mcp__claude_ai_Atlassian__editJiraIssue', { issueIdOrKey: 'PMO-1' }, { mcp_server_source: 'claudeai' }), {}, critical('jira.write', 'PMO-1'), { scope: 'jira.write', target: 'PMO-1' }],
   ['MCP write in a granted scope', call('mcp__claude_ai_Atlassian__editJiraIssue', { issueIdOrKey: 'PMO-1' }, { mcp_server_source: 'claudeai' }), { grant: { scopes: [JIRA] } }, 'allow'],
   ['MCP tool with an unknown verb', call('mcp__warehouse__run_query', { sql: 'select 1' }, { mcp_server_source: 'user' }), {}, denied('unknown-prod')],
-  ['pinned MCP action', call('mcp__argocd__sync_application', { applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { actionPins: [{ scope: 'argo.sync', pin: 'mcp__argocd__sync_application pay-stg' }] } }, 'allow'],
-  ['MCP action outside the pin', call('mcp__argocd__sync_application', { applicationName: 'pay-prod' }, { mcp_server_source: 'user' }), { grant: { actionPins: [{ scope: 'argo.sync', pin: 'mcp__argocd__sync_application pay-stg' }] } }, critical('argo.sync', 'pay-prod')],
+  ['pinned MCP action', call('mcp__argocd__sync_application', { applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { actionPins: [MCP_PIN] } }, 'allow'],
+  ['MCP action outside the pin', call('mcp__argocd__sync_application', { applicationName: 'pay-prod' }, { mcp_server_source: 'user' }), { grant: { actionPins: [MCP_PIN] } }, critical('argo.sync', 'pay-prod')],
 
   // classifier edges
   ['empty command', bash('   '), {}, denied('unparseable')],
@@ -192,6 +197,71 @@ const ROWS = [
   ['moving the guard away', bash('mv src/gate src/gate-old'), IN_INSTALL, denied('protected-path')],
   ['the real install root keeps its guard', call('Edit', { file_path: path.join(INSTALL_ROOT, 'src', 'gate', 'run-guard.js'), old_string: 'x', new_string: 'y' }), { env: { cwd: INSTALL_ROOT, installRoot: undefined }, grant: { permissions: EDIT, readableRoots: [INSTALL_ROOT, runDir, tmp], writableRoots: [INSTALL_ROOT, runDir, tmp], protectedPaths: [] } }, denied('protected-path')],
   ['the real install root stays editable', call('Edit', { file_path: path.join(INSTALL_ROOT, 'src', 'lib', 'text.js'), old_string: 'x', new_string: 'y' }), { env: { cwd: INSTALL_ROOT, installRoot: undefined }, grant: { permissions: EDIT, readableRoots: [INSTALL_ROOT, runDir, tmp], writableRoots: [INSTALL_ROOT, runDir, tmp], protectedPaths: [] } }, 'allow'],
+
+  // fix round 1, C1: a wildcard cannot hide a link from the readable roots
+  ['a literal path through the junction', bash('cat esc/credentials'), {}, denied('outside-readable')],
+  ['a * wildcard through the junction', bash('cat esc*/credentials'), {}, denied('outside-readable')],
+  ['a ? wildcard through the junction', bash('cat e?c/credentials'), {}, denied('outside-readable')],
+  ['a [..] wildcard through the junction', bash('cat e[s]c/credentials'), {}, denied('outside-readable')],
+  ['a ** wildcard through the junction', bash('cat **/credentials'), {}, denied('outside-readable')],
+  ['a PowerShell wildcard through the junction', pwsh('Get-Content es*/credentials'), {}, denied('outside-readable')],
+  ['copying through the junction with a wildcard', bash('cp esc*/credentials copy.txt'), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['a wildcard over a plain directory', bash('cat sr*/app.js'), {}, 'allow'],
+  ['a wildcard over plain files', bash('cat src/*.js'), {}, 'allow'],
+  ['a ? wildcard over a plain directory', bash('cat s?c/app.js'), {}, 'allow'],
+
+  // fix round 1, I1: a shell pin is exactly its command, without environment or wrappers
+  ['pin: an environment prefix', bash("ARGOCD_OPTS='--server evil.example' argocd app sync pay-stg"), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['pin: env with an assignment', bash('env ARGOCD_SERVER=evil.example argocd app sync pay-stg'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['pin: env -u', bash('env -u KUBECONFIG argocd app sync pay-stg'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['pin: PowerShell $env: before the command', pwsh("$env:ARGOCD_OPTS='--server evil.example'; argocd app sync pay-stg"), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['pin: export earlier in the chain', bash('export ARGOCD_OPTS=x; argocd app sync pay-stg'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['pin: a wrapper shell', bash('bash -c "argocd app sync pay-stg"'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['pin: input from a file', bash('argocd app sync pay-stg < opts.txt'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['pin: quoting does not change the action', bash('argocd app sync "pay-stg"'), { grant: { actionPins: [PIN] } }, 'allow'],
+  ['pin: helm with a context variable', bash('HELM_KUBECONTEXT=prod helm upgrade api ./chart'), { grant: { actionPins: [{ scope: 'k8s.write', pin: 'helm upgrade api ./chart' }] } }, critical('k8s.write', '')],
+  ['pin: helm as pinned', bash('helm upgrade api ./chart'), { grant: { actionPins: [{ scope: 'k8s.write', pin: 'helm upgrade api ./chart' }] } }, 'allow'],
+  ['pin: kubectl with another kubeconfig', bash('KUBECONFIG=/tmp/rw kubectl --context stg apply -f x.yaml'), { grant: { actionPins: [{ scope: 'k8s.write:stg', pin: 'kubectl --context stg apply -f x.yaml' }] } }, critical('k8s.write', 'stg')],
+
+  // fix round 1, I2: the whole MCP input is the action
+  ['MCP pin: a second app field naming another app', call('mcp__argocd__sync_application', { applicationName: 'pay-stg', name: 'pay-prod' }, { mcp_server_source: 'user' }), { grant: { actionPins: [MCP_PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['MCP pin: an extra option', call('mcp__argocd__sync_application', { applicationName: 'pay-stg', prune: true }, { mcp_server_source: 'user' }), { grant: { actionPins: [MCP_PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['MCP pin: the same input in another key order', call('mcp__argocd__sync_application', { revision: 'abc', applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { actionPins: [{ scope: 'argo.sync', pin: 'mcp__argocd__sync_application {"applicationName":"pay-stg","revision":"abc"}' }] } }, 'allow'],
+  ['MCP pin in the old tool-and-target form matches nothing', call('mcp__argocd__sync_application', { applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { actionPins: [{ scope: 'argo.sync', pin: 'mcp__argocd__sync_application pay-stg' }] } }, critical('argo.sync', 'pay-stg')],
+
+  // fix round 1, I3: command patterns cover only the part they match
+  ['matchers: a kubectl read does not cover a helm write', bash('helm --kube-context stg uninstall api; kubectl --context stg get pods'), { grant: { scopes: [KUBECTL_ONLY] } }, critical('k8s.write', 'stg')],
+  ['matchers: a helm write alone', bash('helm --kube-context stg uninstall api'), { grant: { scopes: [KUBECTL_ONLY] } }, critical('k8s.write', 'stg')],
+  ['matchers: kubectl writes they match', bash('kubectl --context stg get pods && kubectl --context stg delete pod api'), { grant: { scopes: [KUBECTL_ONLY] } }, 'allow'],
+
+  // fix round 1, R13: Claude Code and MCP configuration in the checkout
+  ['R13: Edit .claude/settings.json', call('Edit', { file_path: path.join(checkout, '.claude', 'settings.json'), old_string: 'x', new_string: 'y' }), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['R13: Write .mcp.json', call('Write', { file_path: path.join(checkout, '.mcp.json'), content: '{}' }), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['R13: Write a Claude agent definition', call('Write', { file_path: path.join(checkout, '.claude', 'agents', 'x.md'), content: 'x' }), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['R13: shell write into .claude', bash('echo x > .claude/settings.local.json'), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['R13: Read of .claude/settings.json', call('Read', { file_path: path.join(checkout, '.claude', 'settings.json') }), {}, 'allow'],
+  ['R13: Read of .mcp.json', call('Read', { file_path: path.join(checkout, '.mcp.json') }), {}, 'allow'],
+  ['R13: full access may change it', call('Write', { file_path: path.join(checkout, '.claude', 'agents', 'x.md'), content: 'x' }), FULL, 'allow', undefined],
+
+  // fix round 1, M1: Glob and Grep patterns that climb out after a wildcard or brace
+  ['Glob: .. inside a brace', call('Glob', { pattern: '{..,x}/../../../../home/.aws/*' }), {}, denied('outside-readable')],
+  ['Glob: .. after a wildcard', call('Glob', { pattern: 'src/**/../../../../home/.aws/*' }), {}, denied('outside-readable')],
+  ['Grep: a glob filter that climbs', call('Grep', { pattern: 'token', glob: '{..,src}/*' }), {}, denied('outside-readable')],
+  ['Grep: an ordinary glob filter', call('Grep', { pattern: 'token', glob: '*.js' }), {}, 'allow'],
+
+  // fix round 1, M3: every reading of the tool name must name a trusted server
+  ['MCP: a server name that also reads as a trusted one', call('mcp__team_docs__x__get_page', {}, { mcp_server_source: 'project' }), {}, denied('untrusted-mcp-server')],
+  ['MCP: a folded name shared by two trusted entries', call('mcp__team_wiki__get_page', {}, { mcp_server_source: 'project' }), { grant: { trustedMcpServers: ['team.wiki', 'team wiki'] } }, denied('untrusted-mcp-server')],
+  ['MCP: a name already in tool-name form', call('mcp__team_wiki__get_page', {}, { mcp_server_source: 'project' }), { grant: { trustedMcpServers: ['team_wiki'] } }, 'allow'],
+
+  // fix round 1, M4: a hosts matcher covers an external write in the scope's own name
+  ['hosts: a wildcard host pattern', bash('curl -X POST https://api.example.com/v1/items'), { grant: { scopes: [{ name: 'http.write', matchers: { hosts: ['*.example.com'] }, fingerprint: 'f' }] } }, 'allow'],
+  ['hosts: another host', bash('curl -X POST https://api.other.com/v1/items'), { grant: { scopes: [{ name: 'http.write', matchers: { hosts: ['*.example.com'] }, fingerprint: 'f' }] } }, critical('http.write', 'api.other.com')],
+  ['hosts: a package registry', bash('npm publish'), { grant: { scopes: [{ name: 'package.publish', matchers: { hosts: ['registry.npmjs.org'] }, fingerprint: 'f' }] } }, 'allow'],
+  ['hosts: scp has no scope, so a host pattern cannot cover it', bash('scp a.txt files.example.com:/x'), { grant: { scopes: [{ name: 'http.write', matchers: { hosts: ['files.example.com'] }, fingerprint: 'f' }] } }, critical('external.write', 'files.example.com')],
+
+  // fix round 1, M5: a write to the whole checkout says why it is refused
+  ['deleting the whole checkout', bash('rm -rf .'), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .* contains .*\.git, which is protected.*Name the files/],
 
   // full access: observe only
   ['full: a cluster write is allowed and recorded', bash('kubectl apply -f deploy.yaml'), FULL, 'allow', { scope: 'k8s.write', target: null }],
@@ -315,6 +385,17 @@ test('a dangling link is followed to where writing through it would land (R10)',
   assert.match(r.reason, denied('outside-writable'));
 });
 
+test('a path a call names is resolved afresh on every decision', (t) => {
+  const later = path.join(checkout, 'later');
+  const target = path.join(later, 'credentials');
+  assert.equal(run(call('Read', { file_path: target }), {}).decision, 'allow', 'not there yet: inside the checkout');
+  fs.symlinkSync(outside, later, 'junction');
+  t.after(() => fs.rmSync(later, { force: true }));
+  const r = run(call('Read', { file_path: target }), {});
+  assert.equal(r.decision, 'deny', r.reason);
+  assert.match(r.reason, denied('outside-readable'));
+});
+
 test('a file symlink to a credential is neither readable nor writable (R10)', (t) => {
   const link = path.join(checkout, 'creds.txt');
   try {
@@ -328,6 +409,67 @@ test('a file symlink to a credential is neither readable nor writable (R10)', (t
   assert.match(read.reason, denied('outside-readable'));
   const write = run(call('Write', { file_path: link, content: 'x' }), { grant: { permissions: EDIT } });
   assert.match(write.reason, denied('protected-path'));
+});
+
+test('a wildcard that matches too many entries is refused rather than checked (C1)', (t) => {
+  const big = path.join(checkout, 'big');
+  fs.mkdirSync(big);
+  t.after(() => fs.rmSync(big, { recursive: true, force: true }));
+  for (let i = 0; i <= MAX_GLOB_MATCHES; i += 1) fs.writeFileSync(path.join(big, `f${i}.txt`), '');
+  const r = run(bash('cat big/*'), {});
+  assert.equal(r.decision, 'deny', r.reason);
+  assert.match(r.reason, denied('wildcard-too-broad'));
+  fs.rmSync(path.join(big, 'f0.txt'));
+  assert.equal(run(bash('cat big/*'), {}).decision, 'allow', 'exactly at the cap is still checked');
+});
+
+test('protected names ignore case where the file system does (M2)', () => {
+  const r = run(call('Write', { file_path: path.join(checkout, '.MCP.JSON'), content: '{}' }), { grant: { permissions: EDIT } });
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    assert.match(r.reason, denied('protected-path'));
+  } else {
+    assert.equal(r.decision, 'allow', r.reason);
+  }
+});
+
+test('with the default Quill home under ~/.claude, the checkout and run dir stay writable (R13)', () => {
+  const qh2 = path.join(home, '.claude', 'quill');
+  const co2 = path.join(qh2, 'handoffs', 'worktrees', 'run9');
+  const rd2 = path.join(qh2, 'handoffs', 'runs', 'run9');
+  fs.mkdirSync(path.join(co2, 'src'), { recursive: true });
+  fs.mkdirSync(rd2, { recursive: true });
+  const { QUILL_HOME, ...vars } = VARS;
+  const env = { ...ENV, cwd: co2, vars: { ...vars, QUILL_HANDOFF_ID: 'run9' } };
+  const grant = grantWith({ permissions: EDIT, readableRoots: [co2, rd2, tmp], writableRoots: [co2, rd2, tmp], protectedPaths: [] });
+  const cases = [
+    [call('Write', { file_path: path.join(co2, 'src', 'a.js'), content: 'x' }), 'allow'],
+    [call('Write', { file_path: path.join(rd2, 'notes.txt'), content: 'x' }), 'allow'],
+    [call('Write', { file_path: path.join(co2, '.claude', 'settings.json'), content: '{}' }), 'deny'],
+    [call('Write', { file_path: path.join(rd2, 'grant.json'), content: '{}' }), 'deny'],
+    [call('Write', { file_path: path.join(qh2, 'memory', 'x.md'), content: 'x' }), 'deny'],
+  ];
+  for (const [c, want] of cases) {
+    const r = decide(c, grant, env);
+    assert.equal(r.decision, want, `${c.tool_input.file_path}: ${r.reason}`);
+  }
+});
+
+test('decide stays quick on every tool call (M7)', () => {
+  const grant = grantWith({ permissions: PUSH, scopes: [K8S_STG, ARGO, JIRA], actionPins: [PIN] });
+  const calls = ROWS.map((r) => r[1]);
+  // best p95 of three passes, so a busy machine does not fail one pass
+  let p95 = Infinity;
+  for (let pass = 0; pass < 3 && p95 >= 5; pass += 1) {
+    const times = [];
+    for (let i = 0; i < 1000; i += 1) {
+      const t0 = process.hrtime.bigint();
+      decide(calls[i % calls.length], grant, ENV);
+      times.push(Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+    times.sort((a, b) => a - b);
+    p95 = Math.min(p95, times[Math.floor(times.length * 0.95)]);
+  }
+  assert.ok(p95 < 5, `p95 ${p95.toFixed(3)} ms`);
 });
 
 test('GUARD_CODE covers every local module the guard loads', () => {

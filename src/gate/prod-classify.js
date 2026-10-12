@@ -4,7 +4,7 @@
 // `unknown-prod`, never `local`.
 //
 // classifyCall({ tool_name, tool_input }, ctx) → { class, scope?, target?, host?, path?, paths?,
-//   readPaths?, calls?, reason }
+//   readPaths?, calls?: [{ class, scope?, target?, host?, reason, argv }], reason }
 // ctx: { cwd, home?, env?, currentBranch?, defaultBranch?, isProtectedBranch?(name),
 //        kubeContext?, awsProfile?, mcpPolicy: { read: string[], write: Record<string,string> },
 //        trackerHosts?: string[] }
@@ -162,17 +162,23 @@ function classifyScript(command, dialect, ctx, depth, cwd = ctx.cwd ?? null) {
   if (parsed.error) return unparseable(parsed.error);
   const st = { cwd, paths: [], readPaths: [], depth };
   const results = [];
-  for (const seg of parsed.segments) results.push(classifySegment(seg, ctx, st));
-  return aggregate(results, st);
+  const argvs = [];
+  for (const seg of parsed.segments) {
+    results.push(classifySegment(seg, ctx, st));
+    argvs.push(Array.isArray(seg.argv) ? seg.argv.slice() : []);
+  }
+  return aggregate(results, st, argvs);
 }
 
-function aggregate(results, st) {
+// Each `calls` entry carries the words of its own command (after unwrapping) as `argv`, so the
+// guard can match a scope's command patterns against that part alone.
+function aggregate(results, st, argvs) {
   let best = local('no command reaches prod');
   const calls = [];
-  for (const res of results) {
-    if (res.class !== 'local') calls.push(strip(res));
+  results.forEach((res, i) => {
+    if (res.class !== 'local') calls.push({ ...strip(res), argv: argvs[i] });
     if (RANK[res.class] > RANK[best.class]) best = res;
-  }
+  });
   const out = strip(best);
   if (st.paths.length) out.paths = [...new Set(st.paths)];
   if (st.readPaths.length) out.readPaths = [...new Set(st.readPaths)];
