@@ -54,9 +54,6 @@ const PROVIDER_KEEP = {
   aws: /^AWS_/,
   gcp: /^(GOOGLE_APPLICATION_CREDENTIALS|GOOGLE_CLOUD_PROJECT|GCLOUD_PROJECT|CLOUDSDK_.*|ANTHROPIC_VERTEX_.*|CLOUD_ML_REGION|VERTEX_REGION_.*)$/,
 };
-// Inherited ARGOCD_OPTS flags that carry or select credentials; such a value is dropped whole.
-const ARGOCD_CREDENTIAL_FLAGS = /(^|\s)(--config|--auth-token|--header|-H|--client-crt|--client-crt-key|--core)(=|\s|$)/;
-
 // Which system a variable name belongs to, so a scope or a read-only table can only set its own.
 const OWNER = [
   ['kubernetes', /^KUBE/], ['aws', /^AWS_/], ['gcp', /^(CLOUDSDK_|GOOGLE_|GCLOUD_)/], ['azure', /^(AZURE_|ARM_|AZD_)/],
@@ -188,7 +185,7 @@ function awsProfileFiles(profile, configFile, credentialsFile) {
  *      ADC file from APPDATA / ~/.config, not from CLOUDSDK_CONFIG; an invalid explicit file stops
  *      them instead of falling back).
  *    - Azure: `AZURE_CONFIG_DIR`, `AZD_CONFIG_DIR`, `AZURE_TOKEN_CREDENTIALS=AzureCliCredential`.
- *    - Argo: `ARGOCD_OPTS` gains `--config <empty stub>` unless the read-only table sets ARGOCD_OPTS.
+ *    - Argo: `ARGOCD_OPTS` is `--config <empty stub>` (an inherited value is never carried) unless the read-only table sets ARGOCD_OPTS.
  *    - Git without push: a global config holding `user.*`, a short allowlist of non-credential
  *      settings (GIT_COPY) and `credential.helper =`; command-scope config (`GIT_CONFIG_COUNT`) that
  *      empties `credential.helper` again after the checkout's own `.git/config` and sets
@@ -244,7 +241,6 @@ export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes =
   const kept = (name) => keep.has(win ? name.toUpperCase() : name);
   const resolveValue = (v) => (v.startsWith('env:') ? get(v.slice(4)) : v);
   const user = typeof gitUser === 'function' ? gitUser() : gitUser === undefined ? (push ? null : readOwnerGitConfig(baseEnv)) : gitUser;
-  const inheritedArgoOpts = get('ARGOCD_OPTS');
 
   // 1. Removals over the inherited variables.
   for (const k of Object.keys(env)) {
@@ -327,8 +323,9 @@ export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes =
   const argoNames = applyTable(readonly.argocd_env, 'argo');
   report.argo = argoNames.length ? 'readonly' : 'stub';
   if (!argoNames.some((n) => same(n, 'ARGOCD_OPTS'))) {
-    const carried = typeof inheritedArgoOpts === 'string' && inheritedArgoOpts.trim() && !ARGOCD_CREDENTIAL_FLAGS.test(inheritedArgoOpts) ? `${inheritedArgoOpts.trim()} ` : '';
-    set('ARGOCD_OPTS', `${carried}--config ${shQuote(stubFile('argocd-config'))}`);
+    // An inherited ARGOCD_OPTS is never carried: argocd shlex-unquotes it, so no text check can
+    // rule out a quoted credential flag.
+    set('ARGOCD_OPTS', `--config ${shQuote(stubFile('argocd-config'))}`);
   }
 
   set('NETRC', stubFile('netrc'));
@@ -389,6 +386,9 @@ export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes =
       if (owner) report[owner] = 'scope';
     }
   }
+
+  // A scope's Azure client credentials must be usable: the forced CLI-only chain would ignore them.
+  if (report.azure === 'scope') del('AZURE_TOKEN_CREDENTIALS');
 
   if (provider.aws || provider.gcp) report.provider = 'shared';
   report.residual = residuals({ homes, localAppData: get('LOCALAPPDATA'), pathApi, platform, awsSso });

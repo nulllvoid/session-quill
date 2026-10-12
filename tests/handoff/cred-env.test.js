@@ -303,13 +303,14 @@ test('C1: AWS headers with comments, odd spacing or unparsable brackets never le
   for (const leak of ['SYNTH-ADMIN', 'SYNTH-RO-ADMIN', 'SYNTH-BROKEN']) assert.ok(!c.includes(leak) && !k.includes(leak), leak);
 });
 
-test('C3: argocd gets an empty --config, keeping only credential-free inherited options', (t) => {
+test('C3: argocd gets an empty --config and never carries an inherited ARGOCD_OPTS', (t) => {
   const plain = build(t, { baseEnv: { ...BASE, ARGOCD_OPTS: '--grpc-web' } });
-  const m = plain.env.ARGOCD_OPTS.match(/^--grpc-web --config '([^']+)'$/);
-  assert.ok(m, 'inherited flags without credentials are carried');
+  const m = plain.env.ARGOCD_OPTS.match(/^--config '([^']+)'$/);
+  assert.ok(m, 'an inherited value is dropped, even without credential flags');
   assert.ok(under(m[1], plain.runDir) && isEmptyFile(m[1]));
   assert.equal(plain.report.argo, 'stub');
-  for (const opts of ['--grpc-web --auth-token SYNTH', '--config /home/owner/.config/argocd/config', '--header Authorization:SYNTH', '-H x']) {
+  // argocd shlex-unquotes ARGOCD_OPTS, so quoted credential flags must not survive (review N1)
+  for (const opts of ["'--auth-token' SYNTH", '"--auth-token" SYNTH', '--grpc-web --auth-token SYNTH', '--config /home/owner/.config/argocd/config', '--header Authorization:SYNTH', '-H x']) {
     const out = build(t, { baseEnv: { ...BASE, ARGOCD_OPTS: opts, ARGOCD_AUTH_TOKEN: 'SYNTH' } });
     assert.match(out.env.ARGOCD_OPTS, /^--config '[^']+'$/, `${opts.split(' ')[0]} drops the inherited value`);
     assert.equal(has(out.env, 'ARGOCD_AUTH_TOKEN'), false);
@@ -436,4 +437,12 @@ test('report.residual lists owner credentials that exist and no variable can red
   const win = build(t, { baseEnv: { PATH: 'C:\\bin', USERPROFILE: home }, platform: 'win32' });
   assert.ok(win.report.residual.some((r) => /Windows Credential Manager/.test(r)));
   assert.ok(win.report.residual.some((r) => r.startsWith('ssh:')), 'USERPROFILE is the profile on Windows');
+});
+
+test('a cloud.write scope with Azure client credentials is not forced onto the CLI credential (review N3)', (t) => {
+  const { env, report } = build(t, { scopes: [{ name: 'cloud.write', target: 'stg', env: { AZURE_CLIENT_ID: 'SYNTH-ID', AZURE_CLIENT_SECRET: 'SYNTH-S', AZURE_TENANT_ID: 'SYNTH-T' } }] });
+  assert.equal(report.azure, 'scope');
+  assert.equal(has(env, 'AZURE_TOKEN_CREDENTIALS'), false);
+  assert.equal(env.AZURE_CLIENT_ID, 'SYNTH-ID');
+  assert.equal(build(t).env.AZURE_TOKEN_CREDENTIALS, 'AzureCliCredential', 'without a scope the CLI-only chain stays');
 });
