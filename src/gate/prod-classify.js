@@ -4,7 +4,9 @@
 // `unknown-prod`, never `local`.
 //
 // classifyCall({ tool_name, tool_input }, ctx) → { class, scope?, target?, host?, path?, paths?,
-//   readPaths?, calls?: [{ class, scope?, target?, host?, reason, argv }], reason }
+//   readPaths?, readSpecs?, writeSpecs?, calls?: [{ class, scope?, target?, host?, reason, argv }],
+//   reason }. readSpecs/writeSpecs describe the same shell paths as the call supplied them:
+//   [{ path, root, segs, dialect }] (see rawPath).
 // ctx: { cwd, home?, env?, currentBranch?, defaultBranch?, isProtectedBranch?(name),
 //        kubeContext?, awsProfile?, mcpPolicy: { read: string[], write: Record<string,string> },
 //        trackerHosts?: string[] }
