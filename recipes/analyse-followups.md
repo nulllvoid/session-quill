@@ -3,7 +3,6 @@ name: analyse-followups
 description: Analyse the ticket, suggest a next action and propose follow-up child tickets
 mode: analyse-followups
 permissions: { read_source: true }
-timeout_min: 20
 inputs: [ticket, notes, prs, deployments, work, related, history]
 outputs: [summary, next_action, blocker, followups, description]
 ---
@@ -18,3 +17,9 @@ Analyse where this ticket stands, recommend a concrete next action, and propose 
 When the work spans several modules or more files than you can read closely, split the analysis by module: give each subagent one module (or one area of the diff) and ask it for findings with their sources. Then merge the results yourself into one answer, removing duplicates and resolving disagreements by re-reading the source. For a small change, do it yourself; subagents only help when there is a lot to read.
 
 Proposing no children is a valid answer when the evidence shows none; say so in the summary.
+
+## Definition of done
+- The analysis is complete as for a status review, with sources.
+- Every proposed child has a specific title, a first action and a description whose Done when is checkable; duplicates of existing tickets are dropped.
+- Zero children is stated and explained when the evidence shows none.
+- Routes tried, including failed or refused ones, are in `attempts`.

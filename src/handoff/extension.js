@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
-import { buildPrompt, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
+import { buildPrompt, budgetFor, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
@@ -18,6 +18,9 @@ import { handoffsDir, handoffRunDir, logsDir } from '../lib/paths.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
 
+// The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
+// per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
+// embedder or test cap on top of it.
 export const HANDOFF_DEADLINE_MS = 20 * MINUTE;
 export const DEFAULT_CONCURRENCY = { readonly: 2, fix: 1 };
 
@@ -47,7 +50,7 @@ function detectRuntime(claudePath) {
   }
 }
 
-export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = HANDOFF_DEADLINE_MS, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null } = {}) {
+export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null } = {}) {
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
@@ -83,12 +86,24 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     };
   }
 
+  // Turns and spend across every turn of a run, from each turn's final result event (spec §5.4).
+  // Under claude.ai subscription auth (no API key in the child's environment) the cost is an
+  // estimate, and the record says so.
+  function addUsage(entry, outcome) {
+    if (!entry || !outcome) return;
+    let r = null;
+    try { r = resultFromStream(outcome.collected); } catch { return; }
+    entry.usage = entry.usage ?? { turns: 0, cost: 0, costSeen: false };
+    if (r.num_turns !== null) entry.usage.turns += r.num_turns;
+    if (r.total_cost_usd !== null) { entry.usage.cost += r.total_cost_usd; entry.usage.costSeen = true; }
+  }
+
   // A follow-up turn in the same runtime session. It is tracked like the first turn, so the
   // deadline and cancellation stop it too; null means it did not finish cleanly.
   async function followUp(entry, prompt, { tools, maxTurns, permissionMode = entry.permissionMode }) {
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, ledgerPath: entry.ledgerPath, onInit: entry.onInit, model, resume: entry.sessionId, maxTurns, permissionMode, keepCredentials: entry.keepCredentials });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, ledgerPath: entry.ledgerPath, onInit: entry.onInit, model, resume: entry.sessionId, maxTurns, maxBudgetUsd: entry.budget.maxBudgetUsd, permissionMode, keepCredentials: entry.keepCredentials });
     } catch {
       return null;
     }
@@ -96,6 +111,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     entry.kill = null;
     entry.done = run.done;
     const outcome = await run.done;
+    addUsage(entry, outcome);
     if (entry.reason || outcome.error || outcome.code !== 0) return null;
     return outcome;
   }
@@ -116,7 +132,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       return { outcome, quality };
     }
     if (parsed.problems.length && !entry.reason && timeLeft()) {
-      const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: 2 });
+      const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: entry.budget.repairTurns });
       const fixed = next ? parseOutcome(next, parseOpts) : null;
       if (fixed && !fixed.no_result && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
         outcome = next;
@@ -128,7 +144,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (entry.selfCheck && !parsed.problems.length && !entry.reason && timeLeft()) {
       // The check re-reads sources; it never edits, whatever the run was allowed to do.
       const readOnly = selfCheckTools(entry.permissions);
-      const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: 12, permissionMode: 'dontAsk' });
+      const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: entry.budget.selfCheckTurns, permissionMode: 'dontAsk' });
       const checked = next ? parseOutcome(next, parseOpts) : null;
       if (checked && !checked.no_result && !checked.is_error && !checked.problems.length) {
         outcome = next;
@@ -146,6 +162,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const parseOpts = { outputs: entry ? entry.outputs : null };
     const current = worker.state.handoffs.get(h.id);
     if (!current || !['running'].includes(current.state)) { running.delete(h.id); return; }
+    addUsage(entry, outcome);
     let quality = null;
     let gate = null;
     if (entry && !entry.reason && !outcome.error && outcome.code === 0) {
@@ -162,9 +179,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const testMs = gate && Number.isFinite(gate.total_ms) ? gate.total_ms : null;
     const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}) } : null;
     if (gate) delete gate.total_ms;
-    const record = (w, id, parsed, opts) => recordResult(w, id, parsed, timings ? { ...opts, extra: { ...(opts.extra ?? {}), timings } } : opts);
+    const usage = entry && entry.usage ? { num_turns: entry.usage.turns, cost_usd: entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !({ ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
+    const record = (w, id, parsed, opts) => recordResult(w, id, parsed, timings || usage ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}) } } : opts);
     const reason = entry ? entry.reason : null;
-    if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round(deadlineMs / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'stopped') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
     if (outcome.error) { record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
@@ -218,7 +236,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     try {
       if (p.commit) out.commit_sha = await commitAll(h.worktree_path, `handoff(${h.id.slice(0, 8)}): ${h.note || 'attempt fix'}`);
       if (p.push_branch && out.commit_sha) {
-        try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
+        try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; out.pushed_branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
         if (p.open_draft_pr) {
           try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.\n\n${gateLine(gate)}` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
         }
@@ -253,7 +271,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     total += result.ms;
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
     if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
-      const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: 40 });
+      const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: entry.budget.maxTurns });
       if (entry.reason) return { outcome, gate: null };
       const repaired = next ? parseOutcome(next, { outputs: entry.outputs }) : null;
       if (repaired && !repaired.no_result && !repaired.is_error && repaired.problems.length <= parsed.problems.length) outcome = next;
@@ -320,7 +338,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     }
     const logPath = path.join(logsDir(worker.env), 'handoffs', `${h.id}.log`);
     const started = worker.now();
-    const deadlineAt = addMs(started, Math.min(deadlineMs, h.deadline_ms ?? Infinity));
+    const access = h.access ?? 'standard';
+    const budget = budgetFor(recipe, ctx.config, access, h.mode);
+    const timeoutMs = deadlineMs === null ? budget.timeoutMs : Math.min(deadlineMs, budget.timeoutMs);
+    const deadlineAt = addMs(started, timeoutMs);
     updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings });
     const current = worker.state.handoffs.get(h.id);
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
@@ -334,7 +355,6 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
     // Standard access keeps the recipe's own tool narrowing; settings and full access hand the
     // decision to Claude Code itself (ADR 0017).
-    const access = h.access ?? 'standard';
     const rt = access === 'standard' ? { permissionMode: 'dontAsk', ...(recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions })), keepCredentials: false } : runtimeAccess({ access, mode: h.mode, permissions: h.permissions ?? {} });
     const tools = { allowed: rt.allowed, disallowed: rt.disallowed };
     const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
@@ -345,11 +365,11 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
     // The entry exists before the process does, so the init event always finds it.
-    const entry = { child: null, done: null, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials };
+    const entry = { child: null, done: null, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, budget, timeoutMs, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials };
     running.set(h.id, entry);
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, ledgerPath, onInit, model, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, ledgerPath, onInit, model, maxTurns: budget.maxTurns, maxBudgetUsd: budget.maxBudgetUsd, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
     } catch (err) {
       running.delete(h.id);
       return fail(worker, h, 'spawn-failed', err.message);

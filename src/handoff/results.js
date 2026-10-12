@@ -4,6 +4,7 @@
 import { putBlob } from '../core/blobs.js';
 import { deterministicId } from '../lib/ids.js';
 import { CATEGORIES, PRIORITIES } from '../core/state.js';
+import { recordedStage } from './stage.js';
 import { childKeys, buildSuggestions } from '../agents/suggestions.js';
 
 export function recordResult(worker, handoffId, result, { state = 'done', error = null, extra = {} } = {}) {
@@ -26,7 +27,7 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
   if (!suggesting && state === 'done' && result.description) items.push({ type: 'description', text: result.description });
   let result_ref = h.result_ref ?? null;
   if (result && (result.raw || result.summary)) {
-    try { result_ref = putBlob(JSON.stringify({ summary: result.summary, next_action: result.next_action, blocker: result.blocker, children: result.children, deploy_evidence: result.deploy_evidence, comment_draft: result.comment_draft, test_results: result.test_results, changed_files: result.changed_files, description: result.description ?? null, confidence: result.confidence ?? null, sources: result.sources ?? [], raw: result.raw ?? null }, null, 2), worker.env).hash; } catch { /* keep previous */ }
+    try { result_ref = putBlob(JSON.stringify({ summary: result.summary, next_action: result.next_action, blocker: result.blocker, children: result.children, deploy_evidence: result.deploy_evidence, comment_draft: result.comment_draft, test_results: result.test_results, changed_files: result.changed_files, description: result.description ?? null, confidence: result.confidence ?? null, sources: result.sources ?? [], stage_reached: result.stage_reached ?? null, plan: result.plan ?? [], attempts: result.attempts ?? [], verification: result.verification ?? [], critical_changes: result.critical_changes ?? [], learnings: result.learnings ?? [], contract_problems: result.contract_problems ?? [], raw: result.raw ?? null }, null, 2), worker.env).hash; } catch { /* keep previous */ }
   }
   const update = {
     state,
@@ -41,6 +42,14 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
     changed_files: extra.changed_files ?? (result && result.changed_files && result.changed_files.length ? result.changed_files : h.changed_files ?? []),
     ...extra,
   };
+  // The record carries counts and the stage only; the items live in the result blob (spec §5.3).
+  // `recorded_stage` comes from facts the worker observed, never from the agent's claim.
+  const count = (k, prior) => (result && Array.isArray(result[k]) ? result[k].length : prior ?? 0);
+  update.attempt_count = count('attempts', h.attempt_count);
+  update.learning_count = count('learnings', h.learning_count);
+  update.critical_count = count('critical_changes', h.critical_count);
+  update.stage_reached = result && result.stage_reached ? result.stage_reached : h.stage_reached ?? null;
+  update.recorded_stage = recordedStage({ ...h, ...update });
   if (suggesting && state === 'done' && !(h.suggestions ?? []).length) update.suggestions = buildSuggestions(h.outputs ?? [], result, worker.now());
   return worker.emit('handoff-tx', { handoff_id: h.id, update, result_items: items }, { source_identity: `handoff-tx:${h.id}:${state}:${worker.now()}` });
 }
