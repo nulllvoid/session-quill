@@ -87,6 +87,11 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   }
 
   // Turns and spend across every turn of a run, from each turn's final result event (spec §5.4).
+  // Verified against Claude Code 2.1.296 (haiku, one trivial turn then three --resume turns of the
+  // same session): each invocation's result event reports its OWN num_turns (1, 1, 1, 1) and
+  // total_cost_usd (about 0.004 to 0.006 each, with per-invocation token usage), not a running
+  // total for the session. So turns and costs are summed. `--max-budget-usd` is likewise
+  // per process, which is why follow-up turns get only what the run has left (remainingUsd).
   // Under claude.ai subscription auth (no API key in the child's environment) the cost is an
   // estimate, and the record says so.
   function addUsage(entry, outcome) {
@@ -100,10 +105,22 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
 
   // A follow-up turn in the same runtime session. It is tracked like the first turn, so the
   // deadline and cancellation stop it too; null means it did not finish cleanly.
-  async function followUp(entry, prompt, { tools, maxTurns, permissionMode = entry.permissionMode }) {
+  // What is left of the run's spend cap, in USD; Infinity when no cap applies.
+  const remainingUsd = (entry) => {
+    const cap = entry.budget.maxBudgetUsd;
+    if (!Number.isFinite(cap) || cap <= 0) return Infinity;
+    return Math.max(0, Math.round((cap - (entry.usage ? entry.usage.cost : 0)) * 10000) / 10000);
+  };
+
+  async function followUp(entry, prompt, { tools, maxTurns, permissionMode = entry.permissionMode, label = 'follow-up' }) {
+    const left = remainingUsd(entry);
+    if (left <= 0) {
+      (entry.budgetNotes ??= []).push(`${label}-skipped-budget-spent`);
+      return null;
+    }
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, ledgerPath: entry.ledgerPath, onInit: entry.onInit, model, resume: entry.sessionId, maxTurns, maxBudgetUsd: entry.budget.maxBudgetUsd, permissionMode, keepCredentials: entry.keepCredentials });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, ledgerPath: entry.ledgerPath, onInit: entry.onInit, model, resume: entry.sessionId, maxTurns, maxBudgetUsd: Number.isFinite(left) ? left : null, permissionMode, keepCredentials: entry.keepCredentials });
     } catch {
       return null;
     }
@@ -132,7 +149,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       return { outcome, quality };
     }
     if (parsed.problems.length && !entry.reason && timeLeft()) {
-      const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: entry.budget.repairTurns });
+      const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: entry.budget.repairTurns, label: 'repair' });
       const fixed = next ? parseOutcome(next, parseOpts) : null;
       if (fixed && !fixed.no_result && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
         outcome = next;
@@ -144,7 +161,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (entry.selfCheck && !parsed.problems.length && !entry.reason && timeLeft()) {
       // The check re-reads sources; it never edits, whatever the run was allowed to do.
       const readOnly = selfCheckTools(entry.permissions);
-      const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: entry.budget.selfCheckTurns, permissionMode: 'dontAsk' });
+      const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: entry.budget.selfCheckTurns, permissionMode: 'dontAsk', label: 'self-check' });
       const checked = next ? parseOutcome(next, parseOpts) : null;
       if (checked && !checked.no_result && !checked.is_error && !checked.problems.length) {
         outcome = next;
@@ -179,8 +196,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const testMs = gate && Number.isFinite(gate.total_ms) ? gate.total_ms : null;
     const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}) } : null;
     if (gate) delete gate.total_ms;
-    const usage = entry && entry.usage ? { num_turns: entry.usage.turns, cost_usd: entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !({ ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
-    const record = (w, id, parsed, opts) => recordResult(w, id, parsed, timings || usage ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}) } } : opts);
+    // A turn that produced no result event (killed by the deadline or a cancel) leaves usage unknown: recorded as null, not omitted.
+    const usage = entry && entry.env ? { num_turns: entry.usage ? entry.usage.turns : null, cost_usd: entry.usage && entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !({ ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
+    const withNotes = (p) => (entry && entry.budgetNotes && entry.budgetNotes.length && p && typeof p === 'object' ? { ...p, contract_problems: [...(p.contract_problems ?? []), ...entry.budgetNotes] } : p);
+    const record = (w, id, parsed, opts) => recordResult(w, id, withNotes(parsed), timings || usage ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}) } } : opts);
     const reason = entry ? entry.reason : null;
     if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
@@ -270,8 +289,9 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     let result = await once();
     total += result.ms;
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
-    if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
-      const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: entry.budget.maxTurns });
+    if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft() && remainingUsd(entry) <= 0) (entry.budgetNotes ??= []).push('test-repair-skipped-budget-spent');
+    else if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
+      const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: entry.budget.maxTurns, label: 'test-repair' });
       if (entry.reason) return { outcome, gate: null };
       const repaired = next ? parseOutcome(next, { outputs: entry.outputs }) : null;
       if (repaired && !repaired.no_result && !repaired.is_error && repaired.problems.length <= parsed.problems.length) outcome = next;
