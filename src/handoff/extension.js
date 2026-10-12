@@ -6,14 +6,16 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
-import { createWorktree, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
+import { createWorktree, removeWorktree, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
 import { buildPrompt, budgetFor, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
 import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
 import { recordResult, updateHandoff } from './results.js';
-import { resultFromStream, sessionIdOf } from './stream.js';
+import { resultFromStream, sessionIdOf, readLedger } from './stream.js';
+import { buildDocsMap, renderDocsMap } from './docs-map.js';
+import { reconcileAttempts } from './reconcile.js';
 import { handoffsDir, handoffRunDir, logsDir } from '../lib/paths.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
@@ -39,6 +41,18 @@ export function gateLine(gate) {
   return 'Not test-verified by the worker: no test command is configured for this repository.';
 }
 
+// Keep split on a terminal state (spec §10): a read-only run's checkout goes at once; a fix run's
+// stays this long, because its patch is already collected but the owner may still inspect it.
+export const FIX_WORKTREE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+export const DEFAULT_LOG_RETENTION_DAYS = 30;
+const TERMINAL = new Set(['done', 'failed', 'timed-out', 'cancelled']);
+
+// `[handoff] log_retention_days`: how long a run's ledger directory and log are kept.
+export function retentionDays(config = {}) {
+  const v = config && config.handoff && typeof config.handoff === 'object' ? config.handoff.log_retention_days : undefined;
+  return Number.isInteger(v) && v > 0 ? v : DEFAULT_LOG_RETENTION_DAYS;
+}
+
 const isFix = (h) => !!(h.permissions && h.permissions.edit_source);
 
 function detectRuntime(claudePath) {
@@ -57,6 +71,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
   const limits = { readonly: maxReadonly ?? maxConcurrent ?? configured.readonly, fix: maxFix ?? maxConcurrent ?? configured.fix };
   const inUse = (fix) => [...running.values()].filter((e) => e.fix === fix).length;
   let paused = false;
+  let currentWorker = null;
 
   function failRun(worker, h, code, message, extra = {}) {
     recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code, message }, extra });
@@ -174,7 +189,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     return { outcome, quality };
   }
 
-  async function finish(worker, h, run, outcome) {
+  async function finishRun(worker, h, run, outcome) {
     const entry = running.get(h.id);
     const parseOpts = { outputs: entry ? entry.outputs : null };
     const current = worker.state.handoffs.get(h.id);
@@ -198,8 +213,19 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     if (gate) delete gate.total_ms;
     // A turn that produced no result event (killed by the deadline or a cancel) leaves usage unknown: recorded as null, not omitted.
     const usage = entry && entry.env ? { num_turns: entry.usage ? entry.usage.turns : null, cost_usd: entry.usage && entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !({ ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
+    // Spec §5.4: what the agent says it tried is checked against the run's tool ledger, and calls
+    // the ledger shows were refused are added, so the stored list is the one list later reads use.
+    const reconciled = (p) => {
+      if (!p || typeof p !== 'object') return p;
+      try {
+        const lines = readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'));
+        if (!lines.length && !(p.attempts ?? []).length) return p;
+        const r = reconcileAttempts(p.attempts ?? [], lines);
+        return { ...p, attempts: [...r.attempts, ...r.added] };
+      } catch { return p; }
+    };
     const withNotes = (p) => (entry && entry.budgetNotes && entry.budgetNotes.length && p && typeof p === 'object' ? { ...p, contract_problems: [...(p.contract_problems ?? []), ...entry.budgetNotes] } : p);
-    const record = (w, id, parsed, opts) => recordResult(w, id, withNotes(parsed), timings || usage ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}) } } : opts);
+    const record = (w, id, parsed, opts) => recordResult(w, id, withNotes(reconciled(parsed)), timings || usage ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}) } } : opts);
     const reason = entry ? entry.reason : null;
     if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
@@ -232,6 +258,93 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       if (skipped.length) extras.uncertain_effects = [...(current.uncertain_effects ?? []), ...skipped];
     }
     record(worker, h.id, parsed, { state: extras.error ? 'failed' : 'done', error: extras.error ?? null, extra: extras });
+  }
+
+  async function finish(worker, h, run, outcome) {
+    try {
+      await finishRun(worker, h, run, outcome);
+    } finally {
+      try { await cleanupRun(worker, h.id); } catch (err) { worker.log(`handoff cleanup failed: ${err.stack ?? err.message}`); }
+    }
+  }
+
+  const repoPathOf = (h) => (ctx.config.repos[h.repo_id] && ctx.config.repos[h.repo_id].canonical_path) || null;
+
+  async function dropWorktree(worker, h) {
+    const dir = h.worktree_path;
+    if (!dir || h.worktree_removed_at) return;
+    const repoPath = repoPathOf(h);
+    if (repoPath && fs.existsSync(repoPath)) await removeWorktree({ repoPath, dir });
+    else { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
+    if (worker.state.handoffs.has(h.id)) {
+      try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch (err) { worker.log(`worktree removal not recorded: ${err.message}`); }
+    }
+  }
+
+  // On a terminal state: the sandbox and any run file other than the ledger go (they can hold
+  // grants or settings); a read-only run's checkout goes now, a fix run's stays for pruneOldWorktrees.
+  // The ledger and log stay until retention, because they are the evidence for the result.
+  async function cleanupRun(worker, id) {
+    const h = worker.state.handoffs.get(id);
+    if (!h || !TERMINAL.has(h.state) || running.has(id)) return;
+    try { fs.rmSync(path.join(handoffsDir(worker.env), 'sandbox', id), { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      const dir = handoffRunDir(worker.env, id);
+      for (const name of fs.readdirSync(dir)) if (name !== 'ledger.jsonl') fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+    } catch { /* no run dir */ }
+    if (!isFix(h)) await dropWorktree(worker, h);
+    pruneRetention(Date.parse(worker.now()));
+  }
+
+  // Fix checkouts older than 7 days, and any leftover checkout of a finished read-only run or of a
+  // run this store no longer knows (older releases never removed them). Running runs are never touched.
+  async function pruneOldWorktrees(now) {
+    const worker = currentWorker;
+    if (!worker) return;
+    const at = now ?? Date.parse(worker.now());
+    const root = path.join(handoffsDir(worker.env), 'worktrees');
+    let names = [];
+    try { names = fs.readdirSync(root); } catch { names = []; }
+    for (const name of names) {
+      const dir = path.join(root, name);
+      const h = worker.state.handoffs.get(name);
+      if (running.has(name) || (h && !TERMINAL.has(h.state))) continue;
+      let ageMs;
+      if (h && h.finished_at) ageMs = at - Date.parse(h.finished_at);
+      else { try { ageMs = at - fs.statSync(dir).mtimeMs; } catch { continue; } }
+      const expired = Number.isFinite(ageMs) && ageMs >= FIX_WORKTREE_KEEP_MS;
+      if (h ? (isFix(h) && !expired) : !expired) continue;
+      await dropWorktree(worker, h ?? { id: name, worktree_path: dir, repo_id: null });
+    }
+    const repos = new Set(Object.values(ctx.config.repos ?? {}).map((r) => r && r.canonical_path).filter((p) => p && fs.existsSync(p)));
+    for (const repoPath of repos) await pruneWorktrees(repoPath);
+  }
+
+  // Run ledgers and handoff logs older than `[handoff] log_retention_days` (default 30) are deleted.
+  // Age is from the run's finish time when the store knows the run, else from the file's mtime.
+  function pruneRetention(now) {
+    const worker = currentWorker;
+    if (!worker) return;
+    const at = now ?? Date.parse(worker.now());
+    const cutoff = retentionDays(ctx.config) * 86_400_000;
+    const stale = (id, file) => {
+      if (running.has(id)) return false;
+      const h = worker.state.handoffs.get(id);
+      if (h && !TERMINAL.has(h.state)) return false;
+      let t = h && h.finished_at ? Date.parse(h.finished_at) : NaN;
+      if (!Number.isFinite(t)) { try { t = fs.statSync(file).mtimeMs; } catch { return false; } }
+      return at - t > cutoff;
+    };
+    const sweep = (dir, idOf) => {
+      let names = [];
+      try { names = fs.readdirSync(dir); } catch { return; }
+      for (const name of names) {
+        const id = idOf(name);
+        if (id && stale(id, path.join(dir, name))) { try { fs.rmSync(path.join(dir, name), { recursive: true, force: true }); } catch { /* ignore */ } }
+      }
+    };
+    sweep(path.join(handoffsDir(worker.env), 'runs'), (n) => n);
+    sweep(path.join(logsDir(worker.env), 'handoffs'), (n) => (n.endsWith('.log') ? n.slice(0, -4) : null));
   }
 
   // For fix runs: collect changed files and a patch; perform explicitly permitted commit/push/PR.
@@ -331,11 +444,14 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     const needsSource = h.permissions && h.permissions.read_source;
     let cwd;
     let baseCommit = null;
+    let base = null;
     let worktreePath = null;
     if (needsSource) {
       if (!repoCfg || !repoCfg.canonical_path || !fs.existsSync(repoCfg.canonical_path)) return fail(worker, h, 'repo-unavailable', 'source access requires the registered repository on this owner machine; it is not available');
       try {
-        baseCommit = await headCommit(repoCfg.canonical_path);
+        // The ticket's own branch when it can be found, else HEAD (spec §10).
+        base = await worktreeBase(ticket, repoCfg);
+        baseCommit = base.ref === 'HEAD' ? await headCommit(repoCfg.canonical_path) : base.ref;
         worktreePath = path.join(handoffsDir(worker.env), 'worktrees', h.id);
         const worktreeStarted = performance.now();
         try {
@@ -372,6 +488,10 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     // The diff is read from the run's own checkout, so it exists only with source access.
     if (worktreePath && (!inputs || inputs.has('work'))) context.diff = await gatherDiff(worktreePath, context.commits);
     if (staged) context.staged_files = staged;
+    if (worktreePath) {
+      context.base_label = base ? base.label : null;
+      if (!inputs || inputs.has('docs')) try { context.docs = renderDocsMap(buildDocsMap(worktreePath)) || null; } catch { context.docs = null; }
+    }
     const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
     // Standard access keeps the recipe's own tool narrowing; settings and full access hand the
     // decision to Claude Code itself (ADR 0017).
@@ -410,12 +530,17 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     pause() { paused = true; },
     resume() { paused = false; },
     runningIds: () => new Set(running.keys()),
+    pruneOldWorktrees,
+    pruneRetention,
     async onStart(worker) {
       worker.recipeInfo = () => catalogFor(worker).list();
       worker.handoffLimits = () => ({ ...limits });
+      currentWorker = worker;
       for (const h of [...worker.state.handoffs.values()]) {
         if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
       }
+      // Housekeeping at start: checkouts past their keep time, stale registrations, old ledgers and logs.
+      try { await pruneOldWorktrees(); pruneRetention(); } catch (err) { worker.log(`handoff housekeeping failed: ${err.message}`); }
     },
     tick(worker) {
       if (paused) return;

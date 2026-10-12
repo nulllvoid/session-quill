@@ -44,6 +44,40 @@ export async function removeWorktree({ repoPath, dir }) {
   }
 }
 
+// Drops registrations of worktrees whose directory no longer exists (a crash, a manual delete).
+export async function pruneWorktrees(repoPath) {
+  try { await git(repoPath, ['worktree', 'prune']); } catch { /* not a repository, or git unavailable */ }
+}
+
+// Letters, digits and . _ / - @ + only, not starting with "-" and without "..": a name safe to hand to git.
+const SAFE_BRANCH = /^[A-Za-z0-9_][A-Za-z0-9._/@+-]{0,200}$/;
+
+async function commitOf(repoPath, ref) {
+  try { return await git(repoPath, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]); } catch { return null; }
+}
+
+// What a run's checkout starts from: the ticket's own branch (the one its work was recorded on)
+// when it exists here or on origin, else the repository's HEAD. `ref` is a commit id or "HEAD";
+// `label` is the honest sentence the prompt gives the agent.
+export async function worktreeBase(ticket, repoCfg) {
+  const fallback = { ref: 'HEAD', label: 'checkout is on HEAD; ticket branch unknown' };
+  const repoPath = repoCfg && repoCfg.canonical_path;
+  const branches = [...((ticket && ticket.branches) ?? [])].filter((b) => b && typeof b.name === 'string').sort((a, b) => String(b.last_seen ?? '').localeCompare(String(a.last_seen ?? '')));
+  const branch = branches.length ? branches[0].name : null;
+  if (!repoPath || !branch || !SAFE_BRANCH.test(branch) || branch.includes('..') || branch.endsWith('/') || branch.endsWith('.lock')) return fallback;
+  const local = await commitOf(repoPath, `refs/heads/${branch}`);
+  let hasOrigin = false;
+  try { await git(repoPath, ['remote', 'get-url', 'origin']); hasOrigin = true; } catch { /* no origin */ }
+  if (hasOrigin) {
+    try { await git(repoPath, ['fetch', '--quiet', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { timeoutMs: 30_000 }); } catch { /* offline or branch not on origin */ }
+    const remote = await commitOf(repoPath, `refs/remotes/origin/${branch}`);
+    // The branch as the team last pushed it wins when the local copy is only behind it.
+    if (remote && (!local || (await git(repoPath, ['merge-base', '--is-ancestor', local, remote]).then(() => true, () => false)))) return { ref: remote, label: `checkout based on branch ${branch} (origin)` };
+  }
+  if (local) return { ref: local, label: `checkout based on branch ${branch}` };
+  return fallback;
+}
+
 export async function changedFiles(dir) {
   const out = await git(dir, ['status', '--porcelain', '--untracked-files=all'], { raw: true });
   // Porcelain v1: two status columns, a space, then the path (leading spaces are significant).
