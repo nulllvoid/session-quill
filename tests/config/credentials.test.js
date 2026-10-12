@@ -13,18 +13,19 @@ test('credential settings default to no read-only profiles, no kept variables an
 });
 
 test('[prod.readonly], keep_env and api_billing load from TOML', () => {
+  const abs = (name) => path.join(os.tmpdir(), 'quill-ro', name);
   const cfg = parseToml([
     '[handoff]',
     'keep_env = ["MY_SERVICE_API_KEY"]',
     'api_billing = true',
     '[prod.readonly]',
-    'kubeconfig = "C:/ro.yaml"',
+    `kubeconfig = '${abs('ro.yaml')}'`,
     'aws_profile = "ro"',
-    'aws_config_file = "C:/aws/config"',
-    'aws_credentials_file = "C:/aws/credentials"',
-    'gcloud_config = "C:/gcloud-ro"',
-    'google_application_credentials = "C:/ro-key.json"',
-    'azure_config_dir = "C:/azure-ro"',
+    `aws_config_file = '${abs('aws-config')}'`,
+    `aws_credentials_file = '${abs('aws-credentials')}'`,
+    `gcloud_config = '${abs('gcloud-ro')}'`,
+    `google_application_credentials = '${abs('ro-key.json')}'`,
+    `azure_config_dir = '${abs('azure-ro')}'`,
     '[prod.readonly.db_env]',
     'DATABASE_URL = "env:RO_DSN"',
     '[prod.readonly.argocd_env]',
@@ -35,8 +36,8 @@ test('[prod.readonly], keep_env and api_billing load from TOML', () => {
   assert.deepEqual(s.keepEnv, ['MY_SERVICE_API_KEY']);
   assert.equal(s.apiBilling, true);
   assert.deepEqual(s.readonly, {
-    kubeconfig: 'C:/ro.yaml', aws_profile: 'ro', aws_config_file: 'C:/aws/config', aws_credentials_file: 'C:/aws/credentials',
-    gcloud_config: 'C:/gcloud-ro', google_application_credentials: 'C:/ro-key.json', azure_config_dir: 'C:/azure-ro',
+    kubeconfig: abs('ro.yaml'), aws_profile: 'ro', aws_config_file: abs('aws-config'), aws_credentials_file: abs('aws-credentials'),
+    gcloud_config: abs('gcloud-ro'), google_application_credentials: abs('ro-key.json'), azure_config_dir: abs('azure-ro'),
     db_env: { DATABASE_URL: 'env:RO_DSN' }, argocd_env: { ARGOCD_SERVER: 'argo.example' },
   });
 });
@@ -54,6 +55,12 @@ test('invalid values keep the default and warn without echoing the value', () =>
   const mixed = credentialSettings({ handoff: { keep_env: ['A_KEY', 4, 'bad name'] } });
   assert.deepEqual(mixed.keepEnv, ['A_KEY']);
   assert.equal(mixed.warnings.length, 2);
+});
+
+test('a relative read-only path is ignored: it would resolve inside the run checkout', () => {
+  const s = credentialSettings({ prod: { readonly: { kubeconfig: 'ro.yaml', gcloud_config: './gcloud', aws_profile: 'ro' } } });
+  assert.deepEqual(s.readonly, { aws_profile: 'ro' }, 'a profile name is not a path');
+  assert.deepEqual(s.warnings, ['[prod.readonly] kubeconfig must be an absolute path; ignored', '[prod.readonly] gcloud_config must be an absolute path; ignored']);
 });
 
 test('a repository .quill.toml cannot set [prod] or [handoff]', (t) => {

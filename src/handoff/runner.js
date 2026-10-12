@@ -444,6 +444,8 @@ export function killTree(child) {
 // provider tokens are removed and git is told never to prompt, so a non-permitted push fails.
 // `autonomous` and `full` access delegate to buildChildEnv (spec §4.4), which takes the remaining
 // options (runDir, scopes, readonly, keepEnv, apiBilling, gitUser); standard and settings are as before.
+// That path returns the env only and runs `extra` through the generic secret-name pass, so a run's
+// own `*_TOKEN` would be dropped; dispatch that needs stubs, the report or such values calls buildChildEnv.
 export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {}, { keepCredentials = false, access, platform = process.platform, ...isolation } = {}) {
   if (access === 'autonomous' || access === 'full') return buildChildEnv({ ...isolation, baseEnv: { ...baseEnv, ...extra }, access, permissions, platform }).env;
   const childEnv = { ...baseEnv, ...extra };

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { buildChildEnv, CRED_SYSTEMS } from '../../src/handoff/cred-env.js';
+import { execFileSync } from 'node:child_process';
+import { buildChildEnv, readOwnerGitConfig, CRED_SYSTEMS, NO_CREDENTIAL_PLACEHOLDER } from '../../src/handoff/cred-env.js';
 import { childEnvFor } from '../../src/handoff/runner.js';
 
 // Synthetic values only: nothing here comes from this machine's environment.
@@ -46,9 +47,12 @@ test('autonomous with no read-only profiles redirects every credential location 
   assert.equal(has(env, 'AWS_PROFILE'), false, 'no profile resolves when none is configured');
   assert.equal(env.AWS_EC2_METADATA_DISABLED, 'true');
   assert.ok(under(env.CLOUDSDK_CONFIG, runDir) && isEmptyDir(env.CLOUDSDK_CONFIG), 'CLOUDSDK_CONFIG is an empty dir');
-  assert.equal(has(env, 'GOOGLE_APPLICATION_CREDENTIALS'), false);
+  assert.ok(under(env.GOOGLE_APPLICATION_CREDENTIALS, runDir) && isEmptyFile(env.GOOGLE_APPLICATION_CREDENTIALS), 'ADC points at an empty file, so client libraries cannot fall back to the default ADC file');
   assert.ok(under(env.AZURE_CONFIG_DIR, runDir) && isEmptyDir(env.AZURE_CONFIG_DIR), 'AZURE_CONFIG_DIR is an empty dir');
-  for (const k of ['PGPASSWORD', 'DATABASE_URL', 'GH_TOKEN', 'NPM_TOKEN', 'MY_SERVICE_API_KEY', 'ANTHROPIC_API_KEY']) assert.equal(has(env, k), false, `${k} removed`);
+  assert.ok(under(env.AZD_CONFIG_DIR, runDir) && isEmptyDir(env.AZD_CONFIG_DIR), 'AZD_CONFIG_DIR is an empty dir');
+  assert.equal(env.AZURE_TOKEN_CREDENTIALS, 'AzureCliCredential');
+  for (const k of ['PGPASSWORD', 'DATABASE_URL', 'NPM_TOKEN', 'MY_SERVICE_API_KEY', 'ANTHROPIC_API_KEY']) assert.equal(has(env, k), false, `${k} removed`);
+  assert.equal(env.GH_TOKEN, NO_CREDENTIAL_PLACEHOLDER, "the owner's GH_TOKEN is replaced by a placeholder that keeps gh off the keyring");
   for (const k of ['PGPASSFILE', 'PGSERVICEFILE', 'NETRC', 'NPM_CONFIG_USERCONFIG']) assert.ok(under(env[k], runDir) && isEmptyFile(env[k]), `${k} is an empty stub`);
   assert.ok(under(env.DOCKER_CONFIG, runDir) && isEmptyDir(env.DOCKER_CONFIG), 'DOCKER_CONFIG is an empty dir');
   assert.ok(under(env.GIT_CONFIG_GLOBAL, runDir));
@@ -60,8 +64,9 @@ test('autonomous with no read-only profiles redirects every credential location 
   assert.equal(env.PATH, '/usr/bin');
   assert.equal(env.HOME, '/home/owner', 'the profile is never redirected: Claude Code logs in from it');
   for (const s of stubs) assert.ok(under(s, runDir), 'every stub lives under <runDir>/env');
-  assert.equal(stubs.length, 11);
-  assert.deepEqual(Object.keys(report).sort(), [...CRED_SYSTEMS].sort());
+  assert.equal(stubs.length, 17);
+  assert.deepEqual(Object.keys(report).filter((k) => k !== 'residual').sort(), [...CRED_SYSTEMS].sort());
+  assert.deepEqual(report.residual, [], 'nothing residual when the profile holds none of the known locations');
   for (const sys of CRED_SYSTEMS) assert.equal(report[sys], 'stub', sys);
   assert.equal(has(report, 'provider'), false);
 });
@@ -104,16 +109,18 @@ test('a granted k8s.write scope provides its own kubeconfig and touches nothing 
 });
 
 test('push_branch keeps the owner git config, helper, tokens and ssh agent', (t) => {
-  const base = { ...BASE, GITHUB_TOKEN: 'g', SSH_AUTH_SOCK: '/tmp/agent', SSH_AGENT_PID: '9', GIT_CONFIG_GLOBAL: '/home/owner/.gitconfig-work' };
+  const base = { ...BASE, GITHUB_TOKEN: 'g', SSH_AUTH_SOCK: '/tmp/agent', SSH_AGENT_PID: '9', GIT_CONFIG_GLOBAL: '/home/owner/.gitconfig-work', GIT_SSH_COMMAND: 'ssh -i /home/owner/.ssh/deploy', GH_CONFIG_DIR: '/home/owner/.config/gh-work' };
   const { env, report, stubs } = build(t, { baseEnv: base, permissions: { ...NONE, edit_source: true, commit: true, push_branch: true } });
   assert.equal(env.GIT_CONFIG_GLOBAL, '/home/owner/.gitconfig-work', "the owner's own value, not a stub");
   assert.equal(has(env, 'GIT_CONFIG_NOSYSTEM'), false, 'the system-level helper still applies');
-  for (const k of ['GH_TOKEN', 'GITHUB_TOKEN', 'SSH_AUTH_SOCK', 'SSH_AGENT_PID']) assert.equal(has(env, k), true, k);
+  for (const k of ['GH_TOKEN', 'GITHUB_TOKEN', 'SSH_AUTH_SOCK', 'SSH_AGENT_PID', 'GIT_SSH_COMMAND', 'GH_CONFIG_DIR']) assert.equal(env[k], base[k], k);
+  assert.equal(has(env, 'GIT_CONFIG_COUNT'), false, 'no command-scope reset of the owner helper');
   assert.equal(report.git, 'owner');
   assert.ok(!stubs.some((s) => /gitconfig$/.test(s)));
   assert.equal(has(env, 'NPM_TOKEN'), false, 'push does not bring other tokens back');
   const noPush = build(t, { baseEnv: { ...base } });
   for (const k of ['GITHUB_TOKEN', 'SSH_AUTH_SOCK', 'SSH_AGENT_PID']) assert.equal(has(noPush.env, k), false, `${k} removed without push`);
+  for (const k of ['GIT_SSH_COMMAND', 'GH_CONFIG_DIR']) assert.notEqual(noPush.env[k], base[k], `${k} redirected without push`);
   assert.notEqual(noPush.env.GIT_CONFIG_GLOBAL, base.GIT_CONFIG_GLOBAL);
 });
 
@@ -135,8 +142,9 @@ test('Anthropic credentials are removed unless [handoff] api_billing = true', (t
 test('worker and guard variables survive; CDPATH, NODE_AUTH_TOKEN and nested-session markers do not', (t) => {
   const base = { ...BASE, QUILL_HOME: '/q', QUILL_HANDOFF_ID: 'h1', QUILL_HANDOFF_GRANT_SHA256: 'abc', SystemRoot: 'C:/Windows', ComSpec: 'cmd.exe', PATHEXT: '.EXE', TEMP: '/t', TMP: '/t', NODE_OPTIONS: '--max-old-space-size=4096', NODE_AUTH_TOKEN: 'na', CDPATH: '/elsewhere', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', GIT_EXTERNAL_DIFF: 'pwn', GIT_CONFIG_COUNT: '1', JIRA_URL: 'https://jira', SLACK_WEBHOOK: 'w', ARGOCD_SERVER: 'argo', MYSQL_HOST: 'm', MONGO_URI: 'mo', REDIS_URL: 'r', PGHOST: 'h', AZURE_CLIENT_ID: 'c', ARM_SUBSCRIPTION_ID: 's', SOME_PASSWD: 'p', XYZ_SECRET: 's' };
   const { env } = build(t, { baseEnv: base });
+  assert.equal(env.GIT_CONFIG_COUNT, '2', "the inherited command-scope config is replaced by the run's own");
   for (const k of ['QUILL_HOME', 'QUILL_HANDOFF_ID', 'QUILL_HANDOFF_GRANT_SHA256', 'SystemRoot', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP', 'NODE_OPTIONS']) assert.equal(env[k], base[k], `${k} kept`);
-  for (const k of ['NODE_AUTH_TOKEN', 'CDPATH', 'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'GIT_EXTERNAL_DIFF', 'GIT_CONFIG_COUNT', 'JIRA_URL', 'SLACK_WEBHOOK', 'ARGOCD_SERVER', 'MYSQL_HOST', 'MONGO_URI', 'REDIS_URL', 'PGHOST', 'AZURE_CLIENT_ID', 'ARM_SUBSCRIPTION_ID', 'SOME_PASSWD', 'XYZ_SECRET']) assert.equal(has(env, k), false, `${k} removed`);
+  for (const k of ['NODE_AUTH_TOKEN', 'CDPATH', 'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'GIT_EXTERNAL_DIFF', 'JIRA_URL', 'SLACK_WEBHOOK', 'ARGOCD_SERVER', 'MYSQL_HOST', 'MONGO_URI', 'REDIS_URL', 'PGHOST', 'AZURE_CLIENT_ID', 'ARM_SUBSCRIPTION_ID', 'SOME_PASSWD', 'XYZ_SECRET']) assert.equal(has(env, k), false, `${k} removed`);
 });
 
 test('the generic pass never removes what the redirect sets', (t) => {
@@ -163,7 +171,13 @@ test('read-only GCP and Azure profiles are referenced by path, never copied', (t
   const { env, report, stubs } = build(t, { readonly: { gcloud_config: 'C:/ro-gcloud', azure_config_dir: 'C:/ro-azure' } });
   assert.deepEqual([env.CLOUDSDK_CONFIG, env.AZURE_CONFIG_DIR], ['C:/ro-gcloud', 'C:/ro-azure']);
   assert.deepEqual([report.gcp, report.azure], ['readonly', 'readonly']);
-  assert.ok(!stubs.some((s) => /gcloud|azure/.test(path.basename(s))));
+  assert.ok(!stubs.some((s) => ['gcloud', 'azure'].includes(path.basename(s))), 'no config-dir stubs');
+  assert.equal(path.basename(env.GOOGLE_APPLICATION_CREDENTIALS), 'gcloud-adc.json', 'a read-only config without its own ADC file still blocks the default ADC file');
+  const ro = tmpRun();
+  t.after(() => fs.rmSync(ro, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(ro, 'application_default_credentials.json'), '{}');
+  const withAdc = build(t, { readonly: { gcloud_config: ro }, platform: process.platform });
+  assert.equal(withAdc.env.GOOGLE_APPLICATION_CREDENTIALS, path.join(ro, 'application_default_credentials.json'), "the read-only config's own ADC file, by path");
 });
 
 test('AWS stubs carry only the read-only profile section, and stay empty when it is missing', (t) => {
@@ -213,8 +227,10 @@ test('Bedrock or Vertex: the provider credentials stay for claude itself and the
   for (const k of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_PROFILE', 'AWS_BEARER_TOKEN_BEDROCK', 'AWS_REGION']) assert.equal(has(bedrock.env, k), true, k);
   assert.equal(has(bedrock.env, 'AWS_CONFIG_FILE'), false);
   assert.deepEqual([bedrock.report.aws, bedrock.report.provider], ['owner', 'shared']);
-  assert.equal(has(bedrock.env, 'GOOGLE_APPLICATION_CREDENTIALS'), false, 'only that provider');
-  const vertex = build(t, { baseEnv: { ...BASE, CLAUDE_CODE_USE_VERTEX: 'true', ANTHROPIC_VERTEX_PROJECT_ID: 'p', CLOUDSDK_CONFIG: '/home/owner/.config/gcloud' } });
+  assert.notEqual(bedrock.env.GOOGLE_APPLICATION_CREDENTIALS, 'k.json', 'only that provider');
+  const vertex = build(t, { baseEnv: { ...BASE, CLAUDE_CODE_USE_VERTEX: 'true', ANTHROPIC_VERTEX_PROJECT_ID: 'p', CLOUDSDK_CONFIG: '/home/owner/.config/gcloud', GOOGLE_API_KEY: 'g', GOOGLE_CLOUD_PROJECT: 'proj' } });
+  assert.equal(has(vertex.env, 'GOOGLE_API_KEY'), false, 'only what Vertex auth reads is shared');
+  assert.equal(vertex.env.GOOGLE_CLOUD_PROJECT, 'proj');
   assert.equal(vertex.env.GOOGLE_APPLICATION_CREDENTIALS, 'k.json');
   assert.equal(vertex.env.CLOUDSDK_CONFIG, '/home/owner/.config/gcloud');
   assert.deepEqual([vertex.report.gcp, vertex.report.provider], ['owner', 'shared']);
@@ -267,4 +283,157 @@ test('autonomous needs a run dir; childEnvFor delegates for autonomous and full 
   for (const access of ['standard', 'settings', undefined]) {
     assert.deepEqual(childEnvFor(NONE, BASE, {}, { access }), { ...today, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo' }, `${access} keeps today's behaviour`);
   }
+});
+
+// Fix round 1 (task-9-findings-r1.md).
+
+test('C1: AWS headers with comments, odd spacing or unparsable brackets never leak another profile', (t) => {
+  const src = tmpRun();
+  t.after(() => fs.rmSync(src, { recursive: true, force: true }));
+  const config = path.join(src, 'config');
+  const creds = path.join(src, 'credentials');
+  fs.writeFileSync(config, '[ profile ro ]\nregion = eu-west-1\n[profile admin] # prod admin\nrole_arn = arn:aws:iam::1:role/SYNTH-ADMIN\n[profile ro-admin]\nrole_arn = arn:aws:iam::1:role/SYNTH-RO-ADMIN\n');
+  fs.writeFileSync(creds, '[ro]\naws_secret_access_key = SYNTH-RO\n[admin] ; prod\naws_secret_access_key = SYNTH-ADMIN-SECRET\n[ro]x\naws_session_token = SYNTH-BROKEN\n[ro-admin]\naws_secret_access_key = SYNTH-RO-ADMIN\n');
+  const { env, report } = build(t, { readonly: { aws_profile: 'ro', aws_config_file: config, aws_credentials_file: creds } });
+  const c = fs.readFileSync(env.AWS_CONFIG_FILE, 'utf8');
+  const k = fs.readFileSync(env.AWS_SHARED_CREDENTIALS_FILE, 'utf8');
+  assert.equal(report.aws, 'readonly');
+  assert.match(c, /^\[profile ro\]\nregion = eu-west-1\n$/);
+  assert.match(k, /^\[ro\]\naws_secret_access_key = SYNTH-RO\n$/, 'only the read-only section; an unparsable "[" line ends it');
+  for (const leak of ['SYNTH-ADMIN', 'SYNTH-RO-ADMIN', 'SYNTH-BROKEN']) assert.ok(!c.includes(leak) && !k.includes(leak), leak);
+});
+
+test('C3: argocd gets an empty --config, keeping only credential-free inherited options', (t) => {
+  const plain = build(t, { baseEnv: { ...BASE, ARGOCD_OPTS: '--grpc-web' } });
+  const m = plain.env.ARGOCD_OPTS.match(/^--grpc-web --config '([^']+)'$/);
+  assert.ok(m, 'inherited flags without credentials are carried');
+  assert.ok(under(m[1], plain.runDir) && isEmptyFile(m[1]));
+  assert.equal(plain.report.argo, 'stub');
+  for (const opts of ['--grpc-web --auth-token SYNTH', '--config /home/owner/.config/argocd/config', '--header Authorization:SYNTH', '-H x']) {
+    const out = build(t, { baseEnv: { ...BASE, ARGOCD_OPTS: opts, ARGOCD_AUTH_TOKEN: 'SYNTH' } });
+    assert.match(out.env.ARGOCD_OPTS, /^--config '[^']+'$/, `${opts.split(' ')[0]} drops the inherited value`);
+    assert.equal(has(out.env, 'ARGOCD_AUTH_TOKEN'), false);
+  }
+  const ro = build(t, { readonly: { argocd_env: { ARGOCD_AUTH_TOKEN: 'ro', ARGOCD_SERVER: 'argo.example' } } });
+  assert.match(ro.env.ARGOCD_OPTS, /^--config '/, 'a read-only token still never falls back to the owner config');
+  const own = build(t, { readonly: { argocd_env: { ARGOCD_OPTS: '--config /ro/argocd.yaml' } } });
+  assert.equal(own.env.ARGOCD_OPTS, '--config /ro/argocd.yaml', 'a read-only ARGOCD_OPTS wins');
+});
+
+test('I1: gh and glab get empty config dirs and gh a placeholder token without push', (t) => {
+  const { env, runDir } = build(t, { baseEnv: { ...BASE, GH_ENTERPRISE_TOKEN: 'e', GH_CONFIG_DIR: '/home/owner/.config/gh', GLAB_CONFIG_DIR: '/home/owner/.config/glab-cli' } });
+  for (const k of ['GH_CONFIG_DIR', 'GLAB_CONFIG_DIR']) assert.ok(under(env[k], runDir) && isEmptyDir(env[k]), k);
+  assert.deepEqual([env.GH_TOKEN, env.GH_ENTERPRISE_TOKEN], [NO_CREDENTIAL_PLACEHOLDER, NO_CREDENTIAL_PLACEHOLDER]);
+});
+
+test('I2: git over ssh uses no config, agent or default key without push', (t) => {
+  const runDir = path.join(tmpRun(), "it's here");
+  t.after(() => fs.rmSync(path.dirname(runDir), { recursive: true, force: true }));
+  const { env } = build(t, { runDir, baseEnv: { ...BASE, GIT_SSH: '/usr/bin/ssh-wrapper', GIT_SSH_VARIANT: 'ssh', SSH_ASKPASS: '/bin/ask' } });
+  const m = env.GIT_SSH_COMMAND.match(/^ssh -F none -o IdentitiesOnly=yes -o IdentityAgent=none -o BatchMode=yes -i '(.+)'$/);
+  assert.ok(m, 'the redirected ssh command');
+  assert.equal(m[1].replace(/'\\''/g, "'"), path.join(runDir, 'env', 'no-ssh-key'), 'the identity path is shell-quoted');
+  assert.ok(isEmptyFile(path.join(runDir, 'env', 'no-ssh-key')), 'an existing empty identity, so ssh adds no default key');
+  for (const k of ['GIT_SSH', 'GIT_SSH_VARIANT', 'SSH_ASKPASS']) assert.equal(has(env, k), false, k);
+});
+
+test('I3: command-scope config resets a credential helper from the checkout config (real git)', (t) => {
+  const work = tmpRun();
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const repo = path.join(work, 'repo');
+  const base = { PATH: process.env.PATH, Path: process.env.Path, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec, PATHEXT: process.env.PATHEXT, TEMP: work, TMP: work, HOME: work, USERPROFILE: work };
+  for (const k of Object.keys(base)) if (base[k] === undefined) delete base[k];
+  const git = (args, env, input) => execFileSync('git', args, { cwd: repo, env, input, encoding: 'utf8', windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+  fs.mkdirSync(repo);
+  git(['init', '-q'], { ...base, GIT_CONFIG_NOSYSTEM: '1' });
+  git(['config', 'credential.helper', '!f() { echo username=synth; echo password=SYNTH-LOCAL; }; f'], { ...base, GIT_CONFIG_NOSYSTEM: '1' });
+  git(['config', 'credential.https://example.invalid.helper', '!f() { echo username=synth; echo password=SYNTH-URL; }; f'], { ...base, GIT_CONFIG_NOSYSTEM: '1' });
+  const { env } = buildChildEnv({ baseEnv: base, access: 'autonomous', permissions: NONE, runDir: work, platform: process.platform, gitUser: OWNER });
+  assert.deepEqual([env.GIT_CONFIG_COUNT, env.GIT_CONFIG_KEY_0, env.GIT_CONFIG_VALUE_0, env.GIT_CONFIG_KEY_1], ['2', 'credential.helper', '', 'core.sshCommand']);
+  assert.equal(env.GIT_CONFIG_VALUE_1, env.GIT_SSH_COMMAND);
+  let out = '';
+  try { out = git(['credential', 'fill'], env, 'protocol=https\nhost=example.invalid\npath=x\n\n'); } catch (err) { out = String(err.stdout ?? ''); }
+  assert.doesNotMatch(out, /SYNTH-/, 'neither the local nor the URL-specific helper answers');
+});
+
+test('I4: Azure developer CLI, DevOps PAT and token variables are covered', (t) => {
+  const { env } = build(t, { baseEnv: { ...BASE, AZURE_DEVOPS_EXT_PAT: 'p', AZURE_STORAGE_KEY: 'k', AZURE_OPENAI_API_KEY: 'o', AZD_CONFIG_DIR: '/home/owner/.azd', AZURE_TOKEN_CREDENTIALS: 'dev', AZURE_LOCATION: 'westeurope' } });
+  for (const k of ['AZURE_DEVOPS_EXT_PAT', 'AZURE_STORAGE_KEY', 'AZURE_OPENAI_API_KEY']) assert.equal(has(env, k), false, k);
+  assert.notEqual(env.AZD_CONFIG_DIR, '/home/owner/.azd');
+  assert.equal(env.AZURE_TOKEN_CREDENTIALS, 'AzureCliCredential');
+  assert.equal(env.AZURE_LOCATION, 'westeurope', 'non-credential settings stay');
+});
+
+test('I6: an AWS scope reports scope only when its credentials are in effect', (t) => {
+  const src = tmpRun();
+  t.after(() => fs.rmSync(src, { recursive: true, force: true }));
+  const config = path.join(src, 'config');
+  const creds = path.join(src, 'credentials');
+  fs.writeFileSync(config, '[profile ro]\nregion = eu-west-1\n');
+  fs.writeFileSync(creds, '[ro]\naws_secret_access_key = SYNTH-RO\n');
+  const readonly = { aws_profile: 'ro', aws_config_file: config, aws_credentials_file: creds };
+  const typo = build(t, { readonly, scopes: [{ name: 'cloud.write', target: 'x', env: { AWS_PROFILE: 'typo', AWS_CONFIG_FILE: config, AWS_SHARED_CREDENTIALS_FILE: creds } }] });
+  assert.equal(typo.report.aws, 'readonly', 'the read-only profile is still what resolves');
+  assert.equal(typo.env.AWS_PROFILE, 'ro');
+  assert.match(fs.readFileSync(typo.env.AWS_SHARED_CREDENTIALS_FILE, 'utf8'), /SYNTH-RO/);
+  assert.deepEqual(typo.report.scope_errors, ['cloud.write: AWS profile not found; the earlier AWS settings stay']);
+  const region = build(t, { scopes: [{ name: 'cloud.write', target: 'x', env: { AWS_REGION: 'eu-west-1' } }] });
+  assert.equal(region.env.AWS_REGION, 'eu-west-1');
+  assert.equal(region.report.aws, 'stub', 'a region alone is not a credential');
+  const keys = build(t, { scopes: [{ name: 'cloud.write', target: 'x', env: { AWS_ACCESS_KEY_ID: 'SYNTH-ID', AWS_SECRET_ACCESS_KEY: 'SYNTH-S' } }] });
+  assert.equal(keys.report.aws, 'scope');
+});
+
+test('M2: a reused run dir starts from empty stubs', (t) => {
+  const runDir = tmpRun();
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(runDir, 'env', 'gcloud'), { recursive: true });
+  fs.writeFileSync(path.join(runDir, 'env', 'gcloud', 'credentials.db'), 'SYNTH');
+  fs.writeFileSync(path.join(runDir, 'env', 'leftover'), 'SYNTH');
+  const { env } = build(t, { runDir });
+  assert.ok(isEmptyDir(env.CLOUDSDK_CONFIG));
+  assert.equal(fs.existsSync(path.join(runDir, 'env', 'leftover')), false);
+});
+
+test('M3/M4: the owner git config is read once, and only non-credential settings reach the stub', (t) => {
+  const home = tmpRun();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const global = path.join(home, 'gitconfig');
+  fs.writeFileSync(global, '[user]\n\tname = Synth Owner\n[core]\n\tautocrlf = true\n\tlongpaths = true\n[credential]\n\thelper = store\n[http]\n\textraHeader = Authorization: SYNTH\n');
+  const env = { PATH: process.env.PATH, Path: process.env.Path, SystemRoot: process.env.SystemRoot, HOME: home, USERPROFILE: home, GIT_CONFIG_GLOBAL: global, GIT_CONFIG_SYSTEM: path.join(home, 'no-system-config') };
+  for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
+  const first = readOwnerGitConfig(env);
+  assert.equal(first.name, 'Synth Owner');
+  assert.deepEqual(first.config, { 'core.autocrlf': 'true', 'core.longpaths': 'true' });
+  fs.writeFileSync(global, '[user]\n\tname = Changed\n');
+  assert.equal(readOwnerGitConfig(env), first, 'cached: no second git call');
+  assert.equal(readOwnerGitConfig(env, { now: Date.now() + 11 * 60_000 }).name, 'Changed', 'refreshed after the cache period');
+  const sys = path.join(home, 'system-config');
+  fs.writeFileSync(sys, '[core]\n\tsymlinks = true\n');
+  assert.equal(readOwnerGitConfig({ ...env, GIT_CONFIG_SYSTEM: sys }).config['core.symlinks'], 'true', 'system settings are copied');
+  assert.equal(readOwnerGitConfig({ ...env, GIT_CONFIG_SYSTEM: sys, GIT_CONFIG_NOSYSTEM: '1' }).config['core.symlinks'], undefined, 'unless the owner turned system config off');
+  const { env: child } = build(t, { gitUser: { ...first, config: { ...first.config, 'credential.helper': 'store', 'http.extraheader': 'SYNTH' } } });
+  const text = fs.readFileSync(child.GIT_CONFIG_GLOBAL, 'utf8');
+  assert.match(text, /\[core\]\n\tautocrlf = "true"\n\tlongpaths = "true"\n/);
+  assert.doesNotMatch(text, /SYNTH|store/);
+});
+
+test('M6: kubernetes, cloud and argo scopes never set a variable no system owns', (t) => {
+  const { env, report } = build(t, { scopes: [{ name: 'k8s.write', target: 'stg', env: { KUBECONFIG: 'C:/stg-rw.yaml', DEPLOY_TOKEN: 'SYNTH' } }, { name: 'deploy', target: 'stg', env: { RELEASE_TOKEN: 'r' } }] });
+  assert.equal(has(env, 'DEPLOY_TOKEN'), false);
+  assert.equal(env.RELEASE_TOKEN, 'r', 'a deploy scope may');
+  assert.deepEqual(report.scope_errors, ["k8s.write: DEPLOY_TOKEN is not this scope's to set; ignored"]);
+});
+
+test('report.residual lists owner credentials that exist and no variable can redirect', (t) => {
+  const home = tmpRun();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  for (const d of ['.ssh', '.Azure', path.join('.aws', 'sso', 'cache')]) fs.mkdirSync(path.join(home, d), { recursive: true });
+  fs.writeFileSync(path.join(home, '.netrc'), '');
+  fs.writeFileSync(path.join(home, 'aws-config'), '[profile ro]\nsso_session = corp\n[sso-session corp]\nsso_start_url = https://corp.example/start\n');
+  const { report } = build(t, { baseEnv: { ...BASE, HOME: home }, readonly: { aws_profile: 'ro', aws_config_file: path.join(home, 'aws-config') } });
+  assert.deepEqual(report.residual.map((r) => r.split(':')[0]), ['ssh', 'netrc', 'azure', 'aws']);
+  const win = build(t, { baseEnv: { PATH: 'C:\\bin', USERPROFILE: home }, platform: 'win32' });
+  assert.ok(win.report.residual.some((r) => /Windows Credential Manager/.test(r)));
+  assert.ok(win.report.residual.some((r) => r.startsWith('ssh:')), 'USERPROFILE is the profile on Windows');
 });

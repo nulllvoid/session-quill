@@ -2,10 +2,10 @@
 // (`prod` and `handoff` are user-only fields, so a repository's .quill.toml cannot set them):
 //
 //   [handoff]
-//   keep_env = ["MY_SERVICE_API_KEY"]   # names the generic token/secret pass keeps (default [])
+//   keep_env = ["MY_SERVICE_API_KEY"]   # names exempt from the generic secret-name pass only (default [])
 //   api_billing = false                 # keep ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN
 //
-//   [prod.readonly]                     # read-only profiles, referenced by path, never copied
+//   [prod.readonly]                     # read-only profiles, by absolute path, never copied
 //   kubeconfig = "…"                    # (the AWS profile section alone is copied into the run)
 //   aws_profile = "…"                   # + optional aws_config_file, aws_credentials_file
 //   gcloud_config = "…"
@@ -15,6 +15,8 @@
 //   [prod.readonly.argocd_env]          # same form
 //
 // An invalid value keeps the default and adds a warning that names the key, never the value.
+
+import path from 'node:path';
 
 export const READONLY_PATH_KEYS = ['kubeconfig', 'aws_profile', 'aws_config_file', 'aws_credentials_file', 'gcloud_config', 'google_application_credentials', 'azure_config_dir'];
 export const READONLY_ENV_KEYS = ['db_env', 'argocd_env'];
@@ -49,8 +51,10 @@ export function credentialSettings(config = {}) {
   for (const key of READONLY_PATH_KEYS) {
     const v = ro[key];
     if (v === undefined) continue;
-    if (typeof v === 'string' && v.trim()) readonly[key] = v.trim();
-    else warnings.push(`[prod.readonly] ${key} must be a non-empty string; ignored`);
+    if (typeof v !== 'string' || !v.trim()) warnings.push(`[prod.readonly] ${key} must be a non-empty string; ignored`);
+    // A relative path would resolve against the run's checkout, i.e. a file the repository controls.
+    else if (key !== 'aws_profile' && !path.isAbsolute(v.trim())) warnings.push(`[prod.readonly] ${key} must be an absolute path; ignored`);
+    else readonly[key] = v.trim();
   }
   for (const key of READONLY_ENV_KEYS) {
     const v = ro[key];

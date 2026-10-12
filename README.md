@@ -426,7 +426,7 @@ test_timeout_ms = 600000      # default 10 minutes
 [handoff]
 max_concurrent_readonly = 2   # runs that only read (default 2)
 max_concurrent_fix = 1        # runs that edit source (default 1; and one per repository)
-keep_env = []                 # variable names autonomous runs keep although they look like secrets
+keep_env = []                 # names exempt from the token/secret name filter only (not from the redirects)
 api_billing = false           # true keeps ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN
 
 [prod.readonly]               # read-only profiles for autonomous runs, referenced by absolute path
@@ -437,7 +437,7 @@ aws_profile = "readonly"      # only this profile's section is copied into the r
 # NAME = "value" or NAME = "env:OTHER_NAME"
 ```
 
-Autonomous runs never see your normal credentials: kubeconfig, cloud, database, registry, netrc and git credential locations point at these read-only profiles or at empty files in the run's directory, and any other variable whose name looks like a token, secret, password, API key or credential is removed. These settings come from your user config only, never from a repository's `.quill.toml`.
+In an autonomous run, the credential locations of Kubernetes, AWS, Google Cloud, Azure (`az`, `azd`), databases, Argo CD, git (helper, ssh, `gh`, `glab`), netrc, npm and Docker point at these read-only profiles or at empty files in the run's directory, and any other variable whose name looks like a token, secret, password, API key or credential is removed. `keep_env` only exempts a name from that last filter; a redirected system's credentials come from `[prod.readonly]`, a granted scope, push permission or `api_billing`. Some owner credentials cannot be redirected through the environment (keys in `~/.ssh` used by `ssh` directly, `~/.netrc` read by curl, the Az PowerShell context, an OS credential store reached through a credential helper, other tools' own files in your home directory); the run reports those that exist on your machine, and the guard is the only protection for them. These settings come from your user config only, never from a repository's `.quill.toml`.
 
 **Bulk runs.** On Board or Pick next, press **Select** (or `x` on a focused card; Shift-click selects a range, Esc clears) and choose **Analyze**, **Attempt fix** or **Change status** for every checked ticket. The bulk dialog shows which tickets are ready, already running, have no repository or are not eligible, and asks once for the recipe and access; bulk fixes need an explicit edit-source confirmation. Each ticket gets its own request, so one stale ticket does not stop the rest, and the runs share a batch id with a progress strip and **Cancel batch** for the queued ones (`quill handoff cancel --batch <id>` from a terminal). Bulk status changes keep their 10-second undo, gathered under **Undo all**. Large analyses may split the work across Claude Code subagents inside the one run ([ADR 0023](docs/decisions/0023-bulk-runs-and-test-gate.md)).
 
