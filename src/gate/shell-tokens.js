@@ -694,24 +694,37 @@ function decodePsBase64(v) {
 // Drive-qualified variable references in PowerShell text. ${env:X} and $env:X name environment
 // variables; $function:f and $alias:a define commands; ${C:\path} and $c:name read or write a
 // file's content; scopes ($global:x, $using:x) are plain variables; any other provider item
-// (${HKCU:\…}, a custom drive) is not followed.
+// (${HKCU:\…}, a custom drive) is not followed. A `${` without its `}` (a PowerShell parse error)
+// and a backtick inside `${…}` (an escape PowerShell removes: ${env:A`B} is $env:AB) come back as
+// kind 'bad'. One left-to-right pass: each `${` is closed by the next `}` or ends the scan.
 const PS_SCOPES = new Set(['global', 'script', 'local', 'private', 'using', 'workflow', 'variable']);
-const PS_REF_RE = /\$\{([^}]*)\}|\$([A-Za-z0-9_?^]+):(?!:)([A-Za-z0-9_?^]*)/g;
+const PS_DRIVE_REF_RE = /\$([A-Za-z0-9_?^]+):(?!:)([A-Za-z0-9_?^]*)/y;
 
 function psRefs(text) {
+  const s = String(text);
   const out = [];
-  for (const m of String(text).matchAll(PS_REF_RE)) {
+  let i = 0;
+  while ((i = s.indexOf('$', i)) >= 0) {
     let qual;
     let rest;
     let ref;
-    if (m[1] !== undefined) {
-      const c = /^([^:\\/]*):(?!:)[\\/]?(.*)$/s.exec(m[1]);
-      if (!c) { if (m[1].includes(':')) out.push({ kind: 'provider', text: m[1] }); continue; }
+    if (s[i + 1] === '{') {
+      const end = s.indexOf('}', i + 2);
+      if (end < 0) { out.push({ kind: 'bad', text: '${ without a closing }' }); return out; }
+      const inner = s.slice(i + 2, end);
+      i = end + 1;
+      if (inner.includes('`')) { out.push({ kind: 'bad', text: 'escaped character in a ${…} variable name' }); continue; }
+      const c = /^([^:\\/]*):(?!:)[\\/]?(.*)$/s.exec(inner);
+      if (!c) { if (inner.includes(':')) out.push({ kind: 'provider', text: inner }); continue; }
       [, qual, rest] = c;
-      ref = m[1];
+      ref = inner;
     } else {
-      [, qual, rest] = m.slice(1);
-      ref = `${m[2]}:${m[3]}`;
+      PS_DRIVE_REF_RE.lastIndex = i;
+      const m = PS_DRIVE_REF_RE.exec(s);
+      if (!m) { i += 1; continue; }
+      i = PS_DRIVE_REF_RE.lastIndex;
+      [, qual, rest] = m;
+      ref = `${m[1]}:${m[2]}`;
     }
     const ql = qual.toLowerCase();
     if (ql === 'env') out.push({ kind: 'env', name: rest });
@@ -786,6 +799,7 @@ function expand(seg, depth, out) {
       if (k[x] === 'lit') continue;
       for (const ref of psRefs(a[x])) {
         if (ref.kind === 'file') addPs('psReads', ref.path);
+        else if (ref.kind === 'bad') { bad(`PowerShell variable reference: ${ref.text}`); return; }
         else if (ref.kind === 'provider') { bad(`PowerShell provider item ${ref.text.slice(0, 60)} is not followed`); return; }
       }
     }
@@ -794,6 +808,7 @@ function expand(seg, depth, out) {
   const psTargets = (lhs, op, rhs) => {
     const refs = lhs.flatMap((t) => psRefs(t));
     for (const ref of refs) {
+      if (ref.kind === 'bad') return `PowerShell variable reference: ${ref.text}`;
       if (ref.kind === 'define') return 'assignment defines a PowerShell function or alias';
       if (ref.kind === 'provider') return `assignment to PowerShell provider item ${ref.text.slice(0, 60)}`;
       if (ref.kind === 'file') addPs('psWrites', ref.path);

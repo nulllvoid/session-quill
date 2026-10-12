@@ -189,15 +189,15 @@ function strip(res) {
 
 function classifySegment(seg, ctx, st) {
   if (seg.unparseable) return unparseable(seg.unparseable);
-  // Prefix assignments (VAR=x cmd) apply to this command only; an assignment on its own, or
+  // Prefix assignments (VAR=x git …) apply to that command only; an assignment on its own, or
   // environment handed to a nested script, lasts for whatever runs later.
-  const envBad = gitEnvProblem(seg.env, ctx, st.cwd, !seg.argv.length);
+  const envBad = gitEnvProblem(seg.env, seg.argv.length > 0 && seg.kinds[0] === 'lit' && binName(seg.argv[0]) === 'git');
   if (envBad) return unparseable(envBad);
   if (seg.dialect !== 'powershell') {
     // ${NAME:=value} and ${NAME=value} assign NAME as a side effect of the expansion
     const assigned = {};
     seg.argv.forEach((word, i) => { if (seg.kinds[i] !== 'lit') for (const m of word.matchAll(/\$\{([A-Za-z_]\w*):?=/g)) assigned[m[1]] = null; });
-    const why = gitEnvProblem(assigned, ctx, null, true);
+    const why = gitEnvProblem(assigned);
     if (why) return unparseable(why);
   }
   const h = helpers(seg, ctx, st);
@@ -543,18 +543,24 @@ function classifyCommand(name, seg, ctx, h) {
     case 'export': case 'declare': case 'typeset': case 'local': case 'readonly': case 'set': {
       // NAME=value sets NAME; a bare NAME exports (or declares) a value assigned elsewhere
       const env = {};
+      // declare -n / typeset -n / local -n make a name refer to another variable (a nameref)
+      if (['declare', 'typeset', 'local'].includes(name) && args.some((t) => /^[-+][a-zA-Z]*n/.test(t))) return unparseable(`${name} -n makes a name refer to another variable`);
       const printOnly = args.some((t) => /^-[a-zA-Z]*[pfF]/.test(t));
       const unexport = (name === 'export' && args.some((t) => /^-[a-zA-Z]*n/.test(t))) || args.some((t) => /^\+[a-zA-Z]*x/.test(t));
+      // bash `set` words are positional parameters, not variables (cmd's `set NAME=value` is one)
+      const names = name !== 'set' || cmdD;
       let end = false;
       for (let i = 0; i < args.length; i += 1) {
         const t = args[i];
         if (!end && t === '--') { end = true; continue; }
         if (!end && /^[-+]/.test(t)) continue;
         const eq = t.indexOf('=');
+        // a name that is not a literal identifier ("$k=…", "$n") could be any variable
+        if (names && ak[i] !== 'lit' && (eq > 0 ? !/^[A-Za-z_]\w*(\[[^\]]*\])?\+?$/.test(t.slice(0, eq)) : !printOnly && !unexport)) return unparseable(`${name} sets a variable whose name is not literal`);
         if (eq > 0) env[t.slice(0, eq).replace(/\[.*$/, '').replace(/\+$/, '')] = ak[i] === 'lit' ? t.slice(eq + 1) : null;
         else if (name !== 'set' && !printOnly && !unexport && /^[A-Za-z_]\w*$/.test(t)) env[t] = null;
       }
-      const bad = gitEnvProblem(env, ctx, null, true);
+      const bad = gitEnvProblem(env);
       if (bad) return unparseable(bad);
       return local(`${name}`);
     }
@@ -568,8 +574,9 @@ function classifyCommand(name, seg, ctx, h) {
         pos.push(i);
       }
       const env = {};
+      if (pos.length && ak[pos[0]] !== 'lit') return unparseable('setx sets a variable whose name is not literal');
       if (pos.length) env[args[pos[0]]] = !fromElsewhere && pos.length > 1 && ak[pos[1]] === 'lit' ? args[pos[1]] : null;
-      const bad = gitEnvProblem(env, ctx, null, true);
+      const bad = gitEnvProblem(env);
       if (bad) return unparseable(bad);
       return local('setx');
     }
@@ -581,6 +588,8 @@ function classifyCommand(name, seg, ctx, h) {
       const named = !!(s.get('path') ?? s.get('literalpath'));
       const value = s.get('value') ?? s.pos[named ? 0 : 1];
       if (!target || target.v === true || target.kind !== 'lit') return unparseable('Set-Item target is not a literal path');
+      // -Path and a positional target expand wildcards (env:GIT_CONFIG_KEY_?, env:*); -LiteralPath does not
+      if (target !== s.get('literalpath') && /[*?[]/.test(String(target.v))) return unparseable('Set-Item target has wildcards and may set any matching variable');
       const env = {};
       for (const one of splitPs(target.v)) {
         const m = /^(?:Microsoft\.PowerShell\.Core\\)?(env|environment|variable|function|alias)(?:::?)[\\/]?(.*)$/i.exec(one);
@@ -590,7 +599,7 @@ function classifyCommand(name, seg, ctx, h) {
         if (drive === 'variable') continue;
         env[m[2]] = value && value.v !== true && value.kind === 'lit' ? value.v : null;
       }
-      const bad = gitEnvProblem(env, ctx, null, true);
+      const bad = gitEnvProblem(env);
       if (bad) return unparseable(bad);
       return local('Set-Item');
     }
@@ -612,11 +621,16 @@ function classifyCommand(name, seg, ctx, h) {
       const env = {};
       const vi = args.findIndex((t) => t.startsWith('-v'));
       const names = name === 'for' || name === 'select' ? args.slice(0, 1) : name === 'printf' ? [args[vi] === '-v' ? args[vi + 1] ?? '' : args[vi]] : args;
+      // a variable name that is not literal ("$n") could be any variable; option values may be dynamic
+      const valueOpt = name === 'read' ? /^-[a-zA-Z]*[dinNptu]$/ : /^-[a-zA-Z]*[dnOsuCc]$/;
+      const nameAt = name === 'for' || name === 'select' ? [0] : name === 'printf' ? [args[vi] === '-v' ? vi + 1 : vi] : name === 'getopts' ? [1]
+        : args.map((_, i) => i).filter((i) => !valueOpt.test(args[i - 1] ?? ''));
+      if (nameAt.some((i) => i < args.length && ak[i] !== 'lit')) return unparseable(`${name} sets a variable whose name is not literal`);
       for (const t of names) {
-        const m = /^(?:-v)?([A-Za-z_]\w*)$/.exec(t);
+        const m = /^(?:-v)?([A-Za-z_]\w*)(\[[^\]]*\])?$/.exec(t);
         if (m) env[m[1]] = null;
       }
-      const bad = gitEnvProblem(env, ctx, null, true);
+      const bad = gitEnvProblem(env);
       if (bad) return unparseable(bad);
       return local(name);
     }
@@ -1178,45 +1192,29 @@ function isProtected(ctx, name) {
   try { return !!fn(name); } catch { return true; }
 }
 
-// Environment that makes git read other config or run other programs.
-const GIT_EXEC_ENV_RE = /^(GIT_CONFIG_PARAMETERS|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG|GIT_SSH|GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_ASKPASS|SSH_ASKPASS|GIT_EXTERNAL_DIFF|GIT_PROXY_COMMAND|GIT_TEMPLATE_DIR|GIT_INDEX_FILE)$/i;
+// Environment that makes git read other config, use another repository or work tree, write to
+// another file or run other programs. GIT_DIR and GIT_WORK_TREE are never trusted: git resolves
+// them against wherever it ends up running (after cd, -C or inside a function), which the guard
+// does not model.
+const GIT_EXEC_ENV_RE = /^(GIT_CONFIG_PARAMETERS|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG|GIT_SSH|GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_ASKPASS|SSH_ASKPASS|GIT_EXTERNAL_DIFF|GIT_PROXY_COMMAND|GIT_TEMPLATE_DIR|GIT_INDEX_FILE|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_ALLOW_PROTOCOL|GIT_REDIRECT_STDIN|GIT_REDIRECT_STDOUT|GIT_REDIRECT_STDERR)$/i;
 // Programs git starts (pager, editor); git falls back to PAGER, VISUAL and EDITOR.
 const GIT_PROGRAM_ENV_RE = /^(GIT_PAGER|GIT_EDITOR|GIT_SEQUENCE_EDITOR|PAGER|EDITOR|VISUAL)$/i;
 const HARMLESS_PROGRAMS = new Set(['', 'cat', 'true', 'false', ':', 'less', 'more']);
-// Where git finds the repository and its work tree.
-const GIT_PATH_ENV_RE = /^(GIT_DIR|GIT_WORK_TREE)$/i;
 
 function samePath(a, b, ctx) {
   return isWin(ctx) ? String(a).toLowerCase() === String(b).toLowerCase() : a === b;
 }
 
-// A path value that resolves inside the run's checkout (ctx.cwd). `base` resolves a relative value;
-// null means a relative value cannot be trusted (it is resolved wherever git later runs).
-function insideCheckout(v, ctx, base) {
-  if (typeof v !== 'string' || !v || typeof ctx.cwd !== 'string' || !ctx.cwd) return false;
-  if (base === null && !isAbsLike(v)) return false;
-  const p = resolveLiteral(v, ctx, base ?? undefined, 'lit');
-  if (!p) return false;
-  const win = isWin(ctx);
-  const root = normalizeAbs(ctx.cwd, ctx);
-  const sep = win ? '\\' : '/';
-  const [pp, rr] = win ? [p.toLowerCase(), root.toLowerCase()] : [p, root];
-  return pp === rr || pp.startsWith(rr.endsWith(sep) ? rr : rr + sep);
-}
-
-// env: name → literal value, or null when the value is not known. `persistent`: the assignment
-// outlives this command (export, $env:X = …), so a relative path is not trusted.
-function gitEnvProblem(env, ctx = {}, base = null, persistent = true) {
+// env: name → literal value, or null when the value is not known. `prefixOnGit`: the assignment
+// is a prefix of a literal `git` command (GIT_PAGER=cat git log), so it lasts for that command
+// only; only then is a harmless pager or editor value allowed.
+function gitEnvProblem(env, prefixOnGit = false) {
   if (!env || typeof env !== 'object') return null;
   for (const [k, v] of Object.entries(env)) {
     if (GIT_EXEC_ENV_RE.test(k)) return `${k} changes what git runs or reads`;
     if (GIT_PROGRAM_ENV_RE.test(k)) {
-      if (typeof v === 'string' && HARMLESS_PROGRAMS.has(v)) continue;
+      if (prefixOnGit && typeof v === 'string' && HARMLESS_PROGRAMS.has(v)) continue;
       return `${k} makes git run a program the guard cannot see`;
-    }
-    if (GIT_PATH_ENV_RE.test(k)) {
-      if (insideCheckout(v, ctx, persistent ? null : base)) continue;
-      return `${k} points git outside the checkout (or is not a literal path)`;
     }
     if (/^GIT_TRACE\w*$/i.test(k)) {
       if (typeof v === 'string' && /^(|[0-9]|true|false|yes|no|on|off)$/i.test(v)) continue;
@@ -1244,7 +1242,7 @@ const GIT_COMMIT = new Set(['commit', 'revert', 'am', 'cherry-pick', 'rebase', '
 function git(args, ak, seg, ctx, h) {
   let i = 0;
   let pushConfig = false;
-  // git -C <dir> runs in <dir>: relative paths, --git-dir and GIT_DIR resolve there (null = unknown)
+  // git -C <dir> runs in <dir>: relative paths resolve there (null = unknown)
   let base = h.cwd();
   let moved = 0; // number of -C options
   while (i < args.length && args[i].startsWith('-')) {
@@ -1258,16 +1256,9 @@ function git(args, ak, seg, ctx, h) {
       i += 2;
       continue;
     }
-    // --git-dir and --work-tree are trusted only inside the checkout, like GIT_DIR and GIT_WORK_TREE
+    // --git-dir and --work-tree are never trusted, like GIT_DIR and GIT_WORK_TREE
     const dirOpt = /^--(git-dir|work-tree)(=|$)/.exec(t);
-    if (dirOpt) {
-      const attached = dirOpt[2] === '=';
-      const v = attached ? t.slice(dirOpt[0].length) : args[i + 1];
-      const kind = attached ? ak[i] : ak[i + 1];
-      if (kind !== 'lit' || !insideCheckout(v, ctx, base)) return unparseable(`git --${dirOpt[1]} points git outside the checkout (or is not a literal path)`);
-      i += attached ? 1 : 2;
-      continue;
-    }
+    if (dirOpt) return unparseable(`git --${dirOpt[1]} points git at another repository or work tree`);
     if (t === '-c' || t.startsWith('-c')) {
       const kv = t === '-c' ? args[i + 1] : t.slice(2);
       const key = String(kv ?? '').split('=')[0];
@@ -1286,11 +1277,6 @@ function git(args, ak, seg, ctx, h) {
     }
     if (GIT_GLOBAL_VALUES.has(t)) { i += 2; continue; }
     i += 1;
-  }
-  if (moved) {
-    // a relative GIT_DIR or GIT_WORK_TREE is resolved in the -C directory
-    const why = gitEnvProblem(seg.env, ctx, base, false);
-    if (why) return unparseable(why);
   }
   // rebase -x and bisect run commands run at the top of the work tree: known only when git runs
   // at the top of the checkout

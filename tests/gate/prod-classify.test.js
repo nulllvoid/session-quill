@@ -114,6 +114,29 @@ test('assignment, comment, git -C and end-of-options input near the size cap is 
   }
 });
 
+test('PowerShell ${…} references and variable-name checks near the size cap are classified in linear time', () => {
+  const rep = (s) => s.repeat(Math.floor(99_000 / s.length));
+  const inputs = [
+    // unterminated ${ used to be rescanned from every start (1.9 s each); now one pass and unparseable
+    ['PowerShell', `Write-Output $a'${rep('${')}'`, 'unparseable'],
+    ['PowerShell', `Write-Output $a'${rep('${x:')}'`, 'unparseable'],
+    ['PowerShell', `$x '${rep('${')}' = 1`, 'unparseable'],
+    ['PowerShell', `Write-Output "${rep('${a}')}"`, 'local'],
+    ['PowerShell', `Write-Output "$${rep('a')}"`, 'local'],
+    ['PowerShell', `Set-Item env:${rep('a?')} x`, 'unparseable'],
+    ['Bash', `export ${rep('"$n"=x ')}`, 'unparseable'],
+    ['Bash', `read ${rep('-p $x ')}a`, 'local'],
+    ['Bash', `git ${rep('--git-dir=. ')}status`, 'unparseable'],
+  ];
+  for (const [tool_name, command, cls] of inputs) {
+    const t0 = process.hrtime.bigint();
+    const r = classifyCall({ tool_name, tool_input: { command } }, baseCtx);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.equal(r.class, cls, `${JSON.stringify(command.slice(0, 20))}…: ${r.reason}`);
+    assert.ok(ms < 50, `${JSON.stringify(command.slice(0, 20))}… took ${ms.toFixed(1)} ms`);
+  }
+});
+
 test('garbage inputs never throw', () => {
   const inputs = [undefined, null, 0, 'x', [], { command: {} }, { command: Symbol.iterator.toString() }, { command: '\u0000kubectl delete pod p' }];
   for (const tool_name of ['Bash', 'PowerShell', 'Edit', 'mcp__a__b', '', undefined, 7]) {
