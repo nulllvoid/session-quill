@@ -144,7 +144,7 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
   if (climbing) return deny(REASONS.patternClimbs(climbing));
   const perms = isPlainObject(g.permissions) ? g.permissions : {};
   const reads = readPathsOf(tool, c.tool_input, cls, ctx, home);
-  const writes = writePathsOf(tool, cls, ctx);
+  const writes = writePathsOf(tool, cls);
   if (reads.length || writes.length) {
     const roots = rootsOf(g, e, vars, home, perms, writes.length > 0);
     for (const r of reads) {
@@ -269,7 +269,7 @@ function rootsOf(g, e, vars, home, perms, forWrites) {
   const qhEnv = { QUILL_HOME: varOf(vars, 'QUILL_HOME') ?? path.join(home, '.claude', 'quill') };
   const grantWritable = canon(strings(g.writableRoots));
   const unreadable = [...under(canonicalRoot(home), HOME_SECRETS), ...canon([quillHome(qhEnv)])];
-  const roots = { canonical, readable: [...canon(strings(g.readableRoots)), ...grantWritable], unreadable };
+  const roots = { canonical, scan: scanState(), readable: [...canon(strings(g.readableRoots)), ...grantWritable], unreadable };
   if (!forWrites) return roots;
 
   let runDir = null;
@@ -316,34 +316,43 @@ function linkedConfig(w) {
   return out;
 }
 
+// Wildcard characters per dialect (ruling R15; N3: cmd also treats `<`, `>` and `"` as DOS
+// wildcards). Paths of unknown dialect use them all.
+const WILDCARD = { bash: /[*?[\]{}]/, powershell: /[*?[\]{}`]/, cmd: /[*?[\]{}<>"]/ };
+const ANY_WILDCARD = /[*?[\]{}`<>"]/;
+
 // Checks everything an entry can reach, as canonical paths, with `check(c, wildcard)` (a deny
 // reason or null); returns the first reason, or null. A file tool's path is literal. A shell path
-// is scanned for wildcards (ruling R15), which are over-approximated rather than evaluated, so no
-// glob dialect (bash brackets and classes, extglob, PowerShell wildcards and escapes, case rules)
-// needs emulating:
-//  1. only the text the call supplied is scanned; the directory it was resolved against (the
-//     call's cwd, which may itself contain `[`, `]` or spaces) is literal;
-//  2. a supplied segment with `*`, `?`, `[`, `]`, `{` or `}` (or a backtick in PowerShell) matches
-//     EVERY entry of each directory reached so far; one containing `**` matches every entry at any
-//     depth, links included;
-//  3. every entry reached is resolved and checked like the path itself, directories go on to the
-//     next segment, and more than MAX_GLOB_MATCHES entries refuse the call;
-//  4. a directory that cannot be listed refuses the call: an empty listing is not a pass.
+// comes with its spec from the classifier: `root`, a literal absolute directory (the hook's cwd for
+// a relative word), and `segs`, the text the call supplied, `..` uncollapsed. The walk follows the
+// segments one by one:
+//  - `..` takes the parent of each directory reached, after its links were resolved, as the shell
+//    does (P1); the classifier's lexically resolved path is checked as well, as PowerShell, cmd and
+//    the file tools resolve it;
+//  - a wildcard segment (ruling R15) is over-approximated, not evaluated, so no glob dialect needs
+//    emulating: it matches EVERY entry of each directory reached so far (one containing `**`,
+//    every entry at any depth, links included); every entry is resolved and checked like the path
+//    itself, and directories go on to the next segment;
+//  - a directory that cannot be listed refuses the call: an empty listing is not a pass;
+//  - one budget of MAX_GLOB_MATCHES visited entries serves the whole call (N2), and listings,
+//    realpaths and directory checks are memoised for the call.
 // Entries are checked as they are reached, so a refused wildcard stops at its first bad entry.
 function reach(entry, roots, check) {
   if (typeof entry.p !== 'string' || !path.isAbsolute(entry.p)) return check(null, false);
-  if (entry.literal) return check(roots.canonical(entry.p), false);
-  const abs = path.resolve(entry.p);
-  const wild = (s) => /[*?[\]{}]/.test(s) || (entry.dialect === 'powershell' && s.includes('`'));
-  const cwd = typeof entry.base === 'string' && path.isAbsolute(entry.base) ? path.resolve(entry.base) : null;
-  const base = cwd && isWithin(abs, cwd) ? cwd : path.parse(abs).root;
-  const segs = path.relative(base, abs).split(/[\\/]+/).filter(Boolean);
-  const first = segs.findIndex(wild);
-  if (first < 0) return check(roots.canonical(abs), false);
-  let frontier = [roots.canonical(path.join(base, ...segs.slice(0, first)))];
-  let visited = 0;
-  for (const seg of segs.slice(first)) {
-    if (frontier.includes(null)) return check(null, true);
+  if (entry.literal || !entry.spec) return check(roots.canonical(entry.p), false);
+  const { root, segs, dialect } = entry.spec;
+  const wildRe = WILDCARD[dialect] ?? ANY_WILDCARD;
+  const wild = (s) => wildRe.test(s);
+  const hasWild = segs.some(wild);
+  const lexical = check(roots.canonical(entry.p), hasWild);
+  if (lexical || (!hasWild && !segs.includes('..'))) return lexical;
+  let frontier = [roots.canonical(root)];
+  for (const seg of segs) {
+    if (frontier.includes(null)) return check(null, hasWild);
+    if (seg === '..') {
+      frontier = frontier.map((d) => path.dirname(d));
+      continue;
+    }
     if (!wild(seg)) {
       frontier = frontier.map((d) => roots.canonical(path.join(d, seg)));
       continue;
@@ -354,31 +363,62 @@ function reach(entry, roots, check) {
     const seen = new Set(frontier);
     while (stack.length) {
       const dir = stack.pop();
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return REASONS.unlisted(entry.p, dir); }
+      const entries = roots.scan.list(dir);
+      if (entries === null) return REASONS.unlisted(entry.p, dir);
       for (const ent of entries) {
-        if ((visited += 1) > MAX_GLOB_MATCHES) return REASONS.tooBroad(entry.p);
+        if ((roots.scan.visited += 1) > MAX_GLOB_MATCHES) return REASONS.tooBroad(entry.p);
         const full = path.join(dir, ent.name);
         const link = ent.isSymbolicLink();
-        const real = link ? canonicalPath(full) : full;
+        const real = link ? roots.canonical(full) : full;
         const why = check(real, true);
         if (why) return why;
-        if (!(link ? isDirectory(real) : ent.isDirectory())) continue;
+        if (!(link ? roots.scan.isDirectory(real) : ent.isDirectory())) continue;
         next.push(real);
         if (deep && !seen.has(real)) { seen.add(real); stack.push(real); }
       }
     }
     frontier = next;
   }
-  for (const c of [...frontier, roots.canonical(abs)]) {
-    const why = check(c, true);
+  for (const c of frontier) {
+    const why = check(c, hasWild);
     if (why) return why;
   }
   return null;
 }
 
-function isDirectory(p) {
-  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+// Per-call state for walking wildcards: the shared visit budget and memoised listings (read with
+// opendir, so a huge directory stops at the budget) and directory checks.
+function scanState() {
+  const listings = new Map();
+  const dirs = new Map();
+  return {
+    visited: 0,
+    list(dir) {
+      if (listings.has(dir)) return listings.get(dir);
+      let entries = null;
+      try {
+        const d = fs.opendirSync(dir);
+        try {
+          entries = [];
+          for (let ent = d.readSync(); ent !== null && entries.length <= MAX_GLOB_MATCHES; ent = d.readSync()) entries.push(ent);
+        } finally {
+          d.closeSync();
+        }
+      } catch {
+        entries = null;
+      }
+      listings.set(dir, entries);
+      return entries;
+    },
+    isDirectory(p) {
+      if (!dirs.has(p)) {
+        let yes = false;
+        try { yes = fs.statSync(p).isDirectory(); } catch { yes = false; }
+        dirs.set(p, yes);
+      }
+      return dirs.get(p);
+    },
+  };
 }
 
 function readProblem(entry, roots) {
@@ -441,13 +481,12 @@ function protectedName(c, base) {
   return null;
 }
 
-// Each entry is { p, literal } or, for a shell path, { p, literal: false, base, dialect }:
-// `literal` paths come from a file tool and are never scanned for wildcards; `base` is the cwd the
-// shell path was resolved against.
+// Each entry is { p, literal: true } for a file tool's path, never scanned for wildcards, or
+// { p, spec } for a shell path (see reach).
 function readPathsOf(tool, input, cls, ctx, home) {
   const out = [];
   if (READ_TOOLS.has(tool)) out.push({ p: cls.path ?? null, literal: true });
-  if (Array.isArray(cls.readPaths)) for (const p of cls.readPaths) out.push({ p, literal: false, base: ctx.cwd, dialect: SHELLS[tool] });
+  out.push(...shellEntries(cls.readPaths, cls.readSpecs));
   for (const pattern of patternsOf(tool, input)) {
     const base = patternBase(pattern, cls.path ?? ctx.cwd, home);
     if (base !== undefined) out.push({ p: base, literal: true });
@@ -455,10 +494,28 @@ function readPathsOf(tool, input, cls, ctx, home) {
   return out;
 }
 
-function writePathsOf(tool, cls, ctx) {
+function writePathsOf(tool, cls) {
   const out = [];
   if (WRITE_TOOLS.has(tool)) out.push({ p: cls.path ?? null, literal: true });
-  if (Array.isArray(cls.paths)) for (const p of cls.paths) out.push({ p, literal: false, base: ctx.cwd, dialect: SHELLS[tool] });
+  out.push(...shellEntries(cls.paths, cls.writeSpecs));
+  return out;
+}
+
+// The classifier's specs, plus any resolved path that came without one, scanned from its root
+// in every dialect's wildcard set.
+function shellEntries(paths, specs) {
+  const out = [];
+  const covered = new Set();
+  for (const s of Array.isArray(specs) ? specs : []) {
+    if (!isPlainObject(s) || typeof s.path !== 'string' || typeof s.root !== 'string' || !Array.isArray(s.segs)) continue;
+    out.push({ p: s.path, spec: s });
+    covered.add(s.path);
+  }
+  for (const p of Array.isArray(paths) ? paths : []) {
+    if (typeof p !== 'string' || covered.has(p) || !path.isAbsolute(p)) continue;
+    const { root } = path.parse(path.resolve(p));
+    out.push({ p, spec: { root, segs: path.resolve(p).slice(root.length).split(/[\\/]+/).filter(Boolean), dialect: null } });
+  }
   return out;
 }
 

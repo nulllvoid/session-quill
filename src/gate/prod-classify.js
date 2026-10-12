@@ -89,6 +89,26 @@ function normalizeAbs(p, ctx) {
 // Resolves a literal path word (with ~ and well-known variables) against `cwd`; null when it is
 // not literal enough to apply roots to.
 function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
+  const p = expandLiteral(word, ctx, kind);
+  if (p === null) return null;
+  if (isWin(ctx)) {
+    const base = cwd ?? 'C:\\';
+    let r = path.win32.resolve(base, p);
+    // Windows ignores trailing dots and spaces and treats name:stream as the same file; a wildcard
+    // word with a colon is a pattern such as [[:alpha:]], not a stream name, so it is not literal
+    const colon = r.indexOf(':', 2);
+    if (colon >= 0 && /[*?[\]{}]/.test(r)) return null;
+    if (colon >= 0) r = r.slice(0, colon);
+    r = r.split('\\').map((c, i) => (i === 0 ? c : c.replace(/[. ]+$/, ''))).join('\\');
+    return r;
+  }
+  return path.posix.resolve(cwd ?? '/', p);
+}
+
+// The text a path word supplies, after ~, variables and Windows prefixes: the guard reads it to
+// tell supplied wildcards from the cwd's own characters and to apply `..` physically (rulings R15
+// and P1). Null when the word is not literal.
+function expandLiteral(word, ctx, kind) {
   if (typeof word !== 'string' || !word) return null;
   let p = word;
   if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
@@ -124,8 +144,7 @@ function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
     });
   }
   if (unresolved || (kind !== 'lit' && /[$`]|\$\(|%[A-Za-z_]/.test(p))) return null;
-  const win = isWin(ctx);
-  if (win) {
+  if (isWin(ctx)) {
     const msys = /^\/([A-Za-z])(\/|$)(.*)$/.exec(p);
     if (msys) p = `${msys[1].toUpperCase()}:\\${msys[3]}`;
     else if (/^\/tmp(\/|$)/.test(p)) {
@@ -133,17 +152,35 @@ function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
       if (!t) return null;
       p = t + p.slice(4);
     }
-    const base = cwd ?? 'C:\\';
-    let r = path.win32.resolve(base, p);
-    // Windows ignores trailing dots and spaces and treats name:stream as the same file; a wildcard
-    // word with a colon is a pattern such as [[:alpha:]], not a stream name, so it is not literal
-    const colon = r.indexOf(':', 2);
-    if (colon >= 0 && /[*?[\]{}]/.test(r)) return null;
-    if (colon >= 0) r = r.slice(0, colon);
-    r = r.split('\\').map((c, i) => (i === 0 ? c : c.replace(/[. ]+$/, ''))).join('\\');
-    return r;
   }
-  return path.posix.resolve(cwd ?? '/', p);
+  return p;
+}
+
+// Where a path word leads, as the guard needs it: { root, segs }. `root` is a literal absolute
+// directory: the hook's cwd for a relative word (what `cd` added since is part of `segs`), or the
+// file-system root for an absolute one. `segs` is the text after it as supplied, with `..` kept.
+// `baseRaw` is the same shape for the directory a relative word resolves against; without it, or
+// for a word that cannot be read this way, the resolved path is scanned from its root.
+function rawPath(word, ctx, kind, baseRaw, resolved) {
+  const win = isWin(ctx);
+  const P = win ? path.win32 : path.posix;
+  const split = (text) => text.split(win ? /[\\/]+/ : /\/+/).filter((s) => s && s !== '.').map((s) => {
+    if (!win || s === '..') return s;
+    const colon = s.indexOf(':');
+    return (colon >= 0 ? s.slice(0, colon) : s).replace(/[. ]+$/, '');
+  }).filter(Boolean);
+  const fromRoot = () => { const root = P.parse(resolved).root; return { root, segs: split(resolved.slice(root.length)) }; };
+  const p = expandLiteral(word, ctx, kind);
+  if (p === null) return fromRoot();
+  if (P.isAbsolute(p)) return { root: P.parse(resolved).root, segs: split(p.slice(P.parse(p).root.length)) };
+  let rel = p;
+  if (win && /^[A-Za-z]:/.test(p)) {
+    // drive-relative (C:x) is relative to the base only on the base's own drive
+    if (!baseRaw || baseRaw.root.slice(0, 2).toLowerCase() !== p.slice(0, 2).toLowerCase()) return fromRoot();
+    rel = p.slice(2);
+  }
+  if (!baseRaw) return fromRoot();
+  return { root: baseRaw.root, segs: [...baseRaw.segs, ...split(rel)] };
 }
 
 const NULL_TARGETS = new Set(['/dev/null', 'nul', '$null', '/dev/stdout', '/dev/stderr', '/dev/tty', 'con']);
@@ -159,10 +196,12 @@ function classifyShell(command, dialect, ctx) {
 }
 
 // `cwd` is where the script starts (a nested script starts where its caller is; null = unknown).
-function classifyScript(command, dialect, ctx, depth, cwd = ctx.cwd ?? null) {
+// `cwdRaw` is the same directory as rawPath() describes it; by default the cwd itself, literal.
+function classifyScript(command, dialect, ctx, depth, cwd = ctx.cwd ?? null, cwdRaw = undefined) {
   const parsed = parseShell(command, dialect, depth);
   if (parsed.error) return unparseable(parsed.error);
-  const st = { cwd, paths: [], readPaths: [], depth };
+  const raw0 = cwdRaw !== undefined ? cwdRaw : cwd ? { root: normalizeAbs(cwd, ctx), segs: [] } : null;
+  const st = { cwd, cwdRaw: raw0, paths: [], readPaths: [], readSpecs: [], writeSpecs: [], depth };
   const results = [];
   const argvs = [];
   for (const seg of parsed.segments) {
@@ -184,8 +223,17 @@ function aggregate(results, st, argvs) {
   const out = strip(best);
   if (st.paths.length) out.paths = [...new Set(st.paths)];
   if (st.readPaths.length) out.readPaths = [...new Set(st.readPaths)];
+  // the same paths as the text supplied them (see rawPath), for the guard
+  if (st.readSpecs.length) out.readSpecs = uniqueSpecs(st.readSpecs);
+  if (st.writeSpecs.length) out.writeSpecs = uniqueSpecs(st.writeSpecs);
   if (calls.length) out.calls = calls;
   return out;
+}
+
+function uniqueSpecs(specs) {
+  const seen = new Map();
+  for (const s of specs) seen.set(JSON.stringify(s), s);
+  return [...seen.values()];
 }
 
 function strip(res) {
@@ -273,6 +321,7 @@ function helpers(seg, ctx, st) {
       const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `write target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.paths.push(p);
+      st.writeSpecs.push(h.spec(word, kind, base, p));
       return true;
     },
     read(word, kind = 'lit', base = st.cwd) {
@@ -281,22 +330,33 @@ function helpers(seg, ctx, st) {
       const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `read target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.readPaths.push(p);
+      st.readSpecs.push(h.spec(word, kind, base, p));
       return true;
+    },
+    // { path, root, segs, dialect } for the guard: a relative word keeps the text `cd` supplied
+    // only when it resolves against the tracked current directory (not git -C and the like)
+    spec(word, kind, base, resolved) {
+      const raw = rawPath(word, ctx, kind, base === st.cwd ? st.cwdRaw : null, resolved);
+      return { path: resolved, root: raw.root, segs: raw.segs, dialect: seg.dialect };
     },
     cwd: () => st.cwd,
     chdir(word, kind) {
       st.cds = (st.cds ?? 0) + 1;
-      if (st.cds > 256) { h.bad = 'too many directory changes to follow'; st.cwd = null; return; }
-      if (seg.nested || kind !== 'lit' || word === '-') { st.cwd = null; return; }
+      if (st.cds > 256) { h.bad = 'too many directory changes to follow'; st.cwd = null; st.cwdRaw = null; return; }
+      if (seg.nested || kind !== 'lit' || word === '-') { st.cwd = null; st.cwdRaw = null; return; }
       const p = word === undefined ? ctx.home ?? null : st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined);
+      // `cd` with no word goes home, which the call did not spell; any other target is supplied text
+      st.cwdRaw = p === null ? null : word === undefined ? { root: p, segs: [] } : rawPath(word, ctx, 'dyn', st.cwdRaw, p);
       st.cwd = p ?? null;
     },
     // A nested script starts in the caller's directory, and the files it reads or writes are
     // reported with the caller's.
     script(text, dialect, base = st.cwd) {
-      const res = classifyScript(text, dialect, ctx, st.depth + 1, base);
+      const res = classifyScript(text, dialect, ctx, st.depth + 1, base, base === st.cwd ? st.cwdRaw : null);
       if (res.paths) st.paths.push(...res.paths);
       if (res.readPaths) st.readPaths.push(...res.readPaths);
+      if (res.readSpecs) st.readSpecs.push(...res.readSpecs);
+      if (res.writeSpecs) st.writeSpecs.push(...res.writeSpecs);
       return res;
     },
   };
@@ -1953,14 +2013,33 @@ const PS_FILE_VALUES = ['path', 'literalpath', 'destination', 'filepath', 'desti
   'inputobject', 'width', 'delimiter', 'tosession', 'fromsession', 'aclobject', 'compressionlevel', 'variable', 'depth', 'property', 'propertytype', 'useculture', 'quotefields', 'usequotes'];
 const PS_FILE_SWITCHES = ['recurse', 'force', 'whatif', 'confirm', 'passthru', 'nonewline', 'append', 'noclobber', 'asbytestream', 'container', 'notypeinformation', 'includetypeinformation', 'update'];
 
+// The path a rename creates: the new name in the source's own directory (`x` → `./name`,
+// `a\b\` → `a\name`, `C:\x` → `C:\name`).
+function renamed(source, name) {
+  const s = source.replace(/(.)[\\/]+$/, '$1');
+  const cut = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return cut < 0 ? `./${name}` : `${s.slice(0, cut + 1)}${name}`;
+}
+
 function psFileCmdlet(name, args, ak, h, cmdD) {
   if (cmdD) {
     const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/'));
     if (['del', 'erase', 'rd', 'rmdir', 'md', 'mkdir'].includes(name)) { for (const p of pos) h.write(p.v, p.kind); return local(`${name} files`); }
     if (name === 'dir') { for (const p of pos) h.read(p.v, p.kind); return local('dir'); }
-    if (name === 'copy' || name === 'xcopy' || name === 'robocopy') { if (pos.length > 1) h.write(pos[name === 'robocopy' ? 1 : pos.length - 1].v, pos[name === 'robocopy' ? 1 : pos.length - 1].kind); return local(`${name} files`); }
+    if (name === 'copy' || name === 'xcopy' || name === 'robocopy') {
+      const dest = name === 'robocopy' ? 1 : pos.length - 1;
+      if (pos.length > 1) h.write(pos[dest].v, pos[dest].kind);
+      // what is copied is read: robocopy's source directory, every other operand of copy/xcopy
+      pos.forEach((p, i) => { if (pos.length > 1 ? (name === 'robocopy' ? i === 0 : i !== dest) : true) h.read(p.v, p.kind); });
+      return local(`${name} files`);
+    }
     if (name === 'move') { for (const p of pos) h.write(p.v, p.kind); return local('move files'); }
-    if (name === 'ren' || name === 'rename') { if (pos[0]) h.write(pos[0].v, pos[0].kind); return local('rename'); }
+    if (name === 'ren' || name === 'rename') {
+      // the new name lands in the source's directory: `ren x .claude` creates .claude
+      if (pos[0]) h.write(pos[0].v, pos[0].kind);
+      if (pos[0] && pos[1]) h.write(renamed(pos[0].v, pos[1].v), pos[0].kind === 'lit' && pos[1].kind === 'lit' ? 'lit' : 'dyn');
+      return local('rename');
+    }
     if (name === 'type') { for (const p of pos) h.read(p.v, p.kind); return local('type'); }
     return null;
   }
@@ -1996,7 +2075,7 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
   if (spec.rename) {
     const target = writes[0];
     const nn = s.get('newname') ?? slots[target === slots[0] ? 1 : 0];
-    if (target && nn && nn.v !== true) writes.push({ v: `${String(target.v).replace(/[\\/][^\\/]*$/, '') || '.'}/${nn.v}`, kind: nn.kind === 'lit' && target.kind === 'lit' ? 'lit' : 'dyn' });
+    if (target && nn && nn.v !== true) writes.push({ v: renamed(String(target.v), String(nn.v)), kind: nn.kind === 'lit' && target.kind === 'lit' ? 'lit' : 'dyn' });
   }
   for (const wv of writes) for (const one of splitPs(wv.v)) h.write(one, wv.kind);
   for (const p of spec.readParams ?? []) if (s.get(p) && s.get(p).v !== true) for (const one of splitPs(s.get(p).v)) h.read(one, s.get(p).kind);

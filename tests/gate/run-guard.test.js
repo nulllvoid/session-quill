@@ -221,6 +221,30 @@ const ROWS = [
   ['C1a: copying with [[=e=]]', bash('cp [[=e=]]sc/credentials src/x.txt'), { grant: { permissions: EDIT } }, denied('outside-readable')],
   ['C1a: [[:alpha:]] through the junction', bash('cat [[:alpha:]]sc/credentials'), {}, /^QUILL_DENIED (outside-readable|unparseable): /],
 
+  // fix round 3, P1: `..` after a link is applied physically, as the shell does
+  ['P1: link then ..', bash('cat esc/../credentials'), {}, denied('outside-readable')],
+  ['P1: wildcard then ..', bash('cat */../credentials'), {}, denied('outside-readable')],
+  ['P1: ? wildcard then ..', bash('cat e?c/../credentials'), {}, denied('outside-readable')],
+  ['P1: cd into the link, then ..', bash('cd esc && cat ../credentials'), {}, denied('outside-readable')],
+  ['P1: write through link then ..', bash('echo x > esc/../x.txt'), { grant: { permissions: EDIT } }, /^QUILL_DENIED (outside-writable|protected-path): /],
+  ['P1: .. over plain directories', bash('cat src/../src/app.js'), {}, 'allow'],
+
+  // fix round 3, N3: cmd's DOS wildcards < > "
+  ['N3: cmd < wildcard beside the junction', bash(`cmd /c 'type "es<"'`), {}, denied('outside-readable')],
+  ['N3: cmd > wildcard beside the junction', pwsh('cmd /c "type cred^>ntials"'), {}, denied('outside-readable')],
+  ['N3: cmd copy reads its source', bash(`cmd /c 'copy "es>" out.txt'`), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['N3: cmd > wildcard over plain files', bash(`cmd /c 'type "src\\app.j>"'`), {}, 'allow'],
+
+  // fix round 3, P2: a rename's destination is a write path
+  ['P2: cmd ren to .claude', bash('cmd /c ren x .claude'), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['P2: cmd rename to .mcp.json', bash('cmd /c rename x.json .mcp.json'), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['P2: Rename-Item to .claude', pwsh('Rename-Item x .claude'), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['P2: Rename-Item -NewName .mcp.json in a subdirectory', pwsh('Rename-Item -Path src\\app.js -NewName .mcp.json'), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['P2: Move-Item to .claude', pwsh('Move-Item x .claude'), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['P2: cmd move to .claude', bash('cmd /c move x .claude'), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['P2: mv to .mcp.json', bash('mv x.json .mcp.json'), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['P2: an ordinary rename', bash('cmd /c ren src\\app.js app2.js'), { grant: { permissions: EDIT } }, 'allow'],
+
   // fix round 2, C1c: extglob words and shopt
   ['C1c: ?(…) extglob', bash('cat ?(esc)/credentials'), {}, denied('unparseable')],
   ['C1c: @(…) extglob', bash('cat @(esc)/credentials'), {}, denied('unparseable')],
@@ -509,6 +533,70 @@ test('a checkout whose own path has brackets: only the supplied text is scanned 
     const ok = decide(bash('cat src/*.js'), grant, env);
     assert.equal(ok.decision, 'allow', `${name}: the brackets in the checkout path are literal: ${ok.reason}`);
   }
+});
+
+test('wildcard characters the call spells in the cwd path are scanned (N1)', () => {
+  const cases = [
+    ['work1', 'proj[ab]', 'proja'],
+    ['work2', 'proj [1]', 'proj 1'],
+  ];
+  for (const [work, name, sibling] of cases) {
+    const co = dir(work, name);
+    fs.mkdirSync(path.join(co, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(co, 'src', 'app.js'), 'x\n');
+    file(work, sibling, 'secret');
+    const env = { ...ENV, cwd: co };
+    const grant = grantWith({ readableRoots: [co, runDir, tmp], writableRoots: [runDir, tmp] });
+    const abs = path.join(co, 'secret');
+    const msys = process.platform === 'win32' ? `/${abs[0].toLowerCase()}${abs.slice(2).replace(/\\/g, '/')}` : abs;
+    const bashName = name.replace(/ /g, '\\ ');
+    const calls = [
+      bash(`cat ../${bashName}/secret`),
+      bash(`cd .. && cat ${bashName}/secret`),
+      bash(`cat ${msys.replace(/ /g, '\\ ')}`),
+      bash(`cat ${q(abs.replace(/\\/g, '/'))}`),
+      bash(`cat ../${bashName}/src/*.js`),
+      pwsh(`Get-Content ${q(`..${path.sep}${name}${path.sep}secret`)}`),
+      pwsh(`Get-Content ${q(abs)}`),
+    ];
+    for (const c of calls) {
+      const r = decide(c, grant, env);
+      assert.equal(r.decision, 'deny', `${name}: ${c.tool_input.command}: ${r.reason}`);
+      assert.match(r.reason, denied('outside-readable'), c.tool_input.command);
+    }
+    const ok = decide(bash('cat src/*.js'), grant, env);
+    assert.equal(ok.decision, 'allow', `${name}: the cwd's own brackets stay literal: ${ok.reason}`);
+  }
+});
+
+test('one wildcard budget per call, with memoised listings, keeps a decision quick (N2)', (t) => {
+  const fastestMs = (fn) => {
+    let best = Infinity;
+    for (let i = 0; i < 3; i += 1) {
+      const t0 = process.hrtime.bigint();
+      fn();
+      best = Math.min(best, Number(process.hrtime.bigint() - t0) / 1e6);
+    }
+    return best;
+  };
+  const files = path.join(checkout, 'many');
+  const links = path.join(checkout, 'links');
+  fs.mkdirSync(files);
+  fs.mkdirSync(links);
+  t.after(() => { fs.rmSync(files, { recursive: true, force: true }); fs.rmSync(links, { recursive: true, force: true }); });
+  for (let i = 0; i < 500; i += 1) fs.writeFileSync(path.join(files, `f${i}.txt`), '');
+  for (let i = 0; i < 200; i += 1) fs.symlinkSync(path.join(checkout, 'src'), path.join(links, `l${i}`), 'junction');
+
+  assert.equal(run(bash('cat many/*'), {}).decision, 'allow', 'one wildcard over 500 entries is within the budget');
+  const manyPaths = bash(`cat ${Array.from({ length: 1000 }, (_, i) => `many/*${i}`).join(' ')}`);
+  let r;
+  const ms1 = fastestMs(() => { r = run(manyPaths, {}); });
+  assert.match(r.reason, denied('wildcard-too-broad'));
+  assert.ok(ms1 < 250, `1,000 wildcard paths over 500 files took ${ms1.toFixed(1)} ms`);
+  const linkPaths = bash(`cat ${Array.from({ length: 20 }, (_, i) => `links/*${i}`).join(' ')}`);
+  const ms2 = fastestMs(() => { r = run(linkPaths, {}); });
+  assert.match(r.reason, denied('wildcard-too-broad'));
+  assert.ok(ms2 < 250, `20 wildcard paths over 200 junctions took ${ms2.toFixed(1)} ms`);
 });
 
 test('Claude configuration behind a link in the checkout stays protected (R13b)', (t) => {
