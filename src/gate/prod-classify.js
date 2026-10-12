@@ -199,6 +199,8 @@ function classifySegment(seg, ctx, st) {
     seg.argv.forEach((word, i) => { if (seg.kinds[i] !== 'lit') for (const m of word.matchAll(/\$\{([A-Za-z_]\w*):?=/g)) assigned[m[1]] = null; });
     const why = gitEnvProblem(assigned);
     if (why) return unparseable(why);
+    // ${!NAME:=value} assigns whichever variable NAME names
+    if (seg.argv.some((word, i) => seg.kinds[i] !== 'lit' && /\$\{![A-Za-z_]\w*:?=/.test(word))) return unparseable('an indirect ${!name:=…} expansion assigns a variable whose name is not literal');
   }
   const h = helpers(seg, ctx, st);
   for (const red of seg.redirects) {
@@ -543,22 +545,23 @@ function classifyCommand(name, seg, ctx, h) {
     case 'export': case 'declare': case 'typeset': case 'local': case 'readonly': case 'set': {
       // NAME=value sets NAME; a bare NAME exports (or declares) a value assigned elsewhere
       const env = {};
-      // declare -n / typeset -n / local -n make a name refer to another variable (a nameref)
-      if (['declare', 'typeset', 'local'].includes(name) && args.some((t) => /^[-+][a-zA-Z]*n/.test(t))) return unparseable(`${name} -n makes a name refer to another variable`);
-      const printOnly = args.some((t) => /^-[a-zA-Z]*[pfF]/.test(t));
-      const unexport = (name === 'export' && args.some((t) => /^-[a-zA-Z]*n/.test(t))) || args.some((t) => /^\+[a-zA-Z]*x/.test(t));
       // bash `set` words are positional parameters, not variables (cmd's `set NAME=value` is one)
       const names = name !== 'set' || cmdD;
-      let end = false;
-      for (let i = 0; i < args.length; i += 1) {
+      // fail safe: any non-literal word (an option, a bare name, or NAME= whose NAME is not a
+      // literal identifier) could set or export any variable, whatever -p/-n/+x appear to say
+      if (names && args.some((t, i) => ak[i] !== 'lit' && !(t.indexOf('=') > 0 && /^[A-Za-z_]\w*(\[[^\]]*\])?\+?$/.test(t.slice(0, t.indexOf('=')))))) return unparseable(`${name} sets a variable whose name is not literal`);
+      // declare -n / typeset -n / local -n make a name refer to another variable (a nameref)
+      if (['declare', 'typeset', 'local'].includes(name) && args.some((t) => /^[-+][a-zA-Z]*n/.test(t))) return unparseable(`${name} -n makes a name refer to another variable`);
+      // options end at the first word that is not one, or at `--` (bash builtins stop there)
+      let optEnd = args.findIndex((t) => t === '--' || !/^[-+]/.test(t));
+      if (optEnd < 0) optEnd = args.length;
+      const opts = args.slice(0, optEnd);
+      const unexport = (name === 'export' && opts.some((t) => /^-[a-zA-Z]*n/.test(t))) || opts.some((t) => /^\+[a-zA-Z]*x/.test(t));
+      for (let i = optEnd + (args[optEnd] === '--' ? 1 : 0); i < args.length; i += 1) {
         const t = args[i];
-        if (!end && t === '--') { end = true; continue; }
-        if (!end && /^[-+]/.test(t)) continue;
         const eq = t.indexOf('=');
-        // a name that is not a literal identifier ("$k=…", "$n") could be any variable
-        if (names && ak[i] !== 'lit' && (eq > 0 ? !/^[A-Za-z_]\w*(\[[^\]]*\])?\+?$/.test(t.slice(0, eq)) : !printOnly && !unexport)) return unparseable(`${name} sets a variable whose name is not literal`);
         if (eq > 0) env[t.slice(0, eq).replace(/\[.*$/, '').replace(/\+$/, '')] = ak[i] === 'lit' ? t.slice(eq + 1) : null;
-        else if (name !== 'set' && !printOnly && !unexport && /^[A-Za-z_]\w*$/.test(t)) env[t] = null;
+        else if (name !== 'set' && !unexport && /^[A-Za-z_]\w*$/.test(t)) env[t] = null;
       }
       const bad = gitEnvProblem(env);
       if (bad) return unparseable(bad);
@@ -606,6 +609,8 @@ function classifyCommand(name, seg, ctx, h) {
     case 'read': case 'mapfile': case 'readarray': case 'getopts': case 'for': case 'select': case 'printf': {
       // builtins that assign shell variables from input: the values are unknown (in PowerShell
       // these are external programs, which cannot change the session's variables)
+      // a non-literal first printf word may be -v, which assigns a variable
+      if (!ps && name === 'printf' && args.length && ak[0] !== 'lit') return unparseable('printf with a non-literal first word may set any variable (-v)');
       if (ps || (name === 'printf' && !args.some((t) => t.startsWith('-v')))) return local(name);
       if (name === 'mapfile' || name === 'readarray') {
         // -C runs a callback every few lines
@@ -626,6 +631,9 @@ function classifyCommand(name, seg, ctx, h) {
       const nameAt = name === 'for' || name === 'select' ? [0] : name === 'printf' ? [args[vi] === '-v' ? vi + 1 : vi] : name === 'getopts' ? [1]
         : args.map((_, i) => i).filter((i) => !valueOpt.test(args[i - 1] ?? ''));
       if (nameAt.some((i) => i < args.length && ak[i] !== 'lit')) return unparseable(`${name} sets a variable whose name is not literal`);
+      // option clusters (`read -pt "$n"`, `read -p -p "$n"`) hide which word is a name:
+      // read, mapfile and readarray with any non-literal word fail safe
+      if (['read', 'mapfile', 'readarray'].includes(name) && args.some((_, i) => ak[i] !== 'lit')) return unparseable(`${name} has a non-literal word and may set any variable`);
       for (const t of names) {
         const m = /^(?:-v)?([A-Za-z_]\w*)(\[[^\]]*\])?$/.exec(t);
         if (m) env[m[1]] = null;

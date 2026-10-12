@@ -622,7 +622,8 @@ export function binName(word) {
   return word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, '');
 }
 
-const PS_DANGER_RE = /(\.|::)(invoke\w*|newscriptblock|upload\w*|download\w*|send\w*|start|execute\w*|post\w*|put\w*|delete\w*|write\w*|append\w*|open\w*|connect\w*|getresponse\w*|run\w*|create\w*|exec\w*|copy\w*|move\w*|replacefile|setenvironmentvariable)\s*\(/i;
+// $ExecutionContext.InvokeProvider.Item.Set('env:…') sets variables and writes items like Set-Item
+const PS_DANGER_RE = /(\.|::)(?:invokeprovider\b|(invoke\w*|newscriptblock|upload\w*|download\w*|send\w*|start|execute\w*|post\w*|put\w*|delete\w*|write\w*|append\w*|open\w*|connect\w*|getresponse\w*|run\w*|create\w*|exec\w*|copy\w*|move\w*|replacefile|setenvironmentvariable)\s*\()/i;
 const BASH_KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done']);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'fish', 'busybox']);
 const POWERSHELLS = new Set(['powershell', 'pwsh', 'powershell_ise']);

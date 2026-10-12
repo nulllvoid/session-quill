@@ -125,7 +125,7 @@ test('PowerShell ${…} references and variable-name checks near the size cap ar
     ['PowerShell', `Write-Output "$${rep('a')}"`, 'local'],
     ['PowerShell', `Set-Item env:${rep('a?')} x`, 'unparseable'],
     ['Bash', `export ${rep('"$n"=x ')}`, 'unparseable'],
-    ['Bash', `read ${rep('-p $x ')}a`, 'local'],
+    ['Bash', `read ${rep('-p $x ')}a`, 'unparseable'],
     ['Bash', `git ${rep('--git-dir=. ')}status`, 'unparseable'],
   ];
   for (const [tool_name, command, cls] of inputs) {
