@@ -84,6 +84,17 @@ test('brace-like input near the size cap is classified in linear time', () => {
   }
 });
 
+test('PowerShell comma-newline input near the size cap is classified in linear time', () => {
+  const inputs = [`Remove-Item x${',\n'.repeat(49_000)}y`, `Write-Output ${"'a,'\n".repeat(19_000)}`, `Remove-Item x${',a'.repeat(49_000)}`];
+  for (const command of inputs) {
+    const t0 = process.hrtime.bigint();
+    const r = classifyCall({ tool_name: 'PowerShell', tool_input: { command } }, baseCtx);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(CLASSES.has(r.class));
+    assert.ok(ms < 500, `${JSON.stringify(command.slice(0, 20))}… took ${ms.toFixed(1)} ms`);
+  }
+});
+
 test('garbage inputs never throw', () => {
   const inputs = [undefined, null, 0, 'x', [], { command: {} }, { command: Symbol.iterator.toString() }, { command: '\u0000kubectl delete pod p' }];
   for (const tool_name of ['Bash', 'PowerShell', 'Edit', 'mcp__a__b', '', undefined, 7]) {

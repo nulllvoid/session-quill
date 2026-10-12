@@ -84,6 +84,7 @@ class Lexer {
         this.i = j;
         return;
       }
+      seg.trailComma = word.commaAt !== undefined && word.commaAt === word.text.length;
       seg.argv.push(word.text);
       seg.kinds.push(kind);
       seg.quoted.push(word.qpos === 0);
@@ -284,7 +285,8 @@ class Lexer {
         return;
       }
       // PowerShell continues an array onto the next line after a trailing comma
-      if (c === '\n' && ps && ((w && w.text.endsWith(',')) || (!w && seg.argv.length && seg.argv[seg.argv.length - 1].endsWith(',')))) { this.i += 1; continue; }
+      // (only a bare comma: a quoted 'a,' or escaped a`, ends the statement as usual)
+      if (c === '\n' && ps && (w ? w.commaAt === w.text.length : seg.trailComma)) { this.i += 1; continue; }
       if (c === '\n') {
         end(false);
         this.i += 1;
@@ -348,6 +350,7 @@ class Lexer {
         if (PS_DASH.has(c) && !w) { start(); w.text += '-'; w.lit = true; this.i += 1; continue; }
         start();
         w.text += c;
+        if (c === ',') w.commaAt = w.text.length;
         w.lit = true;
         this.i += 1;
         continue;
@@ -553,9 +556,17 @@ class Lexer {
   }
 }
 
-// `{a,b}` or `{1..3}` anywhere in the text. Linear: each brace group is scanned once.
+// True when a closed brace group (at any nesting depth) holds `,` or `..`: bash expands it.
+// One linear pass with a stack of per-group flags.
 export function hasBraceExpansion(text) {
-  for (const m of String(text).matchAll(/\{[^{}]*\}/g)) if (m[0].includes(',') || m[0].includes('..')) return true;
+  const s = String(text);
+  const stack = [];
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s[i];
+    if (c === '{') stack.push(false);
+    else if (c === '}') { if (stack.length && stack.pop()) return true; }
+    else if (stack.length && (c === ',' || (c === '.' && s[i + 1] === '.'))) stack[stack.length - 1] = true;
+  }
   return false;
 }
 
@@ -587,7 +598,7 @@ export function binName(word) {
   return word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, '');
 }
 
-const PS_DANGER_RE = /(\.|::)(invoke\w*|newscriptblock|upload\w*|download\w*|send\w*|start|execute\w*|post\w*|put\w*|delete\w*|write\w*|append\w*|open\w*|connect\w*|getresponse\w*|run\w*|create\w*|exec\w*|copy\w*|move\w*|replacefile)\s*\(/i;
+const PS_DANGER_RE = /(\.|::)(invoke\w*|newscriptblock|upload\w*|download\w*|send\w*|start|execute\w*|post\w*|put\w*|delete\w*|write\w*|append\w*|open\w*|connect\w*|getresponse\w*|run\w*|create\w*|exec\w*|copy\w*|move\w*|replacefile|setenvironmentvariable)\s*\(/i;
 const BASH_KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done']);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'fish', 'busybox']);
 const POWERSHELLS = new Set(['powershell', 'pwsh', 'powershell_ise']);

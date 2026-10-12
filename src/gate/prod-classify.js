@@ -97,11 +97,16 @@ function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
   }
   if (p.startsWith('~')) return null; // ~user, ~+ and ~- are not resolvable here
   // Win32 device and long-path prefixes, and the local admin share, name the same files
-  p = p.replace(/^\\\\[?.]\\UNC\\/i, '\\\\').replace(/^\\\\[?.]\\/, '');
+  p = p.replace(/^\\\\[?.]\\UNC\\/i, '\\\\');
+  if (/^\\\\[?.]\\/.test(p)) {
+    // \\?\C:\… and \\.\C:\… name a normal file; volumes, GLOBALROOT and raw devices do not
+    if (!/^\\\\[?.]\\[A-Za-z]:[\\/]/.test(p)) return null;
+    p = p.slice(4);
+  }
   // PowerShell provider-qualified paths: only the FileSystem provider names a file
   p = p.replace(/^(Microsoft\.PowerShell\.Core\\)?FileSystem::/i, '');
   if (/^[A-Za-z][\w.\\]*::/.test(p) || /^[A-Za-z][A-Za-z0-9_]+:/.test(p)) return null;
-  p = p.replace(/^\\\\(localhost|127\.0\.0\.1|\[::1\]|\.)\\([A-Za-z])\$(?=\\|$)/i, '$2:');
+  p = p.replace(/^\\\\(localhost|127\.0\.0\.1|\[::1\]|\.)\\([A-Za-z])\$(?=\\|$)/i, (m, h2, d) => `${d.toUpperCase()}:`);
   let unresolved = false;
   // a literal word (quoted or plain text) has no expansions; only expand words the shell expands
   if (kind !== 'lit') {
@@ -176,6 +181,8 @@ function strip(res) {
 
 function classifySegment(seg, ctx, st) {
   if (seg.unparseable) return unparseable(seg.unparseable);
+  const envBad = gitEnvProblem(seg.env);
+  if (envBad) return unparseable(envBad);
   const h = helpers(seg, ctx, st);
   for (const red of seg.redirects) {
     const op = red.op.replace(/^\d+|^\*/, '');
@@ -506,6 +513,18 @@ function classifyCommand(name, seg, ctx, h) {
       return unknownProd(`${name} reaches a remote or management interface`);
     }
     case 'invoke-sqlcmd': return invokeSqlcmd(args, ak, h);
+    case 'export': case 'declare': case 'typeset': case 'set': case 'setx': case 'set-item': case 'si': {
+      const env = {};
+      for (let i = 0; i < args.length; i += 1) {
+        const a0 = args[i].replace(/^env:\\?/i, '');
+        const eq = a0.indexOf('=');
+        if (eq > 0) env[a0.slice(0, eq)] = ak[i] === 'lit' ? a0.slice(eq + 1) : null;
+        else if (/^env:/i.test(args[i]) || name === 'setx') env[a0] = ak[i + 1] === 'lit' ? args[i + 1] : null;
+      }
+      const bad = gitEnvProblem(env);
+      if (bad) return unparseable(bad);
+      return local(`${name}`);
+    }
     case 'at': case 'batch': case 'crontab': {
       if (name === 'crontab') {
         const files = args.filter((t, i) => (!t.startsWith('-') || t === '-') && args[i - 1] !== '-u');
@@ -545,10 +564,16 @@ function classifyCommand(name, seg, ctx, h) {
         for (const i of [2, 3]) if (args[i] !== undefined) h.write(args[i], ak[i]);
         return local('fsutil hardlink create');
       }
-      if (sub[0] === 'fsinfo' || sub.some((x) => x === 'query' || x === 'list' || x === 'queryvalue')) return local('fsutil query');
+      if (sub[0] === 'fsinfo' || (sub[1] !== undefined && (sub[1].startsWith('query') || sub[1] === 'list'))) return local('fsutil query');
       return unparseable('fsutil changes file-system state the guard cannot follow');
     }
+    case 'mountvol': return args.length === 0 || args.some((x) => /^\/l$/i.test(x)) ? local('mountvol listing') : unparseable('mountvol changes volume mount points');
     case 'link': {
+      if (args.some((x) => /^\/[A-Za-z]/.test(x))) {
+        // MSVC link.exe: it writes only its /OUT: file
+        for (const x of args) if (/^\/out:/i.test(x)) h.write(x.slice(5), 'lit');
+        return local('MSVC link');
+      }
       const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('-'));
       if (pos.length !== 2) { h.bad = 'link needs a target and a name'; return local('link'); }
       for (const x of pos) h.write(x.v, x.kind);
@@ -1054,8 +1079,23 @@ function isProtected(ctx, name) {
   try { return !!fn(name); } catch { return true; }
 }
 
+// Environment that makes git read other config or run other programs.
+const GIT_EXEC_ENV_RE = /^(GIT_CONFIG_PARAMETERS|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG|GIT_SSH|GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_PAGER|GIT_EDITOR|GIT_SEQUENCE_EDITOR|GIT_ASKPASS|SSH_ASKPASS|GIT_EXTERNAL_DIFF|GIT_PROXY_COMMAND|GIT_TEMPLATE_DIR|GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)$/i;
+
+function gitEnvProblem(env) {
+  if (!env || typeof env !== 'object') return null;
+  for (const [k, v] of Object.entries(env)) {
+    if (GIT_EXEC_ENV_RE.test(k)) return `${k} changes what git runs or reads`;
+    if (/^GIT_CONFIG_KEY_\d+$/i.test(k)) {
+      if (typeof v !== 'string') return `${k} is not literal`;
+      if (GIT_EXEC_CONFIG_RE.test(v) || /^(push|remote|branch)\./i.test(v)) return `${k}=${v} can make git run arbitrary commands`;
+    }
+  }
+  return null;
+}
+
 const GIT_GLOBAL_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix']);
-const GIT_EXEC_CONFIG_RE = /^(core\.(sshcommand|pager|editor|hookspath|fsmonitor|gitproxy|askpass)|credential\..*|diff\..*\.(textconv|command)|diff\.external|merge\..*\.driver|filter\..*|sequence\.editor|gpg\..*program|pager\..*|uploadpack\..*|alias\..*|remote\..*\.(receivepack|uploadpack|vcs)|protocol\..*|url\..*|include\.path|includeif\..*\.path|submodule\..*\.update|init\.templatedir|(merge|diff)tool\..*\.(cmd|path)|core\.(attributesfile|excludesfile|worktree)|safe\.directory)$/i;
+const GIT_EXEC_CONFIG_RE = /^(core\.(sshcommand|pager|editor|hookspath|fsmonitor|gitproxy|askpass)|credential\..*|diff\..*\.(textconv|command)|diff\.external|merge\..*\.driver|filter\..*|sequence\.editor|gpg\..*program|pager\..*|uploadpack\..*|alias\..*|remote\..*\.(receivepack|uploadpack|vcs)|protocol\..*|url\..*|include\.path|includeif\..*\.path|submodule\..*\.update|init\.templatedir|(merge|diff)tool\..*\.(cmd|path)|interactive\.difffilter|trailer\..*\.(command|cmd)|sendemail\..*|browser\..*\.(cmd|path)|man\..*\.(cmd|path)|web\.browser|ssh\.variant|core\.(sshcommand|editor|pager|askpass)|gpg\.program)$/i;
 const GIT_LOCAL = new Set(['status', 'log', 'diff', 'show', 'branch', 'checkout', 'switch', 'add', 'rm', 'mv', 'restore', 'reset', 'stash', 'fetch', 'pull', 'clone', 'init', 'rev-parse', 'rev-list',
   'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'blame', 'grep', 'remote', 'tag', 'config', 'worktree', 'clean', 'describe', 'shortlog', 'reflog', 'merge-base', 'name-rev', 'for-each-ref', 'show-ref',
   'symbolic-ref', 'notes', 'bisect', 'apply', 'format-patch', 'archive', 'bundle', 'sparse-checkout', 'gc', 'fsck', 'prune', 'count-objects', 'var', 'version', 'help', 'diff-tree', 'diff-index',
@@ -1065,6 +1105,8 @@ const GIT_LOCAL = new Set(['status', 'log', 'diff', 'show', 'branch', 'checkout'
 const GIT_COMMIT = new Set(['commit', 'revert', 'am', 'cherry-pick', 'rebase', 'merge']);
 
 function git(args, ak, seg, ctx, h) {
+  const envBad = gitEnvProblem(seg.env);
+  if (envBad) return unparseable(envBad);
   let i = 0;
   let pushConfig = false;
   while (i < args.length && args[i].startsWith('-')) {
@@ -1078,7 +1120,13 @@ function git(args, ak, seg, ctx, h) {
       continue;
     }
     if (t.startsWith('--exec-path')) return unparseable('git --exec-path changes which programs git runs');
-    if (t === '--config-env') { const key = String(args[i + 1] ?? '').split('=')[0]; if (GIT_EXEC_CONFIG_RE.test(key)) return unparseable(`git --config-env ${key}`); }
+    if (t === '--config-env' || t.startsWith('--config-env=')) {
+      const key = String(t === '--config-env' ? args[i + 1] ?? '' : t.slice(13)).split('=')[0];
+      if (GIT_EXEC_CONFIG_RE.test(key)) return unparseable(`git --config-env ${key} can run arbitrary commands`);
+      if (/^(push|remote|branch)\./i.test(key)) pushConfig = true;
+      i += t === '--config-env' ? 2 : 1;
+      continue;
+    }
     if (GIT_GLOBAL_VALUES.has(t)) { i += 2; continue; }
     i += 1;
   }
@@ -1431,7 +1479,7 @@ function curl(args, ak, seg, h) {
   if (urls.some((x) => /[?&]_method=(post|put|patch|delete)/i.test(String(x)))) return xwrite('http.write', host, 'curl overrides the method in the query');
   const method = String(s.first('-X', '--request') ?? '').toUpperCase();
   const data = s.has(...CURL_DATA);
-  if (s.has('-G', '--get') && s.all(...CURL_DATA).some((x) => String(x.v ?? '').startsWith('@'))) return xwrite('http.write', host, 'curl --get sends a file\'s contents');
+  if (s.has('-G', '--get') && (s.all(...CURL_DATA).some((x) => String(x.v ?? '').startsWith('@')) || s.all('--data-urlencode').some((x) => /^[^=]*@/.test(String(x.v ?? ''))))) return xwrite('http.write', host, 'curl --get sends a file\'s contents');
   if (method && method !== 'GET' && method !== 'HEAD') return xwrite('http.write', host, `curl ${method}`);
   if (data && !(s.has('-G', '--get') && !s.has('-F', '--form', '--form-string', '-T', '--upload-file', '-Q', '--quote', '--mail-rcpt'))) return xwrite('http.write', host, 'curl sends a body');
   return read('curl GET', host ? { host } : {});
@@ -1604,7 +1652,8 @@ function posixFileCommand(name, args, ak, h) {
         if (dstIdx !== null) h.write(args[dstIdx], ak[dstIdx]);
         if (name === 'ln' && pos.length === 1 && tdir === null) h.write(String(args[pos[0]]).replace(/^.*[\\/]/, ''), ak[pos[0]]);
         if (name === 'ln') for (const i of pos) h.write(args[i], ak[i]); // writes through a link land on its target
-        const linking = name === 'cp' && args.some((t) => t === '--link' || t === '--symbolic-link' || (/^-[a-zA-Z]+$/.test(t) && /[ls]/.test(t)));
+        // GNU accepts unambiguous prefixes: --l… is only --link, --sy… only --symbolic-link
+        const linking = name === 'cp' && args.some((t) => (t.length >= 3 && '--link'.startsWith(t)) || (t.length >= 4 && '--symbolic-link'.startsWith(t)) || (/^-[a-zA-Z]+$/.test(t) && /[ls]/.test(t)));
         // cp -l/-s makes links: a later write through the copy lands on the source
         if (name === 'cp') for (const i of pos.slice(0, tdir !== null ? pos.length : -1)) (linking ? h.write : h.read)(args[i], ak[i]);
       }
@@ -1737,10 +1786,14 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
     if (idx === 0 && named0) continue;
     if (slots[slot]) writes.push(slots[slot]);
   }
-  const itemType = String(s.get('itemtype')?.v ?? s.get('type')?.v ?? '').toLowerCase();
-  if (canon === 'new-item' && itemType && ['symboliclink', 'junction', 'hardlink'].some((x) => x.startsWith(itemType))) {
+  const itemTypeArg = s.get('itemtype') ?? s.get('type');
+  const itemType = String(itemTypeArg?.v ?? '').toLowerCase();
+  // -ItemType is wildcard-matched by PowerShell ('j*', '?unction') and may come from a variable
+  const maybeLink = !!itemTypeArg && (itemTypeArg.kind !== 'lit' || /[*?[]/.test(itemType));
+  const isLink = !!itemType && ['symboliclink', 'junction', 'hardlink'].some((x) => x.startsWith(itemType));
+  if (canon === 'new-item' && (isLink || maybeLink)) {
     const t = s.get('target') ?? s.get('value');
-    if (!t || t.v === true) h.bad = 'link without a literal target';
+    if (!t || t.v === true) { if (isLink) h.bad = 'link without a literal target'; }
     else for (const one of splitPs(t.v)) h.write(one, t.kind);
   }
   if (canon === 'new-item' && s.get('name') && s.get('name').v !== true) {
