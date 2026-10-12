@@ -55,6 +55,7 @@ const REASONS = {
   untrustedMcp: (server, source) => `QUILL_DENIED untrusted-mcp-server: MCP server ${server} comes from the ${source} configuration and is not in [handoff] trusted_mcp_servers, so this run cannot use it. Use a connector or command that is available, and record the route you tried in attempts.`,
   unparseable: (why) => `QUILL_DENIED unparseable: the guard could not read this command (${why}); rewrite it as one plain command without variables, eval, wrappers or globs in write targets.`,
   climbs: (p) => `QUILL_DENIED unparseable: the path ${p} has '..' after a directory name, which shells resolve through links differently than the guard can check. Write the path without 'name/..': name the directory you mean directly, or start the path with '..' only.`,
+  cdMissing: (dir) => `QUILL_DENIED unparseable: the command changes directory to ${dir}, which does not exist (or is not a directory), and later commands would still run in the old directory. Create the directory first, join the commands with && after the cd, or use paths from the current directory.`,
   climbFrom: (p, dir) => `QUILL_DENIED unparseable: ${p} climbs with '..' from ${dir}, which is not an existing directory, so the guard cannot tell where the shell really is (a cd into it fails, or it is created in the same command). Create the directory or change into it in an earlier command, or write the path without '..'.`,
   privileged: (why) => `QUILL_DENIED quill-privileged: ${why}. A run may use only Quill's read commands (status, ticket show|list|children, agent list|show|suggestions, handoff list, repo list, doctor); put what you wanted Quill to do in the result instead.`,
   outsideReadable: (p, via) => `QUILL_DENIED outside-readable: ${p ?? 'this location'}${via && via !== p ? ` reaches ${via}, which` : ''} is outside what this run may read (its checkout, run directory, context snapshot, temp directory and plugin directories). Work from those, and record in attempts what you could not reach.`,
@@ -147,6 +148,13 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
 
   const climbing = climbingPattern(tool, c.tool_input);
   if (climbing) return deny(REASONS.patternClimbs(climbing));
+  // R18: a cd that would fail while later commands still run leaves them in the old directory
+  for (const d of Array.isArray(cls.cdChecks) ? cls.cdChecks : []) {
+    const real = typeof d === 'string' && path.isAbsolute(d) ? realOrNull(d) : null;
+    let isDir = false;
+    try { isDir = !!real && fs.statSync(real).isDirectory(); } catch { isDir = false; }
+    if (!isDir) return deny(REASONS.cdMissing(d));
+  }
   const perms = isPlainObject(g.permissions) ? g.permissions : {};
   const reads = readPathsOf(tool, c.tool_input, cls, ctx, home);
   const writes = writePathsOf(tool, cls);

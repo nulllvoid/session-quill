@@ -98,9 +98,10 @@ class Lexer {
       const eq = word.text.indexOf('=');
       seg.assign.push(eq > 0 && (word.qpos < 0 || eq < word.qpos) && /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?$/.test(word.text.slice(0, eq)));
     };
-    const end = (piped) => {
+    const end = (piped, sep = ';') => {
       flush();
       if (seg.pending) this.fail('redirect without a target');
+      seg.sep = sep; // what follows this command: ; && || | & or the end of the list
       if (seg.argv.length || seg.redirects.length || seg.stdin !== null || seg.call) this.out.push(seg);
       seg = newSeg(this.d);
       if (this.nest > 1) seg.nested = true;
@@ -288,7 +289,7 @@ class Lexer {
     while (this.i < this.n) {
       const c = s[this.i];
       if (stop && c === stop) {
-        end(false);
+        end(false, 'end');
         this.i += 1;
         this.nest -= 1;
         return;
@@ -357,15 +358,15 @@ class Lexer {
         if (c === ')' || c === '}') this.fail(`unbalanced ${c}`);
         if (c === ';') { end(false); this.i += 1; continue; }
         if (c === '|') {
-          if (s[this.i + 1] === '|') { end(false); this.i += 2; continue; }
-          end(true);
+          if (s[this.i + 1] === '|') { end(false, '||'); this.i += 2; continue; }
+          end(true, '|');
           this.i += 1;
           continue;
         }
         if (c === '&') {
-          if (s[this.i + 1] === '&') { end(false); this.i += 2; continue; }
+          if (s[this.i + 1] === '&') { end(false, '&&'); this.i += 2; continue; }
           if (!w && seg.argv.length === 0 && !seg.call) { seg.call = true; this.i += 1; continue; }
-          end(false);
+          end(false, '&');
           this.i += 1;
           continue;
         }
@@ -420,13 +421,13 @@ class Lexer {
         }
         if (c === '(' && !w) { group(1, ')', '(…)'); continue; }
         if (c === '&') {
-          end(false);
+          end(false, s[this.i + 1] === '&' ? '&&' : ';');
           this.i += s[this.i + 1] === '&' ? 2 : 1;
           continue;
         }
         if (c === '|') {
-          if (s[this.i + 1] === '|') { end(false); this.i += 2; continue; }
-          end(true);
+          if (s[this.i + 1] === '|') { end(false, '||'); this.i += 2; continue; }
+          end(true, '|');
           this.i += 1;
           continue;
         }
@@ -491,7 +492,8 @@ class Lexer {
         flush();
         this.i += 1;
         this.list(')');
-        if (hadWords) end(false);
+        // a function definition (`name()`): the classifier cannot tell when its body runs
+        if (hadWords) { seg.funcDef = true; end(false); }
         continue;
       }
       if (c === ')') this.fail('unbalanced )');
@@ -502,7 +504,7 @@ class Lexer {
         continue;
       }
       if (c === '&') {
-        if (s[this.i + 1] === '&') { end(false); this.i += 2; continue; }
+        if (s[this.i + 1] === '&') { end(false, '&&'); this.i += 2; continue; }
         if (s[this.i + 1] === '>') {
           flush();
           const op = s[this.i + 2] === '>' ? '&>>' : '&>';
@@ -510,13 +512,13 @@ class Lexer {
           seg.pending = op;
           continue;
         }
-        end(false);
+        end(false, '&');
         this.i += 1;
         continue;
       }
       if (c === '|') {
-        if (s[this.i + 1] === '|') { end(false); this.i += 2; continue; }
-        end(true);
+        if (s[this.i + 1] === '|') { end(false, '||'); this.i += 2; continue; }
+        end(true, '|');
         this.i += s[this.i + 1] === '&' ? 2 : 1;
         continue;
       }
@@ -532,7 +534,7 @@ class Lexer {
       this.i += 1;
     }
     if (stop) this.fail(`unterminated group (missing ${stop})`);
-    end(false);
+    end(false, 'end');
     if (this.heredocs.length) this.readHeredocs();
     this.nest -= 1;
   }
@@ -845,7 +847,7 @@ function expand(seg, depth, out) {
     const w0 = a[0];
     // group words and keywords that only structure the line
     if (!ps && k[0] === 'lit' && !q[0] && BASH_KEYWORDS.has(w0)) { shift(); continue; }
-    if (!ps && k[0] === 'lit' && !q[0] && w0 === 'function' && a.length > 1) { shift(2); continue; }
+    if (!ps && k[0] === 'lit' && !q[0] && w0 === 'function' && a.length > 1) { shift(2); seg = { ...seg, funcDef: true }; continue; }
     if (!ps && !call && k[0] !== 'group' && as[0]) {
       const eq = w0.indexOf('=');
       env[w0.slice(0, eq).replace(/\+$/, '')] = k[0] === 'lit' ? w0.slice(eq + 1) : null;
@@ -903,6 +905,8 @@ function expand(seg, depth, out) {
     const name = binName(w0);
     const rest = () => a.slice(1);
 
+    // R19.6: a coprocess runs its command (or a named group) in the background, unseen
+    if (name === 'coproc' && !ps) { bad('coproc runs a command in the background the guard does not follow'); return; }
     if (PASSTHROUGH.has(name)) {
       if (name === 'command' && /^-[vV]$/.test(a[1] ?? '')) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
       if (name === 'sudo' && a.slice(1).some((t) => /^-(i|s|l|e|v|V|-login|-shell|-list|-edit|-validate|-version)$/.test(t)) && !a.slice(1).some((t) => !t.startsWith('-'))) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
@@ -1068,7 +1072,11 @@ function expand(seg, depth, out) {
         if (!(t.startsWith('-') || t.startsWith('/')) || t === '-') break;
         const p = t.slice(1).toLowerCase().replace(/:.*$/, '');
         // the working directory the child starts in (R17.2)
-        if (p === 'wd' || (p.length >= 2 && 'workingdirectory'.startsWith(p))) { wd = { v: a[j + 1], kind: k[j + 1] ?? 'lit' }; j += 2; continue; }
+        if (p === 'wd' || (p.length >= 2 && 'workingdirectory'.startsWith(p))) {
+          const colon = t.indexOf(':');
+          if (colon > 0) { wd = { v: t.slice(colon + 1), kind: k[j] }; j += 1; } else { wd = { v: a[j + 1], kind: k[j + 1] ?? 'lit' }; j += 2; }
+          continue;
+        }
         if (p === 'e' || p === 'ec' || (p.length >= 2 && 'encodedcommand'.startsWith(p))) {
           const text = decodePsBase64(a[j + 1]);
           if (text === null) { bad('encoded command does not decode'); return; }
@@ -1187,6 +1195,7 @@ function expand(seg, depth, out) {
         const t = a[j];
         if (t === '--' || t === '-e' || t === '--exec') { j += 1; break; }
         if (t === '--cd') dir = { v: a[j + 1], kind: k[j + 1] ?? 'lit' };
+        if (t.startsWith('--cd=')) { dir = { v: t.slice(5), kind: k[j] }; j += 1; continue; }
         if (t === '-d' || t === '--distribution' || t === '-u' || t === '--user' || t === '--cd') { j += 2; continue; }
         j += 1;
       }

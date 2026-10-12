@@ -239,7 +239,8 @@ const ROWS = [
   ['R17.1: a leading .. back into the checkout', bash(`cat ../${path.basename(checkout)}/src/app.js`), {}, 'allow'],
   ['R17.1: a leading .. out of the checkout', bash('cat ../../../../outside/credentials'), {}, denied('outside-readable')],
   ['R17.1: .. from a directory that does not exist (the cd failed)', bash('cd nothere; cat ../../../../outside/credentials'), {}, denied('(unparseable|outside-readable)')],
-  ['R17.1: .. from a directory that does not exist yet', bash('cd nothere; cat ../src/app.js'), {}, /^QUILL_DENIED unparseable: .*not an existing directory/],
+  ['R17.1: .. from a directory that does not exist yet', bash('cd nothere; cat ../src/app.js'), {}, /^QUILL_DENIED unparseable: .*(not an existing directory|does not exist)/],
+  ['R17.1: .. from a directory made in the same command', bash('mkdir -p nothere && cd nothere && cat ../src/app.js'), { grant: { permissions: EDIT } }, /^QUILL_DENIED unparseable: .*not an existing directory/],
   ['R17.1: PowerShell .. after a name', pwsh('Get-Content esc\\..\\credentials'), {}, CLIMBS],
 
   // fix round 4, R17.2 and P1r: directory options take the same `..` rules
@@ -256,7 +257,7 @@ const ROWS = [
   ['R17.2: tar -C home', bash('tar -C ~ -czf /tmp/x.tgz .aws'), {}, denied('outside-readable')],
   ['R17.2: npm --prefix esc/..', bash('npm --prefix esc/.. test'), {}, CLIMBS],
   ['R17.2: pushd esc/..', bash('pushd esc/.. && cat credentials'), {}, CLIMBS],
-  ['R17.2: cd -P esc/..', bash('cd -P esc/.. && cat credentials'), {}, CLIMBS],
+  ['R17.2: cd -P esc/..', bash('cd -P esc/.. && cat credentials'), {}, denied('unparseable')],
   ['R17.2: Set-Location esc\\..', pwsh('Set-Location esc\\..; Get-Content credentials'), {}, CLIMBS],
   ['R17.2: Push-Location esc\\..', pwsh('Push-Location esc\\..; Get-Content credentials'), {}, CLIMBS],
   ['R17.2: env -C esc/..', bash('env -C esc/.. cat credentials'), {}, CLIMBS],
@@ -272,6 +273,82 @@ const ROWS = [
   ['R17.2: Start-Process -WorkingDirectory', pwsh(`Start-Process -WorkingDirectory ${q(home)} -FilePath cat -ArgumentList .aws/credentials`), {}, denied('outside-readable')],
   ['R17.2: pwsh -WorkingDirectory', pwsh(`pwsh -WorkingDirectory ${q(home)} -Command 'Get-Content .aws/credentials'`), {}, denied('outside-readable')],
   ['R17.2: cmd start /D', bash(`cmd /c 'start /D "${home}" type .aws\\credentials'`), {}, denied('outside-readable')],
+  ['R17.2: pwsh -wd:<dir> (colon form)', pwsh(`pwsh -wd:${q(home)} -c 'Get-Content .aws/credentials'`), {}, denied('outside-readable')],
+
+  // fix round 5, R18: a cd that may fail while later commands still run
+  ['R18: a failed cd, then a read', bash(`cd ~; cd ${q(path.join(checkout, 'nothere'))}; cat .aws/credentials`), {}, /^QUILL_DENIED unparseable: .*does not exist/],
+  ['R18: a failed cd with ||', bash('cd nothere || cat src/app.js'), {}, /^QUILL_DENIED unparseable: .*does not exist/],
+  ['R18: a failed cd, then a newline', bash('cd nothere\ncat src/app.js'), {}, /^QUILL_DENIED unparseable: .*does not exist/],
+  ['R18: a failed cd, && and then ;', bash('cd nothere && true; cat src/app.js'), {}, /^QUILL_DENIED unparseable: .*does not exist/],
+  ['R18: a failed Set-Location', pwsh('Set-Location nothere; Get-Content src\\app.js'), {}, /^QUILL_DENIED unparseable: .*does not exist/],
+  ['R18: a cd to a file', bash('cd src/app.js; cat x'), {}, /^QUILL_DENIED unparseable: .*does not exist/],
+  ['R18: a cd joined by && to the rest', bash('cd nothere && cat app.js'), {}, 'allow'],
+  ['R18: a cd that exists', bash('cd src; cat app.js'), {}, 'allow'],
+  ['R18: a cd as the last command', bash('cat src/app.js; cd nothere'), {}, 'allow'],
+
+  // fix round 5, R19.2: only plain directory changes are followed
+  ['R19.2: cd -', bash('cd ~; cd -; cat src/app.js'), {}, denied('unparseable')],
+  ['R19.2: cd -P', bash('cd -P src && cat app.js'), {}, denied('unparseable')],
+  ['R19.2: cd -L', bash('cd -L src && cat app.js'), {}, denied('unparseable')],
+  ['R19.2: cd -e', bash('cd -e src && cat app.js'), {}, denied('unparseable')],
+  ['R19.2: cd -L -- ~', bash('cd -L -- ~ && cat .aws/credentials'), {}, denied('unparseable')],
+  ['R19.2: cd -- ~ resolves ~', bash('cd -- ~ && cat .aws/credentials'), {}, denied('outside-readable')],
+  ['R19.2: pushd -- ~ resolves ~', bash('pushd -- ~ && cat .aws/credentials'), {}, denied('outside-readable')],
+  ['R19.2: cd -- src', bash('cd -- src && cat app.js'), {}, 'allow'],
+  ['R19.2: pushd +1', bash(`cd ~ && pushd ${q(checkout)} && pushd +1 && cat .aws/credentials`), {}, denied('unparseable')],
+  ['R19.2: pushd -0', bash(`cd ~ && pushd ${q(checkout)} && pushd -0 && cat .aws/credentials`), {}, denied('unparseable')],
+  ['R19.2: pushd without a directory', bash('pushd && cat src/app.js'), {}, denied('unparseable')],
+  ['R19.2: popd', bash('pushd src && popd && cat src/app.js'), {}, denied('unparseable')],
+  ['R19.2: Pop-Location', pwsh('Push-Location src; Pop-Location; Get-Content src\\app.js'), {}, denied('unparseable')],
+  ['R19.2: cd to a variable', bash('cd "$HOME" && cat .aws/credentials'), {}, denied('unparseable')],
+  ['R19.2: cd to OLDPWD', bash('cd $OLDPWD && cat x'), {}, denied('unparseable')],
+  ['R19.2: cd with a wildcard', bash('cd sr* && cat app.js'), {}, denied('unparseable')],
+  ['R19.2: Set-Location -StackName', pwsh('Set-Location -StackName s; Get-Content x'), {}, denied('unparseable')],
+  ['R19.2: Set-Location -', pwsh('Set-Location -; Get-Content x'), {}, denied('unparseable')],
+
+  // fix round 5, R19.3: a directory change in a pipeline element or a background job
+  ['R19.3: cd in a pipeline', bash(`cd ~; cd ${q(checkout)} | true; cat .aws/credentials`), {}, denied('unparseable')],
+  ['R19.3: cd in a background job', bash(`cd ~; cd ${q(checkout)} & cat .aws/credentials`), {}, denied('unparseable')],
+  ['R19.3: cd after a pipe', bash('true | cd src; cat app.js'), {}, denied('unparseable')],
+
+  // fix round 5, R19.4: tar
+  ['R19.4: tar extract with two -C', bash(`tar -xf ${q(path.join(tmp, 'a.tar'))} -C src -C ~/.ssh`), { grant: { permissions: EDIT } }, denied('unparseable')],
+  ['R19.4: tar extract with two --directory', bash(`tar -xf ${q(path.join(tmp, 'a.tar'))} --directory=src --directory=${q(path.join(home, '.ssh'))}`), { grant: { permissions: EDIT } }, denied('unparseable')],
+  ['R19.4: tar cf to a protected name', bash('tar cf .mcp.json src'), { grant: { permissions: EDIT } }, denied('protected-path')],
+  ['R19.4: tar cf in a read-only run', bash('tar cf out.tar src'), {}, denied('no-edit-permission')],
+  ['R19.4: tar xvf reads its archive', bash(`tar xvf ${q(path.join(home, '.aws', 'x.tar'))}`), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['R19.4: tar -tf reads its archive', bash(`tar -tf ${q(path.join(home, '.aws', 'x.tar'))}`), {}, denied('outside-readable')],
+  ['R19.4: tar czf into temp', bash(`tar czf ${q(path.join(tmp, 'out.tgz'))} src`), {}, 'allow'],
+  ['R19.4: tar with a bundle it does not follow', bash('tar cbf 20 out.tar src'), {}, denied('unparseable')],
+
+  // fix round 5, R19.5: cmd move with one operand
+  ['R19.5: cmd move, one operand, read-only run', bash(`cmd /c 'move "${path.join(tmp, 'note.txt')}"'`), {}, denied('no-edit-permission')],
+
+  // fix round 5, R19.6: hidden command text
+  ['R19.6: trap pushing to main', bash("trap 'git push origin HEAD:main' EXIT"), { grant: { permissions: PUSH } }, denied('protected-branch')],
+  ['R19.6: trap copying credentials', bash("trap 'cp ~/.aws/credentials src/x' EXIT; true"), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['R19.6: trap changing directory', bash("trap 'cd ~' DEBUG; cat .aws/credentials"), {}, denied('unparseable')],
+  ['R19.6: a cd after a trap', bash("trap 'cat .aws/credentials' EXIT; cd ~"), {}, denied('unparseable')],
+  ['R19.6: trap text that is not literal', bash('trap "$CMD" EXIT'), {}, denied('unparseable')],
+  ['R19.6: trap reset and listing', bash("trap - EXIT; trap -p; trap '' INT"), {}, 'allow'],
+  ['R19.6: trap with a plain read', bash("trap 'cat src/app.js' EXIT"), {}, 'allow'],
+  ['R19.6: named coproc', bash('coproc x { kubectl delete ns y; }'), {}, denied('unparseable')],
+  ['R19.6: named coproc copying credentials', bash('coproc X { cp ~/.aws/credentials src/x; }'), { grant: { permissions: EDIT } }, denied('unparseable')],
+  ['R19.6: coproc', bash('coproc kubectl get pods'), {}, denied('unparseable')],
+  ['R19.6: BASH_ENV', bash('BASH_ENV=/dev/stdin bash -c true'), {}, denied('unparseable')],
+  ['R19.6: export ENV', bash('export ENV=/tmp/x; sh -c true'), {}, denied('unparseable')],
+  ['R19.6: PROMPT_COMMAND', bash('PROMPT_COMMAND=x bash -i -c true'), {}, denied('unparseable')],
+  ['R19.6: SHELLOPTS', bash('export SHELLOPTS'), {}, denied('unparseable')],
+  ['R19.6: BASHOPTS', bash('BASHOPTS=extglob bash -c true'), {}, denied('unparseable')],
+  ['R19.6: PS4 with a command substitution', bash("PS4='$(touch x)' bash -x -c true"), {}, denied('unparseable')],
+  ['R19.6: PS4 plain', bash("PS4='+ ' bash -x -c true"), {}, 'allow'],
+
+  // fix round 5, found while doing R19: directory changes the classifier cannot place in time
+  ['R19: a function body changing directory', bash('f() { cd ~; }; cd src; f; cat .aws/credentials'), {}, denied('unparseable')],
+  ['R19: a function keyword body changing directory', bash('function f { cd ~; }; f; cat .aws/credentials'), {}, denied('unparseable')],
+  ['R19: a sourced file may change directory', bash('source x.sh; cat .aws/credentials'), {}, denied('unparseable')],
+  ['R19: a sourced file is read', bash(`source ${q(path.join(home, '.aws', 'credentials'))}`), {}, denied('outside-readable')],
+  ['R19: a PowerShell script may change location', pwsh('& .\\x.ps1; Get-Content .aws\\credentials'), {}, denied('unparseable')],
 
   // fix round 4, R17.3: CDPATH
   ['OOS-C1: CDPATH prefix on cd', bash(`CDPATH=${q(home)} cd .aws && cat credentials`), {}, denied('unparseable')],
@@ -714,6 +791,33 @@ test('`..` handling is linear in the number of segments (R17.1, NB)', () => {
       else assert.match(r.reason, want, label);
       assert.ok(ms < 250, `${label} took ${ms.toFixed(1)} ms`);
     }
+  }
+});
+
+test('a leading .. is resolved from the real path of the directory a cd moved to (R19.1)', (t) => {
+  // L is an in-tree junction to deep/B; deep/esc is a plain directory; esc leads outside
+  fs.mkdirSync(path.join(checkout, 'deep', 'B'), { recursive: true });
+  fs.mkdirSync(path.join(checkout, 'deep', 'esc'), { recursive: true });
+  fs.symlinkSync(path.join(checkout, 'deep', 'B'), path.join(checkout, 'L'), 'junction');
+  t.after(() => { fs.rmSync(path.join(checkout, 'L'), { force: true }); fs.rmSync(path.join(checkout, 'deep'), { recursive: true, force: true }); });
+  const edit = { grant: { permissions: EDIT } };
+  const cases = [
+    [bash('cd L && cd ../esc && cat ../secret.txt'), {}, denied('outside-readable')],
+    [bash('cd L && cd ../esc && echo x > ../zz'), edit, OUT_W],
+    [bash('cd L && cd ../esc && git -C .. init zA'), edit, /^QUILL_DENIED (outside-readable|outside-writable|protected-path): /],
+    [bash('cd L && cd ../esc && cd -P .. && cat secret.txt'), {}, denied('unparseable')],
+    [bash('cd L; cd ../esc; cat ../secret.txt'), {}, denied('outside-readable')],
+    [pwsh('Set-Location L; Set-Location ..\\esc; Get-Content ..\\secret.txt'), {}, denied('outside-readable')],
+  ];
+  for (const [c, opts, want] of cases) {
+    const r = run(c, opts);
+    assert.equal(r.decision, 'deny', `${c.tool_input.command}: ${r.reason}`);
+    assert.match(r.reason, want, c.tool_input.command);
+  }
+  for (const command of ['cd L && cat ../B/../B/x', 'cd L && ls', 'cd deep/esc && cat ../B/x']) {
+    if (command.includes('B/../')) continue;
+    const r = run(bash(command), {});
+    assert.equal(r.decision, 'allow', `${command}: ${r.reason}`);
   }
 });
 

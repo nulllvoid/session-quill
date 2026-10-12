@@ -213,6 +213,9 @@ function climbProblem(word, ctx, kind) {
   return null;
 }
 
+// Commands that change this shell's directory.
+const CD_NAMES = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', 'push-location', 'pop-location']);
+
 const NULL_TARGETS = new Set(['/dev/null', 'nul', '$null', '/dev/stdout', '/dev/stderr', '/dev/tty', 'con']);
 
 // ---------------------------------------------------------------- shell
@@ -230,11 +233,22 @@ function classifyShell(command, dialect, ctx) {
 function classifyScript(command, dialect, ctx, depth, cwd = ctx.cwd ?? null, cwdRaw = undefined) {
   const parsed = parseShell(command, dialect, depth);
   if (parsed.error) return unparseable(parsed.error);
-  const raw0 = cwdRaw !== undefined ? cwdRaw : cwd ? { root: normalizeAbs(cwd, ctx), segs: [] } : null;
-  const st = { cwd, cwdRaw: raw0, paths: [], readPaths: [], readSpecs: [], writeSpecs: [], depth };
+  const raw0 = cwdRaw !== undefined ? cwdRaw : cwd ? [{ root: normalizeAbs(cwd, ctx), segs: [] }] : null;
+  const st = { cwd, cwdRaw: raw0, paths: [], readPaths: [], readSpecs: [], writeSpecs: [], cdChecks: [], depth };
   const results = [];
   const argvs = [];
+  // R18: a directory change may fail; when every command after it is joined by && the failure
+  // stops them, otherwise a later command runs in the old directory (`chainSafe` is false)
+  let later = null; // chainSafe of the next command, null when none follows
+  for (let i = parsed.segments.length - 1; i >= 0; i -= 1) {
+    const seg = parsed.segments[i];
+    if (seg.cwdMark) { seg.chainSafe = later ?? true; continue; }
+    seg.chainSafe = later === null ? true : seg.sep === '&&' && later;
+    later = seg.chainSafe;
+  }
   for (const seg of parsed.segments) {
+    // a function body's directory changes run whenever the function is called (R19)
+    if (seg.funcDef) st.funcSeen = true;
     results.push(classifySegment(seg, ctx, st));
     argvs.push(Array.isArray(seg.argv) ? seg.argv.slice() : []);
   }
@@ -256,6 +270,8 @@ function aggregate(results, st, argvs) {
   // the same paths as the text supplied them (see rawPath), for the guard
   if (st.readSpecs.length) out.readSpecs = uniqueSpecs(st.readSpecs);
   if (st.writeSpecs.length) out.writeSpecs = uniqueSpecs(st.writeSpecs);
+  // directories a cd moves to that must exist when the decision is made (R18)
+  if (st.cdChecks.length) out.cdChecks = [...new Set(st.cdChecks)];
   if (calls.length) out.calls = calls;
   return out;
 }
@@ -287,7 +303,7 @@ function directoryMark(seg, ctx, st) {
   const dir = seg.chdir ?? {};
   if (typeof dir.v !== 'string' || !dir.v) return unparseable('a directory change without a directory');
   h.dir(dir.v, dir.kind);
-  h.chdir(dir.v, dir.kind);
+  h.chdir(dir.v, dir.kind, { program: true });
   return h.bad ? unparseable(h.bad) : local('change directory');
 }
 
@@ -322,6 +338,8 @@ function classifySegment(seg, ctx, st) {
   if (!seg.argv.length) return local('redirect or assignment only');
   const name = binName(seg.argv[0]);
   const res = classifyCommand(name, seg, ctx, h);
+  // a PowerShell script (any program named by a path, or .ps1) may Set-Location this session (R19)
+  if (seg.dialect === 'powershell' && (seg.script !== undefined || /[\\/]|\.ps1$/i.test(String(seg.argv[0])))) h.lostCwd();
   if (h.bad) return unparseable(h.bad);
   if (res.class === 'local' && (!DATA_COMMANDS.has(name) || (name === 'sed' && SED_EXEC_RE.test(seg.argv.slice(1).join(' '))))) {
     const b = backstop(name, seg, ctx);
@@ -363,6 +381,7 @@ function helpers(seg, ctx, st) {
   // `base` resolves relative paths somewhere other than the current directory (git -C, a link's
   // directory); null = unknown. `baseRaw` is the same directory as rawPath() describes it; by
   // default the tracked cwd's when `base` is the cwd, else unknown (the resolved path is scanned).
+  // Raw bases are lists of readings (see chdir); null = unknown.
   const rawOf = (base, baseRaw) => (baseRaw !== undefined ? baseRaw : base === st.cwd ? st.cwdRaw : null);
   const h = {
     bad: null,
@@ -375,7 +394,7 @@ function helpers(seg, ctx, st) {
       const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `write target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.paths.push(p);
-      st.writeSpecs.push(h.spec(word, kind, rawOf(base, baseRaw), p, ifDir));
+      st.writeSpecs.push(...h.spec(word, kind, rawOf(base, baseRaw), p, ifDir));
       return true;
     },
     read(word, kind = 'lit', base = st.cwd, baseRaw = undefined) {
@@ -386,17 +405,20 @@ function helpers(seg, ctx, st) {
       const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `read target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.readPaths.push(p);
-      st.readSpecs.push(h.spec(word, kind, rawOf(base, baseRaw), p));
+      st.readSpecs.push(...h.spec(word, kind, rawOf(base, baseRaw), p));
       return true;
     },
     // { path, root, segs, dialect } for the guard. `ifDir` (a symbolic link's target read as if
     // the link's own name were an existing directory): the spec only applies when its first
     // `ifDir` segments name an existing directory.
-    spec(word, kind, baseRaw, resolved, ifDir) {
-      const raw = rawPath(word, ctx, kind, baseRaw, resolved);
-      const out = { path: resolved, root: raw.root, segs: raw.segs, dialect: seg.dialect };
-      if (ifDir !== undefined && raw.relative && baseRaw) out.ifDir = baseRaw.segs.length;
-      return out;
+    // One spec per reading of the base directory (a list, or null when unknown).
+    spec(word, kind, baseRaws, resolved, ifDir) {
+      return (baseRaws && baseRaws.length ? baseRaws : [null]).map((baseRaw) => {
+        const raw = rawPath(word, ctx, kind, baseRaw, resolved);
+        const out = { path: resolved, root: raw.root, segs: raw.segs, dialect: seg.dialect };
+        if (ifDir !== undefined && raw.relative && baseRaw) out.ifDir = baseRaw.segs.length;
+        return out;
+      });
     },
     // A directory a command runs in or works below (git -C, make -C, npm --prefix, tar -C,
     // env -C …): `..` after a name is refused (R17.2) and the directory itself must be readable.
@@ -405,8 +427,8 @@ function helpers(seg, ctx, st) {
       if (word === undefined || word === true) return null;
       const before = st.readSpecs.length;
       if (!h.read(String(word), kind, base, baseRaw)) return null;
-      const spec = st.readSpecs[before];
-      return spec ? { cwd: spec.path, raw: { root: spec.root, segs: spec.segs } } : null;
+      const specs = st.readSpecs.slice(before);
+      return specs.length ? { cwd: specs[0].path, raw: specs.map((x) => ({ root: x.root, segs: x.segs })) } : null;
     },
     // Where a path word leads, without reporting it: { cwd, raw } or null (h.bad set).
     place(word, kind = 'lit', base = st.cwd, baseRaw = undefined) {
@@ -415,14 +437,30 @@ function helpers(seg, ctx, st) {
       if (climb) { h.bad = climb; return null; }
       const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
       if (!p) { h.bad = `path is not literal: ${String(word).slice(0, 80)}`; return null; }
-      return { cwd: p, raw: rawPath(word, ctx, kind, rawOf(base, baseRaw), p) };
+      const bases = rawOf(base, baseRaw);
+      return { cwd: p, raw: (bases && bases.length ? bases : [null]).map((b) => rawPath(word, ctx, kind, b, p)) };
     },
     cwd: () => st.cwd,
     cwdRaw: () => st.cwdRaw,
-    chdir(word, kind) {
+    trapSet: () => { st.trapSet = true; },
+    lostCwd: () => { st.cwd = null; st.cwdRaw = null; },
+    // A directory change (R19.1). The tracked directory has two readings, and every path is
+    // checked under both:
+    //  - physical: each change is applied to the real directory the previous one reached (raw
+    //    text appended, so the guard walks it), as `cd -P` and programs' own chdir do;
+    //  - logical: a shell's `cd` (bash's default, PowerShell, cmd) moves to the lexical path, and
+    //    later relative paths and leading `..` are resolved from that directory's real path, so
+    //    this reading restarts there; a program chdir (`program`: env -C, sudo -D, start /D …) is
+    //    appended to it.
+    // A shell cd that may fail while later commands still run is checked to exist (R18).
+    chdir(word, kind, { program = false } = {}) {
       st.cds = (st.cds ?? 0) + 1;
       if (st.cds > 256) { h.bad = 'too many directory changes to follow'; st.cwd = null; st.cwdRaw = null; return; }
-      if (seg.nested || kind !== 'lit' || word === '-') { st.cwd = null; st.cwdRaw = null; return; }
+      if (seg.nested) { st.cwd = null; st.cwdRaw = null; return; }
+      if (st.funcSeen && !program) { h.bad = 'a directory change in a command that defines a shell function, whose body runs when it is called'; st.cwd = null; st.cwdRaw = null; return; }
+      if (st.trapSet && !program) { h.bad = 'a directory change after a trap, whose command runs where the shell then is'; st.cwd = null; st.cwdRaw = null; return; }
+      if (kind !== 'lit' || word === '-') { h.bad = 'a directory change to a variable or the previous directory'; st.cwd = null; st.cwdRaw = null; return; }
+      if (word !== undefined && /[*?[\]{}<>`]/.test(word)) { h.bad = `a directory change with wildcards: ${String(word).slice(0, 80)}`; st.cwd = null; st.cwdRaw = null; return; }
       const climb = word === undefined ? null : climbProblem(word, ctx, 'dyn');
       if (climb) { h.bad = climb; st.cwd = null; st.cwdRaw = null; return; }
       // CDPATH (R17.3) sends a relative `cd` to a directory the call does not name
@@ -430,8 +468,16 @@ function helpers(seg, ctx, st) {
       if (seg.dialect !== 'powershell' && typeof cdpath === 'string' && cdpath && word !== undefined && !isAbsLike(word) && !/^\.\.?([\\/]|$)/.test(word)) { st.cwd = null; st.cwdRaw = null; return; }
       const p = word === undefined ? ctx.home ?? null : st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined);
       // `cd` with no word goes home, which the call did not spell; any other target is supplied text
-      st.cwdRaw = p === null ? null : word === undefined ? { root: p, segs: [] } : rawPath(word, ctx, 'dyn', st.cwdRaw, p);
+      if (p === null) st.cwdRaw = null;
+      else {
+        const [physical, logical] = st.cwdRaw ?? [];
+        const here = { root: p, segs: [] };
+        const phys = word === undefined || !physical ? here : rawPath(word, ctx, 'dyn', physical, p);
+        const logi = word === undefined || !program || !(logical ?? physical) ? here : rawPath(word, ctx, 'dyn', logical ?? physical, p);
+        st.cwdRaw = JSON.stringify(phys) === JSON.stringify(logi) ? [phys] : [phys, logi];
+      }
       st.cwd = p ?? null;
+      if (!program && p !== null && !seg.chainSafe) st.cdChecks.push(p);
     },
     // A nested script starts in the caller's directory, and the files it reads or writes are
     // reported with the caller's.
@@ -441,6 +487,7 @@ function helpers(seg, ctx, st) {
       if (res.readPaths) st.readPaths.push(...res.readPaths);
       if (res.readSpecs) st.readSpecs.push(...res.readSpecs);
       if (res.writeSpecs) st.writeSpecs.push(...res.writeSpecs);
+      if (res.cdChecks) st.cdChecks.push(...res.cdChecks);
       return res;
     },
   };
@@ -598,20 +645,43 @@ function classifyCommand(name, seg, ctx, h) {
     case 'source': {
       if (!args.length) return local('source');
       if (ak[0] !== 'lit') return unparseable('sourced file is not literal');
+      // R19: the file runs in this shell and may change its directory unseen; it is read
+      h.read(args[0], ak[0]);
+      h.lostCwd();
       return scriptByName(args[0], args.slice(1));
     }
     case 'cd': case 'chdir': case 'pushd': case 'set-location': case 'sl': case 'push-location': {
+      // R19: only plain forms move the tracked directory; one in a pipeline element or a
+      // background job runs in another process and does not move this shell
+      if (seg.piped || seg.sep === '|' || seg.sep === '&') return unparseable(`${name} in a pipeline or background job`);
+      const plain = (why) => unparseable(`${name} ${why}: only cd [--] <path>, cd, pushd <path>, Set-Location [-Path|-LiteralPath] <path> and chdir are followed`);
       if (ps) {
-        const s = psParams(args, ak, { values: ['path', 'literalpath', 'stackname'], switches: ['passthru'] });
-        const v = s.get('path') ?? s.get('literalpath') ?? s.pos[0];
+        const s = psParams(args, ak, { values: ['path', 'literalpath'], switches: ['passthru'] });
+        if ([...s.named.keys()].some((k) => !['path', 'literalpath', 'passthru'].includes(k))) return plain('with other parameters');
+        const named = s.get('path') ?? s.get('literalpath');
+        const v = named ?? s.pos[0];
+        if (s.pos.length > (named ? 0 : 1)) return plain('with more than one directory');
+        if (v && (v.v === true || /^[-+]$/.test(String(v.v)))) return plain('to the location history');
+        if (!v && name.includes('push')) return plain('without a directory');
         h.chdir(v?.v, v?.kind ?? 'lit');
+      } else if (cmdD) {
+        const t = args.map((x, i) => ({ v: x, kind: ak[i] })).filter((x) => !/^\/d$/i.test(x.v));
+        if (t.length > 1 || t.some((x) => x.v.startsWith('/'))) return plain('with more than one word');
+        if (!t.length) return local(name === 'pushd' ? 'pushd lists the stack' : 'cd prints the directory');
+        h.chdir(t[0].v, t[0].kind);
       } else {
-        const t = args.filter((x) => !/^-[LPe@]+$/.test(x) && !(cmdD && /^\/d$/i.test(x)));
-        h.chdir(t[0], ak[args.indexOf(t[0])] ?? 'lit');
+        let i = 0;
+        if (args[0] === '--') i = 1;
+        else if (args.length && /^[-+]./.test(args[0])) return plain(`with the option ${args[0]}`);
+        const rest = args.slice(i);
+        if (rest.length > 1) return plain('with more than one word');
+        if (!rest.length && name === 'pushd') return plain('without a directory');
+        if (rest.length && /^[-+]\d*$/.test(rest[0]) && (name === 'pushd' || rest[0] === '-')) return plain('to the directory stack');
+        h.chdir(rest[0], rest.length ? ak[i] : 'lit');
       }
       return local('change directory');
     }
-    case 'popd': case 'pop-location': h.chdir(undefined, 'dyn'); return local('change directory');
+    case 'popd': case 'pop-location': return unparseable(`${name} returns to a directory the guard does not follow`);
     case 'npm': return npm(args, ak, h);
     case 'yarn': return yarn(args, ak, h);
     case 'pnpm': return pnpm(args, ak, h);
@@ -695,6 +765,23 @@ function classifyCommand(name, seg, ctx, h) {
     }
     case 'invoke-sqlcmd': return invokeSqlcmd(args, ak, h);
     case 'shopt': return unparseable('shopt changes how the shell expands words (extglob, globstar, nocaseglob …)');
+    case 'trap': {
+      // R19.6: the text runs later in this shell (on EXIT, DEBUG, ERR …) and is classified like
+      // eval; it may not change directory, and no directory change may follow it, since its
+      // paths are resolved where the shell is when it fires
+      if (ps || cmdD) return args.length ? unparseable('PowerShell trap runs a script block the guard does not follow') : local('trap');
+      let i = 0;
+      if (args[0] === '--') i = 1;
+      if (!args.length || /^-[lp]+$/.test(args[0])) return local('trap listing');
+      if (args[i] === undefined || args[i] === '-' || (args[i] === '' && ak[i] === 'lit')) return local('trap reset');
+      if (ak[i] !== 'lit') return unparseable('trap command text is not literal');
+      const parsed = parseShell(args[i], 'bash');
+      if (parsed.error || parsed.segments.some((x) => x.unparseable)) return unparseable(`trap command text: ${parsed.error ?? 'not readable'}`);
+      if (parsed.segments.some((x) => x.argv.length && CD_NAMES.has(binName(x.argv[0])))) return unparseable('trap command text changes directory');
+      h.trapSet();
+      return h.script(args[i], 'bash');
+    }
+    case 'coproc': return unparseable('coproc runs a command in the background the guard does not follow');
     case 'export': case 'declare': case 'typeset': case 'local': case 'readonly': case 'set': {
       // NAME=value sets NAME; a bare NAME exports (or declares) a value assigned elsewhere
       const env = {};
@@ -1378,6 +1465,9 @@ function gitEnvProblem(env, prefixOnGit = false) {
     // R17.3: CDPATH sends a relative `cd` somewhere the call does not name; any assignment or
     // export of it is refused, wherever it is made
     if (/^CDPATH$/i.test(k)) return 'CDPATH changes where cd goes';
+    // R19.6: startup files, prompt hooks and shell options run or change commands unseen
+    if (/^(BASH_ENV|ENV|PROMPT_COMMAND|SHELLOPTS|BASHOPTS)$/i.test(k)) return `${k} makes the shell run or change commands the guard cannot see`;
+    if (/^PS4$/i.test(k) && (typeof v !== 'string' || /\$\(|`/.test(v))) return 'PS4 with a command substitution runs it before every traced command';
     if (GIT_EXEC_ENV_RE.test(k)) return `${k} changes what git runs or reads`;
     if (GIT_PROGRAM_ENV_RE.test(k)) {
       if (prefixOnGit && typeof v === 'string' && HARMLESS_PROGRAMS.has(v)) continue;
@@ -2113,13 +2203,34 @@ function posixFileCommand(name, args, ak, h) {
       return local('sed in place');
     }
     case 'tar': {
-      const mode = (args[0] && !args[0].startsWith('-') ? args[0] : args.filter((t) => /^-[A-Za-z]+$/.test(t)).join('')).replace(/-/g, '');
-      const s = scan(args, ak, { values: new Set(['-f', '--file', '-C', '--directory', '-T', '--files-from', '-X', '--exclude-from']) });
-      const file = s.all('-f', '--file')[0];
-      const dir = s.all('-C', '--directory')[0];
+      // R19.4: an old-style bundle without a dash (`tar cf out.tar src`, `tar xvf a.tar`): its f
+      // takes the next argument as the archive; a bundle with anything else is not followed
+      let rest = args;
+      let restK = ak;
+      let oldFile = null;
+      let mode;
+      if (args[0] && !args[0].startsWith('-')) {
+        const b = args[0];
+        if (!/^[ctxruvzjJapkmOwShPf]+$/.test(b) || !/[ctxru]/.test(b) || (b.match(/f/g) ?? []).length > 1) return unparseable(`tar ${b.slice(0, 40)}: an option bundle the guard does not follow`);
+        if (b.includes('f')) {
+          if (args[1] === undefined) return unparseable('tar f without an archive');
+          oldFile = { v: args[1], kind: ak[1] };
+        }
+        rest = args.slice(b.includes('f') ? 2 : 1);
+        restK = ak.slice(b.includes('f') ? 2 : 1);
+        mode = b;
+      } else mode = args.filter((t) => /^-[A-Za-z]+$/.test(t)).join('').replace(/-/g, '');
+      const s = scan(rest, restK, { values: new Set(['-f', '--file', '-C', '--directory', '-T', '--files-from', '-X', '--exclude-from']) });
+      const file = oldFile ?? s.all('-f', '--file')[0];
+      const dirs = s.all('-C', '--directory');
+      // GNU tar extracts below the last -C: more than one is refused (R19.4)
+      if (dirs.length > 1) return unparseable('tar with more than one -C/--directory');
+      const dir = dirs[0];
+      const extract = /x/.test(mode) || s.has('--extract', '--get');
       if (/[cru]/.test(mode) || s.has('--create', '--append', '--update')) { if (file && file.v !== '-') h.write(file.v, file.kind); }
-      if (/x/.test(mode) || s.has('--extract', '--get')) { if (dir) h.write(dir.v, dir.kind); else h.write('.', 'lit'); }
-      else for (const d of s.all('-C', '--directory')) h.dir(d.v, d.kind); // members are read below it (R17.2)
+      else if (file && file.v !== '-' && (extract || /t/.test(mode) || s.has('--list'))) h.read(file.v, file.kind);
+      if (extract) { if (dir) h.write(dir.v, dir.kind); else h.write('.', 'lit'); }
+      else if (dir) h.dir(dir.v, dir.kind); // members are read below it (R17.2)
       return local('tar');
     }
     case 'unzip': {
@@ -2232,7 +2343,12 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
       else if (sources.length === 1) h.write(wordBase(sources[0].v), sources[0].kind);
       return local('copy files');
     }
-    if (name === 'move') { for (const p of pos) h.write(p.v, p.kind); return local('move files'); }
+    if (name === 'move') {
+      for (const p of pos) h.write(p.v, p.kind);
+      // one operand: the file moves into the current directory under its own name (R19.5)
+      if (pos.length === 1) h.write(wordBase(pos[0].v), pos[0].kind);
+      return local('move files');
+    }
     if (name === 'ren' || name === 'rename') {
       // the new name lands in the source's directory: `ren x .claude` creates .claude
       if (pos[1] && NOT_A_NAME.test(pos[1].v)) { h.bad = `${name} to ${pos[1].v.slice(0, 80)}: the new name has a path in it`; return local('rename'); }
