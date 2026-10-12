@@ -194,11 +194,13 @@ test('module is pure: imports only node:path and its sibling', () => {
   }
 });
 
-test('perf: p95 under 5 ms over 1,000 mixed calls', () => {
+// A loose regression ceiling; the spec's 5 ms target is asserted serially in
+// tests/acceptance/perf.test.js under QUILL_PERF_FULL=1 (rulings R14, R16).
+test('perf: p95 under 25 ms over 1,000 mixed calls', () => {
   const sample = rows.filter((r) => r.tool !== 'SomeFutureTool');
   // best p95 of three passes, so a busy machine does not fail one pass
   let p95 = Infinity;
-  for (let pass = 0; pass < 3 && p95 >= 5; pass += 1) {
+  for (let pass = 0; pass < 3 && p95 >= 25; pass += 1) {
     const times = [];
     for (let i = 0; i < 1000; i += 1) {
       const row = sample[i % sample.length];
@@ -209,5 +211,5 @@ test('perf: p95 under 5 ms over 1,000 mixed calls', () => {
     times.sort((a, b) => a - b);
     p95 = Math.min(p95, times[Math.floor(times.length * 0.95)]);
   }
-  assert.ok(p95 < 5, `p95 ${p95.toFixed(3)} ms`);
+  assert.ok(p95 < 25, `p95 ${p95.toFixed(3)} ms`);
 });

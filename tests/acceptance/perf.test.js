@@ -9,6 +9,11 @@ import os from 'node:os';
 import { scenario, MACHINE } from './scenario.js';
 import { makeEvent } from '../../src/core/events.js';
 import { journalPath } from '../../src/lib/paths.js';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { classifyCall } from '../../src/gate/prod-classify.js';
+import { decide } from '../../src/gate/run-guard.js';
+import { writeGrant } from '../../src/handoff/grant.js';
 
 const FULL = process.env.QUILL_PERF_FULL === '1';
 const TICKETS = FULL ? 10_000 : 2_000;
@@ -88,5 +93,101 @@ test(`A19 (scaled ${TICKETS} tickets / ${EVENTS} events): replay completes, hook
   } finally {
     await s.stop({ flush: false });
     fs.rmSync(s.home, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------ autonomous-run guard latency
+// Spec §4.1: decide() < 5 ms p95 in-process, the whole guard hook p95 <= 200 ms. Strict targets
+// run only in the serial perf job (QUILL_PERF_FULL=1, rulings R14/R16); the main suite, which runs
+// test files in parallel on every OS, asserts loose regression ceilings with the same measurement.
+// Each measurement is the best p95 of up to three passes, so one stalled pass is not a regression.
+const IN_PROCESS_P95 = FULL ? 5 : 25;
+const SPAWN_P95 = FULL ? 200 : 1000;
+
+// Stops early once a pass meets `met`.
+function bestP95(n, met, once) {
+  let best = Infinity;
+  for (let pass = 0; pass < 3 && !met(best); pass += 1) {
+    const times = [];
+    for (let i = 0; i < n; i += 1) times.push(once(i));
+    times.sort((a, b) => a - b);
+    best = Math.min(best, times[Math.floor(times.length * 0.95)]);
+  }
+  return best;
+}
+const timed = (fn) => { const t0 = process.hrtime.bigint(); fn(); return Number(process.hrtime.bigint() - t0) / 1e6; };
+
+const fixtureRows = JSON.parse(fs.readFileSync(new URL('../fixtures/prod-classify.json', import.meta.url), 'utf8')).filter((r) => r.tool !== 'SomeFutureTool');
+
+function guardRun() {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'quill-guard-perf-')));
+  const qh = path.join(root, 'quill');
+  const runDir = path.join(qh, 'handoffs', 'runs', 'perf1');
+  const checkout = path.join(qh, 'handoffs', 'worktrees', 'perf1');
+  const tmp = path.join(root, 'tmp');
+  for (const d of [runDir, path.join(checkout, 'src'), path.join(checkout, '.git'), tmp, path.join(root, 'home')]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(checkout, 'src', 'app.js'), 'x\n');
+  fs.writeFileSync(path.join(checkout, '.git', 'HEAD'), 'ref: refs/heads/feat/x\n');
+  const grant = {
+    access: 'autonomous', permissions: { read_source: true, edit_source: true, commit: true }, actionPins: [],
+    scopes: [{ name: 'k8s.write', target: 'stg', matchers: { bash: ['kubectl *'], mcp: [], hosts: [] }, fingerprint: 'f' }],
+    readableRoots: [checkout, runDir, tmp], writableRoots: [checkout, runDir, tmp], protectedPaths: [],
+    mcpPolicy: { read: [], write: {} }, trustedMcpServers: [], trackerHosts: [], defaultBranch: 'main',
+  };
+  const vars = { USERPROFILE: path.join(root, 'home'), HOME: path.join(root, 'home'), TEMP: tmp, TMP: tmp, TMPDIR: tmp, QUILL_HOME: qh, QUILL_HANDOFF_ID: 'perf1', QUILL_HANDOFF_GUARD: 'enforce' };
+  return { root, runDir, checkout, grant, vars };
+}
+
+test(`guard latency: classifier and decide p95 < ${IN_PROCESS_P95} ms over 1,000 mixed calls`, () => {
+  const r = guardRun();
+  try {
+    const ctx = { cwd: r.checkout, home: r.vars.HOME, env: r.vars, currentBranch: 'feat/x', defaultBranch: 'main', mcpPolicy: { read: [], write: {} } };
+    const quick = (p95) => p95 < IN_PROCESS_P95;
+    const classifyP95 = bestP95(1000, quick, (i) => {
+      const row = fixtureRows[i % fixtureRows.length];
+      return timed(() => classifyCall({ tool_name: row.tool, tool_input: row.input }, { ...ctx, ...(row.ctx ?? {}) }));
+    });
+    const calls = [
+      { tool_name: 'Read', tool_input: { file_path: path.join(r.checkout, 'src', 'app.js') } },
+      { tool_name: 'Edit', tool_input: { file_path: path.join(r.checkout, 'src', 'app.js'), old_string: 'x', new_string: 'y' } },
+      { tool_name: 'Write', tool_input: { file_path: path.join(r.root, 'outside.txt'), content: 'x' } },
+      { tool_name: 'Grep', tool_input: { pattern: 'x', path: path.join(r.checkout, 'src') } },
+      { tool_name: 'Glob', tool_input: { pattern: 'src/**/*.js' } },
+      { tool_name: 'mcp__claude_ai_Atlassian__getJiraIssue', tool_input: { issueIdOrKey: 'X-1' } },
+      ...fixtureRows.filter((row) => /^(Bash|PowerShell)$/.test(row.tool)).slice(0, 60).map((row) => ({ tool_name: row.tool, tool_input: row.input })),
+    ];
+    const env = { cwd: r.checkout, vars: r.vars, currentBranch: 'feat/x', defaultBranch: 'main' };
+    const decideP95 = bestP95(1000, quick, (i) => timed(() => decide(calls[i % calls.length], r.grant, env)));
+    console.log(`guard in-process (${FULL ? 'strict' : 'loose'}): classify p95=${classifyP95.toFixed(3)}ms decide p95=${decideP95.toFixed(3)}ms over 1,000 calls`);
+    assert.ok(classifyP95 < IN_PROCESS_P95, `classifier p95 ${classifyP95.toFixed(3)} ms`);
+    assert.ok(decideP95 < IN_PROCESS_P95, `decide p95 ${decideP95.toFixed(3)} ms`);
+  } finally {
+    fs.rmSync(r.root, { recursive: true, force: true });
+  }
+});
+
+test(`guard latency: bin/quill-guard.js process p95 <= ${SPAWN_P95} ms over 50 spawns`, () => {
+  const guardBin = fileURLToPath(new URL('../../bin/quill-guard.js', import.meta.url));
+  const r = guardRun();
+  try {
+    const { sha256 } = writeGrant(r.runDir, r.grant);
+    const env = { ...process.env, ...r.vars, QUILL_HANDOFF_GRANT_SHA256: sha256 };
+    delete env.NODE_ENV;
+    const inputs = [
+      { tool_name: 'Read', tool_input: { file_path: path.join(r.checkout, 'src', 'app.js') } },
+      { tool_name: 'Bash', tool_input: { command: 'git commit -m wip && git status' } },
+      { tool_name: 'Bash', tool_input: { command: 'kubectl --context prod delete pod x' } },
+    ].map((c) => JSON.stringify({ session_id: 's', hook_event_name: 'PreToolUse', cwd: r.checkout, ...c }));
+    const p95 = bestP95(50, (v) => v <= SPAWN_P95, (i) => {
+      let out;
+      const ms = timed(() => { out = spawnSync(process.execPath, [guardBin], { input: inputs[i % inputs.length], env, encoding: 'utf8' }); });
+      assert.equal(out.status, 0, out.stderr);
+      assert.match(out.stdout, /"permissionDecision":"(allow|deny)"/);
+      return ms;
+    });
+    console.log(`guard process (${FULL ? 'strict' : 'loose'}): p95=${p95.toFixed(1)}ms over 50 spawns on ${process.platform}`);
+    assert.ok(p95 <= SPAWN_P95, `guard process p95 ${p95.toFixed(1)} ms`);
+  } finally {
+    fs.rmSync(r.root, { recursive: true, force: true });
   }
 });

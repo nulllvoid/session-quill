@@ -664,12 +664,14 @@ test('with the default Quill home under ~/.claude, the checkout and run dir stay
   }
 });
 
-test('decide stays quick on every tool call (M7)', () => {
+// A loose regression ceiling; the spec's 5 ms target is asserted serially in
+// tests/acceptance/perf.test.js under QUILL_PERF_FULL=1 (rulings R14, R16).
+test('decide stays quick on every tool call (M7): p95 under 25 ms', () => {
   const grant = grantWith({ permissions: PUSH, scopes: [K8S_STG, ARGO, JIRA], actionPins: [PIN] });
   const calls = ROWS.map((r) => r[1]);
   // best p95 of three passes, so a busy machine does not fail one pass
   let p95 = Infinity;
-  for (let pass = 0; pass < 3 && p95 >= 5; pass += 1) {
+  for (let pass = 0; pass < 3 && p95 >= 25; pass += 1) {
     const times = [];
     for (let i = 0; i < 1000; i += 1) {
       const t0 = process.hrtime.bigint();
@@ -679,7 +681,7 @@ test('decide stays quick on every tool call (M7)', () => {
     times.sort((a, b) => a - b);
     p95 = Math.min(p95, times[Math.floor(times.length * 0.95)]);
   }
-  assert.ok(p95 < 5, `p95 ${p95.toFixed(3)} ms`);
+  assert.ok(p95 < 25, `p95 ${p95.toFixed(3)} ms`);
 });
 
 test('a checkout whose own path has brackets: only the supplied text is scanned (C1b, R15)', () => {
