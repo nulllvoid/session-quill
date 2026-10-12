@@ -36,8 +36,10 @@ for (const [i, row] of rows.entries()) {
     const got = { class: r.class };
     for (const k of ['scope', 'target', 'host', 'path']) if (k in row.expect) got[k] = r[k];
     if ('paths' in row.expect) got.paths = (r.paths ?? []).map(key).sort();
+    if ('readPaths' in row.expect) got.readPaths = (r.readPaths ?? []).map(key).sort();
     const want = { ...row.expect };
     if (want.paths) want.paths = want.paths.map(key).sort();
+    if (want.readPaths) want.readPaths = want.readPaths.map(key).sort();
     if (want.path) { want.path = key(want.path); got.path = got.path && key(got.path); }
     assert.deepEqual(got, want, `${row.note ?? ''} reason=${r.reason}`);
   });
@@ -60,6 +62,15 @@ test('deep nesting is unparseable, not a stack overflow', () => {
   const parens = `${'('.repeat(5000)}kubectl delete pod p${')'.repeat(5000)}`;
   const r2 = classifyCall({ tool_name: 'Bash', tool_input: { command: parens } }, baseCtx);
   assert.ok(['unparseable', 'write'].includes(r2.class), r2.class);
+});
+
+test('thousands of cd commands are refused quickly, not followed one by one', () => {
+  const cmd = `${'cd a; '.repeat(15000)}echo x > y`;
+  const t0 = process.hrtime.bigint();
+  const r = classifyCall({ tool_name: 'Bash', tool_input: { command: cmd } }, baseCtx);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.equal(r.class, 'unparseable');
+  assert.ok(ms < 1000, `${ms.toFixed(0)} ms`);
 });
 
 test('garbage inputs never throw', () => {

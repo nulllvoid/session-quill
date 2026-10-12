@@ -55,10 +55,12 @@ class Lexer {
     let seg = newSeg(this.d);
     if (this.nest > 1) seg.nested = true;
     let w = null;
-    const start = () => { if (!w) w = { text: '', lit: false, dyn: false, group: false, quoted: false, qpos: -1, split: false }; return w; };
+    const start = () => { if (!w) w = { text: '', lit: false, dyn: false, group: false, quoted: false, qpos: -1, split: false, unq: '' }; return w; };
     const quote = () => { start(); if (w.qpos < 0) w.qpos = w.text.length; w.quoted = true; };
     const flush = () => {
       if (!w) return;
+      // bash brace expansion ({a,b}, {1..3}) turns one word into several
+      if (!ps && !cmd && w.unq && /\{[^{}]*(,|\.\.)[^{}]*\}/.test(w.unq)) { w.split = true; w.dyn = true; }
       const kind = w.split ? 'split' : w.dyn || (w.group && w.lit) ? 'dyn' : w.group ? 'group' : 'lit';
       const word = w;
       w = null;
@@ -86,7 +88,7 @@ class Lexer {
       seg.kinds.push(kind);
       seg.quoted.push(word.qpos === 0);
       const eq = word.text.indexOf('=');
-      seg.assign.push(eq > 0 && (word.qpos < 0 || eq < word.qpos) && /^[A-Za-z_][A-Za-z0-9_]*\+?$/.test(word.text.slice(0, eq)));
+      seg.assign.push(eq > 0 && (word.qpos < 0 || eq < word.qpos) && /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?$/.test(word.text.slice(0, eq)));
     };
     const end = (piped) => {
       flush();
@@ -156,7 +158,7 @@ class Lexer {
         this.i = j;
         return;
       }
-      if (nx && /[0-9@*#?$!-]/.test(nx)) { w.text += s.slice(this.i, this.i + 2); w.dyn = true; this.i += 2; return; }
+      if (nx && /[0-9@*#?$!-]/.test(nx)) { if (nx === '@' || nx === '*') w.split = true; w.text += s.slice(this.i, this.i + 2); w.dyn = true; this.i += 2; return; }
       w.text += '$';
       w.lit = true;
       this.i += 1;
@@ -370,6 +372,14 @@ class Lexer {
           this.i = j + 1;
           continue;
         }
+        if (c === '!' && /^![A-Za-z_][\w]*!/.test(s.slice(this.i, this.i + 256))) {
+          const m = /^![A-Za-z_][\w]*!/.exec(s.slice(this.i, this.i + 256));
+          start();
+          w.text += m[0];
+          w.dyn = true;
+          this.i += m[0].length;
+          continue;
+        }
         if (c === '%') {
           const m = /^%(~[a-z]*\d|[A-Za-z_][\w]*%)/.exec(s.slice(this.i, this.i + 256));
           start();
@@ -427,7 +437,7 @@ class Lexer {
           let j = this.i + 2;
           let text = '';
           while (j < this.n && s[j] !== "'") {
-            if (s[j] === '\\' && j + 1 < this.n) { text += ansiEscape(s[j + 1]); j += 2; continue; }
+            if (s[j] === '\\' && j + 1 < this.n) { const [ch, len] = ansiEscape(s, j + 1); text += ch; j += 1 + len; continue; }
             text += s[j];
             j += 1;
           }
@@ -485,6 +495,7 @@ class Lexer {
       if (c === '<' || c === '>') { redirect(c); continue; }
       start();
       w.text += c;
+      w.unq += c;
       w.lit = true;
       this.i += 1;
     }
@@ -544,8 +555,18 @@ function psEscape(c) {
   return { n: '\n', t: '\t', r: '\r', 0: '\0', a: '\x07', b: '\b', f: '\f', v: '\v', e: '\x1b' }[c] ?? c;
 }
 
-function ansiEscape(c) {
-  return { n: '\n', t: '\t', r: '\r', '\\': '\\', "'": "'", '"': '"', a: '\x07', b: '\b', e: '\x1b', f: '\f', v: '\v' }[c] ?? `\\${c}`;
+// Decodes one $'…' escape starting after the backslash; returns [text, consumed length].
+function ansiEscape(s, i) {
+  const c = s[i];
+  const simple = { n: '\n', t: '\t', r: '\r', '\\': '\\', "'": "'", '"': '"', '?': '?', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v' }[c];
+  if (simple !== undefined) return [simple, 1];
+  let m;
+  if (c === 'x' && (m = /^[0-9A-Fa-f]{1,2}/.exec(s.slice(i + 1, i + 3)))) return [String.fromCodePoint(parseInt(m[0], 16)), 1 + m[0].length];
+  if (c === 'u' && (m = /^[0-9A-Fa-f]{1,4}/.exec(s.slice(i + 1, i + 5)))) return [String.fromCodePoint(parseInt(m[0], 16)), 1 + m[0].length];
+  if (c === 'U' && (m = /^[0-9A-Fa-f]{1,8}/.exec(s.slice(i + 1, i + 9)))) { const cp = parseInt(m[0], 16); return [cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd', 1 + m[0].length]; }
+  if ((m = /^[0-7]{1,3}/.exec(s.slice(i, i + 3)))) return [String.fromCodePoint(parseInt(m[0], 8) & 0xff), m[0].length];
+  if (c === 'c' && i + 1 < s.length) return [String.fromCharCode(s.charCodeAt(i + 1) & 0x1f), 2];
+  return [`\\${c}`, 1];
 }
 
 function lex(src, dialect, nest = 0) {
@@ -555,27 +576,64 @@ function lex(src, dialect, nest = 0) {
 // Normalised program name: basename, lower case, Windows shim extensions removed.
 export function binName(word) {
   if (typeof word !== 'string') return '';
-  return word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(exe|cmd|bat|com)$/, '');
+  return word.replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(exe|cmd|bat|com|ps1)$/, '');
 }
 
 const PS_DANGER_RE = /(\.|::)(invoke\w*|newscriptblock|upload\w*|download\w*|send\w*|start|execute\w*|post\w*|put\w*|delete\w*|write\w*|append\w*|open\w*|connect\w*|getresponse\w*|run\w*|create\w*|exec\w*|copy\w*|move\w*|replacefile)\s*\(/i;
 const BASH_KEYWORDS = new Set(['{', '}', '!', 'if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done']);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ash', 'mksh', 'fish', 'busybox']);
 const POWERSHELLS = new Set(['powershell', 'pwsh', 'powershell_ise']);
-const PASSTHROUGH = new Set(['nohup', 'exec', 'builtin', 'unbuffer', 'chronic', 'noglob', 'stdbuf', 'caffeinate', 'nice', 'ionice', 'doas', 'sudo', 'time', 'command', 'sshpass', 'winpty', 'strace', 'ltrace']);
-const PASS_VALUE_OPTS = {
-  sudo: new Set(['-u', '-g', '-C', '-p', '-h', '-U', '-r', '-t', '-D', '-R', '-T']),
-  doas: new Set(['-u', '-C']),
-  nice: new Set(['-n', '--adjustment']),
-  ionice: new Set(['-c', '-n', '-p', '--class', '--classdata']),
-  stdbuf: new Set(['-i', '-o', '-e']),
-  sshpass: new Set(['-p', '-f', '-d', '-P']),
-  strace: new Set(['-e', '-o', '-p', '-s', '-u', '-E']),
-  ltrace: new Set(['-e', '-o', '-p', '-s', '-u']),
-  time: new Set(['-f', '-o', '--format', '--output']),
+// Wrappers that run the rest of the line. Every option they accept is listed: an unknown option
+// could take a value and shift where the real program starts, so it is unparseable.
+const set = (x) => new Set(x.split(' ').filter(Boolean));
+const PASS = {
+  nohup: [set(''), set('')],
+  exec: [set('-a'), set('-c -l')],
+  builtin: [set(''), set('')],
+  unbuffer: [set(''), set('-p')],
+  chronic: [set(''), set('-e -v')],
+  noglob: [set(''), set('')],
+  stdbuf: [set('-i -o -e --input --output --error'), set('')],
+  caffeinate: [set('-t -w'), set('-d -i -m -s -u')],
+  nice: [set('-n --adjustment'), set('')],
+  ionice: [set('-c -n -p -P -u --class --classdata --pid --pgid --uid'), set('-t --ignore')],
+  doas: [set('-u -C'), set('-n -s -L')],
+  sudo: [set('-u -g -C -p -h -U -r -t -D -R -T --user --group --close-from --prompt --host --other-user --role --type --chdir --chroot --command-timeout'),
+    set('-E -H -n -k -K -b -A -S -P -B -N --preserve-env --set-home --non-interactive --reset-timestamp --remove-timestamp --background --askpass --stdin --preserve-groups --bell --no-update')],
+  time: [set('-f -o --format --output'), set('-p -v -a -q --portability --verbose --append --quiet')],
+  command: [set(''), set('-p')],
+  sshpass: [set('-p -f -d -P'), set('-e -v')],
+  winpty: [set(''), set('')],
+  strace: [set('-e -o -p -s -u -E -P -a -b -I -O -S -X'), set('-f -F -c -C -d -D -h -i -k -q -r -t -T -v -V -w -x -y -z -Z -n')],
+  ltrace: [set('-e -o -p -s -u -a -n -l -x -L'), set('-f -c -C -i -r -S -t -T -b -D -h -V -w')],
+  setsid: [set(''), set('-c -f -w --ctty --fork --wait')],
+  call: [set(''), set('')],
+  coproc: [set(''), set('')],
 };
+const PASSTHROUGH = new Set(Object.keys(PASS));
 const XARGS_VALUE = new Set(['-I', '-i', '-n', '-P', '-d', '-L', '-l', '-E', '-e', '-s', '-a', '--max-args', '--max-procs', '--delimiter', '--arg-file', '--replace', '--max-lines', '--eof', '--max-chars']);
 const PS_VALUE_PARAMS = ['executionpolicy', 'windowstyle', 'version', 'psconsolefile', 'configurationname', 'inputformat', 'outputformat', 'workingdirectory', 'custompipename', 'settingsfile', 'encodedarguments'];
+
+// Index of the first non-option argument from `from`, or -1 on an option the wrapper does not take.
+function skipOptions(a, from, values, flags, extra = null) {
+  let j = from;
+  while (j < a.length && a[j].startsWith('-') && a[j] !== '-') {
+    const t = a[j];
+    if (t === '--') return j + 1;
+    if (extra && extra.test(t)) { j += 1; continue; }
+    if (values.has(t)) { j += 2; continue; }
+    const eq = t.indexOf('=');
+    if (t.startsWith('--') && eq > 0 && (values.has(t.slice(0, eq)) || flags.has(t.slice(0, eq)))) { j += 1; continue; }
+    if (flags.has(t)) { j += 1; continue; }
+    if (!t.startsWith('--') && t.length > 2) {
+      // combined short flags, or a short value option with its value attached (-n10, -oL)
+      if (values.has(t.slice(0, 2))) { j += 1; continue; }
+      if ([...t.slice(1)].every((c) => flags.has(`-${c}`))) { j += 1; continue; }
+    }
+    return -1;
+  }
+  return j;
+}
 
 function looksBase64(v) {
   return typeof v === 'string' && v.length > 0 && v.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(v);
@@ -640,7 +698,7 @@ function expand(seg, depth, out) {
         continue;
       }
       if (w0.startsWith('$') && a.length > 1 && /^[+\-*/]?=$/.test(a[1])) { shift(2); continue; }
-      if (q[0] || w0.startsWith('$') || k[0] === 'group' || /^[\d.]+$/.test(w0) || w0.startsWith('@')) {
+      if (q[0] || w0.startsWith('$') || k[0] === 'group' || /^(\d[\d.]*|\.\d[\d.]*)$/.test(w0) || w0.startsWith('@')) {
         // an expression, not a command; nested groups were lexed separately
         out.push({ ...seg, argv: [], kinds: [], quoted: [], env });
         return;
@@ -658,26 +716,47 @@ function expand(seg, depth, out) {
     if (call && k[0] === 'group' && a[0] === '{…}') { out.push({ ...seg, argv: [], kinds: [], quoted: [], env }); return; }
     if (k[0] !== 'lit') { bad('the program name is not a literal'); return; }
 
+    // cmd/c and Git Bash's cmd //c
+    const glued = /^((?:.*[\\/])?cmd(?:\.exe)?)(\/\/?[ckr])$/i.exec(w0);
+    if (glued) { a.splice(0, 1, glued[1], glued[2]); k.splice(0, 1, 'lit', 'lit'); q.splice(0, 1, false, false); as.splice(0, 1, false, false); continue; }
     const name = binName(w0);
     const rest = () => a.slice(1);
 
     if (PASSTHROUGH.has(name)) {
       if (name === 'command' && /^-[vV]$/.test(a[1] ?? '')) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
-      const vals = PASS_VALUE_OPTS[name] ?? new Set();
-      let j = 1;
-      while (j < a.length && a[j].startsWith('-') && a[j] !== '-') {
-        if (a[j] === '--') { j += 1; break; }
-        if (vals.has(a[j])) j += 1;
-        j += 1;
-      }
-      if (name === 'nice' && /^-\d+$/.test(a[1] ?? '')) j = Math.max(j, 2);
+      if (name === 'sudo' && a.slice(1).some((t) => /^-(i|s|l|e|v|V|-login|-shell|-list|-edit|-validate|-version)$/.test(t)) && !a.slice(1).some((t) => !t.startsWith('-'))) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
+      const j = skipOptions(a, 1, PASS[name][0], PASS[name][1], name === 'nice' ? /^-\d+$/ : null);
+      if (j < 0) { bad(`unknown option for ${name}`); return; }
       if (j >= a.length) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
       shift(j);
       continue;
     }
+    if (name === 'chroot') {
+      const j = skipOptions(a, 1, set('--userspec --groups'), set('--skip-chdir'));
+      if (j < 0) { bad('unknown option for chroot'); return; }
+      if (j + 1 >= a.length) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
+      shift(j + 1);
+      continue;
+    }
+    if (name === 'flock') {
+      let j = skipOptions(a, 1, set('-w -E --timeout --conflict-exit-code'), set('-s -x -n -u -o -e -F --shared --exclusive --nonblock --unlock --close --no-fork --verbose'));
+      if (j < 0) { bad('unknown option for flock'); return; }
+      j += 1; // lock file or directory
+      if (a[j] === '-c' || a[j] === '--command') { if (k[j + 1] !== 'lit') { bad('flock -c with a dynamic command'); return; } script(a[j + 1] ?? '', 'bash'); return; }
+      if (j >= a.length) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
+      shift(j);
+      continue;
+    }
+    if (name === 'source' || (name === '.' && !ps)) {
+      if ((a[1] === '/dev/stdin' || a[1] === '/proc/self/fd/0' || a[1] === '-') && a.length >= 2) {
+        if (seg.stdin !== null) { if (seg.stdinDyn) { bad('sourced input contains expansions'); return; } script(seg.stdin, 'bash'); return; }
+        bad('sourced input is not visible');
+        return;
+      }
+    }
     if (name === 'timeout') {
-      let j = 1;
-      while (j < a.length && a[j].startsWith('-')) { if (a[j] === '-s' || a[j] === '-k' || a[j] === '--signal' || a[j] === '--kill-after') j += 1; j += 1; }
+      let j = skipOptions(a, 1, set('-s -k --signal --kill-after'), set('-v -f -p --verbose --foreground --preserve-status'));
+      if (j < 0) { bad('unknown option for timeout'); return; }
       j += 1; // duration
       if (j >= a.length) { out.push({ ...seg, argv: a, kinds: k, quoted: q, env }); return; }
       shift(j);
@@ -690,7 +769,10 @@ function expand(seg, depth, out) {
         if (t === '--') { j += 1; break; }
         if (t === '-u' || t === '--unset' || t === '-C' || t === '--chdir') { j += 2; continue; }
         if (t === '-S' || t === '--split-string') { const str = a[j + 1]; if (k[j + 1] !== 'lit') { bad('env -S with a dynamic string'); return; } script(str ?? '', 'bash'); return; }
-        if (t.startsWith('-')) { j += 1; continue; }
+        if (t.startsWith('--split-string=')) { if (k[j] !== 'lit') { bad('env -S with a dynamic string'); return; } script(t.slice(15), 'bash'); return; }
+        if (/^--(unset|chdir)=/.test(t)) { j += 1; continue; }
+        if (/^-[i0v]+$/.test(t) || ['--ignore-environment', '--null', '--debug', '-'].includes(t)) { j += 1; continue; }
+        if (t.startsWith('-')) { bad(`unknown option for env: ${t}`); return; }
         if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { const eq = t.indexOf('='); env[t.slice(0, eq)] = k[j] === 'lit' ? t.slice(eq + 1) : null; j += 1; continue; }
         break;
       }
@@ -708,7 +790,11 @@ function expand(seg, depth, out) {
         if (t.startsWith('-I') && t.length > 2) { repl = t.slice(2); j += 1; continue; }
         if (t.startsWith('--replace=')) { repl = t.slice(10); j += 1; continue; }
         if (XARGS_VALUE.has(t)) { j += 2; continue; }
-        j += 1;
+        if (/^--[a-z-]+=/.test(t) && XARGS_VALUE.has(t.slice(0, t.indexOf('=')))) { j += 1; continue; }
+        if (/^-[nPdLlEesa]./.test(t)) { j += 1; continue; }
+        if (/^-[0rtpx]+$/.test(t) || ['--null', '--no-run-if-empty', '--verbose', '--interactive', '--exit', '--open-tty', '-o', '--show-limits'].includes(t)) { j += 1; continue; }
+        bad(`unknown option for xargs: ${t}`);
+        return;
       }
       if (j >= a.length) { a.splice(0, a.length, 'echo'); k.splice(0, k.length, 'lit'); q.splice(0, q.length, false); continue; }
       shift(j);
@@ -738,6 +824,7 @@ function expand(seg, depth, out) {
       shift(j);
       // npx package specs: session-quill@1.2 → session-quill
       a[0] = a[0].replace(/^(@?[^@]+)@.*$/, '$1');
+      if (/^(\.{1,2}([\\/]|$)|[\\/]|[A-Za-z]:[\\/]|file:|git\+|https?:|ssh:)/i.test(a[0])) { bad('npx runs a package from a path or URL'); return; }
       continue;
     }
     if (SHELLS.has(name)) {
@@ -819,7 +906,7 @@ function expand(seg, depth, out) {
       let j = 1;
       let run = false;
       while (j < a.length && a[j].startsWith('/')) {
-        const sw = a[j].toLowerCase();
+        const sw = a[j].toLowerCase().replace(/^\/\//, '/');
         j += 1;
         if (sw === '/c' || sw === '/k' || sw === '/r') { run = true; break; }
         if (/^\/[ck]./.test(sw)) { a.splice(j, 0, a[j - 1].slice(2)); k.splice(j, 0, 'lit'); q.splice(j, 0, false); run = true; break; }
@@ -835,6 +922,7 @@ function expand(seg, depth, out) {
       return;
     }
     if (name === 'eval') {
+      if (a[1] === '--') shift(1);
       if (a.length === 1) { out.push({ ...seg, argv: [], kinds: [], quoted: [], env }); return; }
       if (k.slice(1).some((x) => x !== 'lit')) { bad('eval of a dynamic string'); return; }
       script(rest().join(' '), 'bash');
@@ -861,7 +949,9 @@ function expand(seg, depth, out) {
           const p = t.slice(1).toLowerCase();
           if ('filepath'.startsWith(p) || p === 'path') { file = a[j + 1]; fileKind = k[j + 1]; j += 1; continue; }
           if ('argumentlist'.startsWith(p) || p === 'args') { argList = a[j + 1] === undefined ? [] : [a[j + 1]]; argKinds = [k[j + 1]]; j += 1; continue; }
-          if (['workingdirectory', 'verb', 'windowstyle', 'redirectstandardoutput', 'redirectstandardinput', 'redirectstandarderror', 'credential'].some((v) => p.length >= 2 && v.startsWith(p))) { j += 1; continue; }
+          if (p.length >= 2 && 'verb'.startsWith(p) && /^runas/i.test(a[j + 1] ?? '')) { bad('Start-Process -Verb RunAs elevates'); return; }
+          if (p.length >= 2 && 'credential'.startsWith(p)) { bad('Start-Process as another user'); return; }
+          if (['workingdirectory', 'verb', 'windowstyle', 'redirectstandardoutput', 'redirectstandardinput', 'redirectstandarderror'].some((v) => p.length >= 2 && v.startsWith(p))) { j += 1; continue; }
           continue;
         }
         pos.push(j);
@@ -869,7 +959,7 @@ function expand(seg, depth, out) {
       if (file === null && pos.length) { file = a[pos[0]]; fileKind = k[pos[0]]; if (pos.length > 1 && !argList.length) { argList = pos.slice(1).map((x) => a[x]); argKinds = pos.slice(1).map((x) => k[x]); } }
       if (file === null) { bad('Start-Process without a program'); return; }
       if (fileKind !== 'lit' || argKinds.some((x) => x !== 'lit')) { bad('Start-Process with a dynamic program or arguments'); return; }
-      const inner = [file, ...argList.flatMap((x) => x.split(',')).map((x) => x.trim()).filter(Boolean)].map(quoteForBash).join(' ');
+      const inner = [file, ...argList.flatMap((x) => x.split(/[,\s]+/)).filter(Boolean)].map(quoteForBash).join(' ');
       script(inner, 'bash');
       return;
     }

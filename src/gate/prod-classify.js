@@ -88,20 +88,27 @@ function normalizeAbs(p, ctx) {
 
 // Resolves a literal path word (with ~ and well-known variables) against `cwd`; null when it is
 // not literal enough to apply roots to.
-function resolveLiteral(word, ctx, cwd) {
+function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
   if (typeof word !== 'string' || !word) return null;
   let p = word;
   if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
     if (!ctx.home) return null;
     p = ctx.home + p.slice(1);
   }
+  if (p.startsWith('~')) return null; // ~user, ~+ and ~- are not resolvable here
+  // PowerShell provider-qualified paths: only the FileSystem provider names a file
+  p = p.replace(/^(Microsoft\.PowerShell\.Core\\)?FileSystem::/i, '');
+  if (/^[A-Za-z][\w.\\]*::/.test(p) || /^[A-Za-z][A-Za-z0-9_]+:/.test(p)) return null;
   let unresolved = false;
-  p = p.replace(/\$\{env:([A-Za-z_][\w]*)\}|\$env:([A-Za-z_][\w]*)|\$\{([A-Za-z_][\w]*)\}|\$([A-Za-z_][\w]*)|%([A-Za-z_][\w]*)%/gi, (m, a, b, c, d, e) => {
-    const v = envLookup(ctx, a || b || c || d || e);
-    if (typeof v !== 'string' || !v) { unresolved = true; return m; }
-    return v;
-  });
-  if (unresolved || /[$`]|\$\(|%[A-Za-z_]/.test(p)) return null;
+  // a literal word (quoted or plain text) has no expansions; only expand words the shell expands
+  if (kind !== 'lit') {
+    p = p.replace(/\$\{env:([A-Za-z_][\w]*)\}|\$env:([A-Za-z_][\w]*)|\$\{([A-Za-z_][\w]*)\}|\$([A-Za-z_][\w]*)|%([A-Za-z_][\w]*)%/gi, (m, a, b, c, d, e) => {
+      const v = envLookup(ctx, a || b || c || d || e);
+      if (typeof v !== 'string' || !v) { unresolved = true; return m; }
+      return v;
+    });
+  }
+  if (unresolved || (kind !== 'lit' && /[$`]|\$\(|%[A-Za-z_]/.test(p))) return null;
   const win = isWin(ctx);
   if (win) {
     const msys = /^\/([A-Za-z])(\/|$)(.*)$/.exec(p);
@@ -112,7 +119,12 @@ function resolveLiteral(word, ctx, cwd) {
       p = t + p.slice(4);
     }
     const base = cwd ?? 'C:\\';
-    return path.win32.resolve(base, p);
+    let r = path.win32.resolve(base, p);
+    // Windows ignores trailing dots and spaces and treats name:stream as the same file
+    const colon = r.indexOf(':', 2);
+    if (colon >= 0) r = r.slice(0, colon);
+    r = r.split('\\').map((c, i) => (i === 0 ? c : c.replace(/[. ]+$/, ''))).join('\\');
+    return r;
   }
   return path.posix.resolve(cwd ?? '/', p);
 }
@@ -174,7 +186,40 @@ function classifySegment(seg, ctx, st) {
   const name = binName(seg.argv[0]);
   const res = classifyCommand(name, seg, ctx, h);
   if (h.bad) return unparseable(h.bad);
+  if (res.class === 'local' && (!DATA_COMMANDS.has(name) || (name === 'sed' && SED_EXEC_RE.test(seg.argv.slice(1).join(' '))))) {
+    const b = backstop(name, seg, ctx);
+    if (b) return b;
+  }
   return res;
+}
+
+// Words that are only data for these programs; anything else that mentions a prod binary with a
+// changing verb in its arguments (or its input) may well run it.
+const DATA_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'findstr', 'select-string', 'sls', 'write-output', 'write-host', 'write-information',
+  'write-verbose', 'write-warning', 'write-error', 'write-debug', 'which', 'where', 'whereis', 'type', 'get-command', 'gcm', 'command', 'man', 'help', 'get-help', 'jq', 'yq', 'sed', 'test', '[', '[[',
+  'cat', 'head', 'tail', 'wc', 'sort', 'uniq', 'tr', 'cut', 'column', 'less', 'more', 'base64', 'nl', 'od', 'xxd', 'hexdump', 'strings', 'diff', 'cmp', 'comm', 'tee', 'rem', 'true', 'false', ':',
+  'get-content', 'gc', 'out-file', 'set-content', 'add-content', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'ls', 'dir', 'find', 'stat', 'file', 'basename', 'dirname', 'realpath', 'readlink',
+  'export', 'declare', 'typeset', 'local', 'readonly', 'unset', 'set', 'cd', 'pushd', 'popd', 'set-location', 'sl', 'git', 'gh', 'source']);
+// GNU sed's `e` command and the s///e flag run shell commands.
+const SED_EXEC_RE = /(^|[\s;{}0-9$\/,'"])e(\s|$)|\/[gpiImMw0-9]*e[gpiImMw0-9]*(\s|;|$|'|")/;
+let backstopReCache = null;
+const backstopRe = () => (backstopReCache ??= new RegExp(`(^|[^A-Za-z0-9_-])(${[...PROD_BINS, 'quill', 'session-quill'].map((b) => b.replace(/-/g, '\\-')).join('|')})(\\.exe|\\.cmd|\\.ps1)?($|[^A-Za-z0-9_.-])`, 'i'));
+const NOOP_H = { bad: null, write: () => true, read: () => true, chdir: () => {}, script: () => local('nested script') };
+
+function backstop(name, seg, ctx) {
+  const text = [seg.argv.slice(1).join(' '), seg.stdin ?? ''].join(' ');
+  if (!backstopRe().test(text)) return null;
+  const tokens = text.split(/[\s'"`;&|(){}!,=<>]+/).filter(Boolean);
+  for (let i = 0; i < tokens.length - 1; i += 1) {
+    const nm = binName(tokens[i]).replace(/\.ps1$/, '');
+    if (!PROD_BINS.includes(nm) && nm !== 'quill' && nm !== 'session-quill') continue;
+    const argv = tokens.slice(i);
+    const fake = { argv, kinds: argv.map(() => 'lit'), redirects: [], stdin: null, stdinDyn: false, piped: false, env: {}, dialect: 'bash', nested: true };
+    const inner = classifyCommand(nm, fake, ctx, NOOP_H);
+    if (inner.class === 'privileged') return privileged(`${name} arguments run ${nm}: ${inner.reason}`);
+    if (inner.class !== 'local' && inner.class !== 'read') return unknownProd(`${name} arguments mention ${nm} ${argv[1] ?? ''}, which may run it (${inner.reason})`);
+  }
+  return null;
 }
 
 function helpers(seg, ctx, st) {
@@ -182,8 +227,9 @@ function helpers(seg, ctx, st) {
     bad: null,
     write(word, kind = 'lit') {
       if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'write target is not literal'; return false; }
+      if (/[*?[]|\{[^{}]*(,|\.\.)[^{}]*\}/.test(String(word))) { h.bad = `write target has wildcards: ${String(word).slice(0, 80)}`; return false; }
       if (NULL_TARGETS.has(String(word).toLowerCase())) return true;
-      const p = st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined);
+      const p = st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined, kind);
       if (!p) { h.bad = `write target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.paths.push(p);
       return true;
@@ -191,12 +237,14 @@ function helpers(seg, ctx, st) {
     read(word, kind = 'lit') {
       if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'read target is not literal'; return false; }
       if (NULL_TARGETS.has(String(word).toLowerCase()) || word === '-') return true;
-      const p = st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined);
+      const p = st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined, kind);
       if (!p) { h.bad = `read target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
       st.readPaths.push(p);
       return true;
     },
     chdir(word, kind) {
+      st.cds = (st.cds ?? 0) + 1;
+      if (st.cds > 256) { h.bad = 'too many directory changes to follow'; st.cwd = null; return; }
       if (seg.nested || kind !== 'lit' || word === '-') { st.cwd = null; return; }
       const p = word === undefined ? ctx.home ?? null : st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined);
       st.cwd = p ?? null;
@@ -256,18 +304,25 @@ function scan(args, kinds, { values = new Set(), booleans = new Set(), longDefau
 
 // ---------------------------------------------------------------- dispatch
 
-const SCRIPT_NAME_RE = /deploy|release|publish|apply|migrate|rollout|provision|destroy/i;
+const SCRIPT_NAME_RE = /deploy|release|publish|apply|migrate|rollout|provision|destroy|\bprod(uction)?\b/i;
 const SCRIPT_EXT_RE = /\.(sh|bash|zsh|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|mts|rb|pl|php)$/i;
 const PROD_BINS = ['kubectl', 'helm', 'k9s', 'aws', 'gcloud', 'gsutil', 'bq', 'az', 'argocd', 'psql', 'mysql', 'mongosh', 'mongo', 'redis-cli', 'terraform', 'tofu', 'pulumi', 'cdk', 'serverless', 'sls', 'eksctl', 'sqlcmd'];
 const PROD_BIN_RE = new RegExp(`(^|[^A-Za-z0-9_-])(${PROD_BINS.map((b) => b.replace(/-/g, '\\-')).join('|')})(\\.exe)?([^A-Za-z0-9_-]|$)`, 'i');
-const SDK_RE = /@aws-sdk|aws-sdk|\bboto3\b|\bbotocore\b|@kubernetes\/client-node|\bkubernetes\b|@google-cloud|google\.cloud|\bgoogleapis\b|@azure\/|\bazure\.(identity|mgmt|storage|cosmos)|\bmysql2?\b|\bpsycopg2?\b|\bpg8000\b|\bsqlalchemy\b|\bmongodb\b|\bpymongo\b|\bioredis\b|\bredis\b|\bsequelize\b|\bknex\b|@prisma\/client|\btypeorm\b|\bpyodbc\b|\bmssql\b|\btedious\b/i;
+const SDK_RE = /@aws-sdk|aws-sdk|\bboto3\b|\bbotocore\b|@kubernetes\/client-node|\bkubernetes\b|@google-cloud|google\.cloud|\bgoogleapis\b|@azure\/|\bazure\.(identity|mgmt|storage|cosmos)|\bmysql2?\b|\bpsycopg2?\b|\bpg8000\b|\bsqlalchemy\b|\bmongodb\b|\bpymongo\b|\bioredis\b|\bredis\b|\bsequelize\b|\bknex\b|@prisma\/client|\btypeorm\b|\bpyodbc\b|\bmssql\b|\btedious\b|\bpymysql\b|mysql\.connector|\bcx_Oracle\b|\boracledb\b|\bsnowflake\b|\bclickhouse|\bcassandra\b|\belasticsearch\b|@elastic\/|\bkafka|\bhvac\b|node-vault|\bstripe\b/i;
+// Inline code that starts processes or evaluates strings can run anything, however it spells it.
+const PROCESS_IN_CODE_RE = /child_process|\bsubprocess\b|\bos\.(system|popen|exec\w*|spawn\w*)|\bspawn(Sync)?\s*\(|\bexec(Sync|File|FileSync)?\s*\(|\bPopen\b|\bsystem\s*\(|\beval\s*\(|\b__import__\b|\bimportlib\b|Deno\.(run|Command)|Bun\.(spawn|\$)|\bshell_exec\b|\bpassthru\b|\bproc_open\b|\bpopen\s*\(|IO\.popen|%x[({[]|Runtime\.getRuntime|\bnew Function\s*\(/;
+const BACKTICK_LANGS = new Set(['perl', 'ruby', 'php', 'awk']);
 const PG_RE = /require\(\s*['"]pg['"]\s*\)|from\s+['"]pg['"]|import\s+pg\b|import\(\s*['"]pg['"]\s*\)/;
-const QUILL_IN_CODE_RE = /session-quill|[\\/]bin[\\/]quill\.js|['"`]quill(\.cmd)?['"`\s]/i;
+const QUILL_IN_CODE_RE = /session-quill|[\\/]bin[\\/]quill\.js|src[\\/]cli[\\/]|['"`]quill(\.cmd|\.ps1)?['"`\s]/i;
+const HTTP_LIB_RE = /\b(requests|httpx|axios|aiohttp|urllib\w*|got|superagent|ky|needle|node-fetch|undici|fetch|http\.client|https?|XMLHttpRequest|WebClient|HttpClient|Net::HTTP|Faraday|curl_init)\b/i;
+const HTTP_WRITE_IN_CODE_RE = /\b(requests|httpx|session|client|aiohttp|axios|got|superagent|ky|needle|urllib3|http)\s*\.\s*(post|put|patch|delete|request)\s*\(|method\s*[:=]\s*['"`]?(post|put|patch|delete)\b|\bbody\s*:|\bdata\s*=\s*b?['"{]|urlopen\s*\([^)]*data\s*=|Request\s*\([^)]*data\s*=|\bsmtplib\b|\bnodemailer\b|\bnet\.(connect|createConnection)\b|\bsocket\.(socket|create_connection)\b|\bftplib\b|\bparamiko\b/i;
 
 function inlineCode(code, kind, lang) {
   if (kind !== 'lit') return unknownProd(`${lang} inline code is not literal`);
   if (QUILL_IN_CODE_RE.test(code)) return privileged(`${lang} inline code invokes the Quill CLI`);
   if (PROD_BIN_RE.test(code) || SDK_RE.test(code) || PG_RE.test(code)) return unknownProd(`${lang} inline code names a prod binary or SDK client`);
+  if (PROCESS_IN_CODE_RE.test(code) || (BACKTICK_LANGS.has(lang) && /`[^`]+`/.test(code)) || (lang === 'awk' && /getline|\|\s*"|print[^;]*\|/.test(code))) return unknownProd(`${lang} inline code starts processes or evaluates code the guard cannot follow`);
+  if (HTTP_WRITE_IN_CODE_RE.test(code) || (HTTP_LIB_RE.test(code) && /\.\s*(post|put|patch|delete|request|send|upload)\w*\s*\(/i.test(code))) return xwrite('http.write', undefined, `${lang} inline code sends data over the network`);
   return local(`${lang} inline code`);
 }
 
@@ -329,7 +384,17 @@ function classifyCommand(name, seg, ctx, h) {
     case 'python': case 'python3': case 'py': case 'pythonw': case 'python2':
       return python(args, ak, seg, ctx, h);
     case 'ruby': case 'perl': case 'php': {
-      const flag = name === 'php' ? '-r' : name === 'perl' ? /^-[eE]$/ : '-e';
+      if ((name === 'perl' || name === 'ruby') && args.some((t) => /^-[a-zA-Z]*i/.test(t) && !t.startsWith('--'))) {
+        let codeGiven = false;
+        const files = [];
+        for (let i = 0; i < args.length; i += 1) {
+          if (/^-[a-zA-Z]*[eE]$/.test(args[i])) { codeGiven = true; i += 1; continue; }
+          if (args[i].startsWith('-')) continue;
+          files.push(i);
+        }
+        for (const i of codeGiven ? files : files.slice(1)) h.write(args[i], ak[i]);
+      }
+      const flag = name === 'php' ? '-r' : name === 'perl' ? /^-[a-zA-Z]*[eE]$/ : /^-[a-zA-Z]*e$/;
       for (let i = 0; i < args.length; i += 1) {
         if ((typeof flag === 'string' && args[i] === flag) || (flag instanceof RegExp && flag.test(args[i]))) return inlineCode(args[i + 1] ?? '', ak[i + 1], name);
         if (!args[i].startsWith('-')) return scriptByName(args[i], args.slice(i + 1));
@@ -369,7 +434,13 @@ function classifyCommand(name, seg, ctx, h) {
     case 'docker': case 'podman': case 'nerdctl': return docker(name, args, ak, seg);
     case 'twine': return args.includes('upload') ? xwrite('package.publish', undefined, 'twine upload publishes a package') : local('twine');
     case 'gem': return args[0] === 'push' || args[0] === 'yank' || args[0] === 'owner' ? xwrite('package.publish', 'rubygems.org', `gem ${args[0]} publishes`) : local('gem');
-    case 'cargo': return ['publish', 'yank', 'owner'].includes(args[0]) ? xwrite('package.publish', 'crates.io', `cargo ${args[0]} publishes`) : local('cargo');
+    case 'cargo': return ['publish', 'yank', 'owner'].includes(args[0]) ? xwrite('package.publish', 'crates.io', `cargo ${args[0]} publishes`) : args[0] === 'run' && args.some((x) => SCRIPT_NAME_RE.test(x)) ? unknownProd('cargo run of a deploy/release binary') : local('cargo');
+    case 'go': return args[0] === 'run' && args.some((x) => SCRIPT_NAME_RE.test(x)) ? unknownProd('go run of a deploy/release program') : local('go');
+    case 'oc': return kubectl(args, ak, seg, ctx);
+    case 'ansible': case 'ansible-playbook': case 'skaffold': case 'velero': case 'istioctl': case 'linkerd': case 'flux': case 'vault': case 'consul': case 'nomad': case 'doctl':
+    case 'oci': case 'ibmcloud': case 'heroku': case 'supabase': case 'wrangler': case 'drizzle-kit': case 'fly': case 'flyctl': case 'vercel': case 'netlify': case 'railway': case 'glab': case 'hub':
+    case 'mysqladmin': case 'dropdb': case 'createdb': case 'pg_restore': case 'pg_ctl': case 'clickhouse-client': case 'clickhouse': case 'cqlsh': case 'mongorestore': case 'mongoimport': case 'cf': case 'kn': case 'rosa':
+      return otherProd(name, args);
     case 'poetry': return args.includes('publish') ? xwrite('package.publish', undefined, 'poetry publish') : local('poetry');
     case 'dotnet': return args[0] === 'nuget' && args[1] === 'push' ? xwrite('package.publish', undefined, 'dotnet nuget push') : args[0] === 'ef' && args[1] === 'database' ? unknownProd('dotnet ef database update') : local('dotnet');
     case 'nuget': return args[0]?.toLowerCase() === 'push' ? xwrite('package.publish', undefined, 'nuget push') : local('nuget');
@@ -385,8 +456,37 @@ function classifyCommand(name, seg, ctx, h) {
       return unknownProd(`${name} runs commands on a remote host`);
     }
     case 'sftp': case 'ftp': case 'lftp': return unknownProd(`${name} transfers files to a remote host`);
+    case 'smbclient': return xwrite('http.write', remoteHost(String(args.find((x) => x.startsWith('//')) ?? '').replace(/^\/\/([^/]+).*$/, '$1:')), 'smbclient can upload files');
+    case 'openssl': {
+      if (['s_client', 's_server'].includes(args[0])) {
+        const i = args.indexOf('-connect');
+        return xwrite('http.write', i >= 0 ? hostOf(args[i + 1]) : undefined, 'openssl s_client sends its input to a host');
+      }
+      return local('openssl');
+    }
+    case 'mshta': case 'rundll32': case 'regsvr32': case 'msbuild': case 'installutil': case 'regasm': case 'regsvcs': case 'add-type':
+      return unparseable(`${name} loads or runs code the guard cannot follow`);
+    case 'cscript': case 'wscript': {
+      const f = args.find((x) => !x.startsWith('//') && !x.startsWith('/'));
+      return f ? scriptByName(f) : unparseable(`${name} without a script`);
+    }
+    case 'invoke-item': case 'ii': {
+      const s = psParams(args, ak, { values: ['path', 'literalpath', 'filter', 'include', 'exclude', 'credential'], switches: [] });
+      const t = s.get('path') ?? s.get('literalpath') ?? s.pos[0];
+      if (!t || t.kind !== 'lit') return unparseable('Invoke-Item target is not literal');
+      return /\.(lnk|url|exe|bat|cmd|com|ps1|vbs|vbe|js|jse|wsf|wsh|hta|msi|scr|pif)$/i.test(String(t.v)) ? strictest(scriptByName(t.v), unknownProd('Invoke-Item runs a program or shortcut')) : local('open a file');
+    }
+    case 'register-scheduledtask': case 'new-scheduledtask': case 'set-scheduledtask': case 'start-scheduledtask': case 'schtasks': case 'new-service':
+      if (name === 'schtasks' && args.some((x) => /^\/query$/i.test(x))) return local('schtasks /query');
+      return unknownProd(`${name} schedules or installs something that runs later`);
+    case 'stop-computer': case 'restart-computer': return unknownProd(`${name} shuts down or restarts a machine`);
+    case 'stop-process': case 'spps': case 'kill': case 'stop-service': case 'restart-service': case 'start-service': case 'set-service': case 'suspend-service': {
+      if (args.some((x) => /^-(computername|cn)$/i.test(x))) return unknownProd(`${name} on a remote computer`);
+      return local(name);
+    }
     case 'nc': case 'ncat': case 'netcat': case 'socat': case 'telnet': {
-      const host = args.find((x) => !x.startsWith('-'));
+      const addr = name === 'socat' ? args.map((x) => /^(?:tcp|udp|ssl|openssl|sctp)[46]?(?:-connect)?:([^:,]+)/i.exec(x)).find(Boolean) : null;
+      const host = addr ? addr[1] : args.find((x) => !x.startsWith('-'));
       return xwrite('http.write', host, `${name} can send data to any host`);
     }
     case 'sendmail': case 'mail': case 'mailx': case 'mutt': case 'send-mailmessage':
@@ -402,6 +502,51 @@ function classifyCommand(name, seg, ctx, h) {
       return unknownProd(`${name} reaches a remote or management interface`);
     }
     case 'invoke-sqlcmd': return invokeSqlcmd(args, ak, h);
+    case 'at': case 'batch': case 'crontab': {
+      if (name === 'crontab') {
+        const files = args.filter((t, i) => (!t.startsWith('-') || t === '-') && args[i - 1] !== '-u');
+        if (!files.length && args.some((t) => /^-[lre]$/.test(t))) return local('crontab inspection');
+        if (files.length && files[0] !== '-') return unknownProd('crontab installs a schedule from a file');
+      }
+      if (name === 'at' && args.includes('-f')) return unknownProd('at runs a script file later');
+      if (seg.stdin !== null) { if (seg.stdinDyn) return unparseable(`${name} input has expansions`); return strictest(unknownProd(`${name} schedules commands`), h.script(seg.stdin, 'bash')); }
+      return unparseable(`${name} schedules commands the guard cannot see`);
+    }
+    case 'patch': {
+      const s = scan(args, ak, { values: new Set(['-p', '-i', '--input', '-o', '--output', '-d', '--directory', '-r', '--reject-file', '-B', '-D', '-F', '-V', '-z', '-Y', '-g']) });
+      const out = s.all('-o', '--output')[0];
+      const dir = s.all('-d', '--directory')[0];
+      if (out) h.write(out.v, out.kind);
+      else if (s.pos[0]) h.write(s.pos[0], s.posKinds[0]);
+      else h.write(dir ? dir.v : '.', dir ? dir.kind : 'lit');
+      for (const x of s.all('-i', '--input')) h.read(x.v, x.kind);
+      return local('patch');
+    }
+    case 'robocopy': case 'xcopy': {
+      const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/') && !x.v.startsWith('-'));
+      if (pos[0]) h.read(pos[0].v, pos[0].kind);
+      if (pos[1]) h.write(pos[1].v, pos[1].kind); else h.write('.', 'lit');
+      return local(`${name} files`);
+    }
+    case 'icacls': case 'takeown': case 'attrib': case 'cacls': {
+      const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/') && !/^[+-][rahsi]$/i.test(x.v));
+      if (!pos.length) return local(name);
+      h.write(pos[0].v, pos[0].kind);
+      return local(`${name} changes file attributes`);
+    }
+    case 'mklink': {
+      const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/'));
+      for (const x of pos) h.write(x.v, x.kind);
+      if (pos.length < 2) h.bad = 'mklink without link and target';
+      return local('mklink');
+    }
+    case 'start-transcript': {
+      const s = psParams(args, ak, { values: ['path', 'literalpath', 'outputdirectory'], switches: ['append', 'force', 'noclobber', 'includeinvocationheader', 'useminimalheader'] });
+      const t = s.get('path') ?? s.get('literalpath') ?? s.get('outputdirectory') ?? s.pos[0];
+      if (!t || t.v === true) { h.bad = 'Start-Transcript writes to a default location'; return local('transcript'); }
+      h.write(t.v, t.kind);
+      return local('transcript');
+    }
     case 'alias': {
       let worst = local('alias');
       for (let i = 0; i < args.length; i += 1) {
@@ -422,6 +567,7 @@ function classifyCommand(name, seg, ctx, h) {
     case 'awk': case 'gawk': case 'mawk': case 'nawk': {
       const s = scan(args, ak, { values: new Set(['-F', '-v', '-f', '--file', '--assign', '--field-separator', '-i', '--include', '-l', '--load', '-E', '--exec']) });
       const file = s.first('-f', '--file', '-E', '--exec');
+      if (s.all('-i', '--include').some((x) => x.v === 'inplace')) for (let i = file !== undefined ? 0 : 1; i < s.pos.length; i += 1) h.write(s.pos[i], s.posKinds[i]);
       if (file !== undefined) return typeof file === 'string' ? scriptByName(file) : unparseable('awk program file is not literal');
       if (!s.pos.length) return local('awk');
       return inlineCode(s.pos[0], s.posKinds[0], 'awk');
@@ -436,6 +582,18 @@ function classifyCommand(name, seg, ctx, h) {
     const fileRes = posixFileCommand(name, args, ak, h);
     if (fileRes) return fileRes;
   }
+  if (ps && ['get-childitem', 'gci', 'ls', 'dir'].includes(name)) {
+    const s = psParams(args, ak, { values: ['path', 'literalpath', 'filter', 'include', 'exclude', 'depth', 'attributes'], switches: ['recurse', 'force', 'name', 'directory', 'file', 'hidden', 'readonly', 'system', 'followsymlink'] });
+    const t = s.get('path') ?? s.get('literalpath') ?? s.pos[0];
+    if (t && t.v !== true) for (const one of splitPs(t.v)) h.read(one, t.kind);
+    return local('list a directory');
+  }
+  if (ps && ['select-string', 'sls'].includes(name)) {
+    const s = psParams(args, ak, { values: ['path', 'literalpath', 'pattern', 'include', 'exclude', 'context', 'encoding', 'culture'], switches: ['simplematch', 'casesensitive', 'quiet', 'list', 'notmatch', 'allmatches', 'raw', 'noemphasis'] });
+    const t = s.get('path') ?? s.get('literalpath') ?? s.pos[s.get('pattern') ? 0 : 1];
+    if (t && t.v !== true) for (const one of splitPs(t.v)) h.read(one, t.kind);
+    return local('search files');
+  }
   if (ps && ['get-content', 'gc', 'type', 'cat', 'import-csv', 'ipcsv', 'import-clixml'].includes(name)) {
     const s = psParams(args, ak, { values: ['path', 'literalpath', 'totalcount', 'head', 'tail', 'first', 'encoding', 'delimiter', 'readcount', 'filter', 'include', 'exclude', 'stream', 'header'], switches: ['raw', 'wait', 'force', 'asbytestream'] });
     for (const p of [s.get('path'), s.get('literalpath'), s.pos[0]].filter(Boolean)) for (const one of splitPs(p.v)) h.read(one, p.kind);
@@ -445,6 +603,29 @@ function classifyCommand(name, seg, ctx, h) {
   // repo scripts run by path or with a script extension
   if (/[\\/]/.test(argv[0]) || SCRIPT_EXT_RE.test(argv[0])) return scriptByName(argv[0], args);
   return local(`${name} is not a prod binary`);
+}
+
+const OTHER_READ = new Set(['get', 'list', 'ls', 'show', 'describe', 'status', 'version', 'help', 'info', 'logs', 'read', 'whoami', 'diff', 'template', 'lint', 'validate', 'check', 'view', 'inspect', 'search', 'render', 'history', 'tail']);
+
+// Prod-capable CLIs outside the spec's list: a recognised read verb is a read, anything else is
+// unknown-prod (there is no scope for them yet).
+function otherProd(name, args) {
+  if (['mysqladmin', 'dropdb', 'createdb', 'pg_restore', 'pg_ctl', 'mongorestore', 'mongoimport'].includes(name)) {
+    if (name === 'mysqladmin' && args.length && args.every((x) => x.startsWith('-') || ['status', 'version', 'ping', 'processlist', 'variables', 'extended-status'].includes(x))) return read(`${name} status`);
+    return unknownProd(`${name} changes a database`);
+  }
+  if (['clickhouse-client', 'clickhouse', 'cqlsh'].includes(name)) {
+    const i = args.findIndex((x) => x === '-q' || x === '--query' || x === '-e' || x === '--execute');
+    if (i >= 0) return sqlReadOnly(args[i + 1] ?? '') ? read(`${name} read-only query`) : write('db.write', undefined, `${name} runs a query that is not read-only`);
+    return unknownProd(`${name} input is not visible`);
+  }
+  const words = args.filter((x) => !x.startsWith('-'));
+  if (!words.length && args.some((x) => /^--?(version|help|h)$/.test(x))) return read(`${name} info`);
+  if (name === 'vault' && words.some((x) => ['get', 'read', 'login', 'token'].includes(x))) return unknownProd('vault reads secrets or credentials');
+  const hit = words.slice(0, 4).find((x) => OTHER_READ.has(x.toLowerCase()) || /^(list|get|describe|show)-/.test(x));
+  const writey = words.slice(0, 4).find((x) => GC_WRITE.has(x.toLowerCase()) || MCP_MUTATING.has(x.toLowerCase()) || MCP_WRITE_VERBS.has(x.toLowerCase()) || /^(set|add|remove|delete|put)/.test(x));
+  if (hit && (!writey || words.indexOf(hit) < words.indexOf(writey)) && name !== 'ansible' && name !== 'ansible-playbook') return read(`${name} ${hit}`);
+  return unknownProd(`${name} ${words[0] ?? ''} is a prod-capable command without a scope`.trim());
 }
 
 function strictest(a, b) {
@@ -466,8 +647,10 @@ function kubectl(args, ak, seg, ctx) {
   const w = (why) => write('k8s.write', target, why);
   if (!verb) return s.has('--version', '-h', '--help') ? read('kubectl info') : w('kubectl without a verb');
   if (s.posKinds[0] !== 'lit') return w('kubectl verb is not literal');
-  const dry = s.first('--dry-run');
+  const dryAll = s.all('--dry-run');
+  const dry = dryAll.length ? dryAll[dryAll.length - 1].v : undefined; // kubectl uses the last one
   const dryRun = dry === true || dry === 'client' || dry === 'server';
+  if (s.has('--raw')) return w('raw API request (may read secrets or change state)');
   if (verb === 'get') {
     const resources = s.pos.slice(1);
     if (resources.some((x, i) => s.posKinds[i + 1] !== 'lit' && i === 0)) return w('kubectl get of a dynamic resource');
@@ -493,6 +676,7 @@ function helm(args, ak, ctx) {
   const target = s.first('--kube-context') ?? ctx.kubeContext;
   if (!verb) return read('helm info');
   if (verb === 'push') return xwrite('package.publish', undefined, 'helm push publishes a chart');
+  if (verb === 'get' && !['notes', 'metadata'].includes(sub)) return write('k8s.write', target, `helm get ${sub ?? ''} can reveal secret values`.trim());
   if (HELM_READ.has(verb)) return read(`helm ${verb}`);
   if (verb === 'repo' && ['list', 'ls', 'add', 'update', 'up', 'index'].includes(sub)) return read(`helm repo ${sub}`);
   if ((verb === 'dependency' || verb === 'dep') && ['list', 'ls', 'build', 'update', 'up'].includes(sub)) return read(`helm dependency ${sub}`);
@@ -646,7 +830,7 @@ function stripSql(sql) {
     if (c === "'" || c === '"' || c === '`') {
       let j = i + 1;
       while (j < sql.length) {
-        if (sql[j] === '\\' && c === "'") { j += 2; continue; }
+        if (sql[j] === '\\' && c === "'") return null; // E'' and MySQL escapes vs standard strings disagree; not read-only
         if (sql[j] === c) { if (sql[j + 1] === c) { j += 2; continue; } break; }
         j += 1;
       }
@@ -664,6 +848,8 @@ function stripSql(sql) {
 }
 
 const SQL_DML_RE = /\b(insert|update|delete|merge|upsert|replace|truncate|drop|alter|create|grant|revoke|copy|call|do|lock|vacuum|reindex|cluster|refresh|comment|security|set|reset|listen|notify|unlisten|prepare|execute|exec|import|load|handler|rename|attach|detach|checkpoint|discard|reassign|kill|shutdown|flush|install|uninstall|purge|optimize|repair|analyze|into)\b/i;
+// A user function whose name says it changes something is not trusted to be read-only.
+const SQL_WRITEY_FN_RE = /\b\w*(delete|drop|insert|update|truncate|purge|kill|exec|reset|create|alter|grant|revoke|write|modify|remove|terminate|clean|wipe|apply|migrate|refresh|import|load|send|notify)\w*\s*\(/i;
 const SQL_FN_RE = /\b(pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|set_config|lo_import|lo_export|lo_unlink|lo_create|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_file_write|dblink\w*|nextval|setval|pg_switch_wal|pg_create_restore_point|pg_\w*replication_slot\w*|pg_logical_\w+|pg_promote|pg_wal_replay_\w+|pg_advisory_\w*lock\w*|load_file|sys_exec|sys_eval|xp_\w+|sp_\w+|sleep|benchmark|get_lock|release_lock)\s*\(/i;
 
 // True only when every statement is SELECT / SHOW / EXPLAIN (no ANALYZE) / DESCRIBE / WITH … SELECT.
@@ -678,6 +864,7 @@ export function sqlReadOnly(sql) {
   for (const m of meta) if (!/^\\(d[A-Za-z+]*|l\+?|conninfo|x|timing|\?|z|encoding)(\s|$)/.test(m)) return false;
   const cleaned = stripSql(lines.join('\n'));
   if (cleaned === null) return false;
+  if (cleaned.includes('\\')) return false; // \gexec, \g |cmd, \o, \! … mid-line
   const stmts = cleaned.split(';').map((x) => x.trim()).filter(Boolean);
   if (!stmts.length) return meta.length > 0;
   for (const st of stmts) {
@@ -685,7 +872,7 @@ export function sqlReadOnly(sql) {
     if (first === 'show' || first === 'describe' || first === 'desc') { if (/\b(into|set)\b/i.test(st)) return false; continue; }
     if (first === 'explain') { if (/\banalyze\b/i.test(st)) return false; continue; }
     if (first !== 'select' && first !== 'with' && first !== 'values' && first !== 'table') return false;
-    if (SQL_DML_RE.test(st) || SQL_FN_RE.test(st)) return false;
+    if (SQL_DML_RE.test(st) || SQL_FN_RE.test(st) || SQL_WRITEY_FN_RE.test(st)) return false;
   }
   return true;
 }
@@ -700,7 +887,10 @@ const PSQL_VALUES = new Set(['-c', '--command', '-f', '--file', '-d', '--dbname'
 function psql(args, ak, seg, ctx, h) {
   const s = scan(args, ak, { values: PSQL_VALUES });
   const target = s.first('-h', '--host') ?? s.first('-d', '--dbname') ?? ctx.dbEnv;
-  for (const o of s.all('-o', '--output', '-L', '--log-file')) h.write(o.v, o.kind);
+  for (const o of s.all('-o', '--output', '-L', '--log-file')) {
+    if (String(o.v ?? '').trim().startsWith('|')) return unknownProd('psql output is piped into a command');
+    h.write(o.v, o.kind);
+  }
   if (s.has('-f', '--file')) return unknownProd('psql -f runs a SQL file the guard cannot see');
   const cmds = s.all('-c', '--command');
   if (cmds.length) return sqlVerdict(cmds.map((c) => c.v ?? ''), cmds.map((c) => c.kind), target, 'psql');
@@ -718,6 +908,7 @@ function mysql(args, ak, seg, h) {
   const s = scan(args, ak, { values: new Set(['-e', '--execute', '-h', '--host', '-u', '--user', '-P', '--port', '-D', '--database', '--defaults-file', '--defaults-extra-file', '-S', '--socket', '--init-command', '--tee']) });
   const target = s.first('-h', '--host') ?? s.first('-D', '--database');
   if (s.has('--init-command')) return unknownProd('mysql --init-command');
+  if (s.has('--pager') || args.some((t) => t.startsWith('--pager'))) return unknownProd('mysql --pager runs a command');
   for (const o of s.all('--tee')) h.write(o.v, o.kind);
   const cmds = s.all('-e', '--execute');
   if (cmds.length) return sqlVerdict(cmds.map((c) => c.v ?? ''), cmds.map((c) => c.kind), target, 'mysql');
@@ -876,6 +1067,26 @@ function git(args, ak, seg, ctx, h) {
   const restK = ak.slice(i + 1);
   if (sub === undefined) return local('git info');
   if (ak[i] !== 'lit') return unparseable('git subcommand is not literal');
+  if (rest.some((t) => /^--(upload-pack|receive-pack|exec)(=|$)/.test(t))) return unparseable(`git ${sub} with a custom remote program`);
+  if (sub === 'config') {
+    const cs = scan(rest, restK, { values: new Set(['-f', '--file', '--blob', '--type', '--default', '--comment']) });
+    const reading = cs.has('--get', '--get-all', '--get-regexp', '--get-urlmatch', '--list', '-l', '--unset', '--unset-all', '--remove-section', '--rename-section', '-e', '--edit') || (cs.pos[0] && ['get', 'list'].includes(cs.pos[0]) );
+    const key = cs.pos[0] === 'set' ? cs.pos[1] : cs.pos[0];
+    const writing = !reading && (cs.pos.length >= 2 || cs.has('--add', '--replace-all'));
+    if (cs.has('-e', '--edit')) return unparseable('git config --edit opens an editor');
+    if (writing && GIT_EXEC_CONFIG_RE.test(String(key ?? ''))) return unparseable(`git config ${key} can make git run arbitrary commands`);
+    if (writing && /^(push|remote|branch)\./i.test(String(key ?? ''))) return unparseable(`git config ${key} changes where pushes go`);
+    return local('git config');
+  }
+  if (sub === 'clone') {
+    const cs = scan(rest, restK, { values: new Set(['-u', '--upload-pack', '-c', '--config', '-b', '--branch', '-o', '--origin', '--depth', '--reference', '--separate-git-dir', '--template', '-j', '--jobs', '--filter', '--shallow-since', '--shallow-exclude', '--server-option']) });
+    if (cs.has('-u', '--upload-pack', '--template')) return unparseable('git clone with a custom upload-pack or template');
+    for (const c of cs.all('-c', '--config')) if (GIT_EXEC_CONFIG_RE.test(String(c.v ?? '').split('=')[0])) return unparseable('git clone --config can run arbitrary commands');
+    if (cs.pos[1] !== undefined) h.write(cs.pos[1], cs.posKinds[1]);
+    else if (cs.pos[0] !== undefined) h.write(String(cs.pos[0]).replace(/[\\/]+$/, '').replace(/^.*[\\/:]/, '').replace(/\.git$/, '') || '.', cs.posKinds[0]);
+    for (const d of cs.all('--separate-git-dir')) h.write(d.v, d.kind);
+    return local('git clone');
+  }
   if (sub === 'push') return pushConfig ? write('git.protected', undefined, 'git push with push/remote configuration overrides') : gitPush(rest, restK, ctx);
   if (sub === 'lfs' && rest[0] === 'push') return gitPush(rest.slice(1), restK.slice(1), ctx);
   if (sub === 'send-email') return xwrite('http.write', undefined, 'git send-email sends mail');
@@ -972,7 +1183,10 @@ function gh(args, ak, seg, ctx) {
     return xwrite('http.write', apiHost, `gh api ${method || 'POST'}`);
   }
   if (group === 'pr') {
-    if (verb === 'create') return s.has('--draft', '-d') ? write('git.pr', undefined, 'gh pr create --draft') : write('git.protected', undefined, 'gh pr create without --draft');
+    if (verb === 'create') {
+      const off = args.some((t) => /^(--draft|-d)=/.test(t) && !/=(true|1|yes)$/i.test(t));
+      return s.has('--draft', '-d') && !off ? write('git.pr', undefined, 'gh pr create --draft') : write('git.protected', undefined, 'gh pr create without --draft');
+    }
     if (verb === 'merge') return write('git.protected', undefined, 'gh pr merge');
     if (verb === 'review') return s.has('--approve', '-a') ? write('git.protected', undefined, 'gh pr review --approve') : write('git.pr', undefined, 'gh pr review');
     if (['edit', 'comment', 'ready', 'close', 'reopen', 'lock', 'unlock'].includes(verb)) return write('git.pr', undefined, `gh pr ${verb}`);
@@ -989,13 +1203,25 @@ function gh(args, ak, seg, ctx) {
 
 const QUILL_READ = { status: null, doctor: null, ticket: ['show', 'list', 'children'], agent: ['list', 'show', 'suggestions'], handoff: ['list'], repo: ['list'] };
 
+const QUILL_READ_FLAGS = new Set(['--json', '--statusline', '--session', '--status', '--ticket']);
+
 function quill(args) {
   const sub = args[0];
   if (sub === undefined || sub.startsWith('-')) return privileged('Quill CLI outside the read-only subcommands');
   if (!Object.hasOwn(QUILL_READ, sub)) return privileged(`quill ${sub} is not a read-only subcommand`);
+  const bad = args.find((t) => t.startsWith('-') && !QUILL_READ_FLAGS.has(t.replace(/=.*$/, '')));
+  if (bad) return privileged(`quill ${sub} with flag ${bad} is not a documented read form`);
   const allowed = QUILL_READ[sub];
   if (allowed === null || allowed.includes(args[1])) return local(`quill ${sub} ${args[1] ?? ''}`.trim());
   return privileged(`quill ${sub} ${args[1] ?? ''} is not a read-only subcommand`.trim());
+}
+
+// bin/quill.js and friends: quill, quill.js/.mjs/.cjs (any case, trailing slashes), src/cli/*,
+// anything inside a session-quill package.
+function isQuillScript(p) {
+  const t = String(p).replace(/[\\/]+$/, '');
+  const base = t.replace(/^.*[\\/]/, '').toLowerCase();
+  return /^quill(\.[cm]?js)?$/.test(base) || /(^|[\\/])src[\\/]cli([\\/.]|$)/i.test(t) || /(^|[\\/])session-quill([\\/]|$)/i.test(t);
 }
 
 const NODE_VALUES = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions', '--input-type', '--env-file', '--title', '--stack-size', '--max-old-space-size', '--inspect-port', '--test-reporter', '--test-reporter-destination', '--test-name-pattern', '--watch-path']);
@@ -1005,6 +1231,7 @@ function nodeLike(name, args, ak, seg, ctx, h) {
   if (name === 'bun') {
     if (args[0] === 'publish') return xwrite('package.publish', undefined, 'bun publish');
     if (args[0] === 'run') return args[1] ? scriptByName(args[1], args.slice(2), 'package script') : local('bun run');
+    if (args.includes('-g') || args.includes('--global')) return unknownProd('bun -g changes tools outside the checkout');
     if (['install', 'i', 'add', 'remove', 'rm', 'update', 'link', 'unlink', 'pm', 'init', 'create', 'upgrade', 'build', 'test', 'outdated', 'audit', 'repl', 'x'].includes(args[0])) return local(`bun ${args[0]}`);
   }
   let i = name === 'deno' && args[0] === 'run' ? 1 : 0;
@@ -1012,11 +1239,28 @@ function nodeLike(name, args, ak, seg, ctx, h) {
     const t = args[i];
     if (t === '-e' || t === '--eval' || t === '-p' || t === '--print') return inlineCode(args[i + 1] ?? '', ak[i + 1], name);
     if (t.startsWith('--eval=') || t.startsWith('--print=')) return inlineCode(t.slice(t.indexOf('=') + 1), ak[i], name);
-    if (t === '-') break;
-    if (t.startsWith('-')) { if (NODE_VALUES.has(t)) i += 1; continue; }
+    if (t === '-') {
+      const inFile = seg.redirects.find((x) => x.op.replace(/^\d+/, '') === '<');
+      if (inFile) {
+        if (inFile.kind !== 'lit') return unparseable(`${name} reads its script from a dynamic path`);
+        const b = inFile.target.replace(/^.*[\\/]/, '').toLowerCase();
+        if (b === 'quill.js' || b === 'quill') return quill(args.slice(i + 1));
+        return scriptByName(inFile.target, args.slice(i + 1));
+      }
+      break;
+    }
+    if (t.startsWith('-')) {
+      const v = NODE_VALUES.has(t) ? args[i + 1] : /^--(require|import|loader|experimental-loader)=/.test(t) ? t.slice(t.indexOf('=') + 1) : null;
+      if (/^(-r|--require|--import|--loader|--experimental-loader)(=|$)/.test(t) && typeof v === 'string') {
+        if (isQuillScript(v)) return privileged(`${name} preloads the Quill CLI`);
+        if (SDK_RE.test(v) || v === 'pg' || v.startsWith('pg/')) return unknownProd(`${name} preloads a prod SDK client`);
+      }
+      if (NODE_VALUES.has(t)) i += 1;
+      continue;
+    }
     if (ak[i] !== 'lit') return unparseable(`${name} script path is not literal`);
     const base = t.replace(/^.*[\\/]/, '').toLowerCase();
-    if (base === 'quill.js' || base === 'quill' || /[\\/]session-quill[\\/]/i.test(t)) return quill(args.slice(i + 1));
+    if (isQuillScript(t)) return quill(args.slice(i + 1));
     return scriptByName(t, args.slice(i + 1));
   }
   if (seg.stdin !== null) return seg.stdinDyn ? unknownProd(`${name} input has expansions`) : inlineCode(seg.stdin, 'lit', name);
@@ -1052,6 +1296,7 @@ function npm(args, ak) {
   const s = scan(args, ak, { values: new Set(['--prefix', '-w', '--workspace', '--registry', '--userconfig', '--cache', '--loglevel', '--tag', '--otp', '--access', '-C']) });
   const [sub, a1, a2] = s.pos;
   if (!sub) return local('npm');
+  if (s.has('-g', '--global', '--location') || (sub === 'link' && !a1)) return unknownProd(`npm ${sub} -g changes tools outside the checkout`);
   if (['publish', 'unpublish', 'deprecate', 'undeprecate'].includes(sub)) return xwrite('package.publish', 'registry.npmjs.org', `npm ${sub}`);
   if ((sub === 'dist-tag' || sub === 'dist-tags') && ['add', 'rm'].includes(a1)) return xwrite('package.publish', 'registry.npmjs.org', 'npm dist-tag change');
   if (sub === 'owner' && ['add', 'rm'].includes(a1)) return xwrite('package.publish', 'registry.npmjs.org', 'npm owner change');
@@ -1071,6 +1316,7 @@ function yarn(args, ak) {
   const s = scan(args, ak, { values: new Set(['--cwd', '--registry', '--cache-folder', '--modules-folder']) });
   const [sub, a1, a2] = s.pos;
   if (!sub) return local('yarn install');
+  if (sub === 'global') return unknownProd('yarn global changes tools outside the checkout');
   if (sub === 'publish' || (sub === 'npm' && (a1 === 'publish' || (a1 === 'tag' && ['add', 'remove'].includes(a2))))) return xwrite('package.publish', 'registry.npmjs.org', 'yarn publish');
   if (sub === 'owner' || (sub === 'tag' && ['add', 'remove', 'rm'].includes(a1)) || sub === 'team') return xwrite('package.publish', 'registry.npmjs.org', `yarn ${sub}`);
   if (sub === 'run') return a1 ? scriptByName(a1, [], 'package script') : local('yarn run');
@@ -1081,13 +1327,14 @@ function yarn(args, ak) {
 }
 
 const PNPM_BUILTINS = new Set(['add', 'install', 'i', 'update', 'up', 'remove', 'rm', 'un', 'uninstall', 'link', 'ln', 'unlink', 'import', 'rebuild', 'rb', 'prune', 'fetch', 'install-test', 'it', 'patch',
-  'patch-commit', 'patch-remove', 'audit', 'list', 'ls', 'outdated', 'why', 'licenses', 'test', 't', 'start', 'store', 'root', 'bin', 'setup', 'init', 'config', 'c', 'env', 'create', 'deploy', 'pack',
+  'patch-commit', 'patch-remove', 'audit', 'list', 'ls', 'outdated', 'why', 'licenses', 'test', 't', 'start', 'store', 'root', 'bin', 'setup', 'init', 'config', 'c', 'env', 'create', 'pack',
   'dedupe', 'doctor', 'server', 'help', 'exec', 'dlx', 'recursive', 'approve-builds', 'self-update']);
 
 function pnpm(args, ak) {
   const s = scan(args, ak, { values: new Set(['--filter', '-F', '-C', '--dir', '--workspace-dir', '--reporter', '--loglevel']) });
   const [sub, a1] = s.pos;
   if (!sub) return local('pnpm');
+  if (s.has('-g', '--global')) return unknownProd(`pnpm ${sub} -g changes tools outside the checkout`);
   if (sub === 'publish') return xwrite('package.publish', 'registry.npmjs.org', 'pnpm publish');
   if (sub === 'run' || sub === 'run-script') return a1 ? scriptByName(a1, [], 'package script') : local('pnpm run');
   if (PNPM_BUILTINS.has(sub)) return local(`pnpm ${sub}`);
@@ -1098,7 +1345,7 @@ function taskRunner(name, args, ak) {
   const values = new Set(['-C', '-f', '--file', '--makefile', '-j', '--jobs', '-I', '-o', '-W', '-l', '-p', '--project', '-D', '-P', '--settings-file', '-s', '--justfile', '-d', '--working-directory', '-t', '--taskfile']);
   const s = scan(args, ak, { values });
   const targets = s.pos.filter((x) => !/^[A-Za-z_][\w.]*=/.test(x));
-  const hit = targets.find((x) => SCRIPT_NAME_RE.test(x));
+  const hit = s.pos.find((x) => SCRIPT_NAME_RE.test(x)); // includes VAR=value overrides such as DEPLOY=1
   if (hit) return unknownProd(`${name} ${hit} looks like a deploy/release step`);
   if (s.posKinds.some((x) => x !== 'lit')) return unparseable(`${name} target is not literal`);
   return local(`${name} ${targets.join(' ')}`.trim());
@@ -1157,6 +1404,9 @@ function curl(args, ak, seg, h) {
   for (const o of s.all('-o', '--output', '-D', '--dump-header', '-c', '--cookie-jar', '--trace', '--trace-ascii', '--stderr')) if (o.v !== '-') h.write(o.v, o.kind);
   for (const o of s.all('--output-dir')) h.write(o.v, o.kind);
   if (s.has('-K', '--config')) return xwrite('http.write', host, 'curl reads options from a config file');
+  if (urls.some((x) => /^(gopher|dict|telnet|smtps?|ldaps?|mqtt|tftp):/i.test(String(x)))) return xwrite('http.write', host, 'curl protocol that can send commands');
+  if (s.all('-H', '--header').some((x) => /x-http-method(-override)?\s*:\s*(post|put|patch|delete)/i.test(String(x.v)))) return xwrite('http.write', host, 'curl overrides the method in a header');
+  if (urls.some((x) => /[?&]_method=(post|put|patch|delete)/i.test(String(x)))) return xwrite('http.write', host, 'curl overrides the method in the query');
   const method = String(s.first('-X', '--request') ?? '').toUpperCase();
   const data = s.has(...CURL_DATA);
   if (method && method !== 'GET' && method !== 'HEAD') return xwrite('http.write', host, `curl ${method}`);
@@ -1174,6 +1424,8 @@ function wget(args, ak, h) {
   return read('wget GET', host ? { host } : {});
 }
 
+const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE', 'CONNECT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'COPY', 'MOVE', 'LOCK', 'UNLOCK', 'PURGE']);
+
 function httpie(args, ak, seg, h) {
   const s = scan(args, ak, { values: new Set(['-a', '--auth', '-A', '--auth-type', '-o', '--output', '--session', '--session-read-only', '--verify', '--cert', '--cert-key', '--proxy', '--timeout', '-p', '--print', '--pretty', '-s', '--style', '--format-options', '--boundary', '--max-redirects', '--default-scheme', '--ssl', '--ciphers', '--response-charset', '--response-mime', '--unsorted', '--sorted']) });
   for (const o of s.all('-o', '--output')) h.write(o.v, o.kind);
@@ -1181,7 +1433,7 @@ function httpie(args, ak, seg, h) {
   if (s.has('--offline')) return local('httpie --offline builds the request without sending it');
   let pos = s.pos;
   let method = '';
-  if (pos[0] && /^[A-Z]+$/.test(pos[0])) { method = pos[0]; pos = pos.slice(1); }
+  if (pos[0] && HTTP_METHODS.has(pos[0].toUpperCase())) { method = pos[0].toUpperCase(); pos = pos.slice(1); }
   const host = hostOf(/^:/.test(pos[0] ?? '') ? 'localhost' : pos[0]);
   const items = pos.slice(1);
   const data = items.some((x) => /^[^=:@]*(:=@|=@|:=|@|=)(?!=)/.test(x) && !/^[^=]*==/.test(x));
@@ -1191,7 +1443,26 @@ function httpie(args, ak, seg, h) {
 }
 
 // PowerShell parameters: case-insensitive prefix match against the cmdlet's known names.
-function psParams(args, ak, { values = [], switches = [] }) {
+// `a, b` and `a ,b` are one PowerShell array argument split across tokens.
+function mergePsArrays(args, ak) {
+  const A = [];
+  const K = [];
+  for (let i = 0; i < args.length; i += 1) {
+    let t = args[i];
+    let kind = ak[i];
+    while (i + 1 < args.length && (t.endsWith(',') || args[i + 1].startsWith(',')) && !args[i + 1].startsWith('-')) {
+      i += 1;
+      t += args[i];
+      if (ak[i] !== 'lit') kind = ak[i] === 'group' ? 'dyn' : ak[i];
+    }
+    A.push(t);
+    K.push(kind);
+  }
+  return [A, K];
+}
+
+function psParams(rawArgs, rawAk, { values = [], switches = [] }) {
+  const [args, ak] = mergePsArrays(rawArgs, rawAk);
   const named = new Map();
   const pos = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -1309,6 +1580,7 @@ function posixFileCommand(name, args, ak, h) {
         const dstIdx = tdir !== null ? null : pos.length > 1 ? pos[pos.length - 1] : name === 'ln' ? null : null;
         if (dstIdx !== null) h.write(args[dstIdx], ak[dstIdx]);
         if (name === 'ln' && pos.length === 1 && tdir === null) h.write(String(args[pos[0]]).replace(/^.*[\\/]/, ''), ak[pos[0]]);
+        if (name === 'ln') for (const i of pos) h.write(args[i], ak[i]); // writes through a link land on its target
         if (name === 'cp') for (const i of pos.slice(0, tdir !== null ? pos.length : -1)) h.read(args[i], ak[i]);
       }
       return local(`${name} files`);
@@ -1356,13 +1628,27 @@ function posixFileCommand(name, args, ak, h) {
       return local('unzip');
     }
     case 'find': {
+      const starts = [];
+      for (let i = 0; i < args.length; i += 1) { if (/^[-(!]/.test(args[i])) break; starts.push(i); }
+      for (const i of starts) h.read(args[i], ak[i]);
       if (args.includes('-delete')) {
-        const starts = [];
-        for (let i = 0; i < args.length; i += 1) { if (/^[-(!]/.test(args[i])) break; starts.push(i); }
         if (!starts.length) h.write('.', 'lit');
         for (const i of starts) h.write(args[i], ak[i]);
       }
       return local('find');
+    }
+    case 'grep': case 'egrep': case 'fgrep': case 'rg': case 'ag': case 'ack': case 'findstr': {
+      if (name === 'rg' && args.some((t) => t === '--pre' || t.startsWith('--pre='))) { h.bad = 'rg --pre runs a program on each file'; return local('rg'); }
+      const s = scan(args, ak, { values: new Set([...(name === 'rg' ? ['-g', '-t', '-T', '-r', '-E', '-j', '-M'] : []), '-e', '-f', '-m', '-A', '-B', '-C', '--regexp', '--file', '--max-count', '--context', '--after-context', '--before-context', '--include', '--exclude', '--exclude-dir', '--label', '--glob', '--iglob', '--type', '--type-not', '--replace', '--encoding', '--threads', '--max-columns', '--ignore-file', '--max-depth', '-d', '-D']) });
+      for (const x of s.all('-f', '--file', '--ignore-file')) h.read(x.v, x.kind);
+      const patternGiven = s.has('-e', '--regexp', '-f', '--file');
+      const files = s.pos.map((v, i) => ({ v, kind: s.posKinds[i] })).filter((x) => !(name === 'findstr' && x.v.startsWith('/')));
+      for (const x of patternGiven ? files : files.slice(1)) h.read(x.v, x.kind);
+      return local(`${name} searches files`);
+    }
+    case 'ls': case 'dir': case 'tree': case 'du': case 'stat': case 'file': case 'exa': case 'eza': {
+      for (let i = 0; i < args.length; i += 1) if (!opt(args[i])) h.read(args[i], ak[i]);
+      return local(`${name} lists files`);
     }
     case 'cat': case 'head': case 'tail': case 'less': case 'more': case 'base64': case 'xxd': case 'od': case 'hexdump': case 'strings': case 'nl': case 'wc': {
       for (let i = 0; i < args.length; i += 1) {
@@ -1397,7 +1683,7 @@ const PS_FILE = {
 const PS_ALIASES = { ri: 'remove-item', rm: 'remove-item', del: 'remove-item', erase: 'remove-item', rd: 'remove-item', rmdir: 'remove-item', sc: 'set-content', ac: 'add-content', clc: 'clear-content',
   ni: 'new-item', mkdir: 'new-item', md: 'new-item', copy: 'copy-item', cp: 'copy-item', cpi: 'copy-item', move: 'move-item', mv: 'move-item', mi: 'move-item', ren: 'rename-item', rni: 'rename-item',
   tee: 'tee-object', epcsv: 'export-csv', sp: 'set-itemproperty' };
-const PS_FILE_VALUES = ['path', 'literalpath', 'destination', 'filepath', 'destinationpath', 'value', 'encoding', 'filter', 'include', 'exclude', 'credential', 'stream', 'itemtype', 'type', 'name', 'newname',
+const PS_FILE_VALUES = ['path', 'literalpath', 'destination', 'filepath', 'destinationpath', 'value', 'target', 'encoding', 'filter', 'include', 'exclude', 'credential', 'stream', 'itemtype', 'type', 'name', 'newname',
   'inputobject', 'width', 'delimiter', 'tosession', 'fromsession', 'aclobject', 'compressionlevel', 'variable', 'depth', 'property', 'propertytype', 'useculture', 'quotefields', 'usequotes'];
 const PS_FILE_SWITCHES = ['recurse', 'force', 'whatif', 'confirm', 'passthru', 'nonewline', 'append', 'noclobber', 'asbytestream', 'container', 'notypeinformation', 'includetypeinformation', 'update'];
 
@@ -1405,6 +1691,7 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
   if (cmdD) {
     const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/'));
     if (['del', 'erase', 'rd', 'rmdir', 'md', 'mkdir'].includes(name)) { for (const p of pos) h.write(p.v, p.kind); return local(`${name} files`); }
+    if (name === 'dir') { for (const p of pos) h.read(p.v, p.kind); return local('dir'); }
     if (name === 'copy' || name === 'xcopy' || name === 'robocopy') { if (pos.length > 1) h.write(pos[name === 'robocopy' ? 1 : pos.length - 1].v, pos[name === 'robocopy' ? 1 : pos.length - 1].kind); return local(`${name} files`); }
     if (name === 'move') { for (const p of pos) h.write(p.v, p.kind); return local('move files'); }
     if (name === 'ren' || name === 'rename') { if (pos[0]) h.write(pos[0].v, pos[0].kind); return local('rename'); }
@@ -1424,6 +1711,11 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
     const slot = named0 && canon !== 'copy-item' && canon !== 'expand-archive' && canon !== 'compress-archive' ? idx - 1 : idx;
     if (idx === 0 && named0) continue;
     if (slots[slot]) writes.push(slots[slot]);
+  }
+  if (canon === 'new-item' && /^(symboliclink|junction|hardlink)$/i.test(String(s.get('itemtype')?.v ?? s.get('type')?.v ?? ''))) {
+    const t = s.get('target') ?? s.get('value');
+    if (!t || t.v === true) h.bad = 'link without a literal target';
+    else for (const one of splitPs(t.v)) h.write(one, t.kind);
   }
   if (canon === 'new-item' && s.get('name') && s.get('name').v !== true) {
     const base = writes[0] ?? { v: '.', kind: 'lit' };
@@ -1447,7 +1739,12 @@ function psFileCmdlet(name, args, ak, h, cmdD) {
 const MCP_READ_VERBS = new Set(['get', 'list', 'search', 'fetch', 'read', 'describe', 'lookup', 'view', 'find', 'show', 'count', 'status', 'logs']);
 const MCP_WRITE_VERBS = new Set(['create', 'update', 'edit', 'delete', 'remove', 'send', 'post', 'reply', 'forward', 'transition', 'add', 'schedule', 'share', 'trash', 'merge', 'sync', 'apply', 'rollback',
   'terminate', 'restart', 'scale', 'deploy', 'publish', 'upload', 'copy', 'move', 'label', 'mark', 'respond', 'complete', 'approve', 'assign', 'invite', 'set']);
-const MCP_DEFAULT_READ = ['mcp__*__slack_send_message_draft'];
+const MCP_DEFAULT_READ = ['mcp__claude_ai_Slack__slack_send_message_draft', 'mcp__*slack*__slack_send_message_draft', 'mcp__*Slack*__slack_send_message_draft'];
+// Words that change state even though they are not in the spec's write-verb list.
+const MCP_MUTATING = new Set(['purge', 'drop', 'truncate', 'destroy', 'kill', 'reset', 'modify', 'replace', 'push', 'insert', 'upsert', 'save', 'put', 'patch', 'grant', 'revoke', 'enable', 'disable',
+  'stop', 'start', 'restore', 'import', 'submit', 'trigger', 'invoke', 'call', 'write', 'undelete', 'archive', 'unarchive', 'notify', 'comment', 'cancel', 'abort', 'reboot', 'shutdown', 'resize', 'rename',
+  'clear', 'flush', 'wipe', 'erase', 'unlink', 'link', 'attach', 'detach', 'lock', 'unlock', 'block', 'unblock', 'ban', 'unban', 'pause', 'resume', 'suspend', 'promote', 'demote', 'rotate', 'renew',
+  'transfer', 'pay', 'refund', 'charge', 'book', 'reserve', 'order', 'buy', 'sell', 'untrash', 'unlabel', 'unmark', 'accept', 'reject', 'dismiss', 'close', 'reopen', 'merge', 'commit', 'release']);
 
 function globMatch(pattern, name) {
   if (typeof pattern !== 'string') return false;
@@ -1479,13 +1776,16 @@ function classifyMcp(name, input, ctx) {
   let hasRead = false;
   let hasWrite = false;
   let unknown = null;
+  let mutating = null;
   for (const w of mcpWords(tool)) {
     if (w === 'query' || w === 'execute' || w === 'sql' || w.startsWith('run') || w.startsWith('exec')) { unknown = w; break; }
     if (MCP_WRITE_VERBS.has(w)) hasWrite = true;
+    else if (MCP_MUTATING.has(w)) mutating = mutating ?? w;
     else if (MCP_READ_VERBS.has(w)) hasRead = true;
   }
   if (unknown) return unknownProd(`MCP tool ${tool} (verb ${unknown}) is unavailable for policy`);
   if (hasWrite) return mcpScope(server, tool, input);
+  if (mutating) return /atlassian|jira|confluence|slack|argo/i.test(server) ? mcpScope(server, tool, input) : unknownProd(`MCP tool ${tool} (${mutating}) changes state; unavailable for policy`);
   if (hasRead) return read(`MCP read ${tool}`);
   return unknownProd(`MCP tool ${tool} has no recognised verb; unavailable for policy`);
 }
