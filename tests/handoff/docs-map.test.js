@@ -59,3 +59,13 @@ test('the prompt carries the docs map and the checkout base label as data', () =
   const narrow = buildPrompt(h, ticket, { recipe: { name: 'n', legacy: false, inputs: ['ticket'], outputs: ['summary'], body: 'Go.' }, context: { docs: '- docs/a.md' } });
   assert.doesNotMatch(narrow, /Repository docs/, 'a recipe that does not declare docs does not get them');
 });
+
+test('a docs symlink or junction pointing outside the checkout is not followed', (t) => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'st-out-'));
+  put(outside, 'secret.md', '# Outside secret\n');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'st-docs-'));
+  put(root, 'README.md', '# R\n');
+  try { fs.symlinkSync(outside, path.join(root, 'docs'), 'junction'); } catch { t.skip('cannot create a link here'); return; }
+  const map = buildDocsMap(root);
+  assert.deepEqual(map.map((e) => e.path), ['README.md']);
+});

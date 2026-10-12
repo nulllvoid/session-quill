@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
-import { createWorktree, removeWorktree, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
+import { createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
 import { buildPrompt, budgetFor, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
@@ -64,7 +64,7 @@ function detectRuntime(claudePath) {
   }
 }
 
-export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null } = {}) {
+export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null } = {}) {
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
@@ -272,10 +272,20 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
 
   async function dropWorktree(worker, h) {
     const dir = h.worktree_path;
-    if (!dir || h.worktree_removed_at) return;
+    if (!dir) return;
+    // The path comes from the store: only a directory inside this store's worktrees folder is deleted.
+    if (!isUnder(path.join(handoffsDir(worker.env), 'worktrees'), dir)) { worker.log(`worktree path outside the worktrees folder, not removed: ${h.id}`); return; }
+    if (!fs.existsSync(dir)) {
+      if (!h.worktree_removed_at && worker.state.handoffs.has(h.id)) { try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch { /* ignore */ } }
+      return;
+    }
     const repoPath = repoPathOf(h);
-    if (repoPath && fs.existsSync(repoPath)) await removeWorktree({ repoPath, dir });
-    else { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } }
+    try {
+      if (repoPath && fs.existsSync(repoPath)) await removeWorktreeFn({ repoPath, dir });
+      else fs.rmSync(dir, { recursive: true, force: true });
+    } catch { /* checked below */ }
+    // Stamped only when the directory is really gone (a lock on Windows can leave it); the next sweep retries.
+    if (fs.existsSync(dir)) { worker.log(`worktree not removed yet, will retry: ${h.id}`); return; }
     if (worker.state.handoffs.has(h.id)) {
       try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch (err) { worker.log(`worktree removal not recorded: ${err.message}`); }
     }
@@ -317,7 +327,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
       await dropWorktree(worker, h ?? { id: name, worktree_path: dir, repo_id: null });
     }
     const repos = new Set(Object.values(ctx.config.repos ?? {}).map((r) => r && r.canonical_path).filter((p) => p && fs.existsSync(p)));
-    for (const repoPath of repos) await pruneWorktrees(repoPath);
+    for (const repoPath of repos) await pruneWorktrees(repoPath, { under: root });
   }
 
   // Run ledgers and handoff logs older than `[handoff] log_retention_days` (default 30) are deleted.
@@ -420,7 +430,8 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     // How long the run waited for a slot (worker clock), then each setup step that actually ran.
     // A run that fails before it starts keeps whatever was measured (ADR 0022).
     const timings = { queue_wait_ms: Math.max(0, Date.parse(worker.now()) - Date.parse(h.requested_at)) };
-    const fail = (w, run, code, message) => failRun(w, run, code, message, { timings: { ...timings } });
+    // A failed dispatch removes whatever checkout it already made.
+    const fail = (w, run, code, message) => { failRun(w, run, code, message, { timings: { ...timings } }); return cleanupRun(w, run.id); };
     const ticket = worker.state.tickets.get(h.ticket_id);
     if (!ticket) return fail(worker, h, 'ticket-missing', 'ticket no longer exists');
     const repoCfg = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
@@ -456,6 +467,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
         const worktreeStarted = performance.now();
         try {
           await createWorktree({ repoPath: repoCfg.canonical_path, baseCommit, dir: worktreePath });
+          updateHandoff(worker, h.id, { worktree_path: worktreePath });
         } finally { timings.worktree_ms = Math.round(performance.now() - worktreeStarted); }
       } catch (err) {
         return fail(worker, h, err.code === 'worktree-failed' ? 'worktree-failed' : 'source-failed', err.message);
@@ -532,6 +544,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
     runningIds: () => new Set(running.keys()),
     pruneOldWorktrees,
     pruneRetention,
+    cleanupRun: (id) => cleanupRun(currentWorker, id),
     async onStart(worker) {
       worker.recipeInfo = () => catalogFor(worker).list();
       worker.handoffLimits = () => ({ ...limits });
@@ -555,7 +568,7 @@ export function createExtension(ctx, { claudePath = 'claude', claudeArgs = [], s
         const fix = isFix(h);
         if (inUse(fix) >= (fix ? limits.fix : limits.readonly)) continue;
         running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null, fix });
-        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); });
+        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); cleanupRun(worker, h.id).catch(() => {}); });
       }
     },
     async onStop(worker, { abandonRuns = false } = {}) {

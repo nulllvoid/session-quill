@@ -28,7 +28,7 @@ test('a finished read-only run loses its worktree at once; run files other than 
     const wt = path.join(handoffsDir(b.env), 'worktrees', done.id);
     await until(() => !fs.existsSync(wt));
     assert.doesNotMatch(git(repo.dir, 'worktree', 'list'), /worktrees/);
-    assert.ok(b.w.state.handoffs.get(done.id).worktree_removed_at, 'the record says the checkout is gone');
+    await until(() => b.w.state.handoffs.get(done.id).worktree_removed_at);
   } finally { await b.w.stop(); }
 });
 
@@ -108,5 +108,53 @@ test('the result blob carries the reconciled attempts', async () => {
     const blob = JSON.parse(getBlob(done.result_ref, b.env));
     assert.equal(blob.attempts.length, 1);
     assert.equal(blob.attempts[0].verified, 'claimed-no-call');
+  } finally { await b.w.stop(); }
+});
+
+test('a removal that fails (a lock) is not stamped and is retried by the next sweep', async () => {
+  const repo = makeRepo();
+  let fail = true;
+  const calls = [];
+  const b = await bootWorker({ repo, runtimeAvailable: true, removeWorktreeFn: async (a) => { calls.push(a.dir); if (!fail) { fs.rmSync(a.dir, { recursive: true, force: true }); } } });
+  try {
+    const done = await runOne(b, T1, 'LOCAL-a-00000001', RID(7), readOnly);
+    const wt = path.join(handoffsDir(b.env), 'worktrees', done.id);
+    await until(() => calls.length >= 1);
+    await new Promise((r) => setTimeout(r, 100));
+    assert.ok(fs.existsSync(wt), 'the stub could not remove it');
+    assert.equal(b.w.state.handoffs.get(done.id).worktree_removed_at ?? null, null, 'not stamped while the directory is still there');
+    fail = false;
+    await b.hext.pruneOldWorktrees(Date.parse(b.iso()));
+    assert.equal(fs.existsSync(wt), false);
+    assert.ok(b.w.state.handoffs.get(done.id).worktree_removed_at);
+  } finally { await b.w.stop(); }
+});
+
+test('a worktree path outside the worktrees folder is never deleted', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  try {
+    const done = await runOne(b, T1, 'LOCAL-a-00000001', RID(8), readOnly);
+    const outside = fs.mkdtempSync(path.join(b.home, 'precious-'));
+    fs.writeFileSync(path.join(outside, 'keep.txt'), 'x');
+    b.w.state.handoffs.get(done.id).worktree_path = outside;
+    b.w.state.handoffs.get(done.id).worktree_removed_at = null;
+    await b.hext.cleanupRun(done.id);
+    assert.ok(fs.existsSync(path.join(outside, 'keep.txt')));
+  } finally { await b.w.stop(); }
+});
+
+test('a run that fails after its checkout was made does not leave the checkout behind', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true, claudePath: process.execPath, claudeArgs: ['-e', 'process.exit(0)'] });
+  try {
+    b.hext.pause();
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(9), { target_id: T1, expected_revision: t.revision, payload: readOnly });
+    b.hext.resume();
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(9)).result.handoff_id;
+    await until(() => { b.w.tick(); return b.w.state.handoffs.get(hid).state === 'failed'; });
+    await until(() => !fs.existsSync(path.join(handoffsDir(b.env), 'worktrees', hid)));
   } finally { await b.w.stop(); }
 });

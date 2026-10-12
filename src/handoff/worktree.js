@@ -6,9 +6,9 @@ import { execFile } from 'node:child_process';
 import { TrackerError } from '../lib/errors.js';
 import { isProtectedBranch } from './permissions.js';
 
-export function git(cwd, args, { timeoutMs = 60_000, raw = false } = {}) {
+export function git(cwd, args, { timeoutMs = 60_000, raw = false, env = undefined } = {}) {
   return new Promise((resolve, reject) => {
-    execFile('git', args, { cwd, timeout: timeoutMs, windowsHide: true, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile('git', args, { cwd, timeout: timeoutMs, windowsHide: true, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, ...(env ? { env: { ...process.env, ...env } } : {}) }, (err, stdout, stderr) => {
       if (err) reject(new TrackerError('git-failed', (stderr || err.message || 'git failed').trim().split('\n')[0], { args }));
       else resolve(raw ? stdout : stdout.trim());
     });
@@ -45,8 +45,36 @@ export async function removeWorktree({ repoPath, dir }) {
 }
 
 // Drops registrations of worktrees whose directory no longer exists (a crash, a manual delete).
-export async function pruneWorktrees(repoPath) {
-  try { await git(repoPath, ['worktree', 'prune']); } catch { /* not a repository, or git unavailable */ }
+// With `under`, only registrations inside that directory are dropped: the owner's own worktrees
+// (even ones whose directory is temporarily missing) are never deregistered.
+const norm = (p) => path.resolve(p).replace(/[\/]+$/, '').split(path.sep).join('/').toLowerCase();
+export async function pruneWorktrees(repoPath, { under = null } = {}) {
+  if (!under) {
+    try { await git(repoPath, ['worktree', 'prune']); } catch { /* not a repository, or git unavailable */ }
+    return;
+  }
+  try {
+    const listing = await git(repoPath, ['worktree', 'list', '--porcelain'], { raw: true });
+    const root = norm(under);
+    const stale = listing.split(/\r?\n/).filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9)).filter((p) => norm(p).startsWith(`${root}/`) && !fs.existsSync(p));
+    if (!stale.length) return;
+    const common = path.resolve(repoPath, await git(repoPath, ['rev-parse', '--git-common-dir']));
+    const admin = path.join(common, 'worktrees');
+    for (const name of fs.readdirSync(admin)) {
+      let target = '';
+      try { target = fs.readFileSync(path.join(admin, name, 'gitdir'), 'utf8').trim(); } catch { continue; }
+      if (stale.some((p) => norm(path.join(p, '.git')) === norm(target))) fs.rmSync(path.join(admin, name), { recursive: true, force: true });
+    }
+  } catch { /* not a repository, or git unavailable */ }
+}
+
+// True when `dir` is strictly inside `root` (case-insensitive on Windows).
+export function isUnder(root, dir) {
+  const a = path.resolve(root);
+  const b = path.resolve(dir);
+  const cmp = (x) => (process.platform === 'win32' ? x.toLowerCase() : x);
+  const rel = path.relative(cmp(a), cmp(b));
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 // Letters, digits and . _ / - @ + only, not starting with "-" and without "..": a name safe to hand to git.
@@ -69,7 +97,9 @@ export async function worktreeBase(ticket, repoCfg) {
   let hasOrigin = false;
   try { await git(repoPath, ['remote', 'get-url', 'origin']); hasOrigin = true; } catch { /* no origin */ }
   if (hasOrigin) {
-    try { await git(repoPath, ['fetch', '--quiet', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { timeoutMs: 30_000 }); } catch { /* offline or branch not on origin */ }
+    // Writes refs/remotes/origin/<branch> in the owner's repository (the pushed tip is what we base on).
+    // Never prompts: a credential prompt on an https origin must not stall dispatch.
+    try { await git(repoPath, ['fetch', '--quiet', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { timeoutMs: 30_000, env: { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' } }); } catch { /* offline or branch not on origin */ }
     const remote = await commitOf(repoPath, `refs/remotes/origin/${branch}`);
     // The branch as the team last pushed it wins when the local copy is only behind it.
     if (remote && (!local || (await git(repoPath, ['merge-base', '--is-ancestor', local, remote]).then(() => true, () => false)))) return { ref: remote, label: `checkout based on branch ${branch} (origin)` };

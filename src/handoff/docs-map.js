@@ -59,10 +59,12 @@ export function buildDocsMap(repoPath, { maxEntries = DOCS_MAP_MAX_ENTRIES } = {
   // Entry docs first, so the cap never cuts them.
   add(listDir(repoPath).filter((e) => e.isFile() && (ENTRY_DOC.test(e.name) || README.test(e.name) || RUNBOOK.test(e.name))).map((e) => e.name));
   const docs = [];
-  walk(repoPath, 'docs', 0, (n) => MARKDOWN.test(n), docs, maxEntries);
+  // A committed symlink or junction named docs/ or runbooks/ could point outside the checkout.
+  const realDir = (name) => { try { return !fs.lstatSync(path.join(repoPath, name)).isSymbolicLink(); } catch { return false; } };
+  if (realDir('docs')) walk(repoPath, 'docs', 0, (n) => MARKDOWN.test(n), docs, maxEntries);
   add(docs);
   const runbooks = [];
-  walk(repoPath, 'runbooks', 0, () => true, runbooks, maxEntries);
+  if (realDir('runbooks')) walk(repoPath, 'runbooks', 0, () => true, runbooks, maxEntries);
   add(runbooks);
   return paths.map((p) => describe(repoPath, p));
 }
