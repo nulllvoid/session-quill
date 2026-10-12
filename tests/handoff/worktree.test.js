@@ -95,3 +95,16 @@ test('the worker hands the configured claude_path to the handoff extension', asy
   await attachExtensions(fake, { config: { claude_path: 'claude', repos: {} }, env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-h-')) }, storeMeta: {} }, { only: ['../../handoff/extension.js'] });
   assert.deepEqual(seen, ['handoff']);
 });
+
+test('a failed removeWorktree never deregisters the owner\'s own missing worktrees', async () => {
+  const repo = makeRepo();
+  const ownerWt = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'st-owner-')), 'wt');
+  await createWorktree({ repoPath: repo.dir, baseCommit: repo.head, dir: ownerWt });
+  fs.rmSync(ownerWt, { recursive: true, force: true }); // the owner's drive is unplugged
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'st-root-'));
+  const plain = path.join(root, 'not-a-worktree');
+  fs.mkdirSync(plain);
+  await removeWorktree({ repoPath: repo.dir, dir: plain });
+  assert.equal(fs.existsSync(plain), false, 'the fallback still deletes the directory');
+  assert.ok(git(repo.dir, 'worktree', 'list').includes(path.basename(path.dirname(ownerWt))), 'the owner registration survives');
+});

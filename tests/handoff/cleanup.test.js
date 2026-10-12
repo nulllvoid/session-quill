@@ -158,3 +158,19 @@ test('a run that fails after its checkout was made does not leave the checkout b
     await until(() => !fs.existsSync(path.join(handoffsDir(b.env), 'worktrees', hid)));
   } finally { await b.w.stop(); }
 });
+
+test('a spawn that throws after the checkout was made leaves no checkout behind', async () => {
+  const repo = makeRepo();
+  const bad = `claude${String.fromCharCode(0)}x`; // spawn() throws synchronously: the fail() path, after createWorktree
+  const b = await bootWorker({ repo, runtimeAvailable: true, claudePath: bad });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(10), { target_id: T1, expected_revision: t.revision, payload: readOnly });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(10)).result.handoff_id;
+    const h = await until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return x.state === 'failed' ? x : null; });
+    assert.equal(h.error.code, 'spawn-failed');
+    await until(() => !fs.existsSync(path.join(handoffsDir(b.env), 'worktrees', hid)));
+    assert.doesNotMatch(git(repo.dir, 'worktree', 'list'), /worktrees/);
+  } finally { await b.w.stop(); }
+});

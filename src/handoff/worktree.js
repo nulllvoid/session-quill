@@ -35,12 +35,14 @@ export async function createWorktree({ repoPath, baseCommit, dir }) {
   return { dir, baseCommit };
 }
 
-export async function removeWorktree({ repoPath, dir }) {
+export async function removeWorktree({ repoPath, dir, under = path.dirname(dir) }) {
   try {
     await git(repoPath, ['worktree', 'remove', '--force', dir]);
   } catch {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
-    try { await git(repoPath, ['worktree', 'prune']); } catch { /* ignore */ }
+    // A bare `git worktree prune` here would also deregister the owner's own missing worktrees;
+    // the scoped pruneWorktrees(repo, { under }) sweep drops only this folder's stale entries.
+    if (under) await pruneWorktrees(repoPath, { under });
   }
 }
 

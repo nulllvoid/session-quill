@@ -430,8 +430,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // How long the run waited for a slot (worker clock), then each setup step that actually ran.
     // A run that fails before it starts keeps whatever was measured (ADR 0022).
     const timings = { queue_wait_ms: Math.max(0, Date.parse(worker.now()) - Date.parse(h.requested_at)) };
-    // A failed dispatch removes whatever checkout it already made.
-    const fail = (w, run, code, message) => { failRun(w, run, code, message, { timings: { ...timings } }); return cleanupRun(w, run.id); };
+    // A run that fails here is cleaned up when dispatch resolves (see tick): its slot is released first.
+    const fail = (w, run, code, message) => failRun(w, run, code, message, { timings: { ...timings } });
     const ticket = worker.state.tickets.get(h.ticket_id);
     if (!ticket) return fail(worker, h, 'ticket-missing', 'ticket no longer exists');
     const repoCfg = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
@@ -568,7 +568,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
         const fix = isFix(h);
         if (inUse(fix) >= (fix ? limits.fix : limits.readonly)) continue;
         running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null, fix });
-        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); cleanupRun(worker, h.id).catch(() => {}); });
+        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); return cleanupRun(worker, h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); cleanupRun(worker, h.id).catch(() => {}); });
       }
     },
     async onStop(worker, { abandonRuns = false } = {}) {
