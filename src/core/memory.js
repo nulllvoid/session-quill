@@ -18,9 +18,24 @@ function rank(a, b) {
   return tier(a) - tier(b) || cmp(b.last_confirmed_at, a.last_confirmed_at) || b.confirmations - a.confirmations || cmp(a.id, b.id);
 }
 
+// Delivery order (spec §6.3): this ticket's notes, then owner notes and pinned entries, then repo
+// entries, then machine entries; within each bucket by section, then rank.
+function bucket(e) {
+  if (e.scope === 'task') return 0;
+  if (e.pinned === true || e.trust === 'owner') return 1;
+  return e.scope === 'repo' ? 2 : 3;
+}
+
 function order(a, b) {
+  return bucket(a) - bucket(b) || cmp(a.section, b.section) || rank(a, b);
+}
+
+// Listing order for review pages: scope, section, rank.
+function listOrder(a, b) {
   return SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope] || cmp(a.section, b.section) || rank(a, b);
 }
+
+const toMs = (v) => (typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN);
 
 // Groups of live, non-quarantined entries sharing scope, scope id and key with differing text.
 function conflictGroups(entries) {
@@ -40,9 +55,12 @@ function conflictGroups(entries) {
 }
 
 // Entries for a run: machine scope, this repo and this ticket; active, not quarantined, not superseded.
-// Of a conflicting pair only the higher-ranked entry is returned (spec §6.2.4).
-export function memoryFor(state, { repo_id = null, ticket_id = null } = {}) {
+// Of a conflicting pair only the higher-ranked entry is returned (spec §6.2.4). With `now` (ms or ISO
+// string) entries that memoryStaleness reports stale or retired are left out too. Returned in delivery order.
+export function memoryFor(state, { repo_id = null, ticket_id = null, now } = {}) {
+  const nowMs = now === undefined ? null : toMs(now);
   const pool = [...state.memory.entries.values()].filter((e) => isLive(e) && e.trust !== 'quarantined'
+    && (nowMs === null || memoryStaleness(e, nowMs) === 'active')
     && (e.scope === 'machine' || (e.scope === 'repo' && repo_id !== null && e.repo_id === repo_id) || (e.scope === 'task' && ticket_id !== null && e.ticket_id === ticket_id)));
   const losers = new Set();
   for (const g of conflictGroups(pool)) for (const e of g.entries.slice(1)) losers.add(e.id);
@@ -51,7 +69,7 @@ export function memoryFor(state, { repo_id = null, ticket_id = null } = {}) {
 
 // Learnings waiting for the owner's approval.
 export function quarantined(state) {
-  return [...state.memory.entries.values()].filter((e) => e.trust === 'quarantined' && e.state !== 'retired' && !e.superseded_by).sort(order);
+  return [...state.memory.entries.values()].filter((e) => e.trust === 'quarantined' && e.state !== 'retired' && !e.superseded_by).sort(listOrder);
 }
 
 // Same scope + key, different text, both active (and not quarantined): the owner decides.
@@ -60,9 +78,11 @@ export function conflicts(state) {
 }
 
 // 90 days without confirmation -> stale (not inlined); 180 -> retired. The reducer cannot read a clock,
-// so callers pass `nowMs`. The age runs from the later of creation and last confirmation.
+// so callers pass `nowMs`. Pinned and owner entries stay active. The age runs from the later of creation and last confirmation.
 export function memoryStaleness(entry, nowMs) {
   if (entry.state === 'retired' || entry.superseded_by) return 'retired';
+  // Owner notes and pinned entries never age out (ruling R27).
+  if (entry.pinned === true || entry.trust === 'owner') return 'active';
   const times = [Date.parse(entry.last_confirmed_at), Date.parse(entry.created_at)].filter(Number.isFinite);
   if (!times.length || !Number.isFinite(nowMs)) return entry.state === 'stale' ? 'stale' : 'active';
   const since = Math.max(...times);

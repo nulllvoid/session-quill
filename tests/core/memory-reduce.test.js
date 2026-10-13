@@ -224,7 +224,7 @@ test('memory-tx from a producer other than the worker does not count as capture 
   assert.equal(s.lastCaptureAt, null);
 });
 
-test('memoryFor returns machine + this repo + this ticket entries, active and non-quarantined, in a stable order', () => {
+test('memoryFor returns machine + this repo + this ticket entries, active and non-quarantined, in delivery order', () => {
   const s = newState();
   mem(s, 'filed', entry({ id: 'a-machine', scope: 'machine', repo_id: undefined, section: 'tools', key: undefined, trust: 'verified', text: 'node 22' }));
   mem(s, 'filed', entry({ id: 'b-obs', key: undefined, trust: 'observed', text: 'observed', last_confirmed_at: T2 }));
@@ -241,7 +241,7 @@ test('memoryFor returns machine + this repo + this ticket entries, active and no
   mem(s, 'filed', entry({ id: 'm-stale', state: 'stale', key: undefined, text: 'stale' }));
   mem(s, 'filed', entry({ id: 'n-retired', state: 'retired', key: undefined, text: 'retired' }));
   const ids = memoryFor(s, { repo_id: 'demo', ticket_id: 'tk1' }).map((e) => e.id);
-  assert.deepEqual(ids, ['a-machine', 'e-owner', 'f-pinned', 'g-ver-new', 'h-ver-conf', 'd-ver', 'c-src', 'b-obs', 'j-task']);
+  assert.deepEqual(ids, ['j-task', 'e-owner', 'f-pinned', 'g-ver-new', 'h-ver-conf', 'd-ver', 'c-src', 'b-obs', 'a-machine']);
   assert.deepEqual(memoryFor(s, {}).map((e) => e.id), ['a-machine']);
   assert.deepEqual(memoryFor(s, { repo_id: 'demo' }).map((e) => e.id).includes('j-task'), false);
 });
@@ -278,6 +278,14 @@ test('memoryStaleness: 90 days stale, 180 days retired, confirmation resets the 
   assert.equal(memoryStaleness(e, at + 179 * day), 'stale');
   assert.equal(memoryStaleness(e, at + 180 * day), 'retired');
   assert.equal(memoryStaleness({ ...e, last_confirmed_at: '2026-12-01T00:00:00Z' }, Date.parse('2027-01-15T00:00:00Z')), 'active');
+  assert.equal(memoryStaleness({ ...e, trust: 'verified' }, at + 100 * day), 'stale');
+  assert.equal(memoryStaleness({ ...e, trust: 'verified' }, at + 200 * day), 'retired');
+  // Pinned and owner entries never age out (R27) unless retired or superseded.
+  assert.equal(memoryStaleness({ ...e, pinned: true }, at + 200 * day), 'active');
+  assert.equal(memoryStaleness({ ...e, trust: 'owner' }, at + 200 * day), 'active');
+  assert.equal(memoryStaleness({ ...e, trust: 'owner', state: 'stale' }, at + 200 * day), 'active');
+  assert.equal(memoryStaleness({ ...e, trust: 'owner', state: 'retired' }, at), 'retired');
+  assert.equal(memoryStaleness({ ...e, pinned: true, superseded_by: 'm2' }, at), 'retired');
   assert.equal(memoryStaleness({ ...e, state: 'retired' }, at), 'retired');
   assert.equal(memoryStaleness({ ...e, superseded_by: 'm2' }, at), 'retired');
   assert.equal(memoryStaleness({ ...e, state: 'stale' }, at), 'stale');
@@ -291,4 +299,87 @@ test('memory never reaches the snapshot', () => {
   const snap = buildSnapshot(s, { generation_id: 'g1', generated_at: T1 });
   assert.ok(!JSON.stringify(snap).includes('MEMORY-SENTINEL-7731'));
   assert.ok(!('memory' in snap));
+});
+
+test('memoryFor with now leaves out stale entries but keeps owner and pinned ones', () => {
+  const s = newState();
+  mem(s, 'filed', entry({ id: 'old', key: undefined, trust: 'verified' }));
+  mem(s, 'filed', entry({ id: 'old-pinned', key: undefined, trust: 'verified', pinned: true }));
+  mem(s, 'filed', entry({ id: 'old-owner', key: undefined, trust: 'owner' }));
+  mem(s, 'filed', entry({ id: 'fresh', key: undefined, trust: 'verified', last_confirmed_at: T2 }), T2);
+  const now = Date.parse(T0) + 100 * 86_400_000;
+  assert.deepEqual(memoryFor(s, { repo_id: 'demo' }).map((e) => e.id).sort(), ['fresh', 'old', 'old-owner', 'old-pinned']);
+  assert.deepEqual(memoryFor(s, { repo_id: 'demo', now }).map((e) => e.id), ['old-owner', 'old-pinned']);
+  const soon = Date.parse(T2) + 10 * 86_400_000;
+  assert.deepEqual(memoryFor(s, { repo_id: 'demo', now: soon }).map((e) => e.id), ['old-owner', 'old-pinned', 'fresh', 'old']);
+  assert.deepEqual(memoryFor(s, { repo_id: 'demo', now: new Date(now).toISOString() }).map((e) => e.id), memoryFor(s, { repo_id: 'demo', now }).map((e) => e.id));
+});
+
+test('a malformed expected_revision is rejected, never skipped', () => {
+  const s = newState();
+  mem(s, 'filed', entry());
+  for (const bad of ['1', 1.5, -1, null, NaN]) {
+    assert.equal(mem(s, 'pinned', { id: 'm1' }, T1, { expected_revision: bad }).rejected, 'memory-revision-invalid');
+  }
+  assert.equal(mem(s, 'owner-note', entry({ text: 'x' }), T1, { expected_revision: '1' }).rejected, 'memory-revision-invalid');
+  assert.equal(get(s, 'm1').pinned, false);
+  assert.equal(get(s, 'm1').revision, 1);
+});
+
+test('owner-note on a superseded entry files a new live owner entry; the old one stays superseded', () => {
+  const s = newState();
+  mem(s, 'filed', entry());
+  mem(s, 'filed', entry({ id: 'm2', text: 'replacement', trust: 'verified' }), T1);
+  mem(s, 'superseded', { id: 'm1' }, T1, { superseded_by: 'm2' });
+  mem(s, 'owner-note', entry({ id: 'm1', text: 'owner says otherwise' }), T2);
+  assert.equal(get(s, 'm1').state, 'retired');
+  assert.equal(get(s, 'm1').superseded_by, 'm2');
+  const fresh = [...s.memory.entries.values()].filter((e) => e.text === 'owner says otherwise');
+  assert.equal(fresh.length, 1);
+  assert.notEqual(fresh[0].id, 'm1');
+  assert.equal(fresh[0].trust, 'owner');
+  assert.equal(fresh[0].state, 'active');
+  assert.equal(fresh[0].created_at, T2);
+  assert.ok(memoryFor(s, { repo_id: 'demo' }).some((e) => e.id === fresh[0].id));
+});
+
+test('edited revives a retired entry as owner trust but refuses a superseded one', () => {
+  const s = newState();
+  mem(s, 'filed', entry());
+  mem(s, 'retired', { id: 'm1' }, T1);
+  mem(s, 'edited', { id: 'm1', text: 'back again' }, T2);
+  const e = get(s, 'm1');
+  assert.deepEqual([e.state, e.trust, e.text, e.revision], ['active', 'owner', 'back again', 3]);
+  assert.ok(memoryFor(s, { repo_id: 'demo' }).some((x) => x.id === 'm1'));
+
+  mem(s, 'filed', entry({ id: 'm2', key: undefined }), T1);
+  mem(s, 'filed', entry({ id: 'm3', key: undefined }), T1);
+  mem(s, 'superseded', { id: 'm2' }, T1, { superseded_by: 'm3' });
+  assert.equal(mem(s, 'edited', { id: 'm2', text: 'x' }, T2).rejected, 'memory-entry-retired');
+});
+
+test('superseded refuses chains and cycles', () => {
+  const s = newState();
+  for (const id of ['a', 'b', 'c']) mem(s, 'filed', entry({ id, key: undefined, text: id }));
+  mem(s, 'superseded', { id: 'a' }, T1, { superseded_by: 'b' });
+  // Re-superseding an already superseded entry, and A -> B -> A.
+  assert.equal(mem(s, 'superseded', { id: 'a' }, T1, { superseded_by: 'c' }).rejected, 'memory-supersede-invalid');
+  assert.equal(mem(s, 'superseded', { id: 'b' }, T1, { superseded_by: 'a' }).rejected, 'memory-supersede-invalid');
+  // A longer cycle: a -> b, b -> c, then c -> a.
+  mem(s, 'superseded', { id: 'b' }, T1, { superseded_by: 'c' });
+  assert.equal(mem(s, 'superseded', { id: 'c' }, T1, { superseded_by: 'a' }).rejected, 'memory-supersede-invalid');
+  assert.equal(get(s, 'a').superseded_by, 'b');
+  assert.equal(get(s, 'c').superseded_by, undefined);
+  assert.equal(get(s, 'c').state, 'active');
+});
+
+test('conflicts apply to task scope too', () => {
+  const s = newState();
+  const task = { scope: 'task', repo_id: undefined, ticket_id: 'tk1', key: 'approach' };
+  mem(s, 'filed', entry({ ...task, id: 't1', text: 'use a queue', trust: 'observed' }));
+  mem(s, 'filed', entry({ ...task, id: 't2', text: 'use a cron', trust: 'verified' }));
+  mem(s, 'filed', entry({ ...task, id: 't3', ticket_id: 'tk2', text: 'elsewhere' }));
+  const found = conflicts(s);
+  assert.equal(found.length, 1);
+  assert.deepEqual([found[0].ticket_id, found[0].entries.map((e) => e.id)], ['tk1', ['t2', 't1']]);
 });
