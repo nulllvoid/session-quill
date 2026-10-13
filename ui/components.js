@@ -391,14 +391,74 @@ export function contentViewer(ref, { content = {}, status = {}, generation = '',
   return `<button type="button" class="link small" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">${esc(label)}</button>`;
 }
 
-// How much of Claude Code a run may use (ADR 0017). The owner's settings are the default; Full
-// access skips every permission check and says so where it is chosen.
-export function accessFieldset() {
+// How much of Claude Code a run may use (ADR 0017, ADR 0026). Autonomous is the default: every
+// tool and connector, with Quill's guard checking each call and credentials redirected. The owner's
+// own settings sit under Advanced; Full access is marked as a warning and says what it lifts.
+export const FULL_ACCESS_NOTE = 'No Quill guard; prod writes allowed; your Claude Code deny rules still apply.';
+// Insertion point: the scope catalog (Task 11) adds its Write scopes checklist inside the Advanced
+// details below, after "Use my Claude Code settings".
+export function accessFieldset(snapshot = null) {
   return `<fieldset class="access"><legend>Access</legend>
-  <label><input type="radio" name="access" value="settings" checked> My Claude Code settings <span class="muted small">(your permission rules and connectors; anything that would need your approval is refused)</span></label>
+  <label><input type="radio" name="access" value="autonomous" checked> Autonomous <span class="muted small">(your connected tools and local commands; production stays read-only; Quill's guard checks every call)</span></label>
   <label><input type="radio" name="access" value="standard"> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
-  <label class="danger"><input type="radio" name="access" value="full"> Full access <span class="small">(no permission checks: any command, any file on this computer, network, connectors, and pushing with your credentials)</span></label>
+  <label class="danger"><input type="radio" name="access" value="full"> Full access <span class="small access-note">${esc(FULL_ACCESS_NOTE)}</span></label>
+  <details class="advanced access-advanced"><summary>Advanced: other access</summary>
+  <label><input type="radio" name="access" value="settings"> Use my Claude Code settings <span class="muted small">(your permission rules and connectors; anything that would need your approval is refused)</span></label>
+  </details>${autonomyNotes(snapshot)}
 </fieldset>`;
+}
+
+// MCP sources an autonomous run trusts by origin; anything else only when the owner names the
+// server in [handoff] trusted_mcp_servers (spec §4.2).
+const TRUSTED_MCP_SOURCES = new Set(['claudeai', 'user', 'plugin']);
+const MCP_SOURCE_TEXT = { claudeai: 'claude.ai connector', user: 'your Claude Code settings', plugin: 'plugin', project: "this repository's .mcp.json", local: 'local project settings' };
+// The production CLIs whose credentials a run redirects (Task 9 report systems).
+const CRED_SYSTEM_TEXT = [['kubernetes', 'Kubernetes (kubectl)'], ['aws', 'AWS (aws)'], ['gcp', 'Google Cloud (gcloud)'], ['azure', 'Azure (az)'], ['databases', 'Databases (psql, mysql)'], ['argo', 'Argo CD (argocd)']];
+const CRED_VALUE_TEXT = { readonly: 'read-only profile', stub: 'no read-only profile; its reads are refused in autonomous runs', scope: 'write scope credentials', owner: 'your own credentials (shared with Claude Code\'s cloud sign-in)' };
+
+// What the worker last recorded about autonomous runs on this machine (snapshot meta.autonomy):
+// the connectors the latest run's Claude Code reported and the credential report of the latest
+// autonomous run. Each line says what it rests on; with no meta.autonomy nothing is claimed.
+function autonomyNotes(snapshot) {
+  const a = snapshot && snapshot.meta && snapshot.meta.autonomy && typeof snapshot.meta.autonomy === 'object' ? snapshot.meta.autonomy : null;
+  if (!a) return '';
+  const short = (id) => esc(String(id ?? '').slice(0, 8));
+  const out = ['<div class="autonomy-notes small">'];
+  const inv = a.inventory && Array.isArray(a.inventory.mcpServers) ? a.inventory : null;
+  if (!inv) out.push('<p class="muted">Connected tools: not known yet. The first run records what Claude Code reports.</p>');
+  else {
+    const trusted = new Set(Array.isArray(a.trusted_mcp_servers) ? a.trusted_mcp_servers : []);
+    const rows = inv.mcpServers.map((s) => {
+      const source = MCP_SOURCE_TEXT[s.source] ?? (s.source ? `${s.source} configuration` : 'unknown source');
+      const state = s.status === 'pending'
+        ? '<span class="chip small">Not connected yet when the run started (pending)</span>'
+        : s.status && s.status !== 'connected' ? `<span class="chip small">Unavailable (${esc(s.status === 'needs-auth' ? 'needs auth' : s.status)})</span>`
+        : !TRUSTED_MCP_SOURCES.has(s.source) && !trusted.has(s.name) ? '<span class="chip small warning">Not trusted for autonomous runs</span>' : '<span class="chip small good">Connected</span>';
+      return `<li><strong>${esc(s.name)}</strong> <span class="muted">${esc(source)}</span> ${state}</li>`;
+    });
+    out.push(`<p>Connected tools this run can use <span class="muted">(as Claude Code reported them when run ${short(inv.run_id)} started)</span></p>`);
+    out.push(rows.length ? `<ul class="connected-tools">${rows.join('')}</ul>` : '<p class="muted">No MCP servers or connectors were reported.</p>');
+  }
+  const cred = a.credentials && a.credentials.report && typeof a.credentials.report === 'object' ? a.credentials : null;
+  const report = cred ? cred.report : {};
+  const configured = new Set(Array.isArray(a.readonly_configured) ? a.readonly_configured : []);
+  const lines = CRED_SYSTEM_TEXT.map(([sys, label]) => {
+    let text;
+    if (report[sys] === 'readonly') text = CRED_VALUE_TEXT.readonly;
+    else if (configured.has(sys)) text = cred ? `read-only profile configured; run ${short(cred.run_id)} could not use it` : 'read-only profile configured; checked when a run starts';
+    else text = cred ? CRED_VALUE_TEXT[report[sys]] ?? 'no read-only profile' : 'no read-only profile';
+    return `<li>${esc(label)}: ${esc(text)}</li>`;
+  });
+  out.push(`<p>Production command-line tools <span class="muted">(${cred ? `credentials as run ${short(cred.run_id)} got them` : 'from your config; no autonomous run yet'})</span></p><ul class="cred-systems">${lines.join('')}</ul>`);
+  const issues = [];
+  const anyReadonly = CRED_SYSTEM_TEXT.some(([sys]) => report[sys] === 'readonly' || configured.has(sys));
+  if (!anyReadonly) issues.push('No read-only credentials configured: reads through production commands (kubectl, aws, gcloud, az, psql, argocd) are refused in autonomous runs; connectors and local tools still work. Add profiles under [prod.readonly] in config.toml; quill doctor shows what is set.');
+  if (report.provider === 'shared') issues.push('Claude Code signs in through Bedrock or Vertex, so the agent can use those provider credentials too.');
+  for (const r of Array.isArray(report.residual) ? report.residual : []) issues.push(`Not redirected (the guard refuses reading these files, but a script could still reach them): ${r}`);
+  for (const e of Array.isArray(report.scope_errors) ? report.scope_errors : []) issues.push(`Scope setting ignored: ${e}`);
+  if (issues.length) out.push(`<ul class="issues">${issues.map((t) => `<li data-level="warning">${icon('alert')}${esc(t)}</li>`).join('')}</ul>`);
+  out.push('</div>');
+  return out.join('');
 }
 
 // Runs proposed from a shared page (ADR 0025), still waiting for the owner, oldest first.
@@ -416,7 +476,7 @@ export function proposalItem(p, snapshot, { now, pending = [], withTicket = fals
   const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
   const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
   const sent = pending.find((r) => (r.kind === 'approve-run' || r.kind === 'dismiss-run') && r.payload && r.payload.proposal_id === p.id && IN_FLIGHT.has(r.state));
-  const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : '<span class="chip small">Standard access</span>';
+  const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : p.access === 'autonomous' ? '<span class="chip small">Autonomous</span>' : '<span class="chip small">Standard access</span>';
   const perms = p.permissions ?? {};
   const kind = p.read_only ? '<span class="chip small">Read-only</span>' : perms.edit_source ? '<span class="chip warning small">Edits source</span>' : perms.edit_files || perms.delete_files ? '<span class="chip warning small">Changes files</span>' : '';
   const key = p.ticket_key ?? (t ? t.key : '');

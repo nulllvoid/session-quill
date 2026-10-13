@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { classifyCall, CLIMB_REASON_RE } from './prod-classify.js';
-import { parseShell } from './shell-tokens.js';
+import { parseShell, binName } from './shell-tokens.js';
 import { quillHome, handoffRunDir } from '../lib/paths.js';
 import { isProtectedBranch } from '../handoff/permissions.js';
 import { canonicalJson } from '../handoff/grant.js';
@@ -31,11 +31,12 @@ export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL('../..', import.m
 // The guard's code and every local module it loads, relative to the install root. A run never
 // changes them, even when its checkout is the install root (Review Focus 2). A test walks the
 // guard's imports to keep this list complete.
-export const GUARD_CODE = ['src/gate', 'bin/quill-guard.js', 'src/handoff/grant.js', 'src/handoff/permissions.js', 'src/handoff/stream.js', 'src/export/sanitize.js', 'src/lib/paths.js', 'src/lib/errors.js', 'src/lib/atomic-fs.js', 'src/lib/git-head.js'];
+export const GUARD_CODE = ['src/gate', 'bin/quill-guard.js', 'src/handoff/grant.js', 'src/handoff/permissions.js', 'src/handoff/stream.js', 'src/handoff/mcp-sources.js', 'src/export/sanitize.js', 'src/lib/paths.js', 'src/lib/errors.js', 'src/lib/atomic-fs.js', 'src/lib/git-head.js'];
 // A shell wildcard that can match more directory entries than this is refused rather than checked.
 export const MAX_GLOB_MATCHES = 512;
-// The worker's own files in the run dir: the rest of the run dir is scratch.
-const RUN_DIR_FILES = ['grant.json', 'run-settings.json', 'ledger.jsonl', 'env'];
+// The worker's own files in the run dir: the rest of the run dir is scratch. mcp-servers.json
+// tells the guard which MCP servers it may trust by source (R20), so a run must not rewrite it.
+const RUN_DIR_FILES = ['grant.json', 'run-settings.json', 'ledger.jsonl', 'env', 'mcp-servers.json'];
 // Claude's settings and the credential locations under home (spec §4.2): never readable, never writable.
 const HOME_SECRETS = ['.claude', '.claude.json', '.claude.json.backup', '.kube', '.aws', '.config/gcloud', '.azure', '.ssh', '.netrc', '_netrc', '.pgpass', '.docker/config.json', '.git-credentials'];
 const TRUSTED_MCP_SOURCES = new Set(['claudeai', 'user', 'plugin']);
@@ -48,6 +49,9 @@ const WIN = process.platform === 'win32';
 const NAMES_FOLD_CASE = WIN || process.platform === 'darwin';
 const MAX_LINK_HOPS = 32;
 const TOOL_NAME_SAFE = /^[A-Za-z0-9_-]+$/;
+// The production CLIs whose credentials a run redirects, by credential system (Task 9 report
+// names). A read through one of them needs that system's read-only profile (spec §3 onboarding).
+const PROD_CLI_SYSTEMS = { kubectl: 'kubernetes', helm: 'kubernetes', k9s: 'kubernetes', aws: 'aws', eksctl: 'aws', gcloud: 'gcp', gsutil: 'gcp', bq: 'gcp', az: 'azure', psql: 'databases', mysql: 'databases', mongosh: 'databases', 'redis-cli': 'databases', argocd: 'argo' };
 
 const CRITICAL_TAIL = 'Record it in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.';
 const REASONS = {
@@ -73,6 +77,7 @@ const REASONS = {
   noPush: () => 'QUILL_DENIED no-push-permission: git push needs the push_branch permission, which this run does not have. Leave the commits local and say in the result that they need pushing.',
   noPr: () => 'QUILL_DENIED no-pr-permission: creating or changing a pull request needs the open_draft_pr permission, which this run does not have. Put the title and description you would use in the result.',
   protectedBranch: (why) => `QUILL_DENIED protected-branch: ${why}. Pushing to the default or a protected branch, force and tag pushes, deleting branches, merging into a protected branch and non-draft pull requests are never allowed in a run; push the run's own branch or open a draft PR when granted, and leave the rest to the owner.`,
+  noReadonly: (system) => `QUILL_DENIED no-readonly-credentials: no read-only credentials configured for ${system} — set them in quill doctor ([prod.readonly] in config.toml). This run has only empty ${system} credentials, so the command could not succeed. Use a connected tool for ${system} if one is available, and record this route in attempts as unavailable.`,
   unknownProd: (why) => `QUILL_DENIED unknown-prod: ${why}; the guard cannot tell what this changes, so it is not allowed. Use a read-only form, or record the change in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.`,
   critical: (change, pins) => `QUILL_CRITICAL_CHANGE scope=${change.scope} target=${change.target ?? 'unknown'}: not granted for this run${pins.length ? ` (it may perform only its approved action, run exactly as written, alone and without environment changes: ${pins.join(' | ')})` : ''}. ${CRITICAL_TAIL}`,
 };
@@ -177,6 +182,17 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
   }
   const unknown = parts.find((p) => p.class === 'unknown-prod');
   if (unknown) return deny(REASONS.unknownProd(unknown.reason));
+  // Spec §3 onboarding: a prod CLI read on a system the run holds no credentials for (its stub is
+  // empty) is refused with the setup hint. `credentialSystems` lists the systems whose credentials
+  // are not a stub; a grant without it (older grants) skips this check.
+  if (Array.isArray(g.credentialSystems)) {
+    const held = new Set(strings(g.credentialSystems));
+    for (const p of parts) {
+      if (p.class !== 'read' || !Array.isArray(p.argv) || typeof p.argv[0] !== 'string') continue;
+      const system = PROD_CLI_SYSTEMS[binName(p.argv[0])];
+      if (system && !held.has(system)) return deny(REASONS.noReadonly(system));
+    }
+  }
 
   let via = null;
   for (const p of parts) {

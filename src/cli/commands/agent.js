@@ -6,9 +6,10 @@ import { nowIso } from '../../lib/time.js';
 import { validateHandoffRequest } from '../../handoff/permissions.js';
 import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
-import { submitCliRequest } from './handoff.js';
+import { submitCliRequest, runOptions, accessNotice } from './handoff.js';
+import { budgetFor } from '../../handoff/runner.js';
 
-const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
+const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
 
@@ -76,15 +77,18 @@ async function run(ctx, io, args, flags) {
     edit_files: flags['edit-files'] === true,
     delete_files: flags['delete-files'] === true,
   };
-  const access = typeof flags.access === 'string' ? flags.access : (recipe.mode === 'files' ? 'standard' : 'settings');
-  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length });
-  if (access === 'full') io.println('! Full access: this run skips every permission check and can run any command, use connectors and push with your credentials.');
+  // Autonomous unless --access says otherwise (ADR 0026); a files run is always standard (ADR 0015).
+  const access = typeof flags.access === 'string' ? flags.access : (recipe.mode === 'files' ? 'standard' : 'autonomous');
+  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length });
+  const notice = accessNotice(access);
+  if (notice) io.println(notice);
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};
     throw new TrackerError(err.code ?? terminal.state, `run request ${terminal.state}: ${err.message ?? ''}`);
   }
-  io.println(`${name} queued for ${ticket.key} (permissions: ${grants(payload.permissions)}; capped at ${recipe.timeout_min} min). Run ${terminal.result.handoff_id}.`);
+  const minutes = Math.round(budgetFor(recipe, ctx.config, access, recipe.mode).timeoutMs / 60_000);
+  io.println(`${name} queued for ${ticket.key} (permissions: ${grants(payload.permissions)}; capped at ${minutes} min). Run ${terminal.result.handoff_id}.`);
   io.println('Queued is not finished: follow it with `quill handoff list` or on the ticket in the dashboard.');
   if (flags.json) io.json(terminal);
   return 0;

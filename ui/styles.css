@@ -805,6 +805,12 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 /* Run access (ADR 0017): Full access reads as a warning where it is chosen. */
 .access label.danger { color: var(--critical); }
 .access label.danger .small { color: var(--critical); opacity: .85; }
+/* Autonomous runs (ADR 0026): connectors and credentials as the worker last recorded them. */
+.autonomy-notes { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline); }
+.autonomy-notes p { margin: 0; }
+.connected-tools, .cred-systems { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.connected-tools li, .autonomy-notes .issues li { overflow-wrap: anywhere; }
+.autonomy-notes .issues { margin: 0; }
 
 /* Bulk selection and runs (ADR 0023). */
 .view-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 12px; }

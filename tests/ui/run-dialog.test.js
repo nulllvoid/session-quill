@@ -71,3 +71,79 @@ test('blockers disable Queue; warnings do not', () => {
   assert.match(runBlockers(t, noTests, recipes[1]).map((b) => b.text).join(' '), /Not test-verified/);
   assert.match(renderRunAgentDialog(t, noTests, { recipe: 'attempt-fix' }), /<button type="submit" class="btn primary">Queue run/);
 });
+
+// Autonomous access (spec §3, §8; ADR 0026). The dialog shows what the worker last recorded:
+// meta.autonomy carries the latest init inventory and the latest autonomous run's credential report.
+const FULL_NOTE = 'No Quill guard; prod writes allowed; your Claude Code deny rules still apply.';
+const STUBS = { kubernetes: 'stub', aws: 'stub', gcp: 'stub', azure: 'stub', databases: 'stub', argo: 'stub', git: 'stub', netrc: 'stub', registries: 'stub', residual: [] };
+const autonomy = (over = {}) => ({ inventory: null, credentials: null, readonly_configured: [], trusted_mcp_servers: [], min_runtime: '2.1.295', ...over });
+const withMeta = (a) => snap({ meta: { ...snapshot().meta, autonomy: a } });
+const dialogFor = (s, recipe = 'analyse') => renderRunAgentDialog(s.tickets[0], s, { recipe });
+
+test('access: Autonomous is checked, my settings sit under Advanced, Full access carries its note', () => {
+  const html = dialogFor(withMeta(autonomy()));
+  assert.match(html, /<input type="radio" name="access" value="autonomous" checked> Autonomous/);
+  assert.match(html, /<details class="advanced access-advanced"><summary>[^<]+<\/summary>\s*<label><input type="radio" name="access" value="settings"> Use my Claude Code settings/);
+  assert.match(html, /<label class="danger"><input type="radio" name="access" value="full"> Full access <span class="small access-note">([^<]*)<\/span><\/label>/);
+  assert.equal(/<span class="small access-note">([^<]*)<\/span>/.exec(html)[1], FULL_NOTE);
+  assert.match(html, /value="standard"> Standard/);
+});
+
+test('connected tools come from the latest inventory: source and status, needs-auth unavailable, project servers not trusted', () => {
+  const inventory = { run_id: 'abcdef12-0000-4000-8000-000000000000', at: '2026-10-02T11:00:00Z', version: '2.1.296', tools: [], plugins: [], skills: [], mcpServers: [
+    { name: 'claude_ai_Atlassian', status: 'connected', source: 'claudeai' },
+    { name: 'claude.ai Gmail', status: 'needs-auth', source: 'claudeai' },
+    { name: 'repo<db>', status: 'connected', source: 'project' },
+    { name: 'trusted-db', status: 'connected', source: 'project' },
+    { name: 'mine', status: 'failed', source: 'user' },
+  ] };
+  const html = dialogFor(withMeta(autonomy({ inventory, trusted_mcp_servers: ['trusted-db'] })));
+  const row = (name) => new RegExp(`<li[^>]*><strong>${name}</strong>[^]*?</li>`).exec(html)?.[0] ?? '';
+  assert.match(html, /Connected tools this run can use/);
+  assert.match(row('claude_ai_Atlassian'), /claude\.ai connector/);
+  assert.match(row('claude_ai_Atlassian'), /Connected/);
+  assert.match(row('claude\.ai Gmail'), /Unavailable \(needs auth\)/);
+  assert.match(row('repo&lt;db&gt;'), /Not trusted for autonomous runs/);
+  assert.doesNotMatch(html, /repo<db>/, 'server names are escaped');
+  assert.doesNotMatch(row('trusted-db'), /Not trusted/, 'listed in [handoff] trusted_mcp_servers');
+  assert.match(row('mine'), /Unavailable \(failed\)/);
+  assert.match(html, /run abcdef12/);
+  const none = dialogFor(withMeta(autonomy()));
+  assert.match(none, /Connected tools: not known yet/);
+});
+
+test('fresh machine (Review Focus 5): "No read-only credentials configured" is a warning, never a blocker', () => {
+  for (const a of [autonomy(), autonomy({ credentials: { report: STUBS, run_id: 'r1', at: '2026-10-02T10:00:00Z' } })]) {
+    const html = dialogFor(withMeta(a));
+    assert.match(html, /<li data-level="warning">[^<]*<svg[^]*?No read-only credentials configured/);
+    assert.match(html, /<button type="submit" class="btn primary">Queue run/, 'Queue stays enabled');
+  }
+  const ro = dialogFor(withMeta(autonomy({ credentials: { report: { ...STUBS, kubernetes: 'readonly' }, run_id: 'r1', at: '2026-10-02T10:00:00Z' } })));
+  assert.doesNotMatch(ro, /No read-only credentials configured/);
+  assert.match(ro, /Kubernetes \(kubectl\): read-only profile/);
+  assert.match(ro, /AWS \(aws\): no read-only profile/);
+  const configured = dialogFor(withMeta(autonomy({ readonly_configured: ['kubernetes'] })));
+  assert.doesNotMatch(configured, /No read-only credentials configured/);
+  assert.match(configured, /Kubernetes \(kubectl\): read-only profile configured; checked when a run starts/);
+  // An older worker or a snapshot without meta.autonomy: nothing is claimed either way.
+  const unknown = dialogFor(snap());
+  assert.doesNotMatch(unknown, /read-only credentials|Connected tools/);
+});
+
+test('residual credentials, scope errors and a shared cloud provider are shown, escaped', () => {
+  const report = { ...STUBS, aws: 'owner', provider: 'shared', residual: ['ssh: ssh, scp and rsync run directly still read the keys in ~/.ssh <x>'], scope_errors: ['k8s.write: KUBE_X is <not> this scope\'s to set; ignored'] };
+  const html = dialogFor(withMeta(autonomy({ credentials: { report, run_id: 'r1', at: '2026-10-02T10:00:00Z' } })));
+  assert.match(html, /Bedrock or Vertex/);
+  assert.match(html, /the agent can use those provider credentials too/);
+  assert.match(html, /still read the keys in ~\/\.ssh &lt;x&gt;/);
+  assert.match(html, /KUBE_X is &lt;not&gt; this scope&#39;s to set; ignored|KUBE_X is &lt;not&gt; this scope's to set; ignored/);
+  assert.doesNotMatch(html, /<x>|<not>/);
+});
+
+test('the bulk dialog offers the same access choice', async () => {
+  const { renderBulkHandoffForm } = await import('../../ui/views/bulk.js');
+  const s = withMeta(autonomy());
+  const html = renderBulkHandoffForm(s, [s.tickets[0].id], { mode: 'analyse' });
+  assert.match(html, /name="access" value="autonomous" checked/);
+  assert.match(html, /No read-only credentials configured/);
+});

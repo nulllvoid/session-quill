@@ -68,7 +68,7 @@ export function renderBulkHandoffForm(rawSnapshot, ids, { mode = 'analyse' } = {
 <ul class="bulk-entries">${entries.map(entryRow).join('')}</ul>
 <p class="small"><strong>${esc(countLabel(ready.length, 'run'))}</strong> will be queued, one per ready ticket. ${cap}</p>
 ${modes}
-${accessFieldset()}
+${accessFieldset(snapshot)}
 ${tests}
 <label class="label" for="bulk-note">Note for every run <span class="muted">(max 280)</span></label>
 <textarea id="bulk-note" name="note" maxlength="280" rows="2" placeholder="What should each agent focus on?"></textarea>

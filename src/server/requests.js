@@ -6,6 +6,7 @@ import { TrackerError } from '../lib/errors.js';
 import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
 import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
+import { budgetFor } from '../handoff/runner.js';
 import { attachedFiles, undoFileEffect } from '../handoff/files.js';
 import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
@@ -365,7 +366,13 @@ function evaluateHandoff(worker, req, ticket, payload) {
     base_ticket_revision: ticket.revision, base_next_action: ticket.next_action ?? '', repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
     requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,
     children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
-    batch_id: checked.batch_id ?? null, recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
+    batch_id: checked.batch_id ?? null, recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, suggestions: [],
+    // The wall clock the run will get, from the same budget dispatch uses (R8): recipe, config and access.
+    deadline_ms: budgetFor(recipe, worker.config, checked.access ?? 'standard', checked.mode).timeoutMs,
+    // Write scopes (autonomous only) and the run's own turn and spend limits, when it asked for them.
+    ...(checked.scopes ? { scopes: checked.scopes } : {}),
+    ...(checked.max_turns !== undefined ? { max_turns: checked.max_turns } : {}),
+    ...(checked.max_budget_usd !== undefined ? { max_budget_usd: checked.max_budget_usd } : {}),
   };
   return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
 }

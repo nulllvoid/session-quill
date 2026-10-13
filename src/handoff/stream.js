@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { redactText } from '../export/sanitize.js';
+import { writeMcpServersFile } from './mcp-sources.js';
 
 export const EXCERPT_BYTES = 2048;
 // The reason codes bin/quill-guard.js puts first in a refusal, as the host shows them.
@@ -144,7 +145,10 @@ function exitCodeOf(item, event, text) {
   return m ? Number(m[1]) : null;
 }
 
-export function createStreamCollector({ logPath = null, ledgerPath = null, onInit = null, maxWindowBytes = 1_048_576, cwd = null, now = () => new Date().toISOString() } = {}) {
+// `mcpServersPath`: where the init event's MCP server sources go ({ name: source }), written as
+// soon as init arrives so the guard can tell a claude.ai, user or plugin server from a project one
+// (ruling R20). A later init (a follow-up turn) replaces it.
+export function createStreamCollector({ logPath = null, ledgerPath = null, mcpServersPath = null, onInit = null, maxWindowBytes = 1_048_576, cwd = null, now = () => new Date().toISOString() } = {}) {
   let pending = '';
   let pendingBytes = 0; // UTF-8 bytes of `pending`, bounded by MAX_LINE_BYTES (outside the window)
   let skipping = false; // inside an over-long line, dropping until its newline
@@ -189,6 +193,7 @@ export function createStreamCollector({ logPath = null, ledgerPath = null, onIni
       if (!init) init = obj;
       const mcp = Array.isArray(obj.mcp_servers) ? obj.mcp_servers.map((s) => `${s && s.name}:${s && s.status}`).join(', ') : '';
       log(`[init] session=${obj.session_id ?? '?'} model=${obj.model ?? '?'} version=${obj.claude_code_version ?? '?'} tools=${Array.isArray(obj.tools) ? obj.tools.length : 0} mcp=[${mcp}]`);
+      if (mcpServersPath) { try { writeMcpServersFile(mcpServersPath, obj); } catch { /* the guard then trusts no server by source */ } }
       if (onInit) { try { onInit(obj); } catch { /* the stream carries on */ } }
       return;
     }

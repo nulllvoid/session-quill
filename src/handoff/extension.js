@@ -1,9 +1,10 @@
 // Worker extension that dispatches queued handoffs, enforces the 20-minute wall-clock cap,
 // honours cancellation, and resolves runs interrupted by a restart (TRD §Handoff execution).
 import fs from 'node:fs';
+import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
@@ -19,6 +20,14 @@ import { reconcileAttempts } from './reconcile.js';
 import { handoffsDir, handoffRunDir, logsDir } from '../lib/paths.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
+import { TrackerError } from '../lib/errors.js';
+import { buildChildEnv, CRED_SYSTEMS } from './cred-env.js';
+import { writeGrant } from './grant.js';
+import { writeRunSettings } from './run-settings.js';
+import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
+import { MCP_SERVERS_FILE } from './mcp-sources.js';
+import { credentialSettings } from '../config/credentials.js';
+import { mcpSettings } from '../config/mcp-policy.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -54,6 +63,14 @@ export function retentionDays(config = {}) {
 }
 
 const isFix = (h) => !!(h.permissions && h.permissions.edit_source);
+const VERSION_CACHE_MS = 10 * MINUTE;
+
+// Until the scope catalog exists (Task 11), no write scope resolves: a run that names one fails at
+// dispatch instead of running without the grant it asked for.
+function noScopeCatalog(names) {
+  if (names.length) throw new TrackerError('scope-unknown', `no scope catalog resolves ${names.join(', ')}; queue the run again without write scopes`);
+  return [];
+}
 
 function detectRuntime(claudePath) {
   try {
@@ -64,8 +81,11 @@ function detectRuntime(claudePath) {
   }
 }
 
-export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null } = {}) {
+// `resolveScopes(names, config)` turns a run's requested write scopes into resolved entries
+// ([{ name, target?, env?, matchers, fingerprint }]) or throws; the default resolves none.
+export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = noScopeCatalog } = {}) {
   const running = new Map(); // handoff id -> { child, done, reason, fix }
+  let versionCache = null; // { at, value }: `claude --version`, refreshed every 10 minutes
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
   const limits = { readonly: maxReadonly ?? maxConcurrent ?? configured.readonly, fix: maxFix ?? maxConcurrent ?? configured.fix };
@@ -89,16 +109,95 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
 
   // The session id is recorded on the run the moment init arrives, so a run cut off by a worker
   // restart can still be resumed later (spec §5.4). A resumed turn that reports a new id moves it on.
+  // The first init's tool inventory is stored on the run (R6). An autonomous run whose init reports
+  // a runtime older than the guard needs is stopped (the version probe before spawn is the first gate).
   function onInitFor(worker, id) {
     return (event) => {
-      const sid = sessionIdOf(event);
       const entry = running.get(id);
-      if (!sid || !entry || entry.sessionId === sid) return;
-      entry.sessionId = sid;
+      if (!entry) return;
+      const patch = {};
+      const sid = sessionIdOf(event);
+      if (sid && entry.sessionId !== sid) { entry.sessionId = sid; patch.session_id = sid; }
+      if (!entry.inventoryRecorded) {
+        entry.inventoryRecorded = true;
+        try { patch.inventory = { ...parseInit(event), at: worker.now() }; } catch { /* no inventory */ }
+      }
+      if (entry.access === 'autonomous' && !entry.reason && patch.inventory && patch.inventory.version) {
+        try { assertRuntime(patch.inventory.version); } catch (err) { entry.runtimeError = err.message; killWithReason(id, 'runtime-too-old'); }
+      }
       const h = worker.state.handoffs.get(id);
-      if (!h || h.state !== 'running') return;
-      try { updateHandoff(worker, id, { session_id: sid }); } catch (err) { worker.log(`handoff session id not recorded: ${err.message}`); }
+      if (!Object.keys(patch).length || !h || h.state !== 'running') return;
+      try { updateHandoff(worker, id, patch); } catch (err) { worker.log(`handoff init not recorded: ${err.message}`); }
     };
+  }
+
+  // `claude --version`, for the autonomous runtime gate; null when it cannot be read. A good answer
+  // is cached for 10 minutes so a batch does not start one probe per run.
+  function probeVersion() {
+    const now = Date.now();
+    if (versionCache && now - versionCache.at < VERSION_CACHE_MS) return Promise.resolve(versionCache.value);
+    return new Promise((resolve) => {
+      try {
+        execFile(claudePath, [...claudeArgs, '--version'], { timeout: 15_000, windowsHide: true, env: { ...process.env, ...spawnEnv } }, (err, stdout) => {
+          const value = err ? null : String(stdout ?? '').trim().split(/\r?\n/)[0] || null;
+          if (value) versionCache = { at: now, value };
+          resolve(value);
+        });
+      } catch { resolve(null); }
+    });
+  }
+
+  // An autonomous run's setup (ADR 0026): the run dir with an empty context snapshot dir, the child
+  // environment with every credential location redirected (Task 9), the frozen grant the guard reads
+  // on every call, and the run settings that wire the guard in. Returns what spawnAgent needs.
+  function prepareAutonomous(worker, h, { cwd, checkout, repoCfg, scopes, env }) {
+    const runDir = handoffRunDir(worker.env, h.id);
+    fs.mkdirSync(runDir, { recursive: true });
+    const contextDir = path.join(runDir, 'context');
+    fs.rmSync(contextDir, { recursive: true, force: true });
+    fs.mkdirSync(contextDir, { recursive: true });
+    const permissions = h.permissions ?? {};
+    const { readonly, keepEnv, apiBilling } = credentialSettings(ctx.config);
+    const { mcpPolicy, trustedMcpServers } = mcpSettings(ctx.config);
+    const built = buildChildEnv({ baseEnv: { ...process.env, ...env }, access: 'autonomous', permissions, scopes, readonly, keepEnv, apiBilling, runDir, platform: process.platform });
+    const win = process.platform === 'win32';
+    const envOf = (name) => { const k = Object.keys(built.env).find((x) => (win ? x.toUpperCase() === name : x === name)); return k === undefined ? undefined : built.env[k]; };
+    const temps = [...new Set([envOf('TEMP'), envOf('TMP'), envOf('TMPDIR'), os.tmpdir()].filter((t) => typeof t === 'string' && path.isAbsolute(t)))];
+    const home = envOf('USERPROFILE') ?? envOf('HOME') ?? os.homedir();
+    const claudeDir = envOf('CLAUDE_CONFIG_DIR') ?? path.join(home, '.claude');
+    const editable = !!(permissions.edit_source || permissions.edit_files || permissions.delete_files);
+    const grant = {
+      access: 'autonomous',
+      permissions,
+      scopes: scopes.map((x) => ({ name: x.name, ...(x.target ? { target: x.target } : {}), matchers: x.matchers ?? {}, fingerprint: x.fingerprint ?? null })),
+      actionPins: [],
+      // Spec §4.2: the checkout or sandbox, the run dir and its context snapshot, temp, and Claude's
+      // plugin and skill directories; the checkout is writable only with an edit permission.
+      readableRoots: [...new Set([cwd, runDir, contextDir, ...temps, path.join(claudeDir, 'plugins'), path.join(claudeDir, 'skills')])],
+      writableRoots: [...new Set([runDir, ...temps, ...(editable ? [cwd] : [])])],
+      // R13: the checkout's Claude and MCP configuration and git's own files never change in a run.
+      protectedPaths: checkout ? [path.join(checkout, '.mcp.json'), path.join(checkout, '.claude'), path.join(checkout, '.git')] : [],
+      mcpPolicy,
+      trustedMcpServers,
+      trackerHosts: [],
+      defaultBranch: repoCfg ? repoCfg.default_branch ?? null : null,
+      // Systems whose credentials are not an empty stub (read-only, scope or the owner's): a prod
+      // CLI read on any other is refused with the onboarding hint (spec §3).
+      credentialSystems: CRED_SYSTEMS.filter((sys) => built.report[sys] && built.report[sys] !== 'stub'),
+    };
+    const { sha256 } = writeGrant(runDir, grant);
+    const settingsPath = writeRunSettings(runDir);
+    const childEnv = {
+      ...built.env,
+      QUILL_HANDOFF_ACCESS: 'autonomous',
+      QUILL_HANDOFF_PERMISSIONS: Object.keys(permissions).filter((k) => permissions[k] === true).join(','),
+      QUILL_HANDOFF_SCOPES: scopes.map((x) => (x.target ? `${x.name}:${x.target}` : x.name)).join(','),
+      QUILL_HANDOFF_GUARD: 'enforce',
+      QUILL_HANDOFF_GRANT_SHA256: sha256,
+      // Runs never write into the owner's Claude Code memory (spec §6.3, P0 disableAutoMemory).
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    };
+    return { childEnv, settingsPath, addDirs: [contextDir], permissionPrompts: 'none', mcpServersPath: path.join(runDir, MCP_SERVERS_FILE), report: built.report };
   }
 
   // Turns and spend across every turn of a run, from each turn's final result event (spec §5.4).
@@ -135,7 +234,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     }
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, ledgerPath: entry.ledgerPath, onInit: entry.onInit, model, resume: entry.sessionId, maxTurns, maxBudgetUsd: Number.isFinite(left) ? left : null, permissionMode, keepCredentials: entry.keepCredentials });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools, env: entry.env, permissions: entry.permissions, logPath: entry.logPath, ledgerPath: entry.ledgerPath, onInit: entry.onInit, model, resume: entry.sessionId, maxTurns, maxBudgetUsd: Number.isFinite(left) ? left : null, permissionMode, keepCredentials: entry.keepCredentials, ...entry.spawnExtras });
     } catch {
       return null;
     }
@@ -174,8 +273,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       }
     }
     if (entry.selfCheck && !parsed.problems.length && !entry.reason && timeLeft()) {
-      // The check re-reads sources; it never edits, whatever the run was allowed to do.
-      const readOnly = selfCheckTools(entry.permissions);
+      // The check re-reads sources; it never edits, whatever the run was allowed to do. Under
+      // autonomous access the guard still decides each call, with no static allow rule.
+      const readOnly = entry.access === 'autonomous' ? { allowed: [], disallowed: [...new Set([...entry.tools.disallowed, 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Task', 'Agent'])] } : selfCheckTools(entry.permissions);
       const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: entry.budget.selfCheckTurns, permissionMode: 'dontAsk', label: 'self-check' });
       const checked = next ? parseOutcome(next, parseOpts) : null;
       if (checked && !checked.no_result && !checked.is_error && !checked.problems.length) {
@@ -212,7 +312,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}) } : null;
     if (gate) delete gate.total_ms;
     // A turn that produced no result event (killed by the deadline or a cancel) leaves usage unknown: recorded as null, not omitted.
-    const usage = entry && entry.env ? { num_turns: entry.usage ? entry.usage.turns : null, cost_usd: entry.usage && entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !({ ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
+    const usage = entry && entry.env ? { num_turns: entry.usage ? entry.usage.turns : null, cost_usd: entry.usage && entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !((entry.spawnExtras && entry.spawnExtras.childEnv) ?? { ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
     // Spec §5.4: what the agent says it tried is checked against the run's tool ledger, and calls
     // the ledger shows were refused are added, so the stored list is the one list later reads use.
     const reconciled = (p) => {
@@ -229,6 +329,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const reason = entry ? entry.reason : null;
     if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'runtime-too-old') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'runtime-too-old', message: entry.runtimeError ?? 'Claude Code is too old for autonomous runs; queue the run again with standard access' }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'stopped') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
     if (outcome.error) { record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
     const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
@@ -399,7 +500,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (!changed.length) return { outcome, gate: { status: 'skipped', reason: 'no changes to test' } };
     const { command, timeoutMs } = testGateSettings(ctx.config.repos[h.repo_id]);
     if (!command) return { outcome, gate: { status: 'skipped', reason: 'no test_command for this repository; the fix is not test-verified' } };
-    const env = childEnvFor(entry.permissions, process.env, entry.env);
+    // An autonomous run's tests see the same redirected environment as its agent.
+    const env = (entry.spawnExtras && entry.spawnExtras.childEnv) ?? childEnvFor(entry.permissions, process.env, entry.env);
     // The gate's command is the run's child while it runs: cancellation, the deadline and a worker
     // stop kill it through its own handle, and onStop waits for it (entry.done).
     const once = () => {
@@ -445,13 +547,22 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // recipes, which anyone can edit on disk, must still match the reviewed hash.
     const builtin = h.recipe && h.recipe.source === 'builtin';
     if (h.recipe && (!recipe || recipe.error || (!builtin && recipe.hash !== h.recipe.hash))) return fail(worker, h, 'recipe-changed', `recipe ${h.recipe.name} changed or was removed after this run was queued; review it and queue a new run`);
+    // A queued run keeps the access it was queued with.
+    const access = h.access ?? 'standard';
     try {
-      validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null });
+      validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, access, scopes: h.scopes ?? null, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null });
     } catch (err) {
       return fail(worker, h, err.code ?? 'permission-invalid', err.message);
     }
     const available = runtimeAvailable ?? detectRuntime(claudePath);
     if (!available) return fail(worker, h, 'runtime-missing', `Claude Code runtime (${claudePath}) is not installed or not on PATH; install and authenticate it, then retry as a new run`);
+    // Autonomous runs rely on the guard hook failing closed, so the runtime must be new enough;
+    // this is checked before any checkout or process exists (ADR 0026). Write scopes resolve here.
+    let scopes = [];
+    if (access === 'autonomous') {
+      try { assertRuntime(await probeVersion()); } catch (err) { return fail(worker, h, err.code ?? 'runtime-too-old', err.message); }
+      try { scopes = resolveScopes([...(h.scopes ?? [])], ctx.config) ?? []; } catch (err) { return fail(worker, h, err.code ?? 'scope-unknown', err.message); }
+    }
     const needsSource = h.permissions && h.permissions.read_source;
     let cwd;
     let baseCommit = null;
@@ -486,11 +597,18 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     }
     const logPath = path.join(logsDir(worker.env), 'handoffs', `${h.id}.log`);
     const started = worker.now();
-    const access = h.access ?? 'standard';
-    const budget = budgetFor(recipe, ctx.config, access, h.mode);
+    const budget = budgetFor(recipe, ctx.config, access, h.mode, h);
     const timeoutMs = deadlineMs === null ? budget.timeoutMs : Math.min(deadlineMs, budget.timeoutMs);
     const deadlineAt = addMs(started, timeoutMs);
-    updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings });
+    const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
+    if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
+    let auto = null;
+    if (access === 'autonomous') {
+      try { auto = prepareAutonomous(worker, h, { cwd, checkout: worktreePath, repoCfg, scopes, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
+    }
+    // The credential report is what the Run dialog's warnings rest on (Task 9): which systems got a
+    // read-only profile, a stub or a scope, and what no redirect can close.
+    updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings, ...(auto ? { cred_report: auto.report } : {}) });
     const current = worker.state.handoffs.get(h.id);
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
     const environments = worker.environmentsFor ? worker.environmentsFor(ticket.repo_id) : repoCfg ? repoCfg.deployment_environments ?? [] : [];
@@ -507,21 +625,22 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
     // Standard access keeps the recipe's own tool narrowing; settings and full access hand the
     // decision to Claude Code itself (ADR 0017).
-    const rt = access === 'standard' ? { permissionMode: 'dontAsk', ...(recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions })), keepCredentials: false } : runtimeAccess({ access, mode: h.mode, permissions: h.permissions ?? {} });
+    // Under autonomous access the guard decides, and a recipe's `tools` still narrows the built-in
+    // tool families (R8).
+    const rt = access === 'standard' ? { permissionMode: 'dontAsk', ...(recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions })), keepCredentials: false } : runtimeAccess({ access, mode: h.mode, permissions: h.permissions ?? {}, tools: access === 'autonomous' && recipe ? recipe.tools : null });
     const tools = { allowed: rt.allowed, disallowed: rt.disallowed };
-    const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
-    if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
+    const spawnExtras = auto ? { childEnv: auto.childEnv, settingsPath: auto.settingsPath, addDirs: auto.addDirs, permissionPrompts: auto.permissionPrompts, mcpServersPath: auto.mcpServersPath } : {};
     // The run's own directory holds its tool ledger (spec §5.4); every turn appends to it.
     const ledgerPath = path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl');
     const onInit = onInitFor(worker, h.id);
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
     // The entry exists before the process does, so the init event always finds it.
-    const entry = { child: null, done: null, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, budget, timeoutMs, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials };
+    const entry = { child: null, done: null, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, budget, timeoutMs, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, access, spawnExtras };
     running.set(h.id, entry);
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, ledgerPath, onInit, model, maxTurns: budget.maxTurns, maxBudgetUsd: budget.maxBudgetUsd, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, ledgerPath, onInit, model, maxTurns: budget.maxTurns, maxBudgetUsd: budget.maxBudgetUsd, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, ...spawnExtras });
     } catch (err) {
       running.delete(h.id);
       return fail(worker, h, 'spawn-failed', err.message);
@@ -548,6 +667,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     async onStart(worker) {
       worker.recipeInfo = () => catalogFor(worker).list();
       worker.handoffLimits = () => ({ ...limits });
+      worker.autonomyInfo = () => autonomyInfo(worker.state, ctx.config);
       currentWorker = worker;
       for (const h of [...worker.state.handoffs.values()]) {
         if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });

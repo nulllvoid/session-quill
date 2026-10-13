@@ -13,11 +13,23 @@
 //                           or the default result); 'malformed' answers it without a JSON block
 //   FAKE_CLAUDE_SESSION   — session id to report (default 'fake-session'; a --resume turn keeps its id)
 //   FAKE_CLAUDE_CAPTURE   — file to write { prompt, args } to; --resume turns append to
-//                           <capture>.resume as one JSON line each
+//                           <capture>.resume as one JSON line each. With --settings <file> the
+//                           capture also holds that file's JSON (`settings`) and the text of the
+//                           grant.json beside it (`grant_text`)
+//   FAKE_CLAUDE_ENV_PROBE — comma-separated variable names whose values (or null) the capture
+//                           records as `env_probe`; tests set only fake values
+//   FAKE_CLAUDE_VERSION   — what `--version` prints (default '2.1.296 (Claude Code)')
+//   FAKE_CLAUDE_INIT_VERSION — claude_code_version in the init event (default: the version's number)
+//   FAKE_CLAUDE_MCP_SERVERS — JSON list for the init event's mcp_servers (default [])
 import fs from 'node:fs';
 import path from 'node:path';
 
 const args = process.argv.slice(2);
+const VERSION = process.env.FAKE_CLAUDE_VERSION ?? '2.1.296 (Claude Code)';
+if (args.includes('--version')) {
+  process.stdout.write(`${VERSION}\n`);
+  process.exit(0);
+}
 const sleep = Number(process.env.FAKE_CLAUDE_SLEEP_MS ?? 50);
 const resumeIdx = args.indexOf('--resume');
 const resumed = resumeIdx >= 0 ? args[resumeIdx + 1] : null;
@@ -40,10 +52,22 @@ function wrap(text) {
 function run() {
   const capture = process.env.FAKE_CLAUDE_CAPTURE;
   if (capture && resumed) fs.appendFileSync(`${capture}.resume`, `${JSON.stringify({ prompt, args })}\n`);
-  // Whether a provider token reached the agent, for credential tests; never its value.
-  else if (capture) fs.writeFileSync(capture, JSON.stringify({ prompt, args, gh_token: !!process.env.GH_TOKEN }));
+  // Whether a provider token reached the agent, for credential tests; never a real value.
+  else if (capture) {
+    const out = { prompt, args, gh_token: !!process.env.GH_TOKEN };
+    const settingsAt = args.indexOf('--settings');
+    if (settingsAt >= 0) {
+      const file = args[settingsAt + 1];
+      try { out.settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { out.settings = null; }
+      try { out.grant_text = fs.readFileSync(path.join(path.dirname(file), 'grant.json'), 'utf8'); } catch { out.grant_text = null; }
+    }
+    if (process.env.FAKE_CLAUDE_ENV_PROBE) out.env_probe = Object.fromEntries(process.env.FAKE_CLAUDE_ENV_PROBE.split(',').map((k) => [k, process.env[k] ?? null]));
+    fs.writeFileSync(capture, JSON.stringify(out));
+  }
   process.stderr.write(`fake-claude cwd=${process.cwd()} args=${args.join(' ')}\n`);
-  if (mode !== 'garbage') process.stdout.write(line({ type: 'system', subtype: 'init', session_id: SESSION, tools: ['Bash', 'Read'], mcp_servers: [] }));
+  const initVersion = process.env.FAKE_CLAUDE_INIT_VERSION ?? (/\d+\.\d+\.\d+/.exec(VERSION) ?? [null])[0];
+  const mcpServers = process.env.FAKE_CLAUDE_MCP_SERVERS ? JSON.parse(process.env.FAKE_CLAUDE_MCP_SERVERS) : [];
+  if (mode !== 'garbage') process.stdout.write(line({ type: 'system', subtype: 'init', session_id: SESSION, tools: ['Bash', 'Read'], mcp_servers: mcpServers, ...(initVersion ? { claude_code_version: initVersion } : {}) }));
   setTimeout(() => {
     if (process.env.FAKE_CLAUDE_EDIT && !resumed) {
       const file = path.join(process.cwd(), process.env.FAKE_CLAUDE_EDIT);

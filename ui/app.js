@@ -252,7 +252,7 @@ async function submitBulkHandoff(form) {
   if (mode === 'attempt-fix' && fd.get('confirm_edit') !== 'on') { appState.dialog = { ...appState.dialog, error: 'Confirm that these runs may edit source.' }; render(); return; }
   const entries = bulkEntries(appState.snapshot, ids, { mode });
   const batchId = uuidv4();
-  const bodies = bulkRequests(entries, { mode, access: String(fd.get('access') || 'settings'), note: String(fd.get('note') ?? '').trim(), batchId });
+  const bodies = bulkRequests(entries, { mode, access: String(fd.get('access') || 'autonomous'), note: String(fd.get('note') ?? '').trim(), batchId });
   const rows = entries.map((e) => ({ ticketId: e.ticket.id, requestId: null, reason: e.state === 'running' ? 'Already running' : e.state === 'no-repo' ? 'No repo' : e.state === 'not-eligible' ? 'Not eligible' : null }));
   appState.batches = [...appState.batches, batchId];
   appState.dialog = { type: 'bulk-results', batchId, rows };
@@ -781,6 +781,8 @@ function handleSubmit(form) {
     const permissions = {};
     for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files']) permissions[k] = fd.get(k) === 'on';
     if (required) { permissions.read_source = true; permissions.edit_source = true; }
+    // A files run has no access choice and is always standard (ADR 0015); every other form sends
+    // its checked level, Autonomous unless the owner picked another.
     const payload = { recipe: form.dataset.recipe, note: String(fd.get('note') ?? '').trim(), permissions, access: fd.get('access') || 'standard', branch: String(fd.get('branch') ?? '').trim() || null };
     closeDialog();
     submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: form.dataset.retryOf || null }, { announceText: `${form.dataset.recipe} run requested; its results arrive as suggestions on the ticket` });

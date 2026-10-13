@@ -8,7 +8,7 @@
 // exception is full access (observe mode with a verified full grant), which never denies.
 //
 // Start-up cost is most of the hook's latency, so this loads only what decide() needs, the
-// grant reader, the log redaction and the git HEAD reader; no CLI, no config.
+// grant reader, the log redaction, the git HEAD reader and the MCP sources reader; no CLI, no config.
 import fs from 'node:fs';
 import path from 'node:path';
 import { decide, readableUnder } from '../src/gate/run-guard.js';
@@ -16,6 +16,7 @@ import { readGrant, GRANT_FILE } from '../src/handoff/grant.js';
 import { redactCapped, summarizeInput } from '../src/handoff/stream.js';
 import { handoffRunDir } from '../src/lib/paths.js';
 import { currentBranch } from '../src/lib/git-head.js';
+import { sourceOfTool, MCP_SERVERS_FILE } from '../src/handoff/mcp-sources.js';
 
 const MAX_STDIN_BYTES = 4 * 1024 * 1024;
 const EXCERPT_BYTES = 2048;
@@ -101,7 +102,10 @@ function check(raw, env) {
     if (typeof input.cwd === 'string' && path.isAbsolute(input.cwd)) s.cwd = input.cwd;
     if (env.NODE_ENV === 'test' && env.QUILL_GUARD_TEST_THROW === '1') throw new Error('QUILL_GUARD_TEST_THROW');
 
-    const call = { tool_name: input.tool_name, tool_input: input.tool_input };
+    // An MCP call's server source comes from the run's init inventory (R20): a server the file
+    // does not list, or no file, is 'unknown', which decide trusts only by name from the grant.
+    const mcp = typeof input.tool_name === 'string' && input.tool_name.startsWith('mcp__');
+    const call = { tool_name: input.tool_name, tool_input: input.tool_input, ...(mcp ? { mcp_server_source: s.runDir ? sourceOfTool(input.tool_name, path.join(s.runDir, MCP_SERVERS_FILE)) : 'unknown' } : {}) };
     const ctx = { cwd: s.cwd, vars: env, currentBranch: currentBranch(s.cwd) ?? undefined, defaultBranch: nonEmpty(s.grant && s.grant.defaultBranch) };
     const r = decide(call, s.grant, ctx);
     if (!r || (r.decision !== 'allow' && r.decision !== 'deny') || typeof r.reason !== 'string') throw new Error('decide returned no decision');

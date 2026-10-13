@@ -2,10 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { validateHandoffRequest } from '../../src/handoff/permissions.js';
+import { randomUUID, createHash } from 'node:crypto';
+import { validateHandoffRequest, ACCESS } from '../../src/handoff/permissions.js';
 import { runtimeAccess, childEnvFor } from '../../src/handoff/runner.js';
 import { normalizeRecipe } from '../../src/agents/recipes.js';
+import { handoffRunDir } from '../../src/lib/paths.js';
+import { NO_CREDENTIAL_PLACEHOLDER } from '../../src/handoff/cred-env.js';
 import { bootWorker, makeRepo, until, T1 } from './helpers.js';
 
 const NONE = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
@@ -61,16 +63,183 @@ test('through the worker: each access level reaches the runtime as its permissio
   } finally { await b.w.stop(); }
 });
 
-test('dashboard: both dialogs offer access with my settings preselected and full access marked; file runs offer none', async () => {
+test('dashboard: both dialogs offer access with Autonomous preselected, my settings under Advanced and full access marked; file runs offer none', async () => {
   const { renderRecipeRunDialog } = await import('../../ui/views/agents.js');
   const { renderRunAgentDialog } = await import('../../ui/views/run-dialog.js');
   const ticket = { id: T1, key: 'PROJ-1', title: 'T', status: 'active', repo_id: null, files_touched: [{ relative_path: 'C:/x/a.cjs' }], tags: [], timeline: [] };
   const snap = { tickets: [ticket], handoffs: [], recipes: [], capabilities: { read: true, handoff: true }, meta: { timezone: 'UTC' } };
   const analyse = { name: 'analyse', description: 'd', source: 'builtin', mode: 'analyse', permissions: { ...NONE, read_source: true }, timeout_min: 20, legacy: true };
   const dialog = renderRecipeRunDialog(analyse, ticket, snap);
-  assert.match(dialog, /name="access" value="settings" checked/);
+  assert.match(dialog, /name="access" value="autonomous" checked/);
+  assert.doesNotMatch(dialog, /value="settings" checked/);
+  assert.match(dialog, /<details class="advanced access-advanced"><summary>[^<]*<\/summary>\s*<label><input type="radio" name="access" value="settings"> Use my Claude Code settings/);
   assert.match(dialog, /class="danger"><input type="radio" name="access" value="full">/);
-  assert.match(renderRunAgentDialog(ticket, { ...snap, recipes: [analyse] }, { recipe: 'analyse' }), /name="access" value="settings" checked/);
+  assert.match(renderRunAgentDialog(ticket, { ...snap, recipes: [analyse] }, { recipe: 'analyse' }), /name="access" value="autonomous" checked/);
   const files = { name: 'file-task', description: 'd', source: 'builtin', mode: 'files', permissions: { ...NONE, delete_files: true }, timeout_min: 10, legacy: false };
   assert.doesNotMatch(renderRecipeRunDialog(files, ticket, snap), /name="access"/);
+});
+
+test('autonomous is a known access level; write scopes need it; file runs never get it', () => {
+  assert.deepEqual(ACCESS, ['standard', 'settings', 'autonomous', 'full']);
+  const v = (extra, opts = {}) => validateHandoffRequest({ mode: 'analyse', note: '', permissions: {}, ...extra }, opts);
+  assert.equal(v({ access: 'autonomous' }).access, 'autonomous');
+  assert.equal('scopes' in v({ access: 'autonomous' }), false, 'no scopes, no field');
+  assert.deepEqual(v({ access: 'autonomous', scopes: ['k8s.write:stg', 'jira.write', 'k8s.write:stg'] }).scopes, ['k8s.write:stg', 'jira.write']);
+  for (const access of ['standard', 'settings', 'full', undefined]) {
+    assert.throws(() => v({ access, scopes: ['jira.write'] }), (e) => e.code === 'scope-needs-autonomous', String(access));
+  }
+  assert.equal('scopes' in v({ access: 'standard', scopes: [] }), false, 'an empty list is no scope');
+  for (const bad of [['Bad Scope'], ['x:'], [':t'], 'jira.write', [7], ['a'.repeat(80)], Array.from({ length: 21 }, (_, i) => `s${i}.write`)]) {
+    assert.throws(() => v({ access: 'autonomous', scopes: bad }), (e) => e.code === 'scope-invalid', JSON.stringify(bad));
+  }
+  const files = normalizeRecipe({ name: 'file-task', source: 'builtin', text: '---\nname: file-task\ndescription: d\nmode: files\npermissions: { delete_files: true }\n---\nGo.' });
+  assert.throws(() => validateHandoffRequest({ recipe: 'file-task', note: '', permissions: { delete_files: true }, access: 'autonomous' }, { recipe: files, attachedFileCount: 1 }), (e) => e.code === 'access-invalid');
+});
+
+test('a run may set its own turn and spend caps, within bounds', () => {
+  const v = (extra) => validateHandoffRequest({ mode: 'analyse', note: '', permissions: {}, access: 'autonomous', ...extra }, {});
+  const ok = v({ max_turns: 40, max_budget_usd: 2.5 });
+  assert.deepEqual([ok.max_turns, ok.max_budget_usd], [40, 2.5]);
+  assert.equal('max_turns' in v({}), false);
+  for (const bad of [{ max_turns: 0 }, { max_turns: 1.5 }, { max_turns: 1001 }, { max_turns: '40' }, { max_budget_usd: 0 }, { max_budget_usd: -1 }, { max_budget_usd: 1001 }, { max_budget_usd: 'x' }]) {
+    assert.throws(() => v(bad), (e) => e.code === 'budget-invalid', JSON.stringify(bad));
+  }
+});
+
+test('autonomous runtime access: dontAsk, no static allow rules, prompts off, the guard decides; fan-out and recipe tool families narrow as before', () => {
+  const a = runtimeAccess({ access: 'autonomous', mode: 'analyse', permissions: { read_source: true } });
+  assert.deepEqual([a.permissionMode, a.allowed, a.permissionPrompts, a.guard, a.keepCredentials], ['dontAsk', [], 'none', 'enforce', false]);
+  assert.ok(!a.disallowed.includes('Task'), 'a read-only analysis may fan out');
+  assert.ok(!a.disallowed.includes('Bash') && !a.disallowed.includes('WebFetch'), 'the guard decides shell and web calls');
+  const fix = runtimeAccess({ access: 'autonomous', mode: 'attempt-fix', permissions: { read_source: true, edit_source: true } });
+  assert.ok(fix.disallowed.includes('Task') && fix.disallowed.includes('Agent'), 'a fix stays a single agent');
+  assert.ok(!fix.disallowed.includes('Edit'), 'edits are decided by the guard');
+  const narrowed = runtimeAccess({ access: 'autonomous', mode: 'analyse', permissions: { read_source: true }, tools: ['Read', 'Grep', 'Bash(git log:*)'] });
+  for (const t of ['Glob', 'Edit', 'Write', 'WebFetch', 'PowerShell', 'Task', 'Agent']) assert.ok(narrowed.disallowed.includes(t), t);
+  for (const t of ['Read', 'Grep', 'Bash']) assert.ok(!narrowed.disallowed.includes(t), t);
+  assert.ok(!narrowed.disallowed.some((t) => t.startsWith('mcp__')), 'connectors are the guard\'s to decide (R8)');
+});
+
+const SERVERS = [{ name: 'claude_ai_Atlassian', status: 'connected', source: 'claudeai' }, { name: 'repo-db', status: 'connected', source: 'project' }];
+const PROBE = 'GH_TOKEN,KUBECONFIG,QUILL_HANDOFF_ID,QUILL_HANDOFF_ACCESS,QUILL_HANDOFF_PERMISSIONS,QUILL_HANDOFF_SCOPES,QUILL_HANDOFF_GUARD,QUILL_HANDOFF_GRANT_SHA256,CLAUDE_CODE_DISABLE_AUTO_MEMORY,FAKE_OWNER_SECRET';
+
+async function queueRun(b, n, payload) {
+  const rid = `66666666-0000-4000-8000-00000000000${n}`;
+  b.request(rid, { target_id: T1, expected_revision: b.w.state.tickets.get(T1).revision, payload });
+  b.w.tick();
+  const req = b.w.state.requests.get(rid);
+  assert.equal(req.state, 'applied', JSON.stringify(req.error));
+  return req.result.handoff_id;
+}
+const settle = (b, hid) => until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return ['done', 'failed', 'cancelled', 'timed-out'].includes(x.state) ? x : null; }, { timeoutMs: 15000 });
+
+test('through the worker: an autonomous run gets its grant, run settings, context dir, guard env and redirected credentials', async () => {
+  const repo = makeRepo();
+  const capture = path.join(repo.dir, '..', `capture-${randomUUID()}.json`);
+  const b = await bootWorker({ repo, runtimeAvailable: true, handoff: { trusted_mcp_servers: ['repo-db'] }, fakeEnv: { FAKE_CLAUDE_CAPTURE: capture, GH_TOKEN: 'fake-owner-token', KUBECONFIG: '/owner/kube/config', FAKE_OWNER_SECRET: 'x', FAKE_CLAUDE_ENV_PROBE: PROBE, FAKE_CLAUDE_MCP_SERVERS: JSON.stringify(SERVERS) } });
+  try {
+    b.ticket(T1, 'PROJ-7');
+    const hid = await queueRun(b, 1, { recipe: 'analyse', note: '', permissions: { ...NONE, read_source: true }, access: 'autonomous' });
+    assert.equal(b.w.state.handoffs.get(hid).deadline_ms, 30 * 60_000, 'deadline from budgetFor at queue time (R8): 30 min for autonomous');
+    const h = await settle(b, hid);
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    const runDir = handoffRunDir(b.env, hid);
+    const seen = JSON.parse(fs.readFileSync(capture, 'utf8'));
+    const after = (flag) => seen.args[seen.args.indexOf(flag) + 1];
+    assert.equal(after('--permission-mode'), 'dontAsk');
+    assert.equal(after('--permission-prompts'), 'none');
+    assert.equal(after('--settings'), path.join(runDir, 'run-settings.json'));
+    assert.equal(after('--add-dir'), path.join(runDir, 'context'));
+    assert.ok(!seen.args.includes('--allowedTools'), 'the static allow list is empty');
+    assert.ok(!seen.args.includes('--bare'));
+    // Run settings: the guard hook, fail closed, no allow rules.
+    const hook = seen.settings.hooks.PreToolUse[0];
+    assert.deepEqual(seen.settings.permissions.allow, []);
+    assert.equal(hook.hooks[0].onFailure, 'block');
+    assert.match(hook.hooks[0].args[0], /quill-guard\.js$/);
+    // Grant: frozen, hashed into the env, roots from the run.
+    const grant = JSON.parse(seen.grant_text);
+    const wt = h.worktree_path;
+    assert.equal(grant.access, 'autonomous');
+    assert.deepEqual(grant.permissions, { ...NONE, read_source: true, edit_files: false, delete_files: false });
+    for (const r of [wt, runDir, path.join(runDir, 'context')]) assert.ok(grant.readableRoots.includes(r), r);
+    assert.ok(!grant.writableRoots.includes(wt), 'no edit_source: the checkout is not writable');
+    assert.ok(grant.writableRoots.includes(runDir));
+    for (const p of [path.join(wt, '.mcp.json'), path.join(wt, '.claude'), path.join(wt, '.git')]) assert.ok(grant.protectedPaths.includes(p), p);
+    assert.deepEqual(grant.trustedMcpServers, ['repo-db']);
+    assert.deepEqual([grant.scopes, grant.actionPins, grant.defaultBranch, grant.credentialSystems], [[], [], 'main', []]);
+    const probe = seen.env_probe;
+    assert.equal(probe.QUILL_HANDOFF_GRANT_SHA256, createHash('sha256').update(seen.grant_text).digest('hex'));
+    assert.deepEqual([probe.QUILL_HANDOFF_ID, probe.QUILL_HANDOFF_ACCESS, probe.QUILL_HANDOFF_GUARD, probe.QUILL_HANDOFF_PERMISSIONS, probe.QUILL_HANDOFF_SCOPES, probe.CLAUDE_CODE_DISABLE_AUTO_MEMORY], [hid, 'autonomous', 'enforce', 'read_source', '', '1']);
+    // Credentials: redirected, never the owner's.
+    assert.equal(probe.GH_TOKEN, NO_CREDENTIAL_PLACEHOLDER);
+    assert.equal(probe.KUBECONFIG, path.join(runDir, 'env', 'kubeconfig'));
+    assert.equal(probe.FAKE_OWNER_SECRET, null, 'the generic secret-name pass ran');
+    assert.match(seen.prompt, /Access: autonomous/);
+    // The run records the credential report and the init inventory; nothing secret.
+    assert.equal(h.cred_report.kubernetes, 'stub');
+    assert.ok(Array.isArray(h.cred_report.residual));
+    assert.deepEqual(h.inventory.mcpServers, SERVERS);
+    assert.equal(h.inventory.version, '2.1.296');
+    // The grant, settings, stubs and context go with the run; the ledger stays.
+    for (const f of ['grant.json', 'run-settings.json', 'env', 'context', 'mcp-servers.json']) assert.equal(fs.existsSync(path.join(runDir, f)), false, f);
+  } finally { await b.w.stop(); }
+});
+
+test('autonomous with edit_source: the checkout is writable and the test gate runs in the redirected environment', async () => {
+  const repo = makeRepo();
+  const capture = path.join(repo.dir, '..', `capture-${randomUUID()}.json`);
+  const marker = path.join(repo.dir, '..', `gate-${randomUUID()}.txt`);
+  const gate = `node -e "require('fs').writeFileSync(process.argv[1], String(process.env.GH_TOKEN))" "${marker.replace(/\\/g, '/')}"`;
+  const b = await bootWorker({ repo, runtimeAvailable: true, repoExtra: { test_command: gate }, fakeEnv: { FAKE_CLAUDE_CAPTURE: capture, FAKE_CLAUDE_EDIT: 'src.js', GH_TOKEN: 'fake-owner-token' } });
+  try {
+    b.ticket(T1, 'PROJ-8');
+    const hid = await queueRun(b, 2, { recipe: 'attempt-fix', note: '', permissions: { ...NONE, read_source: true, edit_source: true }, access: 'autonomous' });
+    const h = await settle(b, hid);
+    const grant = JSON.parse(JSON.parse(fs.readFileSync(capture, 'utf8')).grant_text);
+    assert.ok(grant.writableRoots.includes(h.worktree_path));
+    assert.equal(h.test_gate && h.test_gate.status, 'passed', JSON.stringify(h.test_gate ?? h.error));
+    assert.equal(fs.readFileSync(marker, 'utf8'), NO_CREDENTIAL_PLACEHOLDER, 'the gate never sees the owner token');
+  } finally { await b.w.stop(); }
+});
+
+test('autonomous dispatch refuses an old Claude Code with runtime-too-old before anything is spawned; standard still runs', async () => {
+  const repo = makeRepo();
+  const capture = path.join(repo.dir, '..', `capture-${randomUUID()}.json`);
+  const b = await bootWorker({ repo, runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_CAPTURE: capture, FAKE_CLAUDE_VERSION: '2.1.200 (Claude Code)' } });
+  try {
+    b.ticket(T1, 'PROJ-9');
+    const hid = await queueRun(b, 3, { recipe: 'analyse', note: '', permissions: { ...NONE, read_source: true }, access: 'autonomous' });
+    const h = await settle(b, hid);
+    assert.equal(h.state, 'failed');
+    assert.equal(h.error.code, 'runtime-too-old');
+    assert.match(h.error.message, /2\.1\.200/);
+    assert.match(h.error.message, /standard/);
+    assert.equal(fs.existsSync(capture), false, 'claude was never started for the run');
+    assert.equal(h.worktree_path ?? null, null, 'no checkout was made');
+    const std = await settle(b, await queueRun(b, 4, { recipe: 'analyse', note: '', permissions: { ...NONE, read_source: true }, access: 'standard' }));
+    assert.equal(std.state, 'done', JSON.stringify(std.error));
+  } finally { await b.w.stop(); }
+});
+
+test('an init event reporting an old runtime stops an autonomous run with runtime-too-old', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_INIT_VERSION: '2.1.100', FAKE_CLAUDE_SLEEP_MS: '4000' } });
+  try {
+    b.ticket(T1, 'PROJ-10');
+    const h = await settle(b, await queueRun(b, 5, { recipe: 'analyse', note: '', permissions: { ...NONE, read_source: true }, access: 'autonomous' }));
+    assert.deepEqual([h.state, h.error.code], ['failed', 'runtime-too-old']);
+  } finally { await b.w.stop(); }
+});
+
+test('write scopes on a run fail at dispatch while no scope catalog resolves them (Task 11 adds it)', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  try {
+    b.ticket(T1, 'PROJ-11');
+    const hid = await queueRun(b, 6, { recipe: 'analyse', note: '', permissions: { ...NONE, read_source: true }, access: 'autonomous', scopes: ['k8s.write:stg'] });
+    assert.deepEqual(b.w.state.handoffs.get(hid).scopes, ['k8s.write:stg'], 'the record keeps the requested scopes');
+    const h = await settle(b, hid);
+    assert.deepEqual([h.state, h.error.code], ['failed', 'scope-unknown']);
+  } finally { await b.w.stop(); }
 });

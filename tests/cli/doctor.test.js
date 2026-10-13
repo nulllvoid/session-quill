@@ -168,3 +168,18 @@ test('import turns supported frontmatter changes into events', async () => {
     await w.stop();
   }
 });
+
+test('doctor: git older than 2.31 and Claude Code older than 2.1.295 are warnings for autonomous runs (ADR 0026)', async () => {
+  const { gitCheck, claudeCheck } = await import('../../src/cli/commands/doctor.js');
+  assert.deepEqual(gitCheck('git version 2.45.1.windows.1'), { level: 'ok', detail: 'git version 2.45.1.windows.1' });
+  const old = gitCheck('git version 2.30.2');
+  assert.equal(old.level, 'warn');
+  assert.match(old.detail, /2\.31/);
+  assert.match(old.detail, /credential helper/);
+  assert.equal(gitCheck(null).level, 'warn');
+  assert.deepEqual(claudeCheck('2.1.296 (Claude Code)'), { level: 'ok', detail: '2.1.296 (Claude Code)' });
+  const oldClaude = claudeCheck('2.1.200 (Claude Code)');
+  assert.equal(oldClaude.level, 'warn');
+  assert.match(oldClaude.detail, /autonomous runs need 2\.1\.295/);
+  assert.equal(claudeCheck(null).level, 'warn');
+});

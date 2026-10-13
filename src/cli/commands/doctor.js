@@ -11,8 +11,26 @@ import { readHealthErrors } from '../../worker/health.js';
 import { repoStatus, REPO_STATUS_TEXT } from '../../config/repos.js';
 import { pausePath } from '../../runtime/readiness.js';
 import { verifyAutostart } from '../../worker/autostart.js';
+import { parseVersion, MIN_RUNTIME } from '../../handoff/inventory.js';
 
 export const MIN_NODE_MAJOR = 22;
+// Autonomous runs empty the checkout's own credential helper with command-scope config, which
+// git reads only from 2.31 (ADR 0026); older git still finds a helper set in .git/config.
+export const MIN_GIT_FOR_AUTONOMOUS = '2.31.0';
+
+const older = (v, min) => { const a = parseVersion(v); const b = parseVersion(min); if (!a || !b) return true; for (let i = 0; i < 3; i += 1) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
+
+export function gitCheck(line) {
+  if (!line) return { level: 'warn', detail: 'not found (required for handoff fixes)' };
+  if (older(line, MIN_GIT_FOR_AUTONOMOUS)) return { level: 'warn', detail: `${line}: autonomous runs need git 2.31 or later to switch off a credential helper set in a checkout's own .git/config; update git` };
+  return { level: 'ok', detail: line };
+}
+
+export function claudeCheck(line) {
+  if (!line) return { level: 'warn', detail: 'not found (required for handoffs)' };
+  if (older(line, MIN_RUNTIME)) return { level: 'warn', detail: `${line}: autonomous runs need ${MIN_RUNTIME} or later and are refused (runtime-too-old); standard runs still work` };
+  return { level: 'ok', detail: line };
+}
 
 function version(cmd, args) {
   try {
@@ -32,10 +50,10 @@ export async function collect(env, { autostart = {} } = {}) {
     if (level === 'error') report.ok = false;
   };
   add(nodeMajor >= MIN_NODE_MAJOR ? 'ok' : 'error', 'node', `${process.versions.node}${nodeMajor >= MIN_NODE_MAJOR ? '' : ` (requires >= ${MIN_NODE_MAJOR} LTS; Node is not bundled with Claude Code)`}`);
-  const git = version('git', ['--version']);
-  add(git ? 'ok' : 'warn', 'git', git ?? 'not found (required for handoff fixes)');
-  const claude = version(process.platform === 'win32' ? 'claude.exe' : 'claude', ['--version']) ?? version('claude', ['--version']);
-  add(claude ? 'ok' : 'warn', 'claude', claude ?? 'not found (required for handoffs)');
+  const git = gitCheck(version('git', ['--version']));
+  add(git.level, 'git', git.detail);
+  const claude = claudeCheck(version(process.platform === 'win32' ? 'claude.exe' : 'claude', ['--version']) ?? version('claude', ['--version']));
+  add(claude.level, 'claude', claude.detail);
   add('ok', 'platform', `${process.platform} ${process.arch}`);
   add('ok', 'commands', `${commandName('ticket')}, ${commandName('approve')}, ${commandName('status')}, ${commandName('handoff')}`);
   if (!ctx.initialized) {

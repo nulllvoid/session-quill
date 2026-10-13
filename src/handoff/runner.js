@@ -207,7 +207,11 @@ function permissionLines(handoff, repo) {
     handoff.access === 'autonomous' || handoff.access === 'full'
       ? `Granted permissions for this run: ${grants.length ? grants.join(', ') : 'none (note-only analysis)'}. Do not commit, push or open pull requests unless that exact permission is listed, never merge, and never touch a default or protected branch.`
       : `Granted permissions for this run: ${grants.length ? grants.join(', ') : 'none (note-only analysis)'}. Anything not granted is forbidden: you must not read or edit source outside what is granted, must not commit, push, open pull requests, merge or deploy unless that exact permission is listed, and must never touch a default or protected branch.`,
-    p.read_source ? `All file and command access is confined to your current working directory (an isolated checkout${repo ? ` of ${repo.display_name ?? repo.id}` : ''}). Do not access other paths. Use plain git log, git show, git diff and git status; options that write files, run programs or read outside the checkout (--output, --ext-diff, --textconv, --no-index), redirects and command substitution are refused.` : 'You have no source access. Work only from the notes below; do not attempt to read files or run commands.',
+    handoff.access === 'autonomous'
+      ? (p.read_source
+        ? `Your working directory is an isolated checkout${repo ? ` of ${repo.display_name ?? repo.id}` : ''}${p.edit_source ? ', which you may edit' : ' that you may read but not change'}. Write scratch files to the temp directory. Paths outside these are refused.`
+        : 'You have no checkout of the repository: your working directory is an empty directory. Use the connected tools and the notes below, and write scratch files to the temp directory; other paths are refused.')
+      : p.read_source ? `All file and command access is confined to your current working directory (an isolated checkout${repo ? ` of ${repo.display_name ?? repo.id}` : ''}). Do not access other paths. Use plain git log, git show, git diff and git status; options that write files, run programs or read outside the checkout (--output, --ext-diff, --textconv, --no-index), redirects and command substitution are refused.` : 'You have no source access. Work only from the notes below; do not attempt to read files or run commands.',
   ];
 }
 
@@ -236,9 +240,21 @@ function forRuntime({ allowed, disallowed }, permissions) {
 const SUBAGENT_TOOLS = ['Task', 'Agent'];
 export const mayFanOut = ({ mode, permissions = {} }) => (mode === 'analyse' || mode === 'analyse-followups') && !permissions.edit_source;
 
+// Built-in tool families a recipe's `tools` list can narrow under autonomous access (R8). MCP and
+// connector tools are not among them: the guard decides those by verb and server source.
+export const TOOL_FAMILIES = ['Read', 'Glob', 'Grep', 'LS', 'Bash', 'PowerShell', 'Monitor', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'WebFetch', 'WebSearch', 'Task', 'Agent'];
+
 export function runtimeAccess({ access = 'standard', mode, permissions = {}, tools = null }) {
   const noFanOut = mayFanOut({ mode, permissions }) ? [] : SUBAGENT_TOOLS;
   if (access === 'full') return { permissionMode: 'bypassPermissions', allowed: [], disallowed: [...noFanOut], keepCredentials: true };
+  // - autonomous (ADR 0026): `dontAsk` with no static allow rule, so the per-run guard hook is the
+  //   only thing that allows a call, and a hook that crashes or times out leaves the call refused.
+  //   A recipe's `tools` list still narrows the built-in families it does not name.
+  if (access === 'autonomous') {
+    const named = Array.isArray(tools) ? new Set(tools.filter((t) => typeof t === 'string').map((t) => t.replace(/\(.*$/s, '').trim())) : null;
+    const narrowed = named ? TOOL_FAMILIES.filter((f) => !named.has(f)) : [];
+    return { permissionMode: 'dontAsk', allowed: [], disallowed: [...new Set([...narrowed, ...noFanOut])], keepCredentials: false, permissionPrompts: 'none', guard: 'enforce' };
+  }
   if (access === 'settings') {
     const disallowed = ['Bash(git push --force*)', 'Bash(gh pr merge*)', 'Bash(git merge*)', 'Bash(git checkout main*)', 'Bash(git checkout master*)'];
     if (!permissions.commit) disallowed.push('Bash(git commit*)');
@@ -411,19 +427,22 @@ export function parseAgentResult(result, { outputs = null } = {}) {
 export const BUDGET_DEFAULTS = { max_turns: 80, max_turns_fix: 150, repair_turns: 4, self_check_turns: 20, timeout_min: 20, timeout_min_autonomous: 30, max_budget_usd: 10, max_batch_budget_usd: 30 };
 export const MAX_TIMEOUT_MINUTES = 60;
 
-export function budgetFor(recipe, config, access, mode) {
+// `run` is the run's own request: its `max_turns` and `max_budget_usd` (spec §8, the CLI's
+// --max-turns and --budget) win over the recipe and the config.
+export function budgetFor(recipe, config, access, mode, run = null) {
   const h = config && config.handoff && typeof config.handoff === 'object' ? config.handoff : {};
   const num = (v, d, { int = true } = {}) => (typeof v === 'number' && Number.isFinite(v) && v > 0 && (!int || Number.isInteger(v)) ? v : d);
   const fix = mode === 'attempt-fix' || Boolean(recipe && recipe.permissions && recipe.permissions.edit_source);
   const maxTurns = num(recipe && recipe.max_turns, fix ? num(h.max_turns_fix, BUDGET_DEFAULTS.max_turns_fix) : num(h.max_turns, BUDGET_DEFAULTS.max_turns));
   const configuredMin = access === 'autonomous' ? num(h.timeout_min_autonomous, BUDGET_DEFAULTS.timeout_min_autonomous, { int: false }) : num(h.timeout_min, BUDGET_DEFAULTS.timeout_min, { int: false });
   const minutes = Math.min(MAX_TIMEOUT_MINUTES, recipe && recipe.timeout_set ? num(recipe.timeout_min, configuredMin, { int: false }) : configuredMin);
+  const own = run && typeof run === 'object' ? run : {};
   return {
-    maxTurns,
+    maxTurns: num(own.max_turns, maxTurns),
     repairTurns: num(h.repair_turns, BUDGET_DEFAULTS.repair_turns),
     selfCheckTurns: num(h.self_check_turns, BUDGET_DEFAULTS.self_check_turns),
     timeoutMs: Math.round(minutes * 60_000),
-    maxBudgetUsd: num(recipe && recipe.max_budget_usd, num(h.max_budget_usd, BUDGET_DEFAULTS.max_budget_usd, { int: false }), { int: false }),
+    maxBudgetUsd: num(own.max_budget_usd, num(recipe && recipe.max_budget_usd, num(h.max_budget_usd, BUDGET_DEFAULTS.max_budget_usd, { int: false }), { int: false }), { int: false }),
   };
 }
 
@@ -466,7 +485,10 @@ export function childEnvFor(permissions = {}, baseEnv = process.env, extra = {},
 // as soon as it arrives, `ledgerPath` receives the redacted tool ledger, and the log keeps only
 // assistant text, tool names, the init summary and the result. `done` resolves to
 // { code, signal, collected, error }, where `collected` is the collector's end() value.
-export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd, tools, env = {}, permissions = {}, logPath, ledgerPath = null, onInit = null, maxTurns = 40, maxBudgetUsd = null, settingsPath = null, addDirs = [], permissionPrompts = null, model = null, resume = null, permissionMode = 'dontAsk', keepCredentials = false }) {
+// `childEnv`, when given, is the agent's complete environment (an autonomous run's, built once by
+// buildChildEnv at dispatch); otherwise it is derived from `env` by childEnvFor. `mcpServersPath`
+// receives the init event's server sources for the guard (R20).
+export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd, tools, env = {}, childEnv = null, permissions = {}, logPath, ledgerPath = null, mcpServersPath = null, onInit = null, maxTurns = 40, maxBudgetUsd = null, settingsPath = null, addDirs = [], permissionPrompts = null, model = null, resume = null, permissionMode = 'dontAsk', keepCredentials = false }) {
   const args = [...claudeArgs, '-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode, '--max-turns', String(maxTurns)];
   if (Number.isFinite(maxBudgetUsd) && maxBudgetUsd > 0) args.push('--max-budget-usd', String(maxBudgetUsd));
   if (settingsPath) args.push('--settings', settingsPath);
@@ -479,9 +501,9 @@ export function spawnAgent({ claudePath = 'claude', claudeArgs = [], prompt, cwd
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const log = fs.openSync(logPath, 'a');
   if (resume) { try { fs.writeSync(log, `\n--- follow-up turn (resume ${resume}) ---\n`); } catch { /* ignore */ } }
-  const childEnv = childEnvFor(permissions, process.env, env, { keepCredentials });
-  const collector = createStreamCollector({ logPath, ledgerPath, onInit, cwd });
-  const child = spawn(claudePath, args, { cwd, env: childEnv, detached: process.platform !== 'win32', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const agentEnv = childEnv ?? childEnvFor(permissions, process.env, env, { keepCredentials });
+  const collector = createStreamCollector({ logPath, ledgerPath, mcpServersPath, onInit, cwd });
+  const child = spawn(claudePath, args, { cwd, env: agentEnv, detached: process.platform !== 'win32', windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   child.stdin.on('error', () => { /* the runtime may exit before reading; its exit code reports that */ });
   child.stdin.end(prompt);
   child.stdout.setEncoding('utf8');

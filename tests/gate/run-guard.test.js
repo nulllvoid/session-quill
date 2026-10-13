@@ -880,3 +880,17 @@ test('GUARD_CODE covers every local module the guard loads', () => {
   assert.ok(seen.size >= 4, `walked ${seen.size} modules`);
   for (const f of seen) assert.ok(GUARD_CODE.some((g) => isWithin(f, path.join(INSTALL_ROOT, g))), `${path.relative(INSTALL_ROOT, f)} is not in GUARD_CODE`);
 });
+
+test('onboarding (spec §3, Review Focus 5): a prod CLI read on a system without read-only credentials is refused with the setup hint', () => {
+  const none = grantWith({ credentialSystems: [] });
+  for (const [cmd, system] of [['kubectl get pods', 'kubernetes'], ['helm list', 'kubernetes'], ['aws s3 ls', 'aws'], ['gcloud compute instances list', 'gcp'], ['az vm list', 'azure'], ['psql -c "select 1"', 'databases'], ['argocd app get pay', 'argo'], ['bash -c "kubectl.exe get pods"', 'kubernetes']]) {
+    const r = decide(bash(cmd), none, ENV);
+    assert.equal(r.decision, 'deny', cmd);
+    assert.ok(r.reason.startsWith(`QUILL_DENIED no-readonly-credentials: no read-only credentials configured for ${system} — set them in quill doctor`), `${cmd}: ${r.reason}`);
+  }
+  assert.equal(decide(bash('kubectl get pods'), grantWith({ credentialSystems: ['kubernetes'] }), ENV).decision, 'allow', 'a read-only profile lets the read through');
+  assert.equal(decide(bash('kubectl get pods'), grantWith(), ENV).decision, 'allow', 'a grant without credentialSystems (older grants) is unaffected');
+  for (const cmd of ['git log', 'curl https://example.com', 'ls']) assert.equal(decide(bash(cmd), none, ENV).decision, 'allow', cmd);
+  const write = decide(bash('kubectl --context stg apply -f x.yaml'), none, ENV);
+  assert.ok(write.reason.startsWith('QUILL_CRITICAL_CHANGE scope=k8s.write'), 'a write is still a critical change');
+});

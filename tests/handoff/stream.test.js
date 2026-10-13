@@ -285,3 +285,15 @@ test('spawnAgent asks for stream-json and passes turn, budget, settings, add-dir
   const plain = JSON.parse(fs.readFileSync(capture2, 'utf8')).args;
   for (const f of ['--max-budget-usd', '--settings', '--add-dir', '--permission-prompts']) assert.ok(!plain.includes(f), f);
 });
+
+test('the init event writes <runDir>/mcp-servers.json for the guard (R20); without a path nothing is written', () => {
+  const t = tmp();
+  const file = path.join(t.dir, 'run', 'mcp-servers.json');
+  const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 's1', mcp_servers: [{ name: 'claude_ai_Atlassian', status: 'connected', source: 'claudeai' }, { name: 'repo-db', status: 'connected', source: 'project' }, { name: 'nosource', status: 'connected' }] });
+  const c = createStreamCollector({ logPath: t.logPath, ledgerPath: t.ledgerPath, mcpServersPath: file });
+  c.push(`${init}\n`);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { claude_ai_Atlassian: 'claudeai', 'repo-db': 'project' }, 'written as soon as init arrives, before the stream ends');
+  c.end();
+  const quiet = collect([`${INIT}\n`]);
+  assert.equal(fs.existsSync(path.join(quiet.dir, 'run', 'mcp-servers.json')), false);
+});

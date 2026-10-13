@@ -22,7 +22,10 @@ function fixture() {
   Object.assign(h, {
     attempts: [{ n: 1, note: S }], learnings: [{ text: S }], critical_changes: [{ path: S }], tool_ledger: [{ tool: S }],
     prod_effects: [{ what: S }], scopes: ['k8s.write:prod', S], action_pin: { sha: S }, inventory: { items: [S] }, recorded_stage: 'attempt',
+    cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S] }, max_turns: 7, max_budget_usd: 1,
   });
+  // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles.
+  s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S] };
   s.tickets[0].run_notes = [S];
   s.tickets[0].critical_spec = { rule: S };
   const local = { ...s.tickets[1], id: TID(40), key: `LOCAL-${S}`, title: `Secret ${S}`, local_only: true };
@@ -52,7 +55,8 @@ test('static export and sanitized snapshot never contain the sentinel or a local
 test('exported handoffs carry counts and the stage, not the records', () => {
   const out = sanitizeSnapshot(fixture(), ALL).handoffs[0];
   assert.deepEqual([out.attempt_count, out.learning_count, out.critical_count, out.recorded_stage], [1, 1, 1, 'attempt']);
-  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory']) assert.equal(k in out, false, k);
+  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report']) assert.equal(k in out, false, k);
+  assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
   assert.ok(Object.keys(out).every((k) => HANDOFF_EXPORT_FIELDS.includes(k)));
 });
 

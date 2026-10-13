@@ -449,6 +449,7 @@ export class Worker {
       environmentsFor: (repoId) => this.environmentsFor(repoId),
       publishers: this.publishInfo ? this.publishInfo() : [],
       handoff_limits: this.handoffLimits ? this.handoffLimits() : null,
+      autonomy: this.autonomyInfo ? this.autonomyInfo() : null,
       onboarding: (({ clone_hosts, auto_clone_dir, import_assigned }) => ({ clone_hosts, auto_clone_dir, import_assigned }))(onboardSettings(this.config.tracker)),
     };
   }

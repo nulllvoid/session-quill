@@ -69,3 +69,35 @@ test('quill agent suggestions, accept and dismiss resolve a recipe run\'s output
     assert.deepEqual(w.state.handoffs.get(h.id).suggestions.map((s) => s.state), ['accepted', 'dismissed']);
   } finally { await stop(); }
 });
+
+const T2 = 'cccccccc-0000-4000-8000-000000000002';
+const T3 = 'cccccccc-0000-4000-8000-000000000003';
+const T4 = 'cccccccc-0000-4000-8000-000000000004';
+
+test('quill agent run and quill handoff default to autonomous access; --access, --scope, --max-turns and --budget reach the run', async () => {
+  const fx = makeHome();
+  const { w, stop } = await start(fx);
+  try {
+    for (const [id, key] of [[T2, 'PROJ-2'], [T3, 'PROJ-3'], [T4, 'PROJ-4']]) w.emit('ticket-create', { ticket: { id, key, title: `Ticket ${key}`, project_id: 'demo', project_name: 'Demo', category: 'feature', priority: 'P2', parent_id: null, repo_id: 'demo', due: null, jira: null } });
+    w.publishGeneration();
+    const byTicket = (id) => [...w.state.handoffs.values()].find((h) => h.ticket_id === id);
+    const first = await cli(['agent', 'run', 'standup', 'PROJ-1', '--max-turns', '12', '--budget', '1.5', '--scope', 'k8s.write:stg', '--scope', 'jira.write'], fx.env);
+    assert.equal(first.code, 0, first.err);
+    const h1 = byTicket(T1);
+    assert.equal(h1.access, 'autonomous');
+    assert.deepEqual(h1.scopes, ['k8s.write:stg', 'jira.write']);
+    assert.deepEqual([h1.max_turns, h1.max_budget_usd], [12, 1.5]);
+    const std = await cli(['agent', 'run', 'standup', 'PROJ-2', '--access', 'standard'], fx.env);
+    assert.equal(std.code, 0, std.err);
+    assert.equal(byTicket(T2).access, 'standard');
+    const scoped = await cli(['agent', 'run', 'standup', 'PROJ-3', '--access', 'full', '--scope', 'jira.write'], fx.env);
+    assert.notEqual(scoped.code, 0);
+    assert.match(scoped.err, /write scopes need autonomous access/);
+    const badTurns = await cli(['agent', 'run', 'standup', 'PROJ-3', '--max-turns', 'lots'], fx.env);
+    assert.notEqual(badTurns.code, 0);
+    assert.match(badTurns.err, /max-turns/);
+    const ho = await cli(['handoff', 'PROJ-4', '--mode', 'analyse'], fx.env);
+    assert.equal(ho.code, 0, ho.err);
+    assert.equal(byTicket(T4).access, 'autonomous');
+  } finally { await stop(); }
+});

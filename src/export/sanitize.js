@@ -160,7 +160,7 @@ export function sanitizeSnapshot(snapshot, options = {}) {
   const hidden = new Set(snapshot.tickets.filter((t) => !isExportableTicket(t)).map((t) => t.id));
   const tickets = snapshot.tickets.filter((t) => isExportableTicket(t) && (!o.projects || o.projects.includes(t.project_id)));
   const ids = new Set(tickets.map((t) => t.id));
-  const meta = { ...snapshot.meta, onboarding: null, owner_machine_id: null, exported_at: o.exportedAt, active_sync_request_id: null, oldest_pending_event_at: null };
+  const meta = { ...snapshot.meta, onboarding: null, autonomy: null, owner_machine_id: null, exported_at: o.exportedAt, active_sync_request_id: null, oldest_pending_event_at: null };
   const out = {
     schema_version: snapshot.schema_version ?? 1,
     generation_id: snapshot.generation_id,

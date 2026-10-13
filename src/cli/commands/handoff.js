@@ -8,6 +8,7 @@ import { requestsDir, handoffsDir } from '../../lib/paths.js';
 import { readJsonIfExists, writeJsonAtomic } from '../../lib/atomic-fs.js';
 import { TrackerError } from '../../lib/errors.js';
 import { bodyHash } from '../../server/requests.js';
+import { budgetFor } from '../../handoff/runner.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -32,6 +33,34 @@ export async function submitCliRequest(ctx, io, body, flags) {
   return terminal;
 }
 
+// The run options `quill agent run` and `quill handoff` share (spec §8): write scopes (repeat
+// --scope or separate with commas), and the run's own turn and spend limits. The worker validates
+// them again when the request applies.
+export function runOptions(flags) {
+  const out = {};
+  if (flags.scope !== undefined) {
+    const list = Array.isArray(flags.scope) ? flags.scope : [flags.scope];
+    if (list.some((x) => typeof x !== 'string')) throw new TrackerError('usage', '--scope needs a scope name, such as jira.write or k8s.write:staging');
+    out.scopes = list.flatMap((x) => x.split(',')).map((x) => x.trim()).filter(Boolean);
+  }
+  if (flags['max-turns'] !== undefined) {
+    if (typeof flags['max-turns'] !== 'string' || !/^\d{1,6}$/.test(flags['max-turns'])) throw new TrackerError('budget-invalid', '--max-turns must be a whole number of turns');
+    out.max_turns = Number(flags['max-turns']);
+  }
+  if (flags.budget !== undefined) {
+    if (typeof flags.budget !== 'string' || !/^\d{1,6}(\.\d{1,4})?$/.test(flags.budget)) throw new TrackerError('budget-invalid', '--budget must be an amount in USD, such as 2.5');
+    out.max_budget_usd = Number(flags.budget);
+  }
+  return out;
+}
+
+// Printed when a run is queued with more than Quill's own profile (ADR 0017, ADR 0026).
+export function accessNotice(access) {
+  if (access === 'full') return '! Full access: no Quill guard; prod writes allowed; your Claude Code deny rules still apply. The run can use your credentials, connectors and push.';
+  if (access === 'autonomous') return 'Autonomous access: connected tools and local commands, production read-only, every call checked by Quill\'s guard. Use --access standard for the narrow profile.';
+  return null;
+}
+
 async function queue(ctx, io, args, flags) {
   const [key] = args;
   if (!key) throw new TrackerError('usage', 'usage: handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <branch>] [--draft-pr] [--retry-of <handoff-id>]');
@@ -47,17 +76,19 @@ async function queue(ctx, io, args, flags) {
     push_branch: typeof flags['push-branch'] === 'string',
     open_draft_pr: flags['draft-pr'] === true,
   };
-  // Runs from the terminal use the owner's Claude Code settings unless --access says otherwise (ADR 0017).
-  const access = typeof flags.access === 'string' ? flags.access : 'settings';
-  const payload = validateHandoffRequest({ mode, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo });
-  if (access === 'full') io.println('! Full access: this run skips every permission check and can run any command, use connectors and push with your credentials.');
+  // Runs from the terminal are autonomous unless --access says otherwise (ADR 0026); a files run is
+  // always standard (ADR 0015).
+  const access = typeof flags.access === 'string' ? flags.access : mode === 'files' ? 'standard' : 'autonomous';
+  const payload = validateHandoffRequest({ mode, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo });
+  const notice = accessNotice(access);
+  if (notice) io.println(notice);
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};
     throw new TrackerError(err.code ?? terminal.state, `handoff request ${terminal.state}: ${err.message ?? ''}${terminal.result && terminal.result.existing_handoff_id ? ` (existing run ${terminal.result.existing_handoff_id})` : ''}`);
   }
   io.println(`Handoff ${terminal.result.handoff_id} queued for ${ticket.key} (${payload.mode}; permissions: ${Object.entries(payload.permissions).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}).`);
-  io.println('Request accepted is not execution complete: follow progress with `quill handoff list` or the dashboard. Execution is capped at 20 minutes.');
+  io.println(`Request accepted is not execution complete: follow progress with \`quill handoff list\` or the dashboard. Execution is capped at ${Math.round(budgetFor(null, ctx.config, access, mode).timeoutMs / 60_000)} minutes.`);
   if (flags.json) io.json(terminal);
   return 0;
 }

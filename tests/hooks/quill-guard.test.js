@@ -366,3 +366,31 @@ test('writeRunSettings refuses relative paths, characters the hook would not pas
   for (const opts of bad) assert.throws(() => writeRunSettings(runDir, opts), { code: 'run-settings-invalid' }, JSON.stringify(opts));
   assert.deepEqual(fs.readdirSync(runDir), []);
 });
+
+test('MCP calls: the server source comes from <runDir>/mcp-servers.json; a project, unknown or unlisted server is refused unless trusted (R20)', () => {
+  const run = makeRun({ grant: { trustedMcpServers: ['trusted-db'] } });
+  const call = (tool) => guard(hookInput(run, tool, { id: 'X-1' }), envFor(run));
+  const before = call('mcp__claude_ai_Atlassian__getJiraIssue');
+  assert.equal(before.decision, 'deny', 'no inventory yet: the server is not known to be trusted');
+  assert.match(before.reason, /^QUILL_DENIED untrusted-mcp-server: MCP server claude_ai_Atlassian/);
+  fs.writeFileSync(path.join(run.runDir, 'mcp-servers.json'), JSON.stringify({ claude_ai_Atlassian: 'claudeai', 'claude.ai Gmail': 'claudeai', 'repo-db': 'project', 'trusted-db': 'project', mine: 'user', plug: 'plugin' }));
+  for (const tool of ['mcp__claude_ai_Atlassian__getJiraIssue', 'mcp__claude_ai_Gmail__search_threads', 'mcp__mine__list_things', 'mcp__plug__get_status', 'mcp__trusted-db__list_tables']) {
+    const r = call(tool);
+    assert.equal(r.decision, 'allow', `${tool}: ${r.reason}`);
+  }
+  for (const tool of ['mcp__repo-db__list_tables', 'mcp__absent__get_thing']) {
+    const r = call(tool);
+    assert.equal(r.decision, 'deny', tool);
+    assert.match(r.reason, /^QUILL_DENIED untrusted-mcp-server/);
+  }
+  fs.writeFileSync(path.join(run.runDir, 'mcp-servers.json'), '{not json');
+  assert.equal(call('mcp__claude_ai_Atlassian__getJiraIssue').decision, 'deny', 'an unreadable inventory trusts nothing');
+});
+
+test('a run cannot rewrite its own mcp-servers.json', () => {
+  const run = makeRun();
+  const r = guard(hookInput(run, 'Write', { file_path: path.join(run.runDir, 'mcp-servers.json'), content: '{"repo-db":"user"}' }), envFor(run));
+  assert.equal(r.decision, 'deny');
+  assert.match(r.reason, /^QUILL_DENIED protected-path/);
+  assert.equal(guard(hookInput(run, 'Write', { file_path: path.join(run.runDir, 'notes.txt'), content: 'x' }), envFor(run)).decision, 'allow');
+});
