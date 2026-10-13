@@ -1,5 +1,6 @@
 // In-memory generated state, reduced from the journal. Field names follow DATA-CONTRACT.md.
 import { uuid, deterministicId } from '../lib/ids.js';
+import { createMemoryState } from './reduce/memory.js';
 
 export const TICKET_STATUSES = ['todo', 'active', 'blocked', 'review', 'deploy-pending', 'done'];
 export const CATEGORIES = ['feature', 'bugfix', 'vuln', 'infra', 'research', 'analysis'];
@@ -49,6 +50,8 @@ export function createState(meta) {
     publishers: new Map(),
     // Runs proposed from a shared page, by proposal id (ADR 0025).
     runProposals: new Map(),
+    // Learned memory (FEAT-12): local only, never part of a snapshot, export or publisher payload.
+    memory: createMemoryState(),
     lastSequence: 0,
     lastSync: null,
     providerHealth: [],
