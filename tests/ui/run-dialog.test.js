@@ -186,3 +186,57 @@ test('bulk requests default to autonomous access', async () => {
   const [body] = bulkRequests([{ ticket: { id: 't1', revision: 1, repo_id: 'demo' }, state: 'ready' }], { mode: 'analyse', batchId: 'b1' });
   assert.equal(body.payload.access, 'autonomous');
 });
+
+// Write scopes (spec §8, Task 11): Advanced → one checkbox per catalog entry, with what it permits
+// and which credentials it switches to; a target field where the scope takes one; off unless the
+// access is Autonomous; the form submits ["k8s.write:stg", …].
+const SCOPES = [
+  { name: 'jira.write', label: 'Jira: change issues', permits: 'Create and transition <issues>', switches: 'No credentials change: your connected Atlassian tool.', takes_target: false, target_label: null, targets: [], credentials: 'none', ready: true },
+  { name: 'k8s.write', label: 'Kubernetes <b>bold</b>', permits: 'kubectl and helm writes on the context', switches: 'KUBECONFIG for stg', takes_target: true, target_label: 'Context', targets: ['stg', 'pr"od'], credentials: 'required', ready: true },
+  { name: 'db.write', label: 'Databases', permits: 'SQL writes', switches: 'No credentials configured: set [scopes."db.write"] env.PGSERVICEFILE in config.toml.', takes_target: true, target_label: 'Host or database', targets: [], credentials: 'required', ready: false },
+];
+
+test('Write scopes: a checklist under Advanced with label, what it permits and the credentials it switches to, all escaped', () => {
+  const html = dialogFor(withMeta(autonomy({ scopes: SCOPES })));
+  const block = /<fieldset class="write-scopes">[\s\S]*?<\/fieldset>/.exec(html)?.[0] ?? '';
+  assert.ok(block, 'the checklist renders');
+  assert.match(html, /<details class="advanced access-advanced">[\s\S]*value="settings"[\s\S]*<fieldset class="write-scopes"><legend>Write scopes<\/legend>[\s\S]*<\/details>/, 'inside Advanced, after my settings');
+  assert.match(block, /<input type="checkbox" name="scope" value="jira\.write"/);
+  assert.match(block, /<input type="checkbox" name="scope" value="k8s\.write"/);
+  assert.match(block, /Kubernetes &lt;b&gt;bold&lt;\/b&gt;/);
+  assert.match(block, /Create and transition &lt;issues&gt;/);
+  assert.match(block, /KUBECONFIG for stg/);
+  assert.doesNotMatch(block, /<b>bold|<issues>/);
+  assert.match(block, /<input type="text" name="scope_target:k8s\.write"/, 'a target field for a scope that takes one');
+  assert.doesNotMatch(block, /name="scope_target:jira\.write"/);
+  assert.match(block, /pr&quot;od|pr&#34;od/, 'configured targets are escaped');
+  assert.match(block, /No credentials configured: set \[scopes\.&quot;db\.write&quot;\] env\.PGSERVICEFILE|No credentials configured: set \[scopes\."db\.write"\] env\.PGSERVICEFILE/);
+  assert.doesNotMatch(block, / disabled/, 'Autonomous is checked: the scopes are available');
+  assert.match(block, /data-scope-reason hidden/);
+});
+
+test('Write scopes are disabled with a reason when the access is not Autonomous; absent without a catalog and in bulk', async () => {
+  const { accessFieldset } = await import('../../ui/components.js');
+  const { renderBulkHandoffForm } = await import('../../ui/views/bulk.js');
+  const s = withMeta(autonomy({ scopes: SCOPES }));
+  const std = accessFieldset(s, { access: 'standard', scopes: true });
+  assert.match(std, /<input type="checkbox" name="scope" value="jira\.write"[^>]* disabled/);
+  assert.match(std, /<input type="text" name="scope_target:k8s\.write"[^>]* disabled/);
+  assert.match(std, /<p class="small scope-reason" id="scope-reason" data-scope-reason>Write scopes need Autonomous access/);
+  assert.doesNotMatch(dialogFor(withMeta(autonomy())), /write-scopes/, 'no catalog in the snapshot: no checklist');
+  assert.doesNotMatch(renderBulkHandoffForm(s, [s.tickets[0].id], { mode: 'analyse' }), /write-scopes/, 'scopes are granted one run at a time');
+});
+
+test('the Run dialog submits the checked scopes, with the target where one was typed', async () => {
+  const { scopeChoices } = await import('../../ui/components.js');
+  const fd = new FormData();
+  fd.append('scope', 'k8s.write');
+  fd.append('scope_target:k8s.write', ' stg ');
+  fd.append('scope', 'jira.write');
+  fd.append('scope_target:db.write', 'ignored-not-checked');
+  fd.append('scope', 'jira.write');
+  assert.deepEqual(scopeChoices(fd), ['k8s.write:stg', 'jira.write']);
+  assert.deepEqual(scopeChoices(new FormData()), []);
+  const app = (await import('node:fs')).readFileSync(new URL('../../ui/app.js', import.meta.url), 'utf8');
+  assert.match(app, /scopeChoices\(fd\)/, 'the recipe form sends them');
+});

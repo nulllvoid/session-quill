@@ -395,22 +395,60 @@ export function contentViewer(ref, { content = {}, status = {}, generation = '',
 // tool and connector, with Quill's guard checking each call and credentials redirected. The owner's
 // own settings sit under Advanced; Full access is marked as a warning and says what it lifts.
 export const FULL_ACCESS_NOTE = 'No Quill guard; prod writes allowed; your Claude Code deny rules still apply.';
-// Insertion point: the scope catalog (Task 11) adds its Write scopes checklist inside the Advanced
-// details below, after "Use my Claude Code settings".
 // `access` is the level to show checked. When it is the one under Advanced, the details element
 // renders open, so the group's checked member stays visible and focusable (design system §8);
-// app.js keeps it open while it holds the checked radio.
-export function accessFieldset(snapshot = null, { access = 'autonomous' } = {}) {
+// app.js keeps it open while it holds the checked radio. `scopes: true` (the single-run dialog)
+// adds the Write scopes checklist under Advanced, after "Use my Claude Code settings".
+export function accessFieldset(snapshot = null, { access = 'autonomous', scopes = false } = {}) {
   const level = ['autonomous', 'standard', 'full', 'settings'].includes(access) ? access : 'autonomous';
   const on = (v) => (v === level ? ' checked' : '');
   return `<fieldset class="access"><legend>Access</legend>
   <label><input type="radio" name="access" value="autonomous"${on('autonomous')}> Autonomous <span class="muted small">(your connected tools and local commands; production stays read-only; Quill's guard checks every call)</span></label>
   <label><input type="radio" name="access" value="standard"${on('standard')}> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
   <label class="danger"><input type="radio" name="access" value="full"${on('full')}> Full access <span class="small access-note">${esc(FULL_ACCESS_NOTE)}</span></label>
-  <details class="advanced access-advanced"${level === 'settings' ? ' open' : ''}><summary>Advanced: other access</summary>
+  <details class="advanced access-advanced"${level === 'settings' ? ' open' : ''}><summary>Advanced: other access${scopes ? ' and write scopes' : ''}</summary>
   <label><input type="radio" name="access" value="settings"${on('settings')}> Use my Claude Code settings <span class="muted small">(your permission rules and connectors; anything that would need your approval is refused)</span></label>
-  </details>${autonomyNotes(snapshot)}
+  ${scopes ? writeScopes(snapshot, level) : ''}</details>${autonomyNotes(snapshot)}
 </fieldset>`;
+}
+
+export const SCOPE_OFF_REASON = 'Write scopes need Autonomous access: only its guard holds a run to them.';
+
+// Write scopes (spec §4.3, §8): one checkbox per catalog entry the worker reported (snapshot
+// meta.autonomy.scopes), with what it permits and which credentials it switches to, and a target
+// field where the scope takes one. Off, with the reason, unless the access is Autonomous; app.js
+// switches them as the access changes. Every word here comes from config, so all of it is escaped.
+function writeScopes(snapshot, level) {
+  const a = snapshot && snapshot.meta && snapshot.meta.autonomy && typeof snapshot.meta.autonomy === 'object' ? snapshot.meta.autonomy : null;
+  const list = a && Array.isArray(a.scopes) ? a.scopes.filter((x) => x && typeof x.name === 'string') : [];
+  if (!list.length) return '';
+  const off = level !== 'autonomous';
+  const dis = off ? ' disabled' : '';
+  const rows = list.map((x, i) => {
+    const targets = Array.isArray(x.targets) ? x.targets.filter((t) => typeof t === 'string') : [];
+    const kind = typeof x.target_label === 'string' && x.target_label ? x.target_label : 'Target';
+    const target = x.takes_target ? `<label class="indent small">${esc(kind)} <input type="text" name="scope_target:${attr(x.name)}" data-scope-target="${attr(x.name)}" autocomplete="off" spellcheck="false" maxlength="128"${targets.length ? ` placeholder="${attr(targets[0])}"` : ''}${dis}></label>${targets.length ? ` <span class="muted small">credentials configured for ${esc(targets.join(', '))}</span>` : ''}` : '';
+    return `<div class="scope-option"><label><input type="checkbox" name="scope" value="${attr(x.name)}" aria-describedby="scope-desc-${i}"${dis}> ${esc(x.label ?? x.name)} <code>${esc(x.name)}</code></label>
+  <p class="muted small" id="scope-desc-${i}">${esc(x.permits ?? '')} ${esc(x.switches ?? '')}</p>${target}</div>`;
+  });
+  return `<fieldset class="write-scopes"><legend>Write scopes</legend>
+  <p class="muted small">Production and external writes this run may make, each only where its patterns in config.toml match. Everything else stays read-only; a write outside them is refused and recorded as a critical change.</p>
+  <p class="small scope-reason" id="scope-reason" data-scope-reason${off ? '' : ' hidden'}>${esc(SCOPE_OFF_REASON)}</p>
+  ${rows.join('\n  ')}
+  </fieldset>`;
+}
+
+// The scopes the Run dialog's form asks for: each checked one, as `name:target` when its target
+// field holds one, in the order shown and without repeats. Disabled boxes are not in the form data.
+export function scopeChoices(fd) {
+  const out = [];
+  for (const raw of fd.getAll('scope')) {
+    const name = String(raw);
+    const target = String(fd.get(`scope_target:${name}`) ?? '').trim();
+    const spec = target ? `${name}:${target}` : name;
+    if (name && !out.includes(spec)) out.push(spec);
+  }
+  return out;
 }
 
 // MCP sources an autonomous run trusts by origin; anything else only when the owner names the

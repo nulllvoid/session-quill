@@ -1,5 +1,5 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
-import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER } from './components.js';
+import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER, scopeChoices } from './components.js';
 import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
 import { renderRuns } from './views/runs.js';
 import { renderRunDetail, renderRunNotFound } from './views/run-detail.js';
@@ -784,6 +784,9 @@ function handleSubmit(form) {
     // A files run has no access choice and is always standard (ADR 0015); every other form sends
     // its checked level, Autonomous unless the owner picked another.
     const payload = { recipe: form.dataset.recipe, note: String(fd.get('note') ?? '').trim(), permissions, access: fd.get('access') || 'standard', branch: String(fd.get('branch') ?? '').trim() || null };
+    // Write scopes go only with Autonomous access (their boxes are disabled otherwise, spec §4.3).
+    const scopes = payload.access === 'autonomous' ? scopeChoices(fd) : [];
+    if (scopes.length) payload.scopes = scopes;
     closeDialog();
     submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: form.dataset.retryOf || null }, { announceText: `${form.dataset.recipe} run requested; its results arrive as suggestions on the ticket` });
   } else if (kind === 'attach') {
@@ -922,6 +925,15 @@ function onChange(e) {
     const cap = runForm.querySelector('.run-cap');
     const access = fd.get('access');
     if (cap && typeof access === 'string' && cap.dataset[`cap${access.charAt(0).toUpperCase()}${access.slice(1)}`]) cap.textContent = cap.dataset[`cap${access.charAt(0).toUpperCase()}${access.slice(1)}`];
+    // Write scopes only with Autonomous access; a checked scope that takes a target needs one.
+    const scoped = access === 'autonomous';
+    for (const input of runForm.querySelectorAll('input[name="scope"], input[data-scope-target]')) input.disabled = !scoped;
+    const reason = runForm.querySelector('[data-scope-reason]');
+    if (reason) reason.hidden = scoped;
+    for (const t of runForm.querySelectorAll('input[data-scope-target]')) {
+      const box = [...runForm.querySelectorAll('input[name="scope"]')].find((b) => b.value === t.dataset.scopeTarget);
+      t.required = !!(box && box.checked && scoped);
+    }
   }
   if (el.dataset.action === 'status-select') {
     const status = el.value;

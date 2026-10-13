@@ -60,7 +60,14 @@ const OWNER = [
   ['argo', /^ARGOCD_/], ['git', /^(GIT_|GCM_|SSH_|GH_|GITHUB_|GITLAB_|GLAB_|BITBUCKET_)/], ['netrc', /^NETRC$/],
   ['registries', /^(NPM_|NODE_AUTH_TOKEN$|DOCKER_)/i], ['databases', /^(PG|DATABASE_URL$|MYSQL_|MONGO|REDIS_URL$)/],
 ];
-const SCOPE_SYSTEMS = { 'k8s.write': ['kubernetes'], 'cloud.write': ['aws', 'gcp', 'azure'], 'db.write': ['databases'], 'argo.sync': ['argo'], 'package.publish': ['registries'] };
+export const SCOPE_SYSTEMS = { 'k8s.write': ['kubernetes'], 'cloud.write': ['aws', 'gcp', 'azure'], 'db.write': ['databases'], 'argo.sync': ['argo'], 'package.publish': ['registries'] };
+// The credential system a variable name belongs to (OWNER), or null; names compare
+// case-insensitively, as on Windows. The scope catalog uses it to tell whether a scope has
+// credentials of its own system configured.
+export function credentialSystemOf(name) {
+  const hit = OWNER.find(([, rx]) => new RegExp(rx.source, 'i').test(String(name)));
+  return hit ? hit[0] : null;
+}
 // Scopes whose credentials are wholly their own system's: they never set a variable no system owns.
 const OWNED_ONLY_SCOPES = new Set(['k8s.write', 'cloud.write', 'argo.sync']);
 // AWS scope variables that are credentials (a region alone does not make the report `scope`).
@@ -196,8 +203,9 @@ function awsProfileFiles(profile, configFile, credentialsFile) {
  *      `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=never` are set with or without push.
  * 3. Apply granted `scopes` (`[{ name, target, env }]`, already resolved): a scope sets only its
  *    own system's variables, never a protected one; k8s.write, cloud.write and argo.sync never set
- *    a variable no system owns. An AWS scope profile that is not found leaves the earlier files in
- *    place. Ignored scope entries are named (never their values) in `report.scope_errors`.
+ *    a variable no system owns. A value `env:NAME` takes that inherited variable (an unset one is
+ *    ignored). An AWS scope profile that is not found leaves the earlier files in place. Ignored
+ *    scope entries are named (never their values) in `report.scope_errors`.
  *
  * `push_branch` / `open_draft_pr` keep the owner's git config, helper, provider tokens, gh/glab
  * config and ssh. With `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` set, claude itself
@@ -363,7 +371,7 @@ export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes =
     const senv = scope.env && typeof scope.env === 'object' ? scope.env : {};
     const awsKeys = Object.keys(senv).filter((k) => test(/^AWS_/, k));
     if (systems.includes('aws') && awsKeys.length && !provider.aws) {
-      const pick = (k) => { const hit = awsKeys.find((x) => same(x, k)); return hit === undefined ? undefined : senv[hit]; };
+      const pick = (k) => { const hit = awsKeys.find((x) => same(x, k)); return hit === undefined || typeof senv[hit] !== 'string' ? undefined : resolveValue(senv[hit]) || undefined; };
       const profile = pick('AWS_PROFILE');
       let fromScope = false;
       if (profile) {
@@ -372,13 +380,18 @@ export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes =
       }
       for (const k of awsKeys) {
         if (['AWS_PROFILE', 'AWS_CONFIG_FILE', 'AWS_SHARED_CREDENTIALS_FILE'].some((x) => same(k, x)) || typeof senv[k] !== 'string') continue;
-        set(k, senv[k]);
+        const value = resolveValue(senv[k]);
+        if (typeof value !== 'string' || !value) { scopeErrors.push(`${name}: ${k} names a variable that is not set; ignored`); continue; }
+        set(k, value);
         if (test(AWS_CREDENTIAL_KEYS, k)) fromScope = true;
       }
       if (fromScope) report.aws = 'scope';
     } else if (awsKeys.length) scopeErrors.push(`${name}: AWS variables ignored`);
-    for (const [k, v] of Object.entries(senv)) {
-      if (typeof v !== 'string' || test(/^AWS_/, k)) continue;
+    for (const [k, raw] of Object.entries(senv)) {
+      if (typeof raw !== 'string' || test(/^AWS_/, k)) continue;
+      // "env:NAME" takes an inherited variable (the scope catalog keeps literal secrets out of config).
+      const v = resolveValue(raw);
+      if (typeof v !== 'string' || !v) { scopeErrors.push(`${name}: ${k} names a variable that is not set; ignored`); continue; }
       const owner = ownerOf(k);
       if (!settable(k, systems) || (owner === null && OWNED_ONLY_SCOPES.has(name))) { scopeErrors.push(`${name}: ${k} is not this scope's to set; ignored`); continue; }
       if (owner && provider[owner]) continue;

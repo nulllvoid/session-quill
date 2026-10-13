@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadContext, cliEvent, submitAndWait, findTicketByKey, latestSnapshot } from '../context.js';
 import { validateHandoffRequest, MODES } from '../../handoff/permissions.js';
+import { scopeValidator } from '../../handoff/scopes.js';
 import { uuid } from '../../lib/ids.js';
 import { nowIso, formatDuration } from '../../lib/time.js';
 import { requestsDir, handoffsDir } from '../../lib/paths.js';
@@ -79,7 +80,7 @@ async function queue(ctx, io, args, flags) {
   // Runs from the terminal are autonomous unless --access says otherwise (ADR 0026); a files run is
   // always standard (ADR 0015).
   const access = typeof flags.access === 'string' ? flags.access : mode === 'files' ? 'standard' : 'autonomous';
-  const payload = validateHandoffRequest({ mode, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo });
+  const payload = validateHandoffRequest({ mode, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo, scopeCheck: scopeValidator(ctx.config) });
   const notice = accessNotice(access);
   if (notice) io.println(notice);
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);

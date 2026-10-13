@@ -232,15 +232,15 @@ test('an init event reporting an old runtime stops an autonomous run with runtim
   } finally { await b.w.stop(); }
 });
 
-test('write scopes on a run fail at dispatch while no scope catalog resolves them (Task 11 adds it)', async () => {
+test('write scopes on a run resolve through the scope catalog at dispatch (Task 11)', async () => {
   const repo = makeRepo();
-  const b = await bootWorker({ repo, runtimeAvailable: true });
+  const b = await bootWorker({ repo, runtimeAvailable: true, configExtra: { scopes: { 'k8s.write': { targets: { stg: { env: { KUBECONFIG: '/fake/rw' } } } } } } });
   try {
     b.ticket(T1, 'PROJ-11');
     const hid = await queueRun(b, 6, { recipe: 'analyse', note: '', permissions: { ...NONE, read_source: true }, access: 'autonomous', scopes: ['k8s.write:stg'] });
     assert.deepEqual(b.w.state.handoffs.get(hid).scopes, ['k8s.write:stg'], 'the record keeps the requested scopes');
     const h = await settle(b, hid);
-    assert.deepEqual([h.state, h.error.code], ['failed', 'scope-unknown']);
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
   } finally { await b.w.stop(); }
 });
 

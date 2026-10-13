@@ -1,15 +1,71 @@
 // Restricted TOML subset used for quill-written configuration.
 // Supported: comments, `key = value` with string/integer/boolean/array-of-strings values (a key is
-// bare, or double-quoted without escapes for names such as "owner/repo"), and `[dotted.table]` headers. Anything else is rejected with a diagnostic rather than
-// parsed lossily (TRD §Configuration and packaging).
+// bare, or double-quoted without escapes for names such as "owner/repo", and may be dotted:
+// `env.KUBECONFIG = "…"`), and `[dotted.table]` headers whose parts are bare or double-quoted
+// (`[scopes."k8s.write"]`). Anything else is rejected with a diagnostic rather than parsed lossily
+// (TRD §Configuration and packaging). Names that would reach an object's prototype are refused.
 import { TrackerError } from '../lib/errors.js';
 
 const KEY_RE = /^[A-Za-z0-9_-]+$/;
-// A quoted key: printable characters other than quotes and backslashes (no escapes to decode).
-const QUOTED_KEY_RE = /^"([^"\\\x00-\x1f]{1,200})"\s*=(.*)$/;
+// A quoted key or table name part: printable characters other than quotes and backslashes (no
+// escapes to decode).
+const QUOTED_PART_RE = /^"([^"\\\x00-\x1f]{1,200})"$/;
+const RESERVED = new Set(['__proto__', 'constructor', 'prototype']);
 
 function unsupported(line, lineNo, why) {
   return new TrackerError('toml-unsupported', `config line ${lineNo}: ${why}: ${line.trim()}`);
+}
+
+// The parts of a dotted name (`a."b.c".d`), or null when a part is neither bare nor quoted.
+function keyPath(text) {
+  const parts = [];
+  let i = 0;
+  const blank = () => { while (text[i] === ' ' || text[i] === '\t') i += 1; };
+  for (;;) {
+    blank();
+    let part;
+    if (text[i] === '"') {
+      const end = text.indexOf('"', i + 1);
+      if (end < 0) return null;
+      const m = QUOTED_PART_RE.exec(text.slice(i, end + 1));
+      if (!m) return null;
+      part = m[1];
+      i = end + 1;
+    } else {
+      let j = i;
+      while (j < text.length && /[A-Za-z0-9_-]/.test(text[j])) j += 1;
+      part = text.slice(i, j);
+      if (!KEY_RE.test(part)) return null;
+      i = j;
+    }
+    parts.push(part);
+    blank();
+    if (i >= text.length) return parts;
+    if (text[i] !== '.') return null;
+    i += 1;
+  }
+}
+
+// Descends into (creating) the tables named by `parts` below `table`.
+function descend(table, parts, rawLine, lineNo) {
+  let t = table;
+  for (const part of parts) {
+    if (RESERVED.has(part)) throw unsupported(rawLine, lineNo, 'reserved name');
+    if (!Object.hasOwn(t, part)) t[part] = {};
+    if (typeof t[part] !== 'object' || Array.isArray(t[part])) throw unsupported(rawLine, lineNo, 'table name collides with a value');
+    t = t[part];
+  }
+  return t;
+}
+
+// The `=` that ends a key: the first one outside a quoted part.
+function keyEnd(line) {
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] === '"') quoted = !quoted;
+    else if (line[i] === '=' && !quoted) return i;
+  }
+  return -1;
 }
 
 function parseString(raw, line, lineNo) {
@@ -116,28 +172,18 @@ export function parseToml(text) {
     }
     if (line.startsWith('[')) {
       if (!line.endsWith(']')) throw unsupported(rawLine, lineNo, 'malformed table header');
-      const parts = line.slice(1, -1).split('.').map((p) => p.trim());
-      if (parts.some((p) => !KEY_RE.test(p))) throw unsupported(rawLine, lineNo, 'unsupported table name');
-      table = root;
-      for (const part of parts) {
-        if (table[part] === undefined) table[part] = {};
-        if (typeof table[part] !== 'object' || Array.isArray(table[part])) throw unsupported(rawLine, lineNo, 'table name collides with a value');
-        table = table[part];
-      }
+      const parts = keyPath(line.slice(1, -1));
+      if (!parts) throw unsupported(rawLine, lineNo, 'unsupported table name');
+      table = descend(root, parts, rawLine, lineNo);
       return;
     }
-    if (line.startsWith('"')) {
-      const m = QUOTED_KEY_RE.exec(line);
-      if (!m) throw unsupported(rawLine, lineNo, 'unsupported quoted key');
-      table[m[1]] = parseValue(m[2].trim(), rawLine, lineNo);
-      return;
-    }
-    const eq = line.indexOf('=');
+    const eq = keyEnd(line);
     if (eq < 0) throw unsupported(rawLine, lineNo, 'expected key = value');
-    const key = line.slice(0, eq).trim();
-    const value = line.slice(eq + 1).trim();
-    if (!KEY_RE.test(key)) throw unsupported(rawLine, lineNo, 'unsupported key');
-    table[key] = parseValue(value, rawLine, lineNo);
+    const parts = keyPath(line.slice(0, eq));
+    if (!parts) throw unsupported(rawLine, lineNo, line.startsWith('"') ? 'unsupported quoted key' : 'unsupported key');
+    const key = parts.pop();
+    if (RESERVED.has(key)) throw unsupported(rawLine, lineNo, 'reserved name');
+    descend(table, parts, rawLine, lineNo)[key] = parseValue(line.slice(eq + 1).trim(), rawLine, lineNo);
   });
   return root;
 }
@@ -170,7 +216,7 @@ function emitTable(obj, prefix, out) {
   const scalars = Object.entries(obj).filter(([, v]) => !isTable(v) && !isTableArray(v) && v !== undefined && v !== null);
   const tables = Object.entries(obj).filter(([, v]) => isTable(v));
   const arrays = Object.entries(obj).filter(([, v]) => isTableArray(v));
-  if (prefix.length) out.push(`[${prefix.join('.')}]`);
+  if (prefix.length) out.push(`[${prefix.map(formatKey).join('.')}]`);
   for (const [k, v] of scalars) out.push(`${formatKey(k)} = ${formatValue(v)}`);
   if (prefix.length || scalars.length) out.push('');
   for (const [k, v] of tables) emitTable(v, [...prefix, k], out);

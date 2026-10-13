@@ -451,6 +451,45 @@ read = ["mcp__kibana__query_logs"]  # MCP tools to treat as reads
 
 MCP servers from claude.ai, your Claude Code settings and plugins are usable in autonomous runs; a repository's own `.mcp.json` servers only when listed in `trusted_mcp_servers`, because whoever writes the branch controls them.
 
+**Write scopes.** An autonomous run writes to production or an external system only through a scope you grant for that run: in the Run dialog under **Advanced → Write scopes** (each with what it permits and which credentials it switches to), or with `--scope name[:target]` (repeatable) on `quill agent run` and `quill handoff`. Scopes need Autonomous access. The dashboard, the CLI and the worker check them against the same catalog: an unknown scope fails with `unknown-scope`, a target where none belongs (or none where one is needed, or one with spaces, wildcards, quotes or `..`) with `invalid-scope-target`, and a scope whose commands need credentials you have not configured with `scope-credentials-missing`, naming the table to add. A write outside the granted scopes is refused and recorded as a critical change. Git commit, push and draft PRs are per-run permissions, never scopes. The built-in scopes:
+
+| Scope | Permits | Credentials it switches to |
+| --- | --- | --- |
+| `jira.write` | create, edit, transition, link and comment on Jira issues through a connected Atlassian or Jira tool | none (your connector) |
+| `confluence.write` | create and update Confluence pages and comments through a connected tool | none (your connector) |
+| `slack.post` | send and schedule Slack messages, create or update canvases (drafts never need it) | none (your connector) |
+| `k8s.write:<context>` | `kubectl` and `helm` writes that name this context with `--context` / `--kube-context` | required: `KUBECONFIG` |
+| `argo.sync:<app>` | sync or roll back this Argo CD application (connected tool, or `argocd app sync` / `argocd app rollback`) | optional: `ARGOCD_*` for the CLI |
+| `cloud.write:<profile>` | `aws`, `gcloud`, `gsutil`, `bq`, `az`, `eksctl` writes that use this profile (`--profile`) | required: `AWS_PROFILE` (+ `AWS_CONFIG_FILE`), `CLOUDSDK_CONFIG` or `AZURE_CONFIG_DIR` |
+| `db.write:<host or database>` | `psql`, `mysql`, `mongosh`, `redis-cli`, `bq` writes that name this host or database (`-h` / `-d`) | required: `PGSERVICEFILE`, `DATABASE_URL`, `MYSQL_*` … |
+| `deploy:<stack, profile or stage>` | `pulumi`, `cdk`, `serverless` deploys that name this target (`terraform` names none, so it is never covered) | optional |
+| `http.write:<host>` | POST/PUT/PATCH/DELETE, uploads and other network writes to exactly this host | optional |
+| `package.publish` | npm/yarn/pnpm/bun publish, docker/podman push, twine, gem, cargo, poetry, NuGet, VS Code extensions, helm push, GitHub releases | required: `NPM_CONFIG_USERCONFIG`, `NODE_AUTH_TOKEN` or `DOCKER_CONFIG` |
+
+A scope covers a call only when the guard classifies the call as that scope, the target matches what the command names, and one of the scope's patterns fits (`mcp` tool names, `bash` command words, `hosts`; `*` is the only wildcard). A command run through a path (`C:/tools/kubectl.exe …`) or with options before its verb (`argocd --grpc-web app sync …`) does not fit the built-in patterns and is refused; run it by its plain name. Credentials and patterns come from your user config only:
+
+```toml
+[scopes."k8s.write"]
+env.KUBECONFIG = "/home/me/.kube/rw.yaml"        # for every context
+
+[scopes."k8s.write".targets.stg]
+env.KUBECONFIG = "env:STG_RW_KUBECONFIG"         # this context; "env:NAME" takes a variable the worker inherits
+
+[scopes."db.write".targets.orders-stg]
+env.DATABASE_URL = "env:ORDERS_STG_RW_URL"       # keep passwords out of config.toml: names that look secret must be env:NAME
+
+[scopes."pager.write"]                           # your own scope for an MCP write you map to it
+label = "PagerDuty: open incidents"
+mcp = ["mcp__pager__create_incident"]
+
+[mcp_policy.write]
+"mcp__pager__create_incident" = "pager.write"
+```
+
+Naming `mcp`, `bash` or `hosts` replaces that built-in list; `label` and `permits` change the dialog's words. A scope sets only its own system's variables (the run's credential report names any it ignored, never their values). Credentials never enter the run's grant file; the grant holds each scope's name, target, patterns and a fingerprint of what it allows. Two targets of one scope with different credentials cannot share a run (`scope-conflict`).
+
+**Full access is observed.** A full-access run gets the guard in observe mode: it never refuses a call, and a failing observer never blocks one. Each production or external write it would have refused in an autonomous run is recorded on the run as `prod_effects` (scope, target, tool and time only), whether the run finishes or not.
+
 **Bulk runs.** On Board or Pick next, press **Select** (or `x` on a focused card; Shift-click selects a range, Esc clears) and choose **Analyze**, **Attempt fix** or **Change status** for every checked ticket. The bulk dialog shows which tickets are ready, already running, have no repository or are not eligible, and asks once for the recipe and access; bulk fixes need an explicit edit-source confirmation. Each ticket gets its own request, so one stale ticket does not stop the rest, and the runs share a batch id with a progress strip and **Cancel batch** for the queued ones (`quill handoff cancel --batch <id>` from a terminal). Bulk status changes keep their 10-second undo, gathered under **Undo all**. Large analyses may split the work across Claude Code subagents inside the one run ([ADR 0023](docs/decisions/0023-bulk-runs-and-test-gate.md)).
 
 ## Example walkthrough

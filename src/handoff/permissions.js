@@ -11,8 +11,9 @@ export const NOTE_MAX = 280;
 // `full` no permission checks at all. A request that names none stays standard, as schedules,
 // page proposals and older requests do; the dashboard and the CLI ask for autonomous.
 export const ACCESS = ['standard', 'settings', 'autonomous', 'full'];
-// Write scopes (spec §4.3) a run may be granted: `name` or `name:target`, autonomous only. They
-// are names here; the scope catalog resolves them at dispatch (Task 11).
+// Write scopes (spec §4.3) a run may be granted: `name` or `name:target`, autonomous only. The
+// form is checked here; the scope catalog (src/handoff/scopes.js) checks names, targets and
+// credentials through the caller's `scopeCheck`, and resolves them again at dispatch.
 export const SCOPE_RE = /^[a-z][a-z0-9._-]{0,63}(?::[A-Za-z0-9._/@-]{1,128})?$/;
 export const MAX_SCOPES = 20;
 // A run may set its own turn and spend caps (spec §8, `--max-turns`, `--budget`); they win over
@@ -29,8 +30,11 @@ export function isProtectedBranch(branch, repo) {
 }
 
 // With a recipe (ADR 0008) the mode comes from the recipe and its frontmatter permissions are a
-// ceiling: a request may ask for less, never more.
-export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null, attachedFileCount = null } = {}) {
+// ceiling: a request may ask for less, never more. `scopeCheck(names)` (scopeValidator(config))
+// throws for a scope the catalog does not grant; every request path passes it, so the dashboard,
+// the CLI and the worker refuse the same scopes. The catalog comes in as a function so that this
+// module, which the guard loads, does not load the catalog and its imports.
+export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null, attachedFileCount = null, scopeCheck = null } = {}) {
   if (recipe && payload.mode !== undefined && payload.mode !== null && payload.recipe !== undefined && payload.mode !== recipe.mode) throw new TrackerError('mode-mismatch', `recipe ${recipe.name} runs in mode ${recipe.mode}`);
   const mode = recipe ? recipe.mode : payload.mode ?? 'analyse-followups';
   if (!MODES.includes(mode)) throw new TrackerError('mode-invalid', `handoff mode must be one of ${MODES.join(', ')}`);
@@ -42,6 +46,7 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   if (payload.batch_id !== undefined && payload.batch_id !== null && !(typeof payload.batch_id === 'string' && BATCH_ID_RE.test(payload.batch_id))) throw new TrackerError('batch-invalid', 'batch_id must be 1 to 64 letters, digits, dots, colons, underscores or dashes');
   const batch = typeof payload.batch_id === 'string' ? { batch_id: payload.batch_id } : {};
   const scopes = scopeList(payload.scopes, access);
+  if (scopes.scopes && typeof scopeCheck === 'function') scopeCheck(scopes.scopes);
   const limits = runLimits(payload);
   const raw = payload.permissions ?? {};
   const permissions = {};

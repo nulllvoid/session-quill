@@ -20,7 +20,7 @@ import { handoffsDir, handoffRunDir, logsDir } from '../lib/paths.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
-import { noScopeCatalog, createVersionProbe, prepareAutonomous } from './autonomous.js';
+import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, prodEffects } from './autonomous.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -67,8 +67,9 @@ function detectRuntime(claudePath) {
 }
 
 // `resolveScopes(names, config)` turns a run's requested write scopes into resolved entries
-// ([{ name, target?, env?, matchers, fingerprint }]) or throws; the default resolves none.
-export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = noScopeCatalog } = {}) {
+// ([{ name, target, env, matchers, fingerprint, credentials, systems }]) or throws; the default is
+// the scope catalog of the config (src/handoff/scopes.js).
+export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
@@ -241,7 +242,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       } catch { return p; }
     };
     const withNotes = (p) => (entry && entry.budgetNotes && entry.budgetNotes.length && p && typeof p === 'object' ? { ...p, contract_problems: [...(p.contract_problems ?? []), ...entry.budgetNotes] } : p);
-    const record = (w, id, parsed, opts) => recordResult(w, id, withNotes(reconciled(parsed)), timings || usage ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}) } } : opts);
+    // A full-access run's writes, as its observer saw them, whatever state it ends in (spec §7).
+    let effects = null;
+    if ((current.access ?? 'standard') === 'full') { try { effects = prodEffects(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { effects = null; } }
+    const record = (w, id, parsed, opts) => recordResult(w, id, withNotes(reconciled(parsed)), timings || usage || effects ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}) } } : opts);
     const reason = entry ? entry.reason : null;
     if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
@@ -477,7 +481,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     let scopes = [];
     if (access === 'autonomous') {
       try { assertRuntime(await probeVersion()); } catch (err) { return fail(worker, h, err.code ?? 'runtime-too-old', err.message); }
-      try { scopes = resolveScopes([...(h.scopes ?? [])], ctx.config) ?? []; } catch (err) { return fail(worker, h, err.code ?? 'scope-unknown', err.message); }
+      try { scopes = resolveScopes([...(h.scopes ?? [])], ctx.config) ?? []; } catch (err) { return fail(worker, h, err.code ?? 'unknown-scope', err.message); }
     }
     const needsSource = h.permissions && h.permissions.read_source;
     let cwd;
@@ -519,8 +523,14 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
     if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
     let auto = null;
+    let observe = null;
     if (access === 'autonomous') {
       try { auto = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, scopes, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
+    } else if (access === 'full') {
+      // Full access is observed, never refused (spec §3, §7): the guard records what it would have
+      // refused, and the run's prod_effects come from that ledger when it finishes.
+      try { observe = prepareObserve({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the full-access observer: ${err.message}`); }
+      Object.assign(env, observe.vars);
     }
     // The credential report is what the Run dialog's warnings rest on (Task 9): which systems got a
     // read-only profile, a stub or a scope, and what no redirect can close.
@@ -545,7 +555,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // tool families (R8).
     const rt = access === 'standard' ? { permissionMode: 'dontAsk', ...(recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions })), keepCredentials: false } : runtimeAccess({ access, mode: h.mode, permissions: h.permissions ?? {}, tools: access === 'autonomous' && recipe ? recipe.tools : null });
     const tools = { allowed: rt.allowed, disallowed: rt.disallowed };
-    const spawnExtras = auto ? { childEnv: auto.childEnv, settingsPath: auto.settingsPath, addDirs: auto.addDirs, permissionPrompts: auto.permissionPrompts, mcpServersPath: auto.mcpServersPath } : {};
+    const spawnExtras = auto ? { childEnv: auto.childEnv, settingsPath: auto.settingsPath, addDirs: auto.addDirs, permissionPrompts: auto.permissionPrompts, mcpServersPath: auto.mcpServersPath } : observe ? { settingsPath: observe.settingsPath, mcpServersPath: observe.mcpServersPath } : {};
     // The run's own directory holds its tool ledger (spec §5.4); every turn appends to it.
     const ledgerPath = path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl');
     const onInit = onInitFor(worker, h.id);

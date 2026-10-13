@@ -33,13 +33,13 @@ export function makeRepo() {
   return { dir, head: git(dir, 'rev-parse', 'HEAD') };
 }
 
-export async function bootWorker({ repo, fakeEnv = {}, deadlineMs, withServer = true, claudePath = process.execPath, claudeArgs = [FAKE_CLAUDE], runtimeAvailable, maxConcurrent = 4, handoff = null, repoExtra = {}, removeWorktreeFn } = {}) {
+export async function bootWorker({ repo, fakeEnv = {}, deadlineMs, withServer = true, claudePath = process.execPath, claudeArgs = [FAKE_CLAUDE], runtimeAvailable, maxConcurrent = 4, handoff = null, repoExtra = {}, removeWorktreeFn, configExtra = {} } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-ho-'));
   const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
   const meta = createStoreMeta({ store_name: 'Quill', owner_machine_id: MACHINE, timezone: 'UTC' });
   writeStoreMeta(storePath, meta);
-  const config = { ...defaultUserConfig(), store_path: storePath, projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', canonical_path: repo ? repo.dir : undefined, default_branch: 'main', deployment_environments: ['production'], provider: null, ...repoExtra } }, ...(handoff ? { handoff } : {}) };
+  const config = { ...defaultUserConfig(), store_path: storePath, projects: { demo: { name: 'Demo', repo_id: 'demo' } }, repos: { demo: { project_id: 'demo', display_name: 'demo', canonical_path: repo ? repo.dir : undefined, default_branch: 'main', deployment_environments: ['production'], provider: null, ...repoExtra } }, ...(handoff ? { handoff } : {}), ...configExtra };
   const env = { QUILL_HOME: home };
   let nowMs = Date.parse('2026-10-02T08:00:00Z');
   const clock = () => nowMs;

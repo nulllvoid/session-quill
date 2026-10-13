@@ -7,6 +7,7 @@ import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
 import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
 import { budgetFor } from '../handoff/runner.js';
+import { scopeValidator } from '../handoff/scopes.js';
 import { attachedFiles, undoFileEffect } from '../handoff/files.js';
 import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
@@ -121,7 +122,7 @@ function approvalRefusal(actor, p, kind) {
   return `${kind === 'approve-run' ? 'approving' : 'dismissing'} a proposed run needs the owner, on the dashboard or with quill approve --run`;
 }
 
-export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null } = {}) {
+export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null, scopeCheck = null } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
   const payload = body.payload ?? {};
@@ -170,7 +171,7 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       normalized = { items: normalizeDeploymentItems(payload.items, target) };
       break;
     case 'handoff':
-      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, payload, target.repo_id), attachedFileCount: attachedFiles(target).length });
+      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, payload, target.repo_id), attachedFileCount: attachedFiles(target).length, scopeCheck });
       break;
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
@@ -278,7 +279,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
     if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
     throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
   }
-  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts });
+  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts, scopeCheck: (names) => scopeValidator(worker.config ?? {})(names) });
   request.actor_id = actor;
   const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
   if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
@@ -350,7 +351,8 @@ function evaluateHandoff(worker, req, ticket, payload) {
   let checked;
   try {
     recipe = resolveRecipe(catalogFor(worker), payload, ticket.repo_id);
-    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length });
+    // Write scopes are checked against the worker's catalog here too (spec §4.3).
+    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(worker.config ?? {}) });
   } catch (err) {
     return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
   }

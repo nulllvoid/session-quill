@@ -21,8 +21,12 @@
 //   FAKE_CLAUDE_VERSION   — what `--version` prints (default '2.1.296 (Claude Code)')
 //   FAKE_CLAUDE_INIT_VERSION — claude_code_version in the init event (default: the version's number)
 //   FAKE_CLAUDE_MCP_SERVERS — JSON list for the init event's mcp_servers (default [])
+//   FAKE_CLAUDE_GUARD_CALLS — JSON list of { tool_name, tool_input } the fake "calls": each runs the
+//                           PreToolUse hook from --settings (the real guard) with that input, in
+//                           order, and the capture records each decision as `guard_decisions`
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const VERSION = process.env.FAKE_CLAUDE_VERSION ?? '2.1.296 (Claude Code)';
@@ -49,6 +53,17 @@ function wrap(text) {
     + line({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: SESSION, num_turns: 3, total_cost_usd: 0.01 });
 }
 
+// Runs the settings' PreToolUse hook once per call, as Claude Code would, and returns each decision.
+function guardCalls(settings) {
+  const hook = settings && settings.hooks && settings.hooks.PreToolUse && settings.hooks.PreToolUse[0] && settings.hooks.PreToolUse[0].hooks[0];
+  if (!hook) return [];
+  return JSON.parse(process.env.FAKE_CLAUDE_GUARD_CALLS).map((call, i) => {
+    const input = JSON.stringify({ hook_event_name: 'PreToolUse', session_id: SESSION, cwd: process.cwd(), tool_use_id: `toolu_fake_${i}`, ...call });
+    const r = spawnSync(hook.command, hook.args, { input, env: process.env, encoding: 'utf8', timeout: (hook.timeout ?? 10) * 1000, windowsHide: true });
+    try { return JSON.parse(r.stdout).hookSpecificOutput.permissionDecision; } catch { return 'no-decision'; }
+  });
+}
+
 function run() {
   const capture = process.env.FAKE_CLAUDE_CAPTURE;
   if (capture && resumed) fs.appendFileSync(`${capture}.resume`, `${JSON.stringify({ prompt, args })}\n`);
@@ -62,6 +77,7 @@ function run() {
       try { out.grant_text = fs.readFileSync(path.join(path.dirname(file), 'grant.json'), 'utf8'); } catch { out.grant_text = null; }
     }
     if (process.env.FAKE_CLAUDE_ENV_PROBE) out.env_probe = Object.fromEntries(process.env.FAKE_CLAUDE_ENV_PROBE.split(',').map((k) => [k, process.env[k] ?? null]));
+    if (process.env.FAKE_CLAUDE_GUARD_CALLS) out.guard_decisions = guardCalls(out.settings);
     fs.writeFileSync(capture, JSON.stringify(out));
   }
   process.stderr.write(`fake-claude cwd=${process.cwd()} args=${args.join(' ')}\n`);

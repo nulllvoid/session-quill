@@ -4,6 +4,7 @@ import { Worker } from '../../src/worker/worker.js';
 import { createExtension as serverExt } from '../../src/server/extension.js';
 import { createExtension as handoffExt } from '../../src/handoff/extension.js';
 import { recordResult } from '../../src/handoff/results.js';
+import { saveUserConfig } from '../../src/config/config.js';
 import { makeHome, cli } from './helpers.js';
 
 const T1 = 'cccccccc-0000-4000-8000-000000000001';
@@ -76,6 +77,9 @@ const T4 = 'cccccccc-0000-4000-8000-000000000004';
 
 test('quill agent run and quill handoff default to autonomous access; --access, --scope, --max-turns and --budget reach the run', async () => {
   const fx = makeHome();
+  // The scope catalog comes from the saved config.toml, as for the worker (spec §4.3).
+  fx.config.scopes = { 'k8s.write': { targets: { stg: { env: { KUBECONFIG: '/fake/rw-stg' } } } } };
+  saveUserConfig(fx.config, fx.env);
   const { w, stop } = await start(fx);
   try {
     for (const [id, key] of [[T2, 'PROJ-2'], [T3, 'PROJ-3'], [T4, 'PROJ-4']]) w.emit('ticket-create', { ticket: { id, key, title: `Ticket ${key}`, project_id: 'demo', project_name: 'Demo', category: 'feature', priority: 'P2', parent_id: null, repo_id: 'demo', due: null, jira: null } });
@@ -93,6 +97,12 @@ test('quill agent run and quill handoff default to autonomous access; --access, 
     const scoped = await cli(['agent', 'run', 'standup', 'PROJ-3', '--access', 'full', '--scope', 'jira.write'], fx.env);
     assert.notEqual(scoped.code, 0);
     assert.match(scoped.err, /write scopes need autonomous access/);
+    const unknown = await cli(['agent', 'run', 'standup', 'PROJ-3', '--scope', 'k8s.nope'], fx.env);
+    assert.notEqual(unknown.code, 0);
+    assert.match(unknown.err, /unknown-scope:k8s\.nope/);
+    const noCreds = await cli(['handoff', 'PROJ-3', '--mode', 'analyse', '--scope', 'k8s.write:prod'], fx.env);
+    assert.notEqual(noCreds.code, 0);
+    assert.match(noCreds.err, /scope-credentials-missing:k8s\.write:prod/);
     const badTurns = await cli(['agent', 'run', 'standup', 'PROJ-3', '--max-turns', 'lots'], fx.env);
     assert.notEqual(badTurns.code, 0);
     assert.match(badTurns.err, /max-turns/);

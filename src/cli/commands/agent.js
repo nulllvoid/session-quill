@@ -4,6 +4,7 @@ import { createRecipeCatalog, PERMISSION_KEYS, personalRecipesDir } from '../../
 import { fetchSource, discoverRecipes, planInstall, applyInstall, describeRecipe, uninstall, readInstalled } from '../../agents/install.js';
 import { nowIso } from '../../lib/time.js';
 import { validateHandoffRequest } from '../../handoff/permissions.js';
+import { scopeValidator } from '../../handoff/scopes.js';
 import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest, runOptions, accessNotice } from './handoff.js';
@@ -79,7 +80,8 @@ async function run(ctx, io, args, flags) {
   };
   // Autonomous unless --access says otherwise (ADR 0026); a files run is always standard (ADR 0015).
   const access = typeof flags.access === 'string' ? flags.access : (recipe.mode === 'files' ? 'standard' : 'autonomous');
-  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length });
+  // --scope is checked against the same catalog the dashboard and the worker use (spec §4.3).
+  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(ctx.config) });
   const notice = accessNotice(access);
   if (notice) io.println(notice);
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);

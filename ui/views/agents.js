@@ -197,7 +197,7 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
 <h2 id="dialog-title">${icon('play')}Run ${esc(recipe.name)} on ${keyEl(ticket.key)}</h2>
 <p class="small">${esc(recipe.description)} <span class="muted">(${esc(SOURCE_LABELS[recipe.source] ?? recipe.source)} recipe, mode ${esc(recipe.mode)})</span></p>
 ${boxes.length || advanced.length ? `<fieldset><legend>Permissions for this run</legend>${boxes.join('\n')}${advanced.length ? `<details class="advanced"><summary>Advanced: commit, push, PR</summary>${advanced.join('\n')}</details>` : ''}<p class="muted small">The recipe allows at most what is listed here. Anything with a side effect stays off unless you tick it.</p></fieldset>` : '<p class="small">This run works from the ticket notes only: no source access and no side effects.</p>'}
-${recipe.mode === 'files' ? '' : accessFieldset(snapshot)}
+${recipe.mode === 'files' ? '' : accessFieldset(snapshot, { scopes: true })}
 <label class="label" for="recipe-note">Note <span class="muted">(max 280)</span></label>
 <textarea id="recipe-note" name="note" maxlength="280" rows="2" placeholder="Anything the agent should focus on?"></textarea>
 <p class="muted small">Capped at <span class="run-cap"${['standard', 'settings', 'autonomous', 'full'].map((a) => ` data-cap-${a}="${attr(recipeCap(recipe, a))}"`).join('')}>${esc(recipeCap(recipe))}</span> minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>

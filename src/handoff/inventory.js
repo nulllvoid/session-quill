@@ -11,6 +11,7 @@ import { TrackerError } from '../lib/errors.js';
 import { credentialSettings } from '../config/credentials.js';
 import { mcpSettings } from '../config/mcp-policy.js';
 import { MCP_SERVERS_FILE, mcpServerSources, writeMcpServersFile } from './mcp-sources.js';
+import { loadScopeCatalog, catalogSummary } from './scopes.js';
 
 export { MCP_SERVERS_FILE, mcpServerSources };
 
@@ -113,7 +114,8 @@ const READONLY_SYSTEMS = [['kubeconfig', 'kubernetes'], ['aws_profile', 'aws'], 
  * What the Run dialog shows about autonomous runs on this machine (snapshot meta.autonomy; never
  * exported): the latest init inventory, the latest autonomous run's credential report (Task 9
  * `report`, as recorded at its dispatch), which read-only profiles the config names (system names
- * only, never paths or values), and the trusted project MCP servers.
+ * only, never paths or values), the trusted project MCP servers, and the write-scope catalog
+ * (catalogSummary: what each scope permits and which variables it switches, never their values).
  */
 export function autonomyInfo(state, config = {}) {
   let credentials = null;
@@ -125,5 +127,6 @@ export function autonomyInfo(state, config = {}) {
   const { readonly } = credentialSettings(config);
   const configured = [];
   for (const [key, system] of READONLY_SYSTEMS) if (readonly[key] !== undefined && !configured.includes(system)) configured.push(system);
-  return { inventory: latestInventory(state), credentials, readonly_configured: configured, trusted_mcp_servers: mcpSettings(config).trustedMcpServers, min_runtime: MIN_RUNTIME };
+  // The write-scope catalog for the dialog's checklist: names, wording and variable names only.
+  return { inventory: latestInventory(state), credentials, readonly_configured: configured, trusted_mcp_servers: mcpSettings(config).trustedMcpServers, min_runtime: MIN_RUNTIME, scopes: catalogSummary(loadScopeCatalog(config)) };
 }
