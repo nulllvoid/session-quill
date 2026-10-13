@@ -137,12 +137,20 @@ export function summarizeInput(tool, input, cwd = null) {
   return oneLine(redactCapped(s, PRECAP_BYTES), SUMMARY_CHARS);
 }
 
-// The exit code a shell tool result exposes, else null (never a guess from is_error).
+// The exit code a shell tool result exposes, else null (never a guess from is_error alone).
+// Claude Code reports a non-zero exit as an error starting "Exit code N"; a command that finished
+// with 0 comes back as a non-error with a structured tool_use_result (stdout, stderr,
+// interrupted…) — verified on claude 2.1.296. An interrupted or backgrounded command has no exit
+// code yet, so it stays null.
 function exitCodeOf(item, event, text) {
-  const extra = event && event.tool_use_result && typeof event.tool_use_result === 'object' ? event.tool_use_result : {};
+  const raw = event && event.tool_use_result;
+  const extra = raw && typeof raw === 'object' ? raw : {};
   for (const v of [extra.exitCode, extra.exit_code, extra.returnCode, extra.code]) if (Number.isInteger(v)) return v;
   const m = /^\s*Exit code (-?\d+)\b/.exec(text);
-  return m ? Number(m[1]) : null;
+  if (m) return Number(m[1]);
+  const finished = raw && typeof raw === 'object' && item.is_error !== true && extra.interrupted === false
+    && !('backgroundTaskId' in extra) && !('backgroundTaskID' in extra) && !('shellId' in extra);
+  return finished ? 0 : null;
 }
 
 // `mcpServersPath`: where the init event's MCP server sources go ({ name: source }), written as

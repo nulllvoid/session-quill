@@ -119,6 +119,14 @@ test('the ledger has one tool_use and one tool_result with a capped, redacted ex
   assert.equal(res.tool, 'Bash');
   assert.equal(res.is_error, false);
   assert.equal(res.exit_code, null, 'no exit code exposed: null, not a guess');
+
+  // Claude Code 2.1.296: a finished command is a non-error with a structured tool_use_result
+  const ok = (extra) => JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', is_error: false, content: '(Bash completed with no output)' }] }, tool_use_result: extra });
+  const exitOf = (extra) => readLedger(collect([`${INIT}\n${TOOL_USE}\n${ok(extra)}\n`]).ledgerPath).find((l) => l.kind === 'tool_result').exit_code;
+  assert.equal(exitOf({ stdout: '', stderr: '', interrupted: false, isImage: false }), 0, 'finished, not interrupted → 0');
+  assert.equal(exitOf({ stdout: '', stderr: '', interrupted: true, isImage: false }), null, 'interrupted → unknown');
+  assert.equal(exitOf({ stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'b1' }), null, 'backgrounded → unknown');
+  assert.equal(exitOf('Error: something'), null, 'a string result is not proof of success');
   assert.ok(res.result_excerpt.length <= 2048);
   assert.ok(Buffer.byteLength(res.result_excerpt) <= 2048);
 
