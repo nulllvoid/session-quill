@@ -25,7 +25,7 @@ import { parseShell, binName } from './shell-tokens.js';
 import { quillHome, handoffRunDir } from '../lib/paths.js';
 import { isProtectedBranch } from '../handoff/permissions.js';
 import { canonicalJson } from '../handoff/grant.js';
-import { commandProblem, BUILTIN_COMMANDS } from './scope-commands.js';
+import { commandProblem, commandCheck, BUILTIN_COMMANDS } from './scope-commands.js';
 
 // The Quill install this guard runs from.
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -825,11 +825,26 @@ function scopeCovers(s, p, c, g = {}, e = {}) {
   if (!dialect) return false;
   const command = isPlainObject(c.tool_input) && typeof c.tool_input.command === 'string' ? c.tool_input.command : '';
   const commands = isPlainObject(m.commands) ? m.commands : BUILTIN_COMMANDS[s.name] ?? {};
-  const why = commandProblem(command, dialect === 'bash' ? 'bash' : 'powershell', { commands, target: typeof s.target === 'string' && s.target ? s.target : null, scope: s.name });
-  if (why) return why;
+  const check = commandCheck(command, dialect === 'bash' ? 'bash' : 'powershell', { commands, target: typeof s.target === 'string' && s.target ? s.target : null, scope: s.name });
+  if (check.why) return check.why;
   const root = typeof g.checkoutRoot === 'string' && g.checkoutRoot ? g.checkoutRoot : strings(g.readableRoots)[0];
   const cwd = typeof e.cwd === 'string' && e.cwd ? e.cwd : null;
   if (!root || !cwd || !isWithin(path.resolve(cwd), path.resolve(root))) return 'the command does not run inside the run\'s checkout';
+  // R26.2: every file the request reads through an option value is inside the checkout or this
+  // run's directory (links resolved); a readable root elsewhere is not enough.
+  const vars = isPlainObject(e.vars) ? e.vars : {};
+  const home = homeOf(vars);
+  let runDir = null;
+  try { const id = varOf(vars, 'QUILL_HANDOFF_ID'); runDir = id ? handoffRunDir({ QUILL_HOME: varOf(vars, 'QUILL_HOME') ?? path.join(home, '.claude', 'quill') }, id) : null; } catch { runDir = null; }
+  const inside = [root, runDir].filter(Boolean).map((r) => canonicalRoot(path.resolve(r))).filter(Boolean);
+  for (const f of check.files) {
+    const expanded = f === '~' || /^~[\\/]/.test(f) ? path.join(home, f.slice(1)) : f;
+    const real = realOrNull(path.resolve(cwd, expanded));
+    if (!real) return `the file ${f.slice(0, 80)} does not exist, so the guard cannot tell where it is`;
+    if (!inside.some((r) => isWithin(real, r))) return `${f.slice(0, 80)} is outside the run's checkout and run directory`;
+  }
+  // R26.4: an image push names its registry; it must be one of the scope's hosts.
+  for (const h of check.hosts) if (!strings(m.hosts).some((pat) => globMatch(pat.toLowerCase(), h))) return `the registry ${h.slice(0, 80)} is not one of this scope's hosts`;
   if (Array.isArray(p.argv) && p.argv.length && strings(m.bash).some((pat) => globMatch(pat, p.argv.join(' ')))) return true;
   return p.class === 'external.write' && typeof p.host === 'string' && strings(m.hosts).some((h) => globMatch(h.toLowerCase(), p.host.toLowerCase().replace(/\.$/, '')));
 }

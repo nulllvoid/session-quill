@@ -76,6 +76,7 @@ const PSQL = {
   options: { '-c': v, '--command': v, '-d': v, '--dbname': v, '-U': v, '--username': v, '-p': v, '--port': v, '-X': f, '--no-psqlrc': f, '-q': f, '--quiet': f },
   patterns: { '-d': PLAIN, '--dbname': PLAIN, '-U': PLAIN, '--username': PLAIN, '-p': DIGITS, '--port': DIGITS },
   requires: ['-c', '--command'],
+  sql: ['-c', '--command'],
   args: 'none',
 };
 const MYSQL = {
@@ -84,6 +85,7 @@ const MYSQL = {
   options: { '-e': v, '--execute': v, '-u': v, '--user': v, '-P': v, '--port': v, '-D': v, '--database': v, '--batch': f },
   patterns: { '-D': PLAIN, '--database': PLAIN, '-u': PLAIN, '--user': PLAIN, '-P': DIGITS, '--port': DIGITS },
   requires: ['-e', '--execute'],
+  sql: ['-e', '--execute'],
   args: 'none',
 };
 const REDIS = { verbs: [], target: { options: ['-h'] }, options: { '-p': v, '-n': v }, patterns: { '-p': DIGITS, '-n': DIGITS }, args: 'any' };
@@ -99,6 +101,9 @@ const CURL = {
     '--compressed': f, '-m': v, '--max-time': v, '--connect-timeout': v, '--retry': v, '-A': v, '--user-agent': v, '-w': v, '--write-out': v, '-v': f, '--verbose': f, '-G': f, '--get': f,
   },
   patterns: { '-X': METHOD, '--request': METHOD },
+  // R26: values that name a file the request reads; every one must be inside the checkout or the run dir
+  files: { '-d': 'at', '--data': 'at', '--data-binary': 'at', '--json': 'at', '--data-urlencode': 'urlencode', '-F': 'form', '--form': 'form', '-T': 'path', '--upload-file': 'path', '-H': 'at', '--header': 'at', '-w': 'at', '--write-out': 'at' },
+  headers: ['-H', '--header'],
   args: 'url',
 };
 const HTTPIE = { verbs: [], target: { url: true }, options: { '--json': f, '-j': f, '--form': f, '-f': f, '--check-status': f, '--ignore-stdin': f, '-I': f, '--timeout': v, '-b': f, '--body': f, '-h': f, '--headers': f, '-v': f, '--verbose': f }, args: 'httpie' };
@@ -108,6 +113,7 @@ const IWR = {
   target: { url: true },
   options: { '-uri': 'url', '-method': v, '-body': v, '-contenttype': v, '-infile': v, '-outfile': v, '-usebasicparsing': f, '-timeoutsec': v },
   patterns: { '-method': METHOD },
+  files: { '-infile': 'path' },
   args: 'url',
 };
 const NPM = { verbs: ['publish'], target: null, options: { '--access': v, '--tag': v, '--provenance': f, '--dry-run': f }, patterns: { '--access': '^(public|restricted)$' }, args: 'any' };
@@ -124,8 +130,8 @@ export const BUILTIN_COMMANDS = Object.freeze({
     npm: NPM,
     pnpm: { ...NPM, options: { ...NPM.options, '--no-git-checks': f } },
     yarn: { verbs: ['npm publish'], target: null, options: { '--access': v, '--tag': v }, patterns: NPM.patterns, args: 'any' },
-    docker: { verbs: ['push'], target: null, options: {}, args: 'one' },
-    podman: { verbs: ['push'], target: null, options: {}, args: 'one' },
+    docker: { verbs: ['push'], target: null, options: {}, args: 'image' },
+    podman: { verbs: ['push'], target: null, options: {}, args: 'image' },
     twine: { verbs: ['upload'], target: null, options: { '--skip-existing': f, '--non-interactive': f }, args: 'any' },
     gem: { verbs: ['push'], target: null, options: {}, args: 'one' },
     cargo: { verbs: ['publish'], target: null, options: { '--allow-dirty': f, '-p': v, '--package': v, '--no-verify': f }, args: 'none' },
@@ -203,12 +209,30 @@ function urlProblem(raw, host) {
 }
 
 /**
- * Why `command` is not covered by a scope with these tool lists and this target, or null when it is.
+ * Why `command` is not covered by a scope with these tool lists and this target, or null when it is
+ * as far as the command text can tell (commandCheck adds the files and registry hosts the guard
+ * must still check).
  * @param {string} command  the Bash or PowerShell text
  * @param {'bash'|'powershell'} dialect
  * @param {{ commands: object, target?: string|null, scope?: string }} opts
  */
-export function commandProblem(command, dialect, { commands, target = null, scope = 'this scope' } = {}) {
+export function commandProblem(command, dialect, opts = {}) {
+  return commandCheck(command, dialect, opts).why;
+}
+
+/**
+ * The full check (R25, R26): { why: string|null, files: string[], hosts: string[] }. `files` are the
+ * paths the command reads through option values (curl @file, -T, -F, HTTPie @ items, -InFile), as
+ * written: the guard requires each to resolve inside the checkout or the run dir. `hosts` are
+ * registry hosts an image push names: the guard requires each to match the scope's `hosts`.
+ */
+export function commandCheck(command, dialect, opts = {}) {
+  const out = { why: null, files: [], hosts: [] };
+  out.why = commandShape(command, dialect, opts, out);
+  return out;
+}
+
+function commandShape(command, dialect, { commands, target = null, scope = 'this scope' } = {}, out = { files: [], hosts: [] }) {
   if (typeof command !== 'string' || !command.trim()) return 'there is no command';
   const parsed = parseShell(command.trim(), dialect);
   if (parsed.error) return 'the command cannot be read';
@@ -228,10 +252,10 @@ export function commandProblem(command, dialect, { commands, target = null, scop
   const tools = commands && typeof commands === 'object' ? commands : {};
   if (!Object.hasOwn(tools, bin)) return `${bin} is not a tool ${scope} covers`;
   if (dialect === 'powershell' && (bin === 'curl' || bin === 'wget') && !/\.exe$/i.test(word)) return `${bin} is Invoke-WebRequest in PowerShell; run ${bin}.exe`;
-  return toolProblem(bin, tools[bin], s.argv.slice(1), target, dialect);
+  return toolProblem(bin, tools[bin], s.argv.slice(1), target, out);
 }
 
-function toolProblem(bin, spec, args, target, dialect) {
+function toolProblem(bin, spec, args, target, out) {
   if (!spec || typeof spec !== 'object') return `${bin} has no usable command list`;
   const ps = spec.ps === true;
   const key = (n) => (ps ? n.toLowerCase() : n);
@@ -263,6 +287,8 @@ function toolProblem(bin, spec, args, target, dialect) {
       }
       if (Object.hasOwn(patterns, name) && !new RegExp(patterns[name], 'i').test(val)) return `${name} ${val.slice(0, 60)} is not a plain value`;
       if (kind === 'target') targets.push(val);
+      const problem = valueProblem(spec, name, val, target, out, key);
+      if (problem) return problem;
       if (kind === 'url') urls.push(val);
     }
     seen.add(name);
@@ -291,6 +317,13 @@ function toolProblem(bin, spec, args, target, dialect) {
     case 'any': break;
     case 'none': if (rest.length) return `${bin} ${verb} takes no further arguments here`.replace(/\s+takes/, ' takes'); break;
     case 'one': if (rest.length !== 1) return `${bin} ${verb} must name exactly one item`; break;
+    case 'image': {
+      if (rest.length !== 1) return `${bin} ${verb} must name exactly one image`;
+      // A registry host is the first part when it has a dot, a colon or is localhost (docker's rule).
+      const first = rest[0].split('/')[0];
+      if (rest[0].includes('/') && (first.includes('.') || first.includes(':') || first === 'localhost')) out.hosts.push(first.toLowerCase());
+      break;
+    }
     case 'target':
     case 'target-revision': {
       if (typeof target !== 'string' || !target) return 'the scope names no target';
@@ -308,11 +341,72 @@ function toolProblem(bin, spec, args, target, dialect) {
       if (all.length !== 1) return 'the command must name exactly one URL';
       const why = urlProblem(all[0], target);
       if (why) return why;
+      if (args2 === 'httpie') for (const item of items.slice(1)) { const p = httpieItem(item, target, out); if (p) return p; }
       break;
     }
     default: return `${bin} has an unknown argument rule`;
   }
   if (t && t.positional && args2 !== 'target' && args2 !== 'target-revision') return `${bin} ${verb} does not name its target`;
-  void dialect;
+  return null;
+}
+
+// R26.1: client commands a SQL string must not start a statement with (mysql), checked after the
+// start or a semicolon; any backslash (psql meta-commands, mysql \! and \G) is refused outright.
+const SQL_CLIENT_COMMANDS = /(^|;)\s*(system|connect|source|tee|notee|pager|nopager|warnings|nowarning|delimiter|edit|rehash|charset|prompt|resetconnection|query_attributes|ego|go|print)\b/i;
+// R26.3: headers that pick another backend or host.
+const HOST_HEADERS = new Set(['host', 'x-forwarded-host', ':authority', 'forwarded', 'x-host', 'x-original-host']);
+
+function headerProblem(name, value, target) {
+  const n = String(name).trim().toLowerCase();
+  if (HOST_HEADERS.has(n)) return `the ${n} header picks another host`;
+  const m = /[a-z][a-z0-9+.-]*:\/\/[^\s/?#]+/i.exec(String(value));
+  if (m && urlProblem(m[0], target)) return `the ${n} header names another host`;
+  return null;
+}
+
+// A file a value names; '-' (stdin) and '.' are never covered.
+function fileRef(file, out) {
+  if (!file || file === '-' || file === '.') return 'the request reads stdin';
+  out.files.push(file);
+  return null;
+}
+
+// What one allow-listed option value may carry (R26).
+function valueProblem(spec, name, val, target, out, key) {
+  if (Array.isArray(spec.sql) && spec.sql.map(key).includes(name)) {
+    if (val.includes('\\')) return 'the SQL has a backslash (a client meta-command)';
+    if (SQL_CLIENT_COMMANDS.test(val)) return 'the SQL runs a client command';
+  }
+  const files = Object.fromEntries(Object.entries(spec.files ?? {}).map(([k, x]) => [key(k), x]));
+  const how = Object.hasOwn(files, name) ? files[name] : null;
+  if (how === 'at' && val.startsWith('@')) { const p = fileRef(val.slice(1), out); if (p) return p; }
+  if (how === 'path') { const p = fileRef(val, out); if (p) return p; }
+  if (how === 'urlencode') {
+    const at = val.indexOf('@');
+    const eq = val.indexOf('=');
+    if (at >= 0 && (eq < 0 || at < eq)) { const p = fileRef(val.slice(at + 1), out); if (p) return p; }
+  }
+  if (how === 'form') {
+    const eq = val.indexOf('=');
+    const rest = eq >= 0 ? val.slice(eq + 1) : '';
+    if (rest.startsWith('@') || rest.startsWith('<')) { const p = fileRef(rest.slice(1).split(';')[0], out); if (p) return p; }
+  }
+  if (Array.isArray(spec.headers) && spec.headers.map(key).includes(name) && !val.startsWith('@')) {
+    const colon = val.indexOf(':');
+    if (colon <= 0) return `${name} ${val.slice(0, 40)} is not a header`;
+    const p = headerProblem(val.slice(0, colon), val.slice(colon + 1), target);
+    if (p) return p;
+  }
+  return null;
+}
+
+// One HTTPie request item: a header (Name:value), data (=, :=, ==) or a file (@, =@, :=@).
+function httpieItem(item, target, out) {
+  if (item.startsWith('@')) return fileRef(item.slice(1), out);
+  const m = /^((?:\\.|[^:=@\\])*)(:=@|=@|:=|==|=|@|:)([\s\S]*)$/.exec(item);
+  if (!m) return `${item.slice(0, 40)} is not an HTTPie request item`;
+  const [, name, sep, rest] = m;
+  if (sep.endsWith('@')) return fileRef(rest, out);
+  if (sep === ':') return headerProblem(name, rest, target);
   return null;
 }
