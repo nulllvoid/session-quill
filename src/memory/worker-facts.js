@@ -11,7 +11,7 @@
 // Every fact is keyed, so a later different outcome under the same key supersedes the old entry and
 // the same outcome confirms it:
 //   test:<command>          repo, build-test   "Worker test gate: `<command>` passed (exit 0)"
-//   denied:<code>:<tool>    repo (else machine), pitfalls   "Under <access> access the Quill guard refused <tool> calls (<code>)"
+//   denied:<code>:<tool>    repo (else machine), pitfalls   "Under <access> access the Quill guard refused some <tool> calls (<code>)"
 //   tool:claude-code        machine, tools     "Claude Code <version> is installed"
 //   connector:<name>        machine, connectors "MCP server <name> (source <source>) was <status>"
 import { redactCapped } from '../handoff/stream.js';
@@ -76,7 +76,7 @@ function denialFacts(run, ledger) {
     out.set(k, {
       scope: run.repo_id ? 'repo' : 'machine', section: 'pitfalls', kind: 'pitfall', key: k,
       // Access first: "change … autonomous access" would read as a request to widen access.
-      text: `Under ${access} access the Quill guard refused ${l.tool_name} calls (${code})`,
+      text: `Under ${access} access the Quill guard refused some ${l.tool_name} calls (${code})`,
       evidence: [`guard ledger of run ${run.id}`],
     });
     if (out.size >= MAX_DENIAL_FACTS) break;
@@ -102,11 +102,14 @@ function inventoryFacts(run, inv) {
 /**
  * Worker-observed facts of one finished run, as filing candidates (trust `verified`, derived_from
  * `worker`). Pass them to fileLearnings({ workerFacts }) to file them through the same key and
- * dedupe rules.
+ * dedupe rules. The returned array carries `dropped`: facts the instruction filter left out.
  * @param {{ run: object, ledger?: object[], testGate?: object|null, inventory?: object|null }} opts
  */
 export function workerLearnings({ run, ledger = [], testGate = null, inventory = null } = {}) {
   if (!run || typeof run.id !== 'string' || !run.id) return [];
   const facts = [testGateFact(run, testGate), ...denialFacts(run, ledger), ...inventoryFacts(run, inventory)].filter(Boolean);
-  return facts.filter((f) => !instructionLike(f.text)).map((f) => ({ ...f, derived_from: 'worker', trust: 'verified' }));
+  const kept = facts.filter((f) => !instructionLike(f.text)).map((f) => ({ ...f, derived_from: 'worker', trust: 'verified' }));
+  // How many facts the instruction filter dropped; fileLearnings records it on memory_filing.worker.
+  Object.defineProperty(kept, 'dropped', { value: facts.length - kept.length, enumerable: false });
+  return kept;
 }

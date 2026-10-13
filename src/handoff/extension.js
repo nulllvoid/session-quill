@@ -21,6 +21,7 @@ import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSo
 import { writeDocsProjection } from '../memory/project.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
+import { getBlob } from '../core/blobs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
 import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, prodEffects } from './autonomous.js';
 
@@ -49,6 +50,12 @@ export function gateLine(gate) {
 // stays this long, because its patch is already collected but the owner may still inspect it.
 export const FIX_WORKTREE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_LOG_RETENTION_DAYS = 30;
+// A stop waits at most this long for runs that are still filing their memory (the cited files are
+// read asynchronously after the terminal state is recorded); anything left is filed at the next start.
+export const FINISH_WAIT_MS = 20_000;
+// At start, terminal runs finished this recently that have no memory_filing are filed again.
+export const REFILE_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const REFILE_MAX = 50;
 const TERMINAL = new Set(['done', 'failed', 'timed-out', 'cancelled']);
 
 // `[handoff] log_retention_days`: how long a run's ledger directory and log are kept.
@@ -73,6 +80,7 @@ function detectRuntime(claudePath) {
 // the scope catalog of the config (src/handoff/scopes.js).
 export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
   const running = new Map(); // handoff id -> { child, done, reason, fix }
+  const finishing = new Set(); // finish() promises, until memory filing has landed
   const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
@@ -299,7 +307,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       const h = worker.state.handoffs.get(id);
       if (!h || !TERMINAL.has(h.state) || !result || typeof result !== 'object') return;
       const ledger = readLedger(path.join(handoffRunDir(worker.env, id), 'ledger.jsonl'));
-      const checkout = h.worktree_path && fs.existsSync(h.worktree_path) ? h.worktree_path : null;
+      // The run's checkout; once it is gone (a filing redone at start), the registered repository
+      // serves the same objects for a read at the run's base commit.
+      const canonical = h.base_commit ? repoPathOf(h) : null;
+      const checkout = h.worktree_path && fs.existsSync(h.worktree_path) ? h.worktree_path : canonical && fs.existsSync(canonical) ? canonical : null;
       const existing = worker.state.memory.entries;
       // M4: the cited files are read with one asynchronous git call, before the synchronous filing.
       const learnings = h.state === 'done' ? result.learnings ?? [] : [];
@@ -307,11 +318,25 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       const workerFacts = workerLearnings({ run: h, ledger, testGate: h.test_gate ?? null, inventory: h.inventory ?? null });
       const events = fileLearnings({ learnings, run: worker.state.handoffs.get(id) ?? h, ledger, checkout, existing, now: worker.now(), workerFacts, citeSources });
       const lessons = taskLessons(events, existing);
-      for (const e of events) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
+      // Deterministic source identities: a filing redone at start never journals an event twice.
+      const fresh = (e) => !(worker.journal && worker.journal.hasSource(e.source_identity));
+      for (const e of events) if (fresh(e)) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
       const note = appendRunNotes(h.ticket_id, result.attempts ?? [], lessons, { run: h, at: worker.now() });
-      if (note) worker.emit(note.kind, note.payload, { source_identity: note.source_identity });
+      if (note && fresh(note)) worker.emit(note.kind, note.payload, { source_identity: note.source_identity });
     } catch (err) {
       worker.log(`memory filing failed for ${id}: ${err.stack ?? err.message}`);
+    }
+  }
+
+  // A stop (or crash) between a run's terminal state and its memory filing leaves the run without
+  // memory_filing; at start such recent runs are filed again from their stored result blob.
+  async function refileMissing(worker) {
+    const now = Date.parse(worker.now());
+    const due = [...worker.state.handoffs.values()].filter((h) => TERMINAL.has(h.state) && !h.memory_filing && h.result_ref && h.finished_at && now - Date.parse(h.finished_at) <= REFILE_WINDOW_MS).slice(-REFILE_MAX);
+    for (const h of due) {
+      let result = null;
+      try { result = JSON.parse(getBlob(h.result_ref, worker.env)); } catch { result = null; }
+      if (result) await fileMemory(worker, h.id, result);
     }
   }
 
@@ -617,6 +642,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     }
     Object.assign(entry, { child: run.child, done: run.done, spawnedAt: performance.now() });
     entry.finished = run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
+    const finished = entry.finished;
+    finishing.add(finished);
+    finished.then(() => finishing.delete(finished));
   }
 
   // Whether this Claude Code takes the observer's hook (the guard's runtime floor).
@@ -648,6 +676,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       for (const h of [...worker.state.handoffs.values()]) {
         if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
       }
+      try { await refileMissing(worker); } catch (err) { worker.log(`memory refiling failed: ${err.message}`); }
       // Housekeeping at start: checkouts past their keep time, stale registrations, old ledgers and logs.
       try { await pruneOldWorktrees(); pruneRetention(); } catch (err) { worker.log(`handoff housekeeping failed: ${err.message}`); }
     },
@@ -676,6 +705,12 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
         if (entry.child) { killWithReason(id, 'stopped'); pending.push(entry.done, entry.finished); }
       }
       await Promise.all(pending);
+      // Runs that already left `running` may still be filing their memory: wait for them, bounded.
+      if (finishing.size) {
+        let timer;
+        await Promise.race([Promise.allSettled([...finishing]), new Promise((r) => { timer = setTimeout(r, FINISH_WAIT_MS); })]);
+        clearTimeout(timer);
+      }
       // give finish() handlers a tick to journal their outcomes
       await new Promise((r) => setTimeout(r, 20));
     },

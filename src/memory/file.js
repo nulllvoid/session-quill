@@ -171,18 +171,19 @@ function verifiedClaims(rawEvidence, calls) {
   return claims.length > 0 && claims.every((c) => claimMatches(c, calls)) ? claims : null;
 }
 
-// Ruling R32: an own-command learning is verified only when its text (or key) names the command it
-// cites, as whole words: the program (its base name, without leading VAR=value assignments, a path
-// or a .exe/.cmd/.bat/.ps1/.sh suffix) and its subcommand (the next word, unless it is an option).
-// "also" never names `ls`, and `echo ok` never verifies a claim about something else.
-export function namesCommand(command, text, key) {
-  const hay = new Set(normaliseText(`${text} ${key ?? ''}`).split(' ').filter(Boolean));
+// Rulings R32 and R33: an own-command learning is verified only when its TEXT (never its key)
+// contains the command it cites: the program (its base name, without leading VAR=value
+// assignments, a path or a .exe/.cmd/.bat/.ps1/.sh suffix) followed directly by its first argument,
+// as whole words after normalisation ("npm test", "pytest tests/x", "node --test"). A command with
+// no argument never verifies a learning: "also" never names `ls`, and "It is true that ..." never
+// names `true`.
+export function namesCommand(command, text) {
   const words = String(command ?? '').trim().split(/\s+/).filter((w) => w && !/^[A-Za-z_]\w*=/.test(w));
-  if (!words.length) return false;
-  const program = words[0].replace(/^["'`]+|["'`]+$/g, '').split(/[\\/]/).pop().replace(/\.(exe|cmd|bat|ps1|sh)$/i, '');
-  const sub = words[1] && !/^[-/]/.test(words[1]) ? words[1] : null;
-  const need = [program, ...(sub ? [sub] : [])].flatMap((w) => normaliseText(w).split(' ').filter(Boolean));
-  return need.length > 0 && need.every((w) => hay.has(w));
+  if (words.length < 2) return false;
+  const program = normaliseText(words[0].replace(/^["'`]+|["'`]+$/g, '').split(/[\\/]/).pop().replace(/\.(exe|cmd|bat|ps1|sh)$/i, ''));
+  const first = normaliseText(words[1]);
+  if (!program || !first) return false;
+  return ` ${normaliseText(text)} `.includes(` ${program} ${first} `);
 }
 
 // --- repo-file: path:line cites against the run's checkout ----------------------------------------
@@ -368,7 +369,7 @@ function decideTrust(l, { page, calls, checkout, run, citeSources }) {
   if (l.derived_from === 'tool-output' || l.derived_from === 'external-text') return { trust: 'quarantined', reason: `derived from ${l.derived_from}` };
   if (l.derived_from === 'own-command') {
     const claims = verifiedClaims(l.rawEvidence, calls);
-    return claims && claims.every((c) => namesCommand(c.command, l.text, l.key)) ? { trust: 'verified' } : { trust: 'observed' };
+    return claims && claims.every((c) => namesCommand(c.command, l.text)) ? { trust: 'verified' } : { trust: 'observed' };
   }
   const pinned = sourcedEvidence(l.evidence, checkout, run, citeSources);
   return pinned ? { trust: 'sourced', evidence: pinned } : { trust: 'quarantined', reason: 'unverified-cite' };
@@ -406,9 +407,9 @@ const poolEntry = (e, fromRun) => {
 export function fileLearnings({ learnings, run, ledger = [], checkout = null, existing = [], now, workerFacts = [], citeSources }) {
   const list = (Array.isArray(learnings) ? learnings : []).slice(0, MAX_LEARNINGS_READ);
   const facts = Array.isArray(workerFacts) ? workerFacts : [];
-  if ((!list.length && !facts.length) || !run || !nonEmpty(run.id)) return [];
+  if ((!list.length && !facts.length && !(workerFacts && workerFacts.dropped)) || !run || !nonEmpty(run.id)) return [];
   const at = toIso(now);
-  const counts = { received: Array.isArray(learnings) ? learnings.length : 0, filed: 0, confirmed: 0, superseded: 0, conflicts: 0, duplicates: 0, quarantined: 0, dropped: 0, by_trust: { verified: 0, sourced: 0, observed: 0, quarantined: 0 }, worker: { filed: 0, confirmed: 0, superseded: 0, conflicts: 0 } };
+  const counts = { received: Array.isArray(learnings) ? learnings.length : 0, filed: 0, confirmed: 0, superseded: 0, conflicts: 0, duplicates: 0, quarantined: 0, dropped: 0, by_trust: { verified: 0, sourced: 0, observed: 0, quarantined: 0 }, worker: { filed: 0, confirmed: 0, superseded: 0, conflicts: 0, dropped: Number.isInteger(workerFacts && workerFacts.dropped) ? workerFacts.dropped : 0 } };
   const problems = new Map();
   const problem = (code, n = 1) => problems.set(code, (problems.get(code) ?? 0) + n);
   const pool = valuesOf(existing).filter((e) => e && isLive(e) && nonEmpty(e.id) && typeof e.text === 'string').map((e) => poolEntry(e, false));

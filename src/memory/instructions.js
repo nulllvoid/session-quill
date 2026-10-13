@@ -83,7 +83,9 @@ export const INSTRUCTION_PATTERNS = [
 /** The name of the first instruction-like pattern the text matches in any normalised form, else null. */
 export function instructionLike(text) {
   const f = scanForms(text);
-  const forms = [f.folded, f.latin, f.bare, f.bareLatin];
+  // Each form is also tried with _ . - read as spaces, so ignore_previous_instructions and
+  // mcp__x__ignore-previous-instructions read as words (M2).
+  const forms = [f.folded, f.latin, f.bare, f.bareLatin].flatMap((s) => [s, s.replace(/[_.-]+/g, ' ')]);
   for (const p of INSTRUCTION_PATTERNS) {
     if (p.compact ? p.re.test(f.compact) : forms.some((s) => p.re.test(s))) return p.name;
   }

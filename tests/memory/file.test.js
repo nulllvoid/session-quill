@@ -175,7 +175,7 @@ test('a quarantined learning never confirms a trusted entry', () => {
 });
 
 test('malformed learnings and repo learnings without a repository are dropped with a problem; the events the reducer accepts', () => {
-  const events = file([{ scope: 'repo', text: '' }, learning({ scope: 'galaxy' }), learning(), learning({ scope: 'machine', section: 'tools', text: 'gh 2.60 is installed', derived_from: 'own-command', evidence: ['gh --version → exit 0'] })], { run: { ...RUN, repo_id: null }, ledger: [shell('gh --version', 0)] });
+  const events = file([{ scope: 'repo', text: '' }, learning({ scope: 'galaxy' }), learning(), learning({ scope: 'machine', section: 'tools', text: 'gh --version reports gh 2.60', derived_from: 'own-command', evidence: ['gh --version → exit 0'] })], { run: { ...RUN, repo_id: null }, ledger: [shell('gh --version', 0)] });
   const sum = summaryOf(events);
   assert.equal(sum.problems.find((p) => p.code === 'learning-invalid').count, 2);
   assert.equal(sum.problems.find((p) => p.code === 'learning-no-repo').count, 1);
