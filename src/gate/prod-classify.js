@@ -4,7 +4,7 @@
 // `unknown-prod`, never `local`.
 //
 // classifyCall({ tool_name, tool_input }, ctx) → { class, scope?, target?, host?, path?, paths?,
-//   readPaths?, readSpecs?, writeSpecs?, calls?: [{ class, scope?, target?, host?, targetAmbiguous?, reason, argv }],
+//   readPaths?, readSpecs?, writeSpecs?, calls?: [{ class, scope?, target?, host?, reason, argv }],
 //   reason }. readSpecs/writeSpecs describe the same shell paths as the call supplied them:
 //   [{ path, root, segs, dialect }] (see rawPath).
 // ctx: { cwd, home?, env?, currentBranch?, defaultBranch?, isProtectedBranch?(name),
@@ -218,132 +218,6 @@ const CD_NAMES = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', 
 
 const NULL_TARGETS = new Set(['/dev/null', 'nul', '$null', '/dev/stdout', '/dev/stderr', '/dev/tty', 'con']);
 
-// ---------------------------------------------------------------- scope targets (ruling R24)
-
-// A granted scope covers a write only when the write names exactly one target, once, through the
-// tool's own target option (or positional), and nothing in the command or the shell around it can
-// send it elsewhere. Every other scoped write keeps its class, scope and first-named target but
-// gets `targetAmbiguous` (why), so the guard never treats it as covered: it is a critical change.
-
-// Shell built-ins and commands that change the environment of what runs after them.
-const ENV_BUILTINS = new Set(['export', 'declare', 'typeset', 'local', 'readonly', 'unset', 'setenv', 'unsetenv', 'source', '.', 'eval', 'alias', 'env', 'setx', 'set-variable', 'sv',
-  'new-variable', 'nv', 'clear-variable', 'clv', 'remove-variable', 'rv', 'set-alias', 'sal', 'new-alias', 'nal', 'import-module', 'ipmo']);
-
-// Why something anywhere in the call may change a write's environment or wrapping, or null.
-function envChange(segments) {
-  for (const seg of segments) {
-    if (seg.cwdMark) continue;
-    if (seg.funcDef) return 'the command defines a function';
-    const names = Object.keys(seg.env ?? {});
-    if (names.length) return `the command sets the variable ${names[0].slice(0, 60)}`;
-    const argv = Array.isArray(seg.argv) ? seg.argv : [];
-    if (!argv.length) continue;
-    if (Array.isArray(seg.assign) && seg.assign.length > argv.length) return `a wrapper command runs ${String(argv[0]).slice(0, 60)}`;
-    const n = binName(argv[0]);
-    if (ENV_BUILTINS.has(n)) return `${n} changes the environment`;
-    if (n === 'set' && (seg.dialect === 'cmd' || argv.slice(1).some((a) => /^-[A-Za-z]*a/.test(a) || a === 'allexport'))) return 'set changes the environment';
-    if (argv.slice(1).some((a) => /^\$?env:/i.test(a))) return 'the command changes an environment variable';
-  }
-  return null;
-}
-
-const once = (s, label, ...names) => (s.all(...names).length > 1 ? `${label} is given more than once` : null);
-const anyOf = (s, names) => { const hit = names.find((n) => s.has(n)); return hit ? `${hit} changes where it connects` : null; };
-const KUBE_OVERRIDES = ['--kubeconfig', '--cluster', '--server', '-s', '--user', '--token', '--as', '--as-group', '--as-uid', '--username', '--password', '--certificate-authority', '--client-certificate', '--client-key', '--tls-server-name', '--insecure-skip-tls-verify'];
-const HELM_OVERRIDES = ['--kubeconfig', '--kube-apiserver', '--kube-token', '--kube-as-user', '--kube-as-group', '--kube-ca-file', '--kube-tls-server-name', '--kube-insecure-skip-tls-verify'];
-const MYSQL_TARGET_VALUES = new Set(['-e', '--execute', '-h', '--host', '-u', '--user', '-P', '--port', '-D', '--database', '--defaults-file', '--defaults-extra-file', '-S', '--socket', '--init-command', '--tee', '--login-path', '--defaults-group-suffix']);
-const CURL_OVERRIDES = ['--connect-to', '--resolve', '-x', '--proxy', '--preproxy', '--socks4', '--socks4a', '--socks5', '--socks5-hostname', '--proxy1.0', '-K', '--config', '--unix-socket', '--abstract-unix-socket', '--doh-url', '--dns-servers', '--haproxy-protocol', '--request-target'];
-const WGET_TARGET_VALUES = new Set(['-O', '--output-document', '-o', '--output-file', '-a', '--append-output', '-P', '--directory-prefix', '--post-data', '--post-file', '--body-data', '--body-file', '--method', '--header', '-U', '--user-agent', '--user', '--password', '-e', '--execute', '-i', '--input-file', '-B', '--base', '--config', '-t', '--tries', '-T', '--timeout', '-w', '--wait', '-Q', '--quota', '-l', '--level']);
-// The clients whose one URL is the host a write goes to; any other network writer is never covered.
-const HTTP_CLIENTS = new Set(['curl', 'wget', 'http', 'https', 'xh', 'xhs', 'httpie', 'invoke-restmethod', 'irm', 'invoke-webrequest', 'iwr', 'gh']);
-const connString = (v) => typeof v === 'string' && (v.includes('=') || /:\/\//.test(v));
-
-// Why the URLs do not name one plain host: credentials or a port in one, or more than one host.
-function urlProblem(urls) {
-  const hosts = new Set();
-  for (const u of urls) {
-    const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(String(u));
-    const auth = m ? m[1] : String(u).split(/[/?#]/)[0];
-    if (auth.includes('@')) return 'the URL carries a user name or password';
-    if (/:\d*$/.test(auth.replace(/^\[[^\]]*\]/, ''))) return 'the URL names a port';
-    hosts.add(hostOf(u) ?? `?${u}`);
-  }
-  return hosts.size > 1 ? 'the command names more than one host' : null;
-}
-
-// Why one write's target is not one plain target, per tool (R24), or null.
-function toolAmbiguity(name, seg) {
-  const args = seg.argv.slice(1);
-  const ak = (seg.kinds ?? []).slice(1);
-  if (ak.some((k) => k !== 'lit')) return 'part of the command is not literal';
-  switch (name) {
-    case 'kubectl': {
-      const s = scan(args, ak, { values: KUBECTL_VALUES });
-      if (s.pos[0] === 'config') return 'kubectl config changes what a context means';
-      return once(s, '--context', '--context') ?? anyOf(s, KUBE_OVERRIDES);
-    }
-    case 'helm': { const s = scan(args, ak, { values: HELM_VALUES }); return once(s, '--kube-context', '--kube-context') ?? anyOf(s, HELM_OVERRIDES); }
-    case 'k9s': { const s = scan(args, ak, { values: new Set(['--context', '--kubeconfig', '--cluster', '--user', '-n', '--namespace']) }); return once(s, '--context', '--context') ?? anyOf(s, ['--kubeconfig', '--cluster', '--user', '--token']); }
-    case 'aws': { const s = scan(args, ak, { longDefault: 'value', booleans: AWS_BOOLEANS }); return once(s, '--profile', '--profile') ?? anyOf(s, ['--endpoint-url']); }
-    case 'eksctl': { const s = scan(args, ak, { longDefault: 'value' }); return once(s, '--profile', '--profile'); }
-    case 'gcloud': { const s = scan(args, ak, { longDefault: 'value', booleans: GC_BOOLEANS }); return once(s, '--project', '--project') ?? anyOf(s, ['--configuration', '--account', '--impersonate-service-account', '--access-token-file', '--credential-file-override']); }
-    case 'bq': { const s = scan(args, ak, { longDefault: 'value' }); return once(s, '--project_id', '--project_id') ?? anyOf(s, ['--api', '--credential_file', '--service_account', '--service_account_credential_file', '--application_default_credential_file']); }
-    case 'az': { const s = scan(args, ak, { longDefault: 'value' }); return once(s, '--subscription', '--subscription'); }
-    case 'psql': {
-      const s = scan(args, ak, { values: PSQL_VALUES });
-      if (s.all('-d', '--dbname').some((x) => connString(x.v)) || s.pos.some(connString)) return 'a connection string names the server';
-      return once(s, '-h', '-h', '--host') ?? once(s, '-d', '-d', '--dbname');
-    }
-    case 'mysql': case 'mariadb': {
-      const s = scan(args, ak, { values: MYSQL_TARGET_VALUES });
-      return once(s, '-h', '-h', '--host') ?? once(s, '-D', '-D', '--database') ?? anyOf(s, ['--defaults-file', '--defaults-extra-file', '--defaults-group-suffix', '--login-path', '-S', '--socket']);
-    }
-    case 'redis-cli': { const s = scan(args, ak, { values: new Set(['-h', '-p', '-a', '-n', '-u', '--user', '--pass', '-s']) }); return once(s, '-h', '-h') ?? anyOf(s, ['-u', '-s']); }
-    case 'pulumi': { const s = scan(args, ak, { values: new Set(['-s', '--stack', '-C', '--cwd', '--config-file']) }); return once(s, '--stack', '-s', '--stack') ?? anyOf(s, ['-C', '--cwd', '--config-file']); }
-    case 'cdk': { const s = scan(args, ak, { values: new Set(['-a', '--app', '--profile', '-c', '--context', '-o', '--output', '--role-arn', '-r']) }); return once(s, '--profile', '--profile') ?? anyOf(s, ['--role-arn', '-r', '--app', '-a']); }
-    case 'serverless': case 'sls': { const s = scan(args, ak, { values: new Set(['-s', '--stage', '-r', '--region', '-c', '--config', '--aws-profile']) }); return once(s, '--stage', '-s', '--stage') ?? anyOf(s, ['--aws-profile', '-c', '--config']); }
-    case 'argocd': {
-      const s = scan(args, ak, { longDefault: 'value', booleans: ARGO_BOOLEANS, values: new Set(['-o', '-p', '-N', '-l', '--selector']) });
-      if (s.has('-l', '--selector')) return 'a selector can name any application';
-      const over = anyOf(s, ['--server', '--auth-token', '--config', '--context', '--core', '--kube-context', '--port-forward', '--port-forward-namespace', '-H', '--header', '--grpc-web-root-path']);
-      if (over) return over;
-      // app <verb> <app>; rollback adds a revision, actions run adds the action
-      return s.pos.length > (s.pos[1] === 'actions' ? 5 : s.pos[1] === 'rollback' ? 4 : 3) ? 'the command names more than one application' : null;
-    }
-    case 'curl': {
-      const s = scan(args, ak, { values: CURL_VALUES });
-      return anyOf(s, CURL_OVERRIDES) ?? urlProblem([...s.all('--url').map((x) => x.v), ...s.pos]);
-    }
-    case 'wget': {
-      const s = scan(args, ak, { values: WGET_TARGET_VALUES });
-      return anyOf(s, ['-i', '--input-file', '-e', '--execute', '-B', '--base', '--config']) ?? urlProblem(s.pos);
-    }
-    case 'http': case 'https': case 'xh': case 'xhs': case 'httpie': {
-      const s = scan(args, ak, { values: new Set(['-a', '--auth', '-A', '--auth-type', '-o', '--output', '--session', '--session-read-only', '--verify', '--cert', '--cert-key', '--proxy', '--timeout', '-p', '--print']) });
-      const pos = s.pos[0] && HTTP_METHODS.has(String(s.pos[0]).toUpperCase()) ? s.pos.slice(1) : s.pos;
-      return anyOf(s, ['--proxy']) ?? urlProblem(pos.slice(0, 1));
-    }
-    case 'invoke-restmethod': case 'irm': case 'invoke-webrequest': case 'iwr': {
-      const s = psParams(args, ak, { values: IWR_VALUES, switches: IWR_SWITCHES });
-      if (s.get('proxy')) return '-Proxy changes where it connects';
-      const uri = s.get('uri') ?? s.pos[0];
-      return uri ? urlProblem([uri.v]) : null;
-    }
-    default: return null;
-  }
-}
-
-// A scoped write with `targetAmbiguous` set when it does not name one plain target; every other
-// result as it is. The target or host it names first stays, for the deny reason and the ledger.
-function withTargetCheck(res, seg, envWhy) {
-  if (!(res.class === 'write' || res.class === 'external.write') || !res.scope || String(res.scope).startsWith('git.')) return res;
-  const name = Array.isArray(seg.argv) && seg.argv.length ? binName(seg.argv[0]) : '';
-  let why = envWhy;
-  if (!why && res.scope === 'http.write' && res.class === 'external.write' && !HTTP_CLIENTS.has(name)) why = `${name || 'this command'} does not name its host plainly enough for a scope`;
-  if (!why && name) why = toolAmbiguity(name, seg);
-  return why ? { ...res, targetAmbiguous: why } : res;
-}
-
 // ---------------------------------------------------------------- shell
 
 function classifyShell(command, dialect, ctx) {
@@ -372,12 +246,10 @@ function classifyScript(command, dialect, ctx, depth, cwd = ctx.cwd ?? null, cwd
     seg.chainSafe = later === null ? true : seg.sep === '&&' && later;
     later = seg.chainSafe;
   }
-  // R24: anything in the call that changes the environment leaves every scoped write in it uncovered
-  const envWhy = envChange(parsed.segments);
   for (const seg of parsed.segments) {
     // a function body's directory changes run whenever the function is called (R19)
     if (seg.funcDef) st.funcSeen = true;
-    results.push(withTargetCheck(classifySegment(seg, ctx, st), seg, envWhy));
+    results.push(classifySegment(seg, ctx, st));
     argvs.push(Array.isArray(seg.argv) ? seg.argv.slice() : []);
   }
   return aggregate(results, st, argvs);
@@ -412,7 +284,7 @@ function uniqueSpecs(specs) {
 
 function strip(res) {
   const o = { class: res.class };
-  for (const k of ['scope', 'target', 'host', 'targetAmbiguous']) if (res[k] !== undefined) o[k] = res[k];
+  for (const k of ['scope', 'target', 'host']) if (res[k] !== undefined) o[k] = res[k];
   o.reason = res.reason;
   return o;
 }

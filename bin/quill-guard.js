@@ -131,6 +131,7 @@ function check(raw, env) {
       ...(scope ? { scope: summary(scope, 200) } : {}),
       ...(target ? { target: summary(target, 300) } : {}),
       ...(change ? { critical: true } : {}),
+      ...(change && change.ambiguous === true ? { ambiguous: true } : {}),
       ...(enforced ? { enforce_decision: enforced.decision, enforce_reason: summary(enforced.reason, EXCERPT_BYTES) } : {}),
     });
     return done(r.decision, r.reason);

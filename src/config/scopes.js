@@ -25,6 +25,7 @@
 // the value.
 
 import { SECRET_NAME, credentialSystemOf } from '../handoff/cred-env.js';
+import { BUILTIN_COMMANDS, NEVER_VERBS, NEVER_OPTIONS } from '../gate/scope-commands.js';
 
 // Literal values config.toml never holds (I1): secret-looking names (cred-env SECRET_NAME, or
 // ending _PWD / _PASS / _PASSPHRASE), connection URLs of the database and registry systems, URLs
@@ -37,6 +38,7 @@ export function literalSecretReason(name, value) {
   if (SECRET_NAME.test(name) || SECRET_SUFFIX.test(name)) return 'looks like a secret';
   if (URL_NAME.test(name) && ['databases', 'registries'].includes(credentialSystemOf(name))) return 'is a connection URL, which usually carries a password';
   if (URL_PASSWORD.test(value)) return 'holds a URL with a password in it';
+  if (/(^|[?&;\s])(password|passwd|pwd)=/i.test(value)) return 'holds a password= setting';
   if (AUTH_VALUE.test(value)) return 'holds an authorization header or token';
   return null;
 }
@@ -49,7 +51,9 @@ export const TARGET_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._@/-]{0,127}$/;
 const MATCHER_RE = /^[^\x00-\x1f\x7f]{1,200}$/;
 const MAX_MATCHERS = 100;
 const TEXT_MAX = { label: 80, permits: 300 };
-const KEYS = new Set(['label', 'permits', 'mcp', 'bash', 'hosts', 'env', 'targets', 'takes_target']);
+const KEYS = new Set(['label', 'permits', 'mcp', 'bash', 'hosts', 'env', 'targets', 'takes_target', 'commands']);
+const VERB_RE = /^[a-z][a-z0-9-]{0,40}( [a-z][a-z0-9-]{0,40}){0,2}$/;
+const OPTION_RE = /^--?[A-Za-z0-9][A-Za-z0-9-]{0,60}$/;
 // The guard's own classes: a scope with one of these names could never cover anything.
 const CLASS_NAMES = new Set(['local', 'read', 'write', 'external.write', 'unknown-prod', 'privileged', 'unparseable']);
 
@@ -167,6 +171,34 @@ function envTable(where, v, warnings) {
   return out;
 }
 
+// [scopes."<name>".commands.<tool>] verbs = [...], flags = [...], values = [...]: what the owner adds
+// to a built-in tool list (R25). Only tools the scope already lists; never a verb or option that
+// changes what a target means (NEVER_VERBS / NEVER_OPTIONS) or the tool's target option.
+function commandExtensions(name, raw, warnings) {
+  const where = `[scopes."${name}".commands]`;
+  const tools = Object.hasOwn(BUILTIN_COMMANDS, name) ? BUILTIN_COMMANDS[name] : null;
+  if (!tools) { warnings.push(`${where}: only a built-in scope has command lists; ignored`); return null; }
+  if (!isTable(raw)) { warnings.push(`${where} must hold one table per tool; ignored`); return null; }
+  const out = {};
+  for (const [bin, t] of Object.entries(raw)) {
+    if (!Object.hasOwn(tools, bin)) { warnings.push(`${where} ${bin.slice(0, 40)} is not a tool of this scope; ignored`); continue; }
+    if (!isTable(t)) { warnings.push(`${where} ${bin} must be a table; ignored`); continue; }
+    const neverVerbs = Object.hasOwn(NEVER_VERBS, bin) ? NEVER_VERBS[bin] : [];
+    const neverOpts = new Set([...(Object.hasOwn(NEVER_OPTIONS, bin) ? NEVER_OPTIONS[bin] : []), ...((tools[bin].target && tools[bin].target.options) || [])].map((o) => (tools[bin].ps ? o.toLowerCase() : o)));
+    const ext = { verbs: [], flags: [], values: [] };
+    for (const [k, list] of Object.entries(t)) {
+      if (!Object.hasOwn(ext, k)) { warnings.push(`${where} ${bin}.${k} is not a command setting (verbs, flags, values); ignored`); continue; }
+      if (!Array.isArray(list)) { warnings.push(`${where} ${bin}.${k} must be a list; ignored`); continue; }
+      list.forEach((x, i) => {
+        const ok = typeof x === 'string' && (k === 'verbs' ? VERB_RE.test(x) && !neverVerbs.includes(x.split(' ')[0]) : OPTION_RE.test(x) && !neverOpts.has(tools[bin].ps ? x.toLowerCase() : x));
+        if (ok) ext[k].push(x); else warnings.push(`${where} ${bin}.${k}[${i}] is not allowed (a target-changing ${k === 'verbs' ? 'verb' : 'option'}, the target option, or not a plain name); ignored`);
+      });
+    }
+    out[bin] = ext;
+  }
+  return out;
+}
+
 /**
  * The owner's `[scopes]` tables, validated: `{ tables: { name: { label?, permits?, mcp?, bash?,
  * hosts?, env?, targets?, takes_target? } }, warnings }`. Built-ins are not merged here.
@@ -194,6 +226,9 @@ export function scopeSettings(config = {}) {
         if (list) out[key] = list;
       } else if (key === 'env') {
         out.env = envTable(`[scopes."${name}"]`, v, warnings);
+      } else if (key === 'commands') {
+        const ext = commandExtensions(name, v, warnings);
+        if (ext) out.commands = ext;
       } else if (key === 'takes_target') {
         if (typeof v !== 'boolean') warnings.push(`${label(name, key)} must be true or false; ignored`);
         else if (Object.hasOwn(BUILTIN_SCOPES, name)) warnings.push(`${label(name, key)} cannot change a built-in scope; ignored`);

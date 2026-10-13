@@ -25,6 +25,7 @@ import { parseShell, binName } from './shell-tokens.js';
 import { quillHome, handoffRunDir } from '../lib/paths.js';
 import { isProtectedBranch } from '../handoff/permissions.js';
 import { canonicalJson } from '../handoff/grant.js';
+import { commandProblem, BUILTIN_COMMANDS } from './scope-commands.js';
 
 // The Quill install this guard runs from.
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -79,7 +80,7 @@ const REASONS = {
   protectedBranch: (why) => `QUILL_DENIED protected-branch: ${why}. Pushing to the default or a protected branch, force and tag pushes, deleting branches, merging into a protected branch and non-draft pull requests are never allowed in a run; push the run's own branch or open a draft PR when granted, and leave the rest to the owner.`,
   noReadonly: (system) => `QUILL_DENIED no-readonly-credentials: no read-only credentials configured for ${system} — set them in quill doctor ([prod.readonly] in config.toml). This run has only empty ${system} credentials, so the command could not succeed. Use a connected tool for ${system} if one is available, and record this route in attempts as unavailable.`,
   unknownProd: (why) => `QUILL_DENIED unknown-prod: ${why}; the guard cannot tell what this changes, so it is not allowed. Use a read-only form, or record the change in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.`,
-  critical: (change, pins, ambiguous) => `QUILL_CRITICAL_CHANGE scope=${change.scope} target=${change.target ?? 'unknown'}: not granted for this run${pins.length ? ` (it may perform only its approved action, run exactly as written, alone and without environment changes: ${pins.join(' | ')})` : ''}${ambiguous ? `, and no scope covers a command whose target is ambiguous (${ambiguous}): name one target once, with no option, variable or wrapper that changes where it connects, as a command of its own` : ''}. ${CRITICAL_TAIL}`,
+  critical: (change, pins, ambiguous) => `QUILL_CRITICAL_CHANGE scope=${change.scope} target=${change.target ?? 'unknown'}: not granted for this run${pins.length ? ` (it may perform only its approved action, run exactly as written, alone and without environment changes: ${pins.join(' | ')})` : ''}${ambiguous ? `; the granted scope does not cover this command (${ambiguous}): a covered write is one plain command run by its bare name, with a listed write verb and only listed options, naming its one target once` : ''}. ${CRITICAL_TAIL}`,
 };
 
 /**
@@ -97,7 +98,7 @@ const REASONS = {
  *   checkout's branch (a bare `git push` needs it) and the repository's default branch;
  *   installRoot: the install whose guard code is protected (default INSTALL_ROOT).
  * @returns {{ decision: 'allow'|'deny', reason: string, classification: object,
- *   criticalChange?: { scope: string, target: string|null } }}  Observe mode (grant access `full`
+ *   criticalChange?: { scope: string, target: string|null, ambiguous?: true } }}  Observe mode (grant access `full`
  *   and QUILL_HANDOFF_GUARD=observe) allows everything and fills criticalChange for writes.
  *
  * Grant shapes read here: scopes `[{ name, target?, matchers: { mcp?, bash?, hosts? } }]`;
@@ -130,7 +131,7 @@ export function decide(call, grant, env) {
   const parts = partsOf(classification);
   if (g.access === 'full' && varOf(vars, 'QUILL_HANDOFF_GUARD') === 'observe') {
     const effect = parts.find((p) => EFFECT_CLASSES.has(p.class));
-    return result({ decision: 'allow', reason: `full access (observe only): ${classification.reason}`, criticalChange: effect ? changeOf(effect) : undefined });
+    return result({ decision: 'allow', reason: `full access (observe only): ${classification.reason}`, criticalChange: effect ? observedChange(effect, c) : undefined });
   }
   return result(enforce(c, classification, parts, g, e, vars, home, ctx));
 }
@@ -197,8 +198,8 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
   let via = null;
   for (const p of parts) {
     if (!(p.class === 'external.write' || (p.class === 'write' && !String(p.scope ?? '').startsWith('git.')))) continue;
-    const cover = coverOf(p, g, c);
-    if (!cover.ok) return deny(REASONS.critical(changeOf(p), cover.pins, typeof p.targetAmbiguous === 'string' ? p.targetAmbiguous : null), changeOf(p));
+    const cover = coverOf(p, g, c, e);
+    if (!cover.ok) return deny(REASONS.critical(changeOf(p), cover.pins, cover.why ?? null), changeOf(p));
     via = via ?? cover.via;
   }
   return { decision: 'allow', reason: via ? `allowed by ${via}` : `allowed: ${cls.reason}` };
@@ -732,6 +733,18 @@ function gitProblem(p, perms, e) {
 
 const targetOf = (p) => p.target ?? p.host ?? null;
 const changeOf = (p) => ({ scope: p.scope ?? p.class, target: targetOf(p) });
+// Observe mode (review N2): a shell write that the built-in allow-list could not cover with the
+// target it names is recorded with no target and `ambiguous: true`, never with the first-named one.
+function observedChange(p, c) {
+  const change = changeOf(p);
+  const dialect = SHELLS[c.tool_name];
+  if (!dialect || String(change.scope).startsWith('git.')) return change;
+  const command = isPlainObject(c.tool_input) && typeof c.tool_input.command === 'string' ? c.tool_input.command : '';
+  const commands = BUILTIN_COMMANDS[change.scope];
+  if (!commands) return change;
+  const plain = !commandProblem(command, dialect === 'bash' ? 'bash' : 'powershell', { commands, target: change.target, scope: change.scope });
+  return plain ? change : { scope: change.scope, target: null, ambiguous: true };
+}
 const scopeName = (s) => (s.includes(':') ? s.slice(0, s.indexOf(':')) : s);
 const scopeTarget = (s) => (s.includes(':') ? s.slice(s.indexOf(':') + 1) : undefined);
 const isMcp = (c) => typeof c.tool_name === 'string' && c.tool_name.startsWith('mcp__');
@@ -739,17 +752,24 @@ const isMcp = (c) => typeof c.tool_name === 'string' && c.tool_name.startsWith('
 function sameTarget(want, p) {
   const got = targetOf(p);
   if (typeof got !== 'string') return false;
-  return p.class === 'external.write' ? got.toLowerCase() === String(want).toLowerCase() : got === String(want);
+  // Hosts compare without case or a trailing root dot (R25).
+  const host = (h) => String(h).toLowerCase().replace(/\.$/, '');
+  return p.class === 'external.write' ? host(got) === host(want) : got === String(want);
 }
 
 // A scope with action pins allows only its pinned actions (§7.5); otherwise a granted scope
 // covers the write when its name and target match and one of its matchers fits the call.
-function coverOf(p, g, c) {
+function coverOf(p, g, c, e = {}) {
   const pins = (Array.isArray(g.actionPins) ? g.actionPins : [])
     .filter((a) => isPlainObject(a) && typeof a.scope === 'string' && typeof a.pin === 'string' && scopeName(a.scope) === p.scope);
   if (pins.length) return pins.some((a) => pinMatches(a, p, c)) ? { ok: true, via: 'the approved action pin' } : { ok: false, pins: pins.map((a) => a.pin.trim()) };
-  const scope = (Array.isArray(g.scopes) ? g.scopes : []).find((s) => scopeCovers(s, p, c));
-  return scope ? { ok: true, via: `scope ${scope.name}${scope.target ? `:${scope.target}` : ''}` } : { ok: false, pins: [] };
+  let why = null;
+  const scope = (Array.isArray(g.scopes) ? g.scopes : []).find((s) => {
+    const r = scopeCovers(s, p, c, g, e);
+    if (r !== true && typeof r === 'string') why = why ?? r;
+    return r === true;
+  });
+  return scope ? { ok: true, via: `scope ${scope.name}${scope.target ? `:${scope.target}` : ''}` } : { ok: false, pins: [], why };
 }
 
 // A pin authorises exactly its action. A shell pin matches only a call that is that one command:
@@ -791,15 +811,27 @@ function soleCommand(text, dialect) {
 }
 
 // Command patterns match the part's own words (I3); a `hosts` pattern covers an external write
-// to that host when the scope's name is the classifier's scope for it (M4).
-// Ruling R24: a part whose target the classifier found ambiguous is never covered.
-function scopeCovers(s, p, c) {
-  if (!isPlainObject(s) || s.name !== p.scope || p.targetAmbiguous) return false;
+// to that host when the scope's name is the classifier's scope for it (M4). Ruling R25: a shell
+// call is covered only when the whole call passes the scope's command allow-list
+// (scope-commands.js; a grant without `matchers.commands` uses the built-in lists) and the agent's
+// working directory is inside the run's checkout. Returns true, false, or why a granted scope of
+// this name does not cover the call.
+function scopeCovers(s, p, c, g = {}, e = {}) {
+  if (!isPlainObject(s) || s.name !== p.scope) return false;
   if (s.target !== undefined && s.target !== null && s.target !== '' && !sameTarget(s.target, p)) return false;
   const m = isPlainObject(s.matchers) ? s.matchers : {};
   if (isMcp(c)) return strings(m.mcp).some((pat) => globMatch(pat, c.tool_name));
+  const dialect = SHELLS[c.tool_name];
+  if (!dialect) return false;
+  const command = isPlainObject(c.tool_input) && typeof c.tool_input.command === 'string' ? c.tool_input.command : '';
+  const commands = isPlainObject(m.commands) ? m.commands : BUILTIN_COMMANDS[s.name] ?? {};
+  const why = commandProblem(command, dialect === 'bash' ? 'bash' : 'powershell', { commands, target: typeof s.target === 'string' && s.target ? s.target : null, scope: s.name });
+  if (why) return why;
+  const root = typeof g.checkoutRoot === 'string' && g.checkoutRoot ? g.checkoutRoot : strings(g.readableRoots)[0];
+  const cwd = typeof e.cwd === 'string' && e.cwd ? e.cwd : null;
+  if (!root || !cwd || !isWithin(path.resolve(cwd), path.resolve(root))) return 'the command does not run inside the run\'s checkout';
   if (Array.isArray(p.argv) && p.argv.length && strings(m.bash).some((pat) => globMatch(pat, p.argv.join(' ')))) return true;
-  return p.class === 'external.write' && typeof p.host === 'string' && strings(m.hosts).some((h) => globMatch(h.toLowerCase(), p.host.toLowerCase()));
+  return p.class === 'external.write' && typeof p.host === 'string' && strings(m.hosts).some((h) => globMatch(h.toLowerCase(), p.host.toLowerCase().replace(/\.$/, '')));
 }
 
 const globCache = new Map();

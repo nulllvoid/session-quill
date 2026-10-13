@@ -10,6 +10,7 @@ import { TrackerError } from '../lib/errors.js';
 import { quillHome } from '../lib/paths.js';
 import { canonicalJson } from './grant.js';
 import { BUILTIN_SCOPES, scopeSettings, SCOPE_NAME_RE } from '../config/scopes.js';
+import { BUILTIN_COMMANDS } from '../gate/scope-commands.js';
 import { SCOPE_SYSTEMS, credentialSystemOf } from './cred-env.js';
 
 const GENERIC_TARGET = '^[A-Za-z0-9](?:[A-Za-z0-9._@-]{0,126}[A-Za-z0-9_])?$';
@@ -24,25 +25,43 @@ const show = (s) => JSON.stringify(String(s).slice(0, 140));
 export const SCOPE_KEY_FILE = 'scope-fingerprint.key';
 const KEY_RE = /^[0-9a-f]{64}$/;
 
+// The file appears only complete: the key is written to a temporary file in the same directory and
+// hard-linked into place (a concurrent creator's link wins and is read). A file that is not a key
+// (empty or cut short by a crash) is replaced, never trusted. An existing key that others can read
+// is made owner-only, or refused when that fails (I1-a, I1-b).
 export function scopeKey(env = process.env) {
   const file = path.join(quillHome(env), SCOPE_KEY_FILE);
-  const unavailable = (why) => new TrackerError('scope-key-unavailable', `the scope fingerprint key ${file} ${why}; scopes with literal credential values cannot be granted until it is readable`);
+  const unavailable = (why) => new TrackerError('scope-key-unavailable', `the scope fingerprint key ${file} ${why}; scopes with literal credential values cannot be granted until it is fixed`);
+  const ownerOnly = () => {
+    if (process.platform === 'win32') return;
+    let mode = fs.statSync(file).mode & 0o777;
+    if (mode & 0o077) { try { fs.chmodSync(file, 0o600); } catch { /* checked below */ } mode = fs.statSync(file).mode & 0o777; }
+    if (mode & 0o077) throw unavailable('is readable by others and could not be made owner-only');
+  };
   const read = () => {
-    const text = fs.readFileSync(file, 'utf8').trim();
-    if (!KEY_RE.test(text)) throw unavailable('is not a key Quill wrote (64 hex characters)');
+    let text;
+    try { text = fs.readFileSync(file, 'utf8').trim(); } catch (err) { if (err.code === 'ENOENT') return null; throw unavailable(`cannot be read (${err.code ?? err.message})`); }
+    if (!KEY_RE.test(text)) return undefined;
+    ownerOnly();
     return text;
   };
-  try { return read(); } catch (err) { if (err.code !== 'ENOENT') throw err.code === 'scope-key-unavailable' ? err : unavailable(`cannot be read (${err.code ?? err.message})`); }
-  const key = randomBytes(32).toString('hex');
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${key}\n`, { flag: 'wx', mode: 0o600 });
-    try { fs.chmodSync(file, 0o600); } catch { /* modes unsupported */ }
-    return key;
-  } catch (err) {
-    if (err.code === 'EEXIST') return read();
-    throw unavailable(`cannot be created (${err.code ?? err.message})`);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const got = read();
+    if (typeof got === 'string') return got;
+    if (got === undefined) { try { fs.unlinkSync(file); } catch (err) { if (err.code !== 'ENOENT') throw unavailable(`is not a key and cannot be replaced (${err.code ?? err.message})`); } }
+    const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(tmp, `${randomBytes(32).toString('hex')}\n`, { flag: 'wx', mode: 0o600 });
+      try { fs.chmodSync(tmp, 0o600); } catch { /* modes unsupported */ }
+      try { fs.linkSync(tmp, file); } catch (err) { if (err.code !== 'EEXIST') throw err; }
+    } catch (err) {
+      throw unavailable(`cannot be created (${err.code ?? err.message})`);
+    } finally {
+      try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+    }
   }
+  throw unavailable('keeps changing while it is read');
 }
 
 // What a credential value contributes to a fingerprint: an `env:NAME` reference as written, a
@@ -62,13 +81,14 @@ const markedEnv = (env, keyOf) => Object.fromEntries(Object.entries(stringMap(en
  * the install key, or a function returning it, read only when a literal is present). It changes
  * when what the scope allows, its label or the credentials it switches to change (Review Focus 4
  * compares it on approval), never with the order things were written in.
- * @param {{ name?, label?, target?, mcp?, bash?, hosts?, env?, targets?, takes_target? }} table
+ * @param {{ name?, label?, target?, mcp?, bash?, hosts?, commands?, env?, targets?, takes_target? }} table
  * @param {{ key?: string|(() => string) }} [opts]
  */
 export function scopeFingerprint(table = {}, { key = null } = {}) {
   const t = table && typeof table === 'object' ? table : {};
   const keyOf = typeof key === 'function' ? key : key ? () => key : null;
   const norm = { mcp: sorted(t.mcp), bash: sorted(t.bash), hosts: sorted(t.hosts), env: markedEnv(t.env, keyOf) };
+  if (t.commands && typeof t.commands === 'object') norm.commands = canonicalCommands(t.commands);
   if (typeof t.name === 'string') norm.name = t.name;
   if (typeof t.label === 'string') norm.label = t.label;
   if (t.target !== undefined && t.target !== null) norm.target = String(t.target);
@@ -85,18 +105,26 @@ function lazyFingerprint(obj, compute) {
   return obj;
 }
 
+// Tool lists with their order-free parts sorted, for the fingerprint.
+function canonicalCommands(commands) {
+  return Object.fromEntries(Object.entries(commands).map(([bin, spec]) => [bin, { ...spec, verbs: sorted(spec && spec.verbs), ...(spec && Array.isArray(spec.requires) ? { requires: sorted(spec.requires) } : {}) }]));
+}
+
 /**
- * Every variable a catalog entry takes through `env:NAME` (C2): the worker removes all of them from
- * every autonomous run's environment, and sets a granted scope's values only under the scope's own
- * variable names.
+ * Every variable the owner's `[scopes]` tables take through `env:NAME` (C2, C2-a), read from the raw
+ * config, so tables the catalog drops (an owner scope without MCP patterns, targets of a scope that
+ * takes none, invalid entries) count too: the worker removes all of them from every autonomous
+ * run's environment, and sets a granted scope's values only under the scope's own variable names.
  */
 export function scopeReferences(config = {}) {
   const out = new Set();
-  const add = (env) => { for (const v of Object.values(env ?? {})) if (typeof v === 'string' && v.startsWith('env:')) out.add(v.slice(4)); };
-  for (const s of Object.values(loadScopeCatalog(config))) {
-    add(s.env);
-    for (const t of Object.values(s.targets)) add(t.env);
-  }
+  const walk = (v, depth) => {
+    if (depth > 8 || v === null || typeof v !== 'object') return;
+    for (const x of Array.isArray(v) ? v : Object.values(v)) {
+      if (typeof x === 'string') { const m = /^env:([A-Za-z_][A-Za-z0-9_]*)$/.exec(x.trim()); if (m) out.add(m[1]); } else walk(x, depth + 1);
+    }
+  };
+  walk(config && config.scopes, 0);
   return [...out];
 }
 
@@ -125,6 +153,14 @@ export function loadScopeCatalog(config = {}, { env = process.env, key = null } 
     if (!b && !(mcp.length || bash.length || hosts.length)) continue;
     const takesTarget = b ? !!b.target : o.takes_target === true;
     const env = { ...(o.env ?? {}) };
+    // R25: the built-in tool lists, with what the owner added (owner scopes have none).
+    const commands = {};
+    if (b && Object.hasOwn(BUILTIN_COMMANDS, name)) {
+      for (const [bin, spec] of Object.entries(BUILTIN_COMMANDS[name])) {
+        const ext = o.commands && Object.hasOwn(o.commands, bin) ? o.commands[bin] : null;
+        commands[bin] = ext ? { ...spec, verbs: [...new Set([...spec.verbs, ...ext.verbs])], options: { ...spec.options, ...Object.fromEntries(ext.flags.map((x) => [x, 'flag'])), ...Object.fromEntries(ext.values.map((x) => [x, 'value'])) } } : spec;
+      }
+    }
     const targets = takesTarget ? { ...(o.targets ?? {}) } : {};
     const label = o.label ?? b?.label ?? name;
     out[name] = lazyFingerprint({
@@ -132,7 +168,7 @@ export function loadScopeCatalog(config = {}, { env = process.env, key = null } 
       builtin: !!b,
       label,
       permits: o.permits ?? b?.permits ?? 'Writes that match the patterns in your config.toml.',
-      mcp, bash, hosts, env, targets,
+      mcp, bash, hosts, commands, env, targets,
       takesTarget,
       targetLabel: takesTarget ? b?.target?.label ?? 'Target' : null,
       targetPattern: takesTarget ? b?.target?.pattern ?? GENERIC_TARGET : null,
@@ -140,7 +176,7 @@ export function loadScopeCatalog(config = {}, { env = process.env, key = null } 
       systems: [...(SCOPE_SYSTEMS[name] ?? [])],
       uses: b?.uses ?? null,
       hint: b?.hint ?? 'env',
-    }, () => scopeFingerprint({ name, label, mcp, bash, hosts, env, targets, takes_target: takesTarget }, { key: keyOf }));
+    }, () => scopeFingerprint({ name, label, mcp, bash, hosts, commands, env, targets, takes_target: takesTarget }, { key: keyOf }));
     Object.defineProperty(out[name], 'keyOf', { value: keyOf, enumerable: false });
   }
   return out;
@@ -183,7 +219,7 @@ export function resolveScopes(requested = [], catalog = {}) {
       throw new TrackerError('scope-credentials-missing', `scope-credentials-missing:${target === null ? name : `${name}:${target}`}: no credentials are configured for this scope${target === null ? '' : ` and ${kind} ${target}`}, and its commands cannot write without them — set ${tableName(name, target)} ${s.hint}${target === null ? '' : ` (or ${tableName(name, null)} ${s.hint} for every ${kind})`} in config.toml`);
     }
     const fill = (list) => list.flatMap((p) => (p.includes('{target}') ? (target === null ? [] : [p.split('{target}').join(target)]) : [p]));
-    const matchers = { mcp: fill(s.mcp), bash: fill(s.bash), hosts: fill(s.hosts) };
+    const matchers = { mcp: fill(s.mcp), bash: fill(s.bash), hosts: fill(s.hosts), commands: s.commands ?? {} };
     if (out.some((x) => x.name === name && x.target === target)) continue;
     const clash = out.find((x) => x.name === name && canonicalJson(x.env) !== canonicalJson(env));
     if (clash) throw new TrackerError('scope-conflict', `scope-conflict:${name}: ${clash.target ?? name} and ${target ?? name} switch to different credentials, so one run cannot hold both; queue a run per ${kind}`);

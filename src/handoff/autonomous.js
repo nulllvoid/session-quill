@@ -67,6 +67,8 @@ function grantFor({ access, permissions, scopes, cwd, runDir, contextDir, checko
     actionPins: [],
     // Spec §4.2: the checkout or sandbox, the run dir and its context snapshot, temp, and Claude's
     // plugin and skill directories; the checkout is writable only with an edit permission.
+    // R25: a covered shell write must run with the agent's working directory inside this root.
+    checkoutRoot: cwd,
     readableRoots: [...new Set([cwd, runDir, ...(contextDir ? [contextDir] : []), ...temps, path.join(claudeDir, 'plugins'), path.join(claudeDir, 'skills')])],
     writableRoots: [...new Set([runDir, ...temps, ...(editable ? [cwd] : [])])],
     // R13: the checkout's Claude and MCP configuration and git's own files never change in a run.
@@ -156,7 +158,7 @@ export function prepareObserve({ storeEnv, config, handoff: h, cwd, checkout, re
  * or write. Git (a per-run permission) and Quill's own commands are not prod effects. Each entry
  * holds only the scope, the target, the tool name and the time; the redacted call text stays in
  * the local ledger.
- * @returns {{ scope: string, target: string|null, tool: string|null, t: string|null }[]}
+ * @returns {{ scope: string, target: string|null, tool: string|null, t: string|null, ambiguous?: true }[]}
  */
 export function prodEffects(lines = []) {
   const out = [];
@@ -164,7 +166,9 @@ export function prodEffects(lines = []) {
     if (!l || typeof l !== 'object' || l.kind !== 'guard' || l.critical !== true || l.decision !== 'allow' || l.enforce_decision === 'allow') continue;
     const scope = typeof l.scope === 'string' && l.scope ? l.scope : null;
     if (!scope || scope.startsWith('git.') || scope === 'privileged') continue;
-    out.push({ scope, target: typeof l.target === 'string' && l.target ? l.target : null, tool: typeof l.tool_name === 'string' ? l.tool_name : null, t: typeof l.ts === 'string' ? l.ts : null });
+    // Review N2: a call the allow-list could not pin to one target is recorded with no target.
+    const ambiguous = l.ambiguous === true;
+    out.push({ scope, target: !ambiguous && typeof l.target === 'string' && l.target ? l.target : null, tool: typeof l.tool_name === 'string' ? l.tool_name : null, t: typeof l.ts === 'string' ? l.ts : null, ...(ambiguous ? { ambiguous: true } : {}) });
     if (out.length >= MAX_PROD_EFFECTS) break;
   }
   return out;

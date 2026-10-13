@@ -151,9 +151,10 @@ const ROWS = [
   // scopes and pins
   ['a scope with no bash matchers does not cover a shell call', bash('kubectl --context stg apply -f x.yaml'), { grant: { scopes: [{ ...K8S_STG, matchers: { mcp: ['mcp__k8s__*'] } }] } }, critical('k8s.write', 'stg')],
   ['a scope with a target does not cover an unknown target', bash('kubectl apply -f x.yaml'), { grant: { scopes: [K8S_STG] } }, critical('k8s.write', '')],
-  ['every write in a chain needs cover', bash('kubectl --context stg apply -f x.yaml && kubectl --context prod delete pod api'), { grant: { scopes: [K8S_STG] } }, critical('k8s.write', 'prod')],
-  ['a write in another scope is not covered', bash('helm --kube-context stg upgrade api ./chart && argocd app sync pay-stg'), { grant: { scopes: [K8S_STG] } }, critical('argo.sync', 'pay-stg')],
-  ['a granted scope without a pin covers other targets', bash('argocd app sync pay-prod'), { grant: { scopes: [ARGO] } }, 'allow'],
+  ['every write in a chain needs cover', bash('kubectl --context stg apply -f x.yaml && kubectl --context prod delete pod api'), { grant: { scopes: [K8S_STG] } }, /^QUILL_CRITICAL_CHANGE scope=k8s.write target=stg: .*more than one command/],
+  ['a write in another scope is not covered', bash('helm --kube-context stg upgrade api ./chart && argocd app sync pay-stg'), { grant: { scopes: [K8S_STG] } }, critical('k8s.write', 'stg')],
+  // R25: a scope without a target covers no command of a tool that names one
+  ['a granted scope without a target covers no targeted command', bash('argocd app sync pay-prod'), { grant: { scopes: [ARGO] } }, /^QUILL_CRITICAL_CHANGE scope=argo.sync target=pay-prod: .*the scope names no target/],
   ['a pin narrows a granted scope to its action', bash('argocd app sync pay-prod'), { grant: { scopes: [ARGO], actionPins: [PIN] } }, critical('argo.sync', 'pay-prod')],
   ['extra flags are a different action than the pin', bash('argocd app sync pay-stg --prune'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
   ['the pin must be the whole command', bash('argocd app sync pay-stg && argocd app sync pay-prod'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
@@ -442,7 +443,8 @@ const ROWS = [
   // fix round 1, I3: command patterns cover only the part they match
   ['matchers: a kubectl read does not cover a helm write', bash('helm --kube-context stg uninstall api; kubectl --context stg get pods'), { grant: { scopes: [KUBECTL_ONLY] } }, critical('k8s.write', 'stg')],
   ['matchers: a helm write alone', bash('helm --kube-context stg uninstall api'), { grant: { scopes: [KUBECTL_ONLY] } }, critical('k8s.write', 'stg')],
-  ['matchers: kubectl writes they match', bash('kubectl --context stg get pods && kubectl --context stg delete pod api'), { grant: { scopes: [KUBECTL_ONLY] } }, 'allow'],
+  ['matchers: kubectl writes they match', bash('kubectl --context stg delete pod api'), { grant: { scopes: [KUBECTL_ONLY] } }, 'allow'],
+  ['R25: a covered write must be a command of its own', bash('kubectl --context stg get pods && kubectl --context stg delete pod api'), { grant: { scopes: [KUBECTL_ONLY] } }, critical('k8s.write', 'stg')],
 
   // fix round 1, R13: Claude Code and MCP configuration in the checkout
   ['R13: Edit .claude/settings.json', call('Edit', { file_path: path.join(checkout, '.claude', 'settings.json'), old_string: 'x', new_string: 'y' }), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
@@ -465,7 +467,8 @@ const ROWS = [
   ['MCP: a name already in tool-name form', call('mcp__team_wiki__get_page', {}, { mcp_server_source: 'project' }), { grant: { trustedMcpServers: ['team_wiki'] } }, 'allow'],
 
   // fix round 1, M4: a hosts matcher covers an external write in the scope's own name
-  ['hosts: a wildcard host pattern', bash('curl -X POST https://api.example.com/v1/items'), { grant: { scopes: [{ name: 'http.write', matchers: { hosts: ['*.example.com'] }, fingerprint: 'f' }] } }, 'allow'],
+  ['hosts: a wildcard host pattern', bash('curl -X POST https://api.example.com/v1/items'), { grant: { scopes: [{ name: 'http.write', target: 'api.example.com', matchers: { hosts: ['*.example.com'] }, fingerprint: 'f' }] } }, 'allow'],
+  ['R25: http.write with no host covers nothing', bash('curl -X POST https://api.example.com/v1/items'), { grant: { scopes: [{ name: 'http.write', matchers: { hosts: ['*.example.com'] }, fingerprint: 'f' }] } }, critical('http.write', 'api.example.com')],
   ['hosts: another host', bash('curl -X POST https://api.other.com/v1/items'), { grant: { scopes: [{ name: 'http.write', matchers: { hosts: ['*.example.com'] }, fingerprint: 'f' }] } }, critical('http.write', 'api.other.com')],
   ['hosts: a package registry', bash('npm publish'), { grant: { scopes: [{ name: 'package.publish', matchers: { hosts: ['registry.npmjs.org'] }, fingerprint: 'f' }] } }, 'allow'],
   ['hosts: scp has no scope, so a host pattern cannot cover it', bash('scp a.txt files.example.com:/x'), { grant: { scopes: [{ name: 'http.write', matchers: { hosts: ['files.example.com'] }, fingerprint: 'f' }] } }, critical('external.write', 'files.example.com')],
@@ -474,7 +477,9 @@ const ROWS = [
   ['deleting the whole checkout', bash('rm -rf .'), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .* contains .*\.git, which is protected.*Name the files/],
 
   // full access: observe only
-  ['full: a cluster write is allowed and recorded', bash('kubectl apply -f deploy.yaml'), FULL, 'allow', { scope: 'k8s.write', target: null }],
+  ['full: a cluster write is allowed and recorded', bash('kubectl apply -f deploy.yaml'), FULL, 'allow', { scope: 'k8s.write', target: null, ambiguous: true }],
+  ['full (N2): a write naming one context is recorded with it', bash('kubectl --context prod apply -f deploy.yaml'), FULL, 'allow', { scope: 'k8s.write', target: 'prod' }],
+  ['full (N2): a write naming two contexts is recorded with none', bash('kubectl --context stg --context prod apply -f deploy.yaml'), FULL, 'allow', { scope: 'k8s.write', target: null, ambiguous: true }],
   ['full: a push to main is allowed and recorded', bash('git push origin main'), FULL, 'allow', { scope: 'git.protected', target: 'main' }],
   ['full: quill commands are allowed and recorded', bash('quill agent run PMO-1'), FULL, 'allow', { scope: 'privileged', target: null }],
   ['full: reading credentials is allowed', call('Read', { file_path: path.join(home, '.aws', 'credentials') }), FULL, 'allow', undefined],

