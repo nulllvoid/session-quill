@@ -142,6 +142,10 @@ function appendRunNote(ticket, note, runId) {
     at: typeof note.at === 'string' ? note.at : null,
     attempts: Array.isArray(note.attempts) ? note.attempts.slice(0, 40) : [],
     lessons: Array.isArray(note.lessons) ? note.lessons.slice(0, 15) : [],
+    // How many free-text fields the instruction filter withheld, and a page-proposed run's mark
+    // (Task 14 must not deliver an origin 'page' note to other runs).
+    ...(Number.isInteger(note.withheld) && note.withheld > 0 ? { withheld: note.withheld } : {}),
+    ...(note.origin === 'page' ? { origin: 'page' } : {}),
   };
   const list = (Array.isArray(ticket.run_notes) ? ticket.run_notes : []).filter((n) => n && n.run_id !== runId);
   list.push(entry);

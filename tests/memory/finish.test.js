@@ -49,6 +49,7 @@ test('a done run files its learnings by provenance, records the summary and Run 
     assert.equal(byText('The ticket is about the constant a').scope, 'task');
     assert.equal(byText('The ticket is about the constant a').ticket_id, T1);
     assert.equal(h.memory_filing.filed, 3);
+    assert.equal(byText('Claude Code 2.1.296 is installed').trust, 'verified', 'the init inventory is a worker-observed fact');
     assert.equal(h.memory_filing.quarantined, 1);
     const notes = b.w.state.tickets.get(T1).run_notes;
     assert.equal(notes.length, 1);
@@ -76,14 +77,20 @@ test('a done run files its learnings by provenance, records the summary and Run 
   } finally { await b.w.stop(); cleanup(repo.dir, b.home); }
 });
 
-test('a run that does not finish done files nothing but keeps what it attempted in the Run notes', async () => {
+test('a run that does not finish done files none of the learnings of the agent, but files what the worker observed and keeps its attempts in the Run notes', async () => {
   const repo = makeRepo();
   const b = await bootWorker({ repo, fakeEnv: { FAKE_CLAUDE_RESULT: JSON.stringify(RESULT), FAKE_CLAUDE_EDIT: 'src.js' }, runtimeAvailable: true, repoExtra: { test_command: `"${process.execPath}" -e "process.exit(1)"` } });
   try {
     const h = await run(b, RID(3), fix);
     assert.equal(h.state, 'failed');
-    assert.equal(b.w.state.memory.entries.size, 0);
-    assert.equal(h.memory_filing, undefined);
+    const entries = [...b.w.state.memory.entries.values()];
+    assert.equal(entries.some((e) => e.derived_from !== 'worker'), false, 'no agent learning is filed');
+    const gate = entries.find((e) => e.key && e.key.startsWith('test:'));
+    assert.equal(gate.trust, 'verified');
+    assert.match(gate.text, /^Worker test gate: .* failed \(exit 1\)$/);
+    assert.equal(entries.find((e) => e.key === 'tool:claude-code').text, 'Claude Code 2.1.296 is installed');
+    assert.equal(h.memory_filing.filed, 0);
+    assert.equal(h.memory_filing.worker.filed, entries.length);
     const notes = b.w.state.tickets.get(T1).run_notes;
     assert.equal(notes.length, 1);
     assert.equal(notes[0].attempts.length >= 1, true);

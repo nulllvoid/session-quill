@@ -17,7 +17,7 @@ import { resultFromStream, sessionIdOf, readLedger } from './stream.js';
 import { buildDocsMap, renderDocsMap } from './docs-map.js';
 import { reconcileAttempts } from './reconcile.js';
 import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js';
-import { fileLearnings, taskLessons, appendRunNotes } from '../memory/file.js';
+import { fileLearnings, taskLessons, appendRunNotes, workerLearnings } from '../memory/file.js';
 import { writeDocsProjection } from '../memory/project.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
@@ -290,9 +290,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
   }
 
   // Spec §6.2: a done run's learnings become memory events, with trust decided by provenance
-  // (src/memory/file.js); every finished run that attempted something leaves a Run note on its
-  // ticket. A failed, cancelled or timed-out run files nothing: what it learned was never checked
-  // against a finished result, so only its attempts are kept. Filing never fails the run.
+  // (src/memory/file.js). Every finished run files what the worker itself observed (test gate,
+  // guard denials, init inventory) as verified facts, and leaves a Run note on its ticket when it
+  // attempted something. A failed, cancelled or timed-out run files none of the agent's learnings:
+  // they were never checked against a finished result. Filing never fails the run.
   function fileMemory(worker, id, result) {
     try {
       const h = worker.state.handoffs.get(id);
@@ -300,7 +301,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       const ledger = readLedger(path.join(handoffRunDir(worker.env, id), 'ledger.jsonl'));
       const checkout = h.worktree_path && fs.existsSync(h.worktree_path) ? h.worktree_path : null;
       const existing = worker.state.memory.entries;
-      const events = h.state === 'done' ? fileLearnings({ learnings: result.learnings ?? [], run: h, ledger, checkout, existing, now: worker.now() }) : [];
+      const workerFacts = workerLearnings({ run: h, ledger, testGate: h.test_gate ?? null, inventory: h.inventory ?? null });
+      const events = fileLearnings({ learnings: h.state === 'done' ? result.learnings ?? [] : [], run: h, ledger, checkout, existing, now: worker.now(), workerFacts });
       const lessons = taskLessons(events, existing);
       for (const e of events) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
       const note = appendRunNotes(h.ticket_id, result.attempts ?? [], lessons, { run: h, at: worker.now() });

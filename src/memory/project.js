@@ -16,6 +16,7 @@
 // agent output: each entry is one bullet line with control characters and newlines collapsed and
 // HTML comment openers neutralised, so it can neither start a heading nor fake a marker.
 import fs from 'node:fs';
+import path from 'node:path';
 import { memoryPaths } from './paths.js';
 import { REPO_SECTIONS, MACHINE_SECTIONS, OTHER, canonicalSection, sectionsFor } from './sections.js';
 import { memoryStaleness, conflicts } from '../core/memory.js';
@@ -152,7 +153,7 @@ export function writeProjections(state, quillHomeDir, { now = Date.now() } = {})
     const mine = trusted.filter((e) => e.scope === 'repo' && e.repo_id === id);
     const learned = mine.filter((e) => e.trust !== 'owner');
     const body = sectionedBody('repo', learned, nowMs, conflictIds);
-    const intro = `Owner notes for this repository are in ${oneLine(id, 200)}.owner.md and come first.`;
+    const intro = `Owner notes for this repository are in ${path.basename(p.repoOwner(id))} and come first.`;
     writeIfChanged(p.repo(id), [`# Repository memory: ${oneLine(id, 200)}`, '', DATA_NOTE, intro, '', ...(body.length ? body : ['No learnings filed yet.', ''])].join('\n').trimEnd() + '\n', written);
     writeOwnerFile(p, id, mine, conflictIds, written, problems);
   }

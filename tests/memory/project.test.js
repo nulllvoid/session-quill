@@ -165,3 +165,15 @@ test('the docs map projection is cached on the tree hash', () => {
   assert.equal(writeDocsProjection(home, 'demo', { treeHash: 'b'.repeat(40), rendered: '- other' }).written, true);
   assert.match(fs.readFileSync(f, 'utf8'), /- other/);
 });
+
+test('Minor 8: the repo file names the owner file it really has, also for a hashed repository id', () => {
+  const home = tempHome();
+  const s = newState({ repos: {} });
+  ev(s, 'memory-tx', { op: 'filed', entry: entry('h', { repo_id: 'team/app' }) });
+  writeProjections(s, home, { now: NOW });
+  const p = memoryPaths(home);
+  const owner = path.basename(p.repoOwner('team/app'));
+  assert.notEqual(owner, 'team/app.owner.md');
+  assert.ok(fs.readFileSync(p.repo('team/app'), 'utf8').includes(`are in ${owner} and come first`), owner);
+  assert.ok(fs.existsSync(p.repoOwner('team/app')));
+});
