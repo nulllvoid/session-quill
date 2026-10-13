@@ -67,6 +67,8 @@ function buildEntry(raw, ev, { trust } = {}) {
   if (nonEmpty(raw.run_id)) entry.run_id = raw.run_id;
   if (nonEmpty(raw.last_used_run)) entry.last_used_run = raw.last_used_run;
   if (nonEmpty(raw.superseded_by)) entry.superseded_by = raw.superseded_by;
+  // Why filing held a learning for the owner (src/memory/file.js); shown on the Memory page.
+  if (finalTrust === 'quarantined' && nonEmpty(raw.quarantine_reason)) entry.quarantine_reason = raw.quarantine_reason.slice(0, 200);
   return { entry };
 }
 
@@ -147,6 +149,7 @@ export function applyMemoryTx(state, ev) {
     case 'approved':
       if (entry.trust !== 'quarantined') return problem(state, ev, op, 'memory-not-quarantined', id);
       entry.trust = 'owner';
+      delete entry.quarantine_reason;
       entry.revision += 1;
       return {};
     case 'pinned':

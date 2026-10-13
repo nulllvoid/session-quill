@@ -8,7 +8,7 @@ import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.j
 import { createState, sessionKey } from '../core/state.js';
 import { applyEvent } from '../core/reducer.js';
 import { safeKeyFileName } from '../core/keys.js';
-import { journalPath, stateDir, requestsDir, configPath } from '../lib/paths.js';
+import { journalPath, stateDir, requestsDir, configPath, quillHome } from '../lib/paths.js';
 import { ensureDir, writeJsonAtomic, readJsonIfExists, listFiles, removeIfExists } from '../lib/atomic-fs.js';
 import { toIso, SECOND } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
@@ -24,6 +24,9 @@ import { publishGeneration, buildSnapshot } from './projections.js';
 import { captureHealth } from './health.js';
 import { effectiveEnvironments } from '../deploy/environments.js';
 import { descriptionProblems, parseDescription } from '../core/description.js';
+import { writeProjections as writeMemoryProjections } from '../memory/project.js';
+import { memoryPaths } from '../memory/paths.js';
+import { latestInventory } from '../handoff/inventory.js';
 
 // What hooks need to know about a bound ticket, with a signature to tell when it changed.
 function ticketFacts(ticket) {
@@ -36,6 +39,9 @@ export const NOTE_FLUSH_MS = 30 * SECOND;
 export const HEARTBEAT_MS = 5 * SECOND;
 export const IDENTITY_CHECK_MS = 10 * SECOND;
 export const PROVISIONAL_MAX_MS = 30 * SECOND;
+// Memory projections are rewritten after memory events apply, and at least this often so entries
+// move to ## Stale as they age (unchanged files are not rewritten).
+export const MEMORY_REFRESH_MS = 60 * 60 * SECOND;
 
 export class Worker {
   constructor({ config, storeMeta, env = process.env, clock = Date.now, derive = null, log = () => {}, identityCheckMs = IDENTITY_CHECK_MS }) {
@@ -69,6 +75,9 @@ export class Worker {
     this.extensions = [];
     this.running = false;
     this.pendingEffects = [];
+    this.memoryDirty = true;
+    this.lastMemoryProjectionMs = -Infinity;
+    this.memoryProblems = new Set();
   }
 
   now() {
@@ -114,6 +123,7 @@ export class Worker {
     this.running = true;
     this.markGenerationDirty();
     this.publishGeneration();
+    this.publishMemory();
     return this;
   }
 
@@ -230,7 +240,30 @@ export class Worker {
     const nowMs = this.clock();
     if (this.flushRequested || (this.firstDirtyAt !== null && nowMs >= this.firstDirtyAt + NOTE_FLUSH_MS)) this.flushNotes();
     for (const ext of this.extensions) if (ext.tick) ext.tick(this);
+    this.publishMemory();
     if (this.generationDirty) this.publishGeneration();
+  }
+
+  // The Markdown projections of memory under quillHome()/memory (spec §6.1), written from state after
+  // the journal applied the events (ADR 0001). Nothing is created for a store that has no memory yet.
+  publishMemory() {
+    const ms = this.clock();
+    if (!this.memoryDirty && ms - this.lastMemoryProjectionMs < MEMORY_REFRESH_MS) return;
+    this.memoryDirty = false;
+    this.lastMemoryProjectionMs = ms;
+    try {
+      const home = quillHome(this.env);
+      if (!this.state.memory.entries.size && !latestInventory(this.state) && !fs.existsSync(memoryPaths(home).root)) return;
+      const { problems } = writeMemoryProjections(this.state, home, { now: ms });
+      for (const p of problems) {
+        if (this.memoryProblems.has(p)) continue;
+        this.memoryProblems.add(p);
+        this.log(`memory: ${p}`);
+      }
+    } catch (err) {
+      this.log(`memory projections not written: ${err.message}`);
+      this.recordHealthError({ kind: 'memory-projection', error: err.message });
+    }
   }
 
   // Serial ingestion: validate, dedupe, journal (fsync), apply, remove ingress (TRD §Durability 3).
@@ -343,6 +376,7 @@ export class Worker {
       else this.pendingEffects.push(effect);
     }
     if (record.kind === 'stop' || record.kind === 'subagent-stop') this.flushRequested = true;
+    if (record.kind === 'memory-tx' || (record.kind === 'handoff-tx' && record.payload && record.payload.update && record.payload.update.inventory)) this.memoryDirty = true;
     this.markGenerationDirty();
     return result;
   }

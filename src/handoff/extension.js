@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
-import { createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
+import { git, createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
 import { buildPrompt, budgetFor, recipeCaps, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
@@ -16,7 +16,9 @@ import { recordResult, updateHandoff } from './results.js';
 import { resultFromStream, sessionIdOf, readLedger } from './stream.js';
 import { buildDocsMap, renderDocsMap } from './docs-map.js';
 import { reconcileAttempts } from './reconcile.js';
-import { handoffsDir, handoffRunDir, logsDir } from '../lib/paths.js';
+import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js';
+import { fileLearnings, taskLessons, appendRunNotes } from '../memory/file.js';
+import { writeDocsProjection } from '../memory/project.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
@@ -245,7 +247,13 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // A full-access run's writes, as its observer saw them, whatever state it ends in (spec §7).
     let effects = null;
     if ((current.access ?? 'standard') === 'full' && entry && entry.observed) { try { effects = prodEffects(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { effects = null; } }
-    const record = (w, id, parsed, opts) => recordResult(w, id, withNotes(reconciled(parsed)), timings || usage || effects ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}) } } : opts);
+    const record = (w, id, parsed, opts) => {
+      const final = withNotes(reconciled(parsed));
+      const out = recordResult(w, id, final, timings || usage || effects ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}) } } : opts);
+      // Before cleanupRun removes the checkout: repo-file learnings are checked against it.
+      fileMemory(w, id, final);
+      return out;
+    };
     const reason = entry ? entry.reason : null;
     if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
@@ -279,6 +287,35 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       if (skipped.length) extras.uncertain_effects = [...(current.uncertain_effects ?? []), ...skipped];
     }
     record(worker, h.id, parsed, { state: extras.error ? 'failed' : 'done', error: extras.error ?? null, extra: extras });
+  }
+
+  // Spec §6.2: a done run's learnings become memory events, with trust decided by provenance
+  // (src/memory/file.js); every finished run that attempted something leaves a Run note on its
+  // ticket. A failed, cancelled or timed-out run files nothing: what it learned was never checked
+  // against a finished result, so only its attempts are kept. Filing never fails the run.
+  function fileMemory(worker, id, result) {
+    try {
+      const h = worker.state.handoffs.get(id);
+      if (!h || !TERMINAL.has(h.state) || !result || typeof result !== 'object') return;
+      const ledger = readLedger(path.join(handoffRunDir(worker.env, id), 'ledger.jsonl'));
+      const checkout = h.worktree_path && fs.existsSync(h.worktree_path) ? h.worktree_path : null;
+      const existing = worker.state.memory.entries;
+      const events = h.state === 'done' ? fileLearnings({ learnings: result.learnings ?? [], run: h, ledger, checkout, existing, now: worker.now() }) : [];
+      const lessons = taskLessons(events, existing);
+      for (const e of events) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
+      const note = appendRunNotes(h.ticket_id, result.attempts ?? [], lessons, { run: h, at: worker.now() });
+      if (note) worker.emit(note.kind, note.payload, { source_identity: note.source_identity });
+    } catch (err) {
+      worker.log(`memory filing failed for ${id}: ${err.stack ?? err.message}`);
+    }
+  }
+
+  // Spec §6.1: repos/<repo>.docs.md, rewritten only when the checkout's tree differs from the cached one.
+  async function cacheDocsMap(worker, repoId, checkout, rendered) {
+    try {
+      const treeHash = await git(checkout, ['rev-parse', 'HEAD^{tree}'], { timeoutMs: 15_000 });
+      writeDocsProjection(quillHome(worker.env), repoId, { treeHash, rendered });
+    } catch (err) { worker.log(`docs map not cached for ${repoId}: ${err.message}`); }
   }
 
   async function finish(worker, h, run, outcome) {
@@ -548,6 +585,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (worktreePath) {
       context.base_label = base ? base.label : null;
       if (!inputs || inputs.has('docs')) try { context.docs = renderDocsMap(buildDocsMap(worktreePath)) || null; } catch { context.docs = null; }
+      if (context.docs && h.repo_id) await cacheDocsMap(worker, h.repo_id, worktreePath, context.docs);
     }
     const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
     // Standard access keeps the recipe's own tool narrowing; settings and full access hand the

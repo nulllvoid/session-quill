@@ -133,6 +133,21 @@ export function applySuggestion(state, ev, m, req, result) {
   req.applied_revision = ticket.revision;
 }
 
+// The last this-many Run notes are kept per ticket; an older note is dropped when a new one arrives.
+export const RUN_NOTES_MAX = 20;
+
+function appendRunNote(ticket, note, runId) {
+  const entry = {
+    run_id: runId,
+    at: typeof note.at === 'string' ? note.at : null,
+    attempts: Array.isArray(note.attempts) ? note.attempts.slice(0, 40) : [],
+    lessons: Array.isArray(note.lessons) ? note.lessons.slice(0, 15) : [],
+  };
+  const list = (Array.isArray(ticket.run_notes) ? ticket.run_notes : []).filter((n) => n && n.run_id !== runId);
+  list.push(entry);
+  ticket.run_notes = list.slice(-RUN_NOTES_MAX);
+}
+
 export function handleHandoffTx(state, ev, result) {
   const p = ev.payload;
   const h = state.handoffs.get(p.handoff_id);
@@ -184,6 +199,11 @@ export function handleHandoffTx(state, ev, result) {
     }
     if (['todo', 'active'].includes(ticket.status)) applyTicketFields(state, ticket, { status: 'review' }, ev, 'evidence', result);
     else touch(state, ticket, ev, result);
+  }
+  // A finished run's Run note (src/memory/file.js appendRunNotes): local to the ticket, never exported.
+  if (ticket && p.run_notes && typeof p.run_notes === 'object' && !Array.isArray(p.run_notes) && (p.run_notes.ticket_id ?? h.ticket_id) === h.ticket_id) {
+    appendRunNote(ticket, p.run_notes, h.id);
+    result.changed.add(ticket.id);
   }
   if (ticket && p.update && p.update.state && terminal.includes(p.update.state)) {
     ticket.timeline.push(timelineEntry(ev, 'handoff', `Handoff ${p.update.state}${h.error && h.error.code ? ` (${h.error.code})` : ''}`, { content_ref: h.result_ref ?? null }));
