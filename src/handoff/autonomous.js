@@ -15,7 +15,7 @@ import { buildChildEnv, CRED_SYSTEMS } from './cred-env.js';
 import { writeGrant } from './grant.js';
 import { writeRunSettings } from './run-settings.js';
 import { MCP_SERVERS_FILE } from './mcp-sources.js';
-import { loadScopeCatalog, resolveScopes } from './scopes.js';
+import { loadScopeCatalog, resolveScopes, scopeReferences } from './scopes.js';
 import { credentialSettings } from '../config/credentials.js';
 import { mcpSettings } from '../config/mcp-policy.js';
 
@@ -24,9 +24,10 @@ export const VERSION_CACHE_MS = 10 * MINUTE;
 export const MAX_PROD_EFFECTS = 200;
 
 // The worker's scope resolver: a run's requested scopes against the catalog of the current config
-// (spec §4.3). A scope that no longer resolves fails the run at dispatch.
-export function catalogScopes(names, config) {
-  return names.length ? resolveScopes(names, loadScopeCatalog(config)) : [];
+// (spec §4.3). A scope that no longer resolves fails the run at dispatch. `env` locates the
+// install key the grant's fingerprints need.
+export function catalogScopes(names, config, env = process.env) {
+  return names.length ? resolveScopes(names, loadScopeCatalog(config, { env })) : [];
 }
 
 /**
@@ -98,7 +99,9 @@ export function prepareAutonomous({ storeEnv, config, handoff: h, cwd, checkout,
   fs.mkdirSync(contextDir, { recursive: true });
   const permissions = h.permissions ?? {};
   const { readonly, keepEnv, apiBilling } = credentialSettings(config);
-  const built = buildChildEnv({ baseEnv: { ...process.env, ...env }, access: 'autonomous', permissions, scopes, readonly, keepEnv, apiBilling, runDir, platform: process.platform });
+  // C2: every variable a scope takes through env:NAME leaves the run; granted scopes set their
+  // values only under their own variable names.
+  const built = buildChildEnv({ baseEnv: { ...process.env, ...env }, access: 'autonomous', permissions, scopes, readonly, keepEnv, apiBilling, runDir, platform: process.platform, stripNames: scopeReferences(config) });
   for (const s of scopes) {
     if (s.credentials !== 'required' || (s.systems ?? []).some((sys) => built.report[sys] === 'scope' || built.report[sys] === 'owner')) continue;
     const why = (built.report.scope_errors ?? []).filter((e) => e.startsWith(`${s.name}:`)).map((e) => e.slice(s.name.length + 1).trim());

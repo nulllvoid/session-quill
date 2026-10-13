@@ -79,7 +79,7 @@ const REASONS = {
   protectedBranch: (why) => `QUILL_DENIED protected-branch: ${why}. Pushing to the default or a protected branch, force and tag pushes, deleting branches, merging into a protected branch and non-draft pull requests are never allowed in a run; push the run's own branch or open a draft PR when granted, and leave the rest to the owner.`,
   noReadonly: (system) => `QUILL_DENIED no-readonly-credentials: no read-only credentials configured for ${system} — set them in quill doctor ([prod.readonly] in config.toml). This run has only empty ${system} credentials, so the command could not succeed. Use a connected tool for ${system} if one is available, and record this route in attempts as unavailable.`,
   unknownProd: (why) => `QUILL_DENIED unknown-prod: ${why}; the guard cannot tell what this changes, so it is not allowed. Use a read-only form, or record the change in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.`,
-  critical: (change, pins) => `QUILL_CRITICAL_CHANGE scope=${change.scope} target=${change.target ?? 'unknown'}: not granted for this run${pins.length ? ` (it may perform only its approved action, run exactly as written, alone and without environment changes: ${pins.join(' | ')})` : ''}. ${CRITICAL_TAIL}`,
+  critical: (change, pins, ambiguous) => `QUILL_CRITICAL_CHANGE scope=${change.scope} target=${change.target ?? 'unknown'}: not granted for this run${pins.length ? ` (it may perform only its approved action, run exactly as written, alone and without environment changes: ${pins.join(' | ')})` : ''}${ambiguous ? `, and no scope covers a command whose target is ambiguous (${ambiguous}): name one target once, with no option, variable or wrapper that changes where it connects, as a command of its own` : ''}. ${CRITICAL_TAIL}`,
 };
 
 /**
@@ -198,7 +198,7 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
   for (const p of parts) {
     if (!(p.class === 'external.write' || (p.class === 'write' && !String(p.scope ?? '').startsWith('git.')))) continue;
     const cover = coverOf(p, g, c);
-    if (!cover.ok) return deny(REASONS.critical(changeOf(p), cover.pins), changeOf(p));
+    if (!cover.ok) return deny(REASONS.critical(changeOf(p), cover.pins, typeof p.targetAmbiguous === 'string' ? p.targetAmbiguous : null), changeOf(p));
     via = via ?? cover.via;
   }
   return { decision: 'allow', reason: via ? `allowed by ${via}` : `allowed: ${cls.reason}` };
@@ -792,8 +792,9 @@ function soleCommand(text, dialect) {
 
 // Command patterns match the part's own words (I3); a `hosts` pattern covers an external write
 // to that host when the scope's name is the classifier's scope for it (M4).
+// Ruling R24: a part whose target the classifier found ambiguous is never covered.
 function scopeCovers(s, p, c) {
-  if (!isPlainObject(s) || s.name !== p.scope) return false;
+  if (!isPlainObject(s) || s.name !== p.scope || p.targetAmbiguous) return false;
   if (s.target !== undefined && s.target !== null && s.target !== '' && !sameTarget(s.target, p)) return false;
   const m = isPlainObject(s.matchers) ? s.matchers : {};
   if (isMcp(c)) return strings(m.mcp).some((pat) => globMatch(pat, c.tool_name));

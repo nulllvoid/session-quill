@@ -3,8 +3,11 @@
 // path uses: request validation (dashboard and CLI), the request applying in the worker, and
 // dispatch. A resolved scope feeds two places and keeps them apart: the grant gets its name,
 // target, matchers and fingerprint (never credentials), buildChildEnv gets its name and env.
-import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { TrackerError } from '../lib/errors.js';
+import { quillHome } from '../lib/paths.js';
 import { canonicalJson } from './grant.js';
 import { BUILTIN_SCOPES, scopeSettings, SCOPE_NAME_RE } from '../config/scopes.js';
 import { SCOPE_SYSTEMS, credentialSystemOf } from './cred-env.js';
@@ -16,21 +19,85 @@ const sorted = (v) => [...new Set(strings(v))].sort();
 const stringMap = (v) => Object.fromEntries(Object.entries(v && typeof v === 'object' ? v : {}).filter(([, x]) => typeof x === 'string'));
 const show = (s) => JSON.stringify(String(s).slice(0, 140));
 
+// The per-install key that literal credential values are fingerprinted under (I1): 32 random bytes,
+// hex, in `<quillHome>/scope-fingerprint.key`, owner-only, created on first use, never exported.
+export const SCOPE_KEY_FILE = 'scope-fingerprint.key';
+const KEY_RE = /^[0-9a-f]{64}$/;
+
+export function scopeKey(env = process.env) {
+  const file = path.join(quillHome(env), SCOPE_KEY_FILE);
+  const unavailable = (why) => new TrackerError('scope-key-unavailable', `the scope fingerprint key ${file} ${why}; scopes with literal credential values cannot be granted until it is readable`);
+  const read = () => {
+    const text = fs.readFileSync(file, 'utf8').trim();
+    if (!KEY_RE.test(text)) throw unavailable('is not a key Quill wrote (64 hex characters)');
+    return text;
+  };
+  try { return read(); } catch (err) { if (err.code !== 'ENOENT') throw err.code === 'scope-key-unavailable' ? err : unavailable(`cannot be read (${err.code ?? err.message})`); }
+  const key = randomBytes(32).toString('hex');
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${key}\n`, { flag: 'wx', mode: 0o600 });
+    try { fs.chmodSync(file, 0o600); } catch { /* modes unsupported */ }
+    return key;
+  } catch (err) {
+    if (err.code === 'EEXIST') return read();
+    throw unavailable(`cannot be created (${err.code ?? err.message})`);
+  }
+}
+
+// What a credential value contributes to a fingerprint: an `env:NAME` reference as written, a
+// literal (a path, a profile name) only as its HMAC under the install key, so a fingerprint copied
+// into a grant or a proposal never lets anyone guess the literal offline.
+function valueMark(v, keyOf) {
+  if (v.startsWith('env:')) return v;
+  const key = keyOf ? keyOf() : null;
+  if (!key) throw new TrackerError('scope-key-unavailable', 'a scope with a literal credential value needs the install key to be fingerprinted');
+  return `hmac:${createHmac('sha256', key).update(v, 'utf8').digest('hex')}`;
+}
+const markedEnv = (env, keyOf) => Object.fromEntries(Object.entries(stringMap(env)).map(([k, v]) => [k, valueMark(v, keyOf)]));
+
 /**
- * SHA-256 (hex) of a scope table in canonical form: matchers de-duplicated and sorted, keys sorted
- * at every level, wording (label, permits) left out. It changes when what the scope allows or the
- * credentials it switches to change (Review Focus 4 compares it on approval), never with the
- * order things were written in.
- * @param {{ name?, target?, mcp?, bash?, hosts?, env?, targets?, takes_target? }} table
+ * SHA-256 (hex) of a scope table in canonical form (I1): label, matchers (de-duplicated, sorted),
+ * target, env keys with each value as its `env:NAME` reference or the HMAC of its literal (`key`:
+ * the install key, or a function returning it, read only when a literal is present). It changes
+ * when what the scope allows, its label or the credentials it switches to change (Review Focus 4
+ * compares it on approval), never with the order things were written in.
+ * @param {{ name?, label?, target?, mcp?, bash?, hosts?, env?, targets?, takes_target? }} table
+ * @param {{ key?: string|(() => string) }} [opts]
  */
-export function scopeFingerprint(table = {}) {
+export function scopeFingerprint(table = {}, { key = null } = {}) {
   const t = table && typeof table === 'object' ? table : {};
-  const norm = { mcp: sorted(t.mcp), bash: sorted(t.bash), hosts: sorted(t.hosts), env: stringMap(t.env) };
+  const keyOf = typeof key === 'function' ? key : key ? () => key : null;
+  const norm = { mcp: sorted(t.mcp), bash: sorted(t.bash), hosts: sorted(t.hosts), env: markedEnv(t.env, keyOf) };
   if (typeof t.name === 'string') norm.name = t.name;
+  if (typeof t.label === 'string') norm.label = t.label;
   if (t.target !== undefined && t.target !== null) norm.target = String(t.target);
   if (typeof t.takes_target === 'boolean') norm.takes_target = t.takes_target;
-  if (t.targets && typeof t.targets === 'object') norm.targets = Object.fromEntries(Object.entries(t.targets).map(([k, v]) => [k, { env: stringMap(v && v.env) }]));
+  if (t.targets && typeof t.targets === 'object') norm.targets = Object.fromEntries(Object.entries(t.targets).map(([k, v]) => [k, { env: markedEnv(v && v.env, keyOf) }]));
   return createHash('sha256').update(canonicalJson(norm)).digest('hex');
+}
+
+// A fingerprint computed on first read: validation never needs one, so only dispatch (the grant)
+// and approval read the install key.
+function lazyFingerprint(obj, compute) {
+  let value;
+  Object.defineProperty(obj, 'fingerprint', { enumerable: true, configurable: true, get() { value ??= compute(); return value; } });
+  return obj;
+}
+
+/**
+ * Every variable a catalog entry takes through `env:NAME` (C2): the worker removes all of them from
+ * every autonomous run's environment, and sets a granted scope's values only under the scope's own
+ * variable names.
+ */
+export function scopeReferences(config = {}) {
+  const out = new Set();
+  const add = (env) => { for (const v of Object.values(env ?? {})) if (typeof v === 'string' && v.startsWith('env:')) out.add(v.slice(4)); };
+  for (const s of Object.values(loadScopeCatalog(config))) {
+    add(s.env);
+    for (const t of Object.values(s.targets)) add(t.env);
+  }
+  return [...out];
 }
 
 /**
@@ -40,10 +107,14 @@ export function scopeFingerprint(table = {}) {
  * @returns {Record<string, { name, builtin, label, permits, mcp: string[], bash: string[], hosts: string[],
  *   env: Record<string,string>, targets: Record<string,{ env }>, takesTarget: boolean, targetLabel,
  *   targetPattern, credentials: 'required'|'optional'|'none', systems: string[], uses, hint, fingerprint }>}
+ *   `fingerprint` is computed when first read; a literal credential value then needs the install
+ *   key (`opts.key`, else scopeKey(opts.env)).
  */
-export function loadScopeCatalog(config = {}) {
+export function loadScopeCatalog(config = {}, { env = process.env, key = null } = {}) {
   const { tables } = scopeSettings(config);
   const out = {};
+  let cachedKey = key;
+  const keyOf = () => (cachedKey ??= scopeKey(env));
   const names = [...Object.keys(BUILTIN_SCOPES), ...Object.keys(tables).filter((n) => !Object.hasOwn(BUILTIN_SCOPES, n)).sort()];
   for (const name of names) {
     const b = Object.hasOwn(BUILTIN_SCOPES, name) ? BUILTIN_SCOPES[name] : null;
@@ -55,10 +126,11 @@ export function loadScopeCatalog(config = {}) {
     const takesTarget = b ? !!b.target : o.takes_target === true;
     const env = { ...(o.env ?? {}) };
     const targets = takesTarget ? { ...(o.targets ?? {}) } : {};
-    out[name] = {
+    const label = o.label ?? b?.label ?? name;
+    out[name] = lazyFingerprint({
       name,
       builtin: !!b,
-      label: o.label ?? b?.label ?? name,
+      label,
       permits: o.permits ?? b?.permits ?? 'Writes that match the patterns in your config.toml.',
       mcp, bash, hosts, env, targets,
       takesTarget,
@@ -68,8 +140,8 @@ export function loadScopeCatalog(config = {}) {
       systems: [...(SCOPE_SYSTEMS[name] ?? [])],
       uses: b?.uses ?? null,
       hint: b?.hint ?? 'env',
-      fingerprint: scopeFingerprint({ name, mcp, bash, hosts, env, targets, takes_target: takesTarget }),
-    };
+    }, () => scopeFingerprint({ name, label, mcp, bash, hosts, env, targets, takes_target: takesTarget }, { key: keyOf }));
+    Object.defineProperty(out[name], 'keyOf', { value: keyOf, enumerable: false });
   }
   return out;
 }
@@ -115,14 +187,14 @@ export function resolveScopes(requested = [], catalog = {}) {
     if (out.some((x) => x.name === name && x.target === target)) continue;
     const clash = out.find((x) => x.name === name && canonicalJson(x.env) !== canonicalJson(env));
     if (clash) throw new TrackerError('scope-conflict', `scope-conflict:${name}: ${clash.target ?? name} and ${target ?? name} switch to different credentials, so one run cannot hold both; queue a run per ${kind}`);
-    out.push({ name, target, matchers, fingerprint: scopeFingerprint({ name, target, ...matchers, env }), env, credentials: s.credentials, systems: [...s.systems] });
+    out.push(lazyFingerprint({ name, target, matchers, env, credentials: s.credentials, systems: [...s.systems] }, () => scopeFingerprint({ name, label: s.label, target, ...matchers, env }, { key: s.keyOf ?? null })));
   }
   return out;
 }
 
 /** The validator handoff requests use (permissions.js `scopeCheck`): one catalog, one resolver. */
-export function scopeValidator(config = {}) {
-  const catalog = loadScopeCatalog(config);
+export function scopeValidator(config = {}, { env = process.env } = {}) {
+  const catalog = loadScopeCatalog(config, { env });
   return (names) => resolveScopes(names, catalog);
 }
 

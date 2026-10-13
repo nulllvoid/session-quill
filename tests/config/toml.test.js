@@ -80,3 +80,22 @@ test('quoted keys hold names a bare key cannot, such as owner/repo, and round-tr
   assert.throws(() => parseToml('"" = "x"'), (e) => e.code === 'toml-unsupported');
   assert.throws(() => parseToml('"a\\"b" = "x"'), (e) => e.code === 'toml-unsupported');
 });
+
+// Scope tables (Task 11, review M8): quoted table-name parts and dotted keys, and their round trip.
+test('quoted table-name parts and dotted keys parse; the writer quotes what needs quoting', () => {
+  const text = '[scopes."k8s.write"]\nenv.KUBECONFIG = "/k/rw"\n"x.y".z = "q"\n\n[scopes."k8s.write".targets.stg]\nenv.KUBECONFIG = "/k/stg"\n';
+  const parsed = parseToml(text);
+  assert.deepEqual(parsed.scopes['k8s.write'], { env: { KUBECONFIG: '/k/rw' }, 'x.y': { z: 'q' }, targets: { stg: { env: { KUBECONFIG: '/k/stg' } } } });
+  assert.deepEqual(parseToml(stringifyToml(parsed)), parsed);
+  assert.match(stringifyToml(parsed), /^\[scopes\."k8s\.write"\.targets\.stg\.env\]$/m);
+  // what parsed before still parses the same
+  assert.deepEqual(parseToml('[repos."owner/repo"]\na = "x=y" # c\n"q=r" = 1\n'), { repos: { 'owner/repo': { a: 'x=y', 'q=r': 1 } } });
+});
+
+test('names that reach an object prototype are refused anywhere in a key path', () => {
+  for (const t of ['[scopes.__proto__]\nx = "y"\n', 'a.__proto__.b = "y"\n', '[a."constructor"]\nx = 1\n', 'prototype = 1\n']) {
+    assert.throws(() => parseToml(t), (e) => e.code === 'toml-unsupported', t);
+  }
+  assert.equal({}.b, undefined);
+  assert.equal({}.x, undefined);
+});

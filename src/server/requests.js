@@ -279,7 +279,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
     if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
     throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
   }
-  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts, scopeCheck: (names) => scopeValidator(worker.config ?? {})(names) });
+  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts, scopeCheck: (names) => scopeValidator(worker.config ?? {}, { env: worker.env })(names) });
   request.actor_id = actor;
   const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
   if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
@@ -352,7 +352,7 @@ function evaluateHandoff(worker, req, ticket, payload) {
   try {
     recipe = resolveRecipe(catalogFor(worker), payload, ticket.repo_id);
     // Write scopes are checked against the worker's catalog here too (spec §4.3).
-    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(worker.config ?? {}) });
+    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(worker.config ?? {}, { env: worker.env }) });
   } catch (err) {
     return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
   }

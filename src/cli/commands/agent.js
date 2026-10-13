@@ -81,7 +81,7 @@ async function run(ctx, io, args, flags) {
   // Autonomous unless --access says otherwise (ADR 0026); a files run is always standard (ADR 0015).
   const access = typeof flags.access === 'string' ? flags.access : (recipe.mode === 'files' ? 'standard' : 'autonomous');
   // --scope is checked against the same catalog the dashboard and the worker use (spec §4.3).
-  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(ctx.config) });
+  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(ctx.config, { env: ctx.env }) });
   const notice = accessNotice(access);
   if (notice) io.println(notice);
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);

@@ -896,6 +896,19 @@ function onClick(e) {
   if (card && !e.target.closest('button, a, [data-copy]')) openDetail(card.dataset.ticket, card);
 }
 
+// A checked scope with no credentials configured blocks Queue and says why (review M4); other
+// blockers rendered with the form (data-blocked) keep it disabled whatever the scopes are.
+function scopeBlockers(form, scoped) {
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const note = form.querySelector('[data-scope-blocked]');
+  const blocking = scoped ? [...form.querySelectorAll('input[name="scope"][data-scope-blocker]')].filter((b) => b.checked).map((b) => b.dataset.scopeBlocker) : [];
+  if (note) { note.textContent = blocking.join(' '); note.hidden = !blocking.length; }
+  if (submitBtn && submitBtn.dataset.blocked !== 'true') {
+    submitBtn.disabled = blocking.length > 0;
+    if (blocking.length) submitBtn.title = blocking[0]; else submitBtn.removeAttribute('title');
+  }
+}
+
 function onChange(e) {
   const el = e.target;
   if (el.dataset.filter) {
@@ -934,6 +947,7 @@ function onChange(e) {
       const box = [...runForm.querySelectorAll('input[name="scope"]')].find((b) => b.value === t.dataset.scopeTarget);
       t.required = !!(box && box.checked && scoped);
     }
+    scopeBlockers(runForm, scoped);
   }
   if (el.dataset.action === 'status-select') {
     const status = el.value;
@@ -973,6 +987,14 @@ export function startApp() {
     const d = e.target;
     if (d instanceof HTMLDetailsElement && d.classList.contains('access-advanced') && !d.open && d.querySelector('input[name="access"]:checked')) d.open = true;
   }, true);
+  // Typing a scope's target ticks its box (review M5), so a typed target is never silently dropped.
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement) || !t.dataset.scopeTarget || !t.value.trim()) return;
+    const form = t.closest('form[data-form="recipe-run"]');
+    const box = form && [...form.querySelectorAll('input[name="scope"]')].find((b) => b.value === t.dataset.scopeTarget);
+    if (box && !box.disabled && !box.checked) { box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); }
+  });
   document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { appState.filters.q = e.target.value; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
   document.addEventListener('submit', (e) => { const form = e.target.closest('form[data-form]'); if (form) { e.preventDefault(); handleSubmit(form); } });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

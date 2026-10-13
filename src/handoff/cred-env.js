@@ -181,7 +181,8 @@ function awsProfileFiles(profile, configFile, credentialsFile) {
  *    Code then signs in from the owner's login, which is why `HOME`, `USERPROFILE`, `APPDATA`,
  *    `LOCALAPPDATA` are never redirected and `CLAUDE_CONFIG_DIR` is kept), and finally the generic
  *    pass: any name matching SECRET_NAME. `keepEnv` exempts names from the generic pass only: a
- *    redirected system's credentials come from `readonly`, a scope, push or `apiBilling`.
+ *    redirected system's credentials come from `readonly`, a scope, push or `apiBilling`. Then every
+ *    name in `stripNames` (the sources of the scope catalog's `env:NAME` references) goes too.
  *    Always kept: `QUILL_*`, `PATH`, `SystemRoot`, `ComSpec`, `PATHEXT`, `TEMP`, `TMP`, the profile
  *    variables above, `NODE_*` except `NODE_AUTH_TOKEN`, and git commit identity.
  * 2. `<runDir>/env/` is recreated empty, then each system points at its read-only profile
@@ -225,7 +226,7 @@ function awsProfileFiles(profile, configFile, credentialsFile) {
  *   report: one of 'readonly' | 'stub' | 'scope' | 'owner' per CRED_SYSTEMS entry, plus
  *   `provider?: 'shared'`, `residual: string[]` (autonomous), `scope_errors?: string[]`.
  */
-export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes = [], readonly = {}, runDir, platform = process.platform, keepEnv = [], apiBilling = false, gitUser } = {}) {
+export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes = [], readonly = {}, runDir, platform = process.platform, keepEnv = [], apiBilling = false, gitUser, stripNames = [] } = {}) {
   readonly = readonly ?? {};
   permissions = permissions ?? {};
   const win = platform === 'win32';
@@ -258,6 +259,9 @@ export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes =
     const listed = test(ALWAYS_REMOVED, k) || test(ANTHROPIC_AUTH, k) || Object.entries(REMOVE).some(([sys, rx]) => (sys !== 'git' || !push) && test(rx, k));
     if (listed || (SECRET_NAME.test(k) && !kept(k) && !test(GIT_IDENTITY, k))) delete env[k];
   }
+  // The sources of the scope catalog's env:NAME references, granted or not (C2): `keep_env` does
+  // not exempt them. A granted scope's values are read from baseEnv in step 3.
+  for (const n of stripNames ?? []) if (typeof n === 'string' && n && !test(PROTECTED, n)) del(n);
 
   // 2. Redirects, into a fresh stub directory (an earlier attempt's files never carry over).
   const stubs = [];

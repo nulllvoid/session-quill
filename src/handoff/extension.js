@@ -66,7 +66,7 @@ function detectRuntime(claudePath) {
   }
 }
 
-// `resolveScopes(names, config)` turns a run's requested write scopes into resolved entries
+// `resolveScopes(names, config, env)` turns a run's requested write scopes into resolved entries
 // ([{ name, target, env, matchers, fingerprint, credentials, systems }]) or throws; the default is
 // the scope catalog of the config (src/handoff/scopes.js).
 export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
@@ -244,7 +244,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const withNotes = (p) => (entry && entry.budgetNotes && entry.budgetNotes.length && p && typeof p === 'object' ? { ...p, contract_problems: [...(p.contract_problems ?? []), ...entry.budgetNotes] } : p);
     // A full-access run's writes, as its observer saw them, whatever state it ends in (spec §7).
     let effects = null;
-    if ((current.access ?? 'standard') === 'full') { try { effects = prodEffects(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { effects = null; } }
+    if ((current.access ?? 'standard') === 'full' && entry && entry.observed) { try { effects = prodEffects(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { effects = null; } }
     const record = (w, id, parsed, opts) => recordResult(w, id, withNotes(reconciled(parsed)), timings || usage || effects ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}) } } : opts);
     const reason = entry ? entry.reason : null;
     if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
@@ -481,7 +481,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     let scopes = [];
     if (access === 'autonomous') {
       try { assertRuntime(await probeVersion()); } catch (err) { return fail(worker, h, err.code ?? 'runtime-too-old', err.message); }
-      try { scopes = resolveScopes([...(h.scopes ?? [])], ctx.config) ?? []; } catch (err) { return fail(worker, h, err.code ?? 'unknown-scope', err.message); }
+      try { scopes = resolveScopes([...(h.scopes ?? [])], ctx.config, worker.env) ?? []; } catch (err) { return fail(worker, h, err.code ?? 'unknown-scope', err.message); }
     }
     const needsSource = h.permissions && h.permissions.read_source;
     let cwd;
@@ -526,9 +526,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     let observe = null;
     if (access === 'autonomous') {
       try { auto = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, scopes, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
-    } else if (access === 'full') {
+    } else if (access === 'full' && await observerSupported()) {
       // Full access is observed, never refused (spec §3, §7): the guard records what it would have
-      // refused, and the run's prod_effects come from that ledger when it finishes.
+      // refused, and the run's prod_effects come from that ledger when it finishes. A Claude Code
+      // older than the guard needs runs unobserved (review M6): its record then has no prod_effects.
       try { observe = prepareObserve({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the full-access observer: ${err.message}`); }
       Object.assign(env, observe.vars);
     }
@@ -562,7 +563,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
     // The entry exists before the process does, so the init event always finds it.
-    const entry = { child: null, done: null, reason: null, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, budget, timeoutMs, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, access, spawnExtras };
+    const entry = { child: null, done: null, reason: null, observed: !!observe, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, budget, timeoutMs, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, access, spawnExtras };
     running.set(h.id, entry);
     let run;
     try {
@@ -573,6 +574,11 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     }
     Object.assign(entry, { child: run.child, done: run.done, spawnedAt: performance.now() });
     entry.finished = run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
+  }
+
+  // Whether this Claude Code takes the observer's hook (the guard's runtime floor).
+  async function observerSupported() {
+    try { assertRuntime(await probeVersion()); return true; } catch { return false; }
   }
 
   function killWithReason(id, reason) {

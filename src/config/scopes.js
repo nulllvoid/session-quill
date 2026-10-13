@@ -11,19 +11,35 @@
 //   [scopes."k8s.write".targets.stg]      # credentials for one target (wins over the scope's own env)
 //   env.KUBECONFIG = "env:STG_RW_KUBECONFIG"   # "env:NAME" takes an inherited variable at dispatch
 //
-//   [scopes."pager.write"]                # an owner scope, e.g. for [mcp_policy.write] mappings
+//   [scopes."pager.write"]                # an owner scope: MCP tools only, mapped by [mcp_policy.write]
 //   mcp = ["mcp__pager__create_incident"]
 //   takes_target = false
 //
 // Matchers are data, not code: `mcp` are MCP tool-name patterns, `bash` command patterns matched
 // against the command's own words, `hosts` host patterns for network writes; `*` is the only
 // wildcard and `{target}` stands for the granted target. A scope covers a call only when the
-// guard classified the call as that scope, the target matches, and one of its matchers fits.
-// Literal secrets never come from config.toml: a variable whose name looks like a secret must be
-// an `env:NAME` reference. Invalid entries are ignored with a warning that names the key, never
+// guard classified the call as that scope, the call names exactly that one target with nothing
+// that changes where it connects (ruling R24), and one of its matchers fits. Owner scopes cover MCP
+// tools only. Literal secrets never come from config.toml (literalSecretReason): they must be
+// `env:NAME` references. Invalid entries are ignored with a warning that names the key, never
 // the value.
 
-import { SECRET_NAME } from '../handoff/cred-env.js';
+import { SECRET_NAME, credentialSystemOf } from '../handoff/cred-env.js';
+
+// Literal values config.toml never holds (I1): secret-looking names (cred-env SECRET_NAME, or
+// ending _PWD / _PASS / _PASSPHRASE), connection URLs of the database and registry systems, URLs
+// with a password in them, and Authorization header values. They must be "env:NAME" references.
+const SECRET_SUFFIX = /(_PWD|_PASS|_PASSPHRASE|PASSWD)$/i;
+const URL_NAME = /_(URL|URI|DSN)$/i;
+const URL_PASSWORD = /:\/\/[^/?#@\s]*:[^/?#@\s]*@/;
+const AUTH_VALUE = /^\s*(proxy-)?authorization\s*:|\b(bearer|basic|token)\s+[A-Za-z0-9+/=._~-]{8,}/i;
+export function literalSecretReason(name, value) {
+  if (SECRET_NAME.test(name) || SECRET_SUFFIX.test(name)) return 'looks like a secret';
+  if (URL_NAME.test(name) && ['databases', 'registries'].includes(credentialSystemOf(name))) return 'is a connection URL, which usually carries a password';
+  if (URL_PASSWORD.test(value)) return 'holds a URL with a password in it';
+  if (AUTH_VALUE.test(value)) return 'holds an authorization header or token';
+  return null;
+}
 
 // Scope names: dotted lower-case words; `git.*` are per-run permissions (ruling R2), never scopes.
 export const SCOPE_NAME_RE = /^[a-z][a-z0-9_-]{0,31}(\.[a-z0-9_-]{1,31}){0,3}$/;
@@ -90,8 +106,8 @@ export const BUILTIN_SCOPES = Object.freeze({
   },
   'cloud.write': {
     label: 'Cloud: change resources',
-    permits: 'aws, gcloud, gsutil, bq, az and eksctl commands that change resources, only when the command uses this profile or configuration (--profile).',
-    target: { label: 'Profile', pattern: `^${TOKEN}$` }, credentials: 'required', uses: null, hint: 'env.AWS_PROFILE (with env.AWS_CONFIG_FILE), env.CLOUDSDK_CONFIG or env.AZURE_CONFIG_DIR',
+    permits: 'aws and eksctl with --profile, gcloud with --project, bq with --project_id and az with --subscription that change resources, only when the command names this one target once (gsutil names none, so it is never covered).',
+    target: { label: 'Profile, project or subscription', pattern: `^${TOKEN}$` }, credentials: 'required', uses: null, hint: 'env.AWS_PROFILE (with env.AWS_CONFIG_FILE), env.CLOUDSDK_CONFIG or env.AZURE_CONFIG_DIR',
     mcp: [], bash: bins('aws', 'gcloud', 'gsutil', 'bq', 'az', 'eksctl'), hosts: [],
   },
   'db.write': {
@@ -108,7 +124,7 @@ export const BUILTIN_SCOPES = Object.freeze({
   },
   'http.write': {
     label: 'HTTP: send data to one host',
-    permits: 'POST, PUT, PATCH and DELETE requests, uploads and other network writes to exactly this host.',
+    permits: 'POST, PUT, PATCH and DELETE requests and uploads with curl, wget, HTTPie or Invoke-WebRequest to exactly this host, on its default port, with no proxy, user name or password in the URL.',
     target: { label: 'Host', pattern: `^${HOST}$` }, credentials: 'optional', uses: 'no stored credentials (the request itself carries what it needs)', hint: 'env',
     mcp: [], bash: [], hosts: ['{target}'],
   },
@@ -143,8 +159,9 @@ function envTable(where, v, warnings) {
     if (typeof value !== 'string' || !value.trim()) { warnings.push(`${where} env.${k} must be a non-empty string; ignored`); continue; }
     const ref = value.startsWith('env:');
     if (ref && !ENV_NAME.test(value.slice(4))) { warnings.push(`${where} env.${k} names no variable after env:; ignored`); continue; }
-    // config.toml is not a secret store: a secret-looking variable must come from the environment.
-    if (!ref && SECRET_NAME.test(k)) { warnings.push(`${where} env.${k} looks like a secret: give it as "env:NAME" (a variable the worker inherits), never a literal; ignored`); continue; }
+    // config.toml is not a secret store: a secret-looking value must come from the environment.
+    const secret = ref ? null : literalSecretReason(k, value);
+    if (secret) { warnings.push(`${where} env.${k} ${secret}: give it as "env:NAME" (a variable the worker inherits), never a literal; ignored`); continue; }
     out[k] = value;
   }
   return out;
@@ -170,6 +187,9 @@ export function scopeSettings(config = {}) {
         if (typeof v === 'string' && v.trim() && v.length <= TEXT_MAX[key] && !/[\x00-\x1f\x7f]/.test(v)) out[key] = v.trim();
         else warnings.push(`${label(name, key)} must be one line of at most ${TEXT_MAX[key]} characters; ignored`);
       } else if (key === 'mcp' || key === 'bash' || key === 'hosts') {
+        // The guard gives commands and hosts only built-in scope names, so an owner scope can only
+        // ever cover MCP tools that [mcp_policy.write] maps to it (review M2).
+        if (key !== 'mcp' && !Object.hasOwn(BUILTIN_SCOPES, name)) { warnings.push(`${label(name, key)}: an owner scope covers MCP tools only (map them with [mcp_policy.write]); ignored`); continue; }
         const list = matcherList(name, key, v, warnings);
         if (list) out[key] = list;
       } else if (key === 'env') {

@@ -240,3 +240,22 @@ test('the Run dialog submits the checked scopes, with the target where one was t
   const app = (await import('node:fs')).readFileSync(new URL('../../ui/app.js', import.meta.url), 'utf8');
   assert.match(app, /scopeChoices\(fd\)/, 'the recipe form sends them');
 });
+
+// Review round 1: M3 (target fields named for their scope), M4 (a scope with no credentials blocks
+// Queue with a reason), M5 (typing a target ticks its box).
+test('Write scopes: each target field is named for its scope; a scope without credentials carries its blocker; app.js wires both', async () => {
+  const html = dialogFor(withMeta(autonomy({ scopes: SCOPES })));
+  assert.match(html, /name="scope_target:k8s\.write"[^>]* aria-label="Context for Kubernetes &lt;b&gt;bold&lt;\/b&gt;"/);
+  assert.match(html, /name="scope_target:db\.write"[^>]* aria-label="Host or database for Databases"/);
+  assert.match(html, /value="db\.write"[^>]* data-scope-blocker="Databases: no credentials are configured for this scope, so a run that asks for it is refused\./);
+  assert.doesNotMatch(/value="k8s\.write"[^>]*>/.exec(html)[0], /data-scope-blocker/, 'a ready scope has none');
+  assert.match(html, /<p class="small critical" role="alert" data-scope-blocked hidden><\/p>/);
+  const app = (await import('node:fs')).readFileSync(new URL('../../ui/app.js', import.meta.url), 'utf8');
+  assert.match(app, /function scopeBlockers\(form, scoped\)/);
+  assert.match(app, /submitBtn\.dataset\.blocked !== 'true'/, 'a form blocker keeps Queue disabled whatever the scopes are');
+  assert.match(app, /t\.dataset\.scopeTarget[\s\S]{0,400}box\.checked = true/);
+  // A form blocker is marked so the scope check never re-enables Queue.
+  const t = ticket(1);
+  const busy = snap({ handoffs: [{ id: 'h', ticket_id: t.id, state: 'running', permissions: {} }] });
+  assert.match(renderRunAgentDialog(t, busy, { recipe: 'analyse' }), /<button type="submit" class="btn primary" disabled data-blocked="true"/);
+});

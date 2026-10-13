@@ -417,7 +417,8 @@ export const SCOPE_OFF_REASON = 'Write scopes need Autonomous access: only its g
 // Write scopes (spec §4.3, §8): one checkbox per catalog entry the worker reported (snapshot
 // meta.autonomy.scopes), with what it permits and which credentials it switches to, and a target
 // field where the scope takes one. Off, with the reason, unless the access is Autonomous; app.js
-// switches them as the access changes. Every word here comes from config, so all of it is escaped.
+// switches them as the access changes, checks a box when its target is typed, and blocks Queue
+// while a checked scope has no credentials configured (design system §5: blockers say why). Every word here comes from config, so all of it is escaped.
 function writeScopes(snapshot, level) {
   const a = snapshot && snapshot.meta && snapshot.meta.autonomy && typeof snapshot.meta.autonomy === 'object' ? snapshot.meta.autonomy : null;
   const list = a && Array.isArray(a.scopes) ? a.scopes.filter((x) => x && typeof x.name === 'string') : [];
@@ -427,14 +428,16 @@ function writeScopes(snapshot, level) {
   const rows = list.map((x, i) => {
     const targets = Array.isArray(x.targets) ? x.targets.filter((t) => typeof t === 'string') : [];
     const kind = typeof x.target_label === 'string' && x.target_label ? x.target_label : 'Target';
-    const target = x.takes_target ? `<label class="indent small">${esc(kind)} <input type="text" name="scope_target:${attr(x.name)}" data-scope-target="${attr(x.name)}" autocomplete="off" spellcheck="false" maxlength="128"${targets.length ? ` placeholder="${attr(targets[0])}"` : ''}${dis}></label>${targets.length ? ` <span class="muted small">credentials configured for ${esc(targets.join(', '))}</span>` : ''}` : '';
-    return `<div class="scope-option"><label><input type="checkbox" name="scope" value="${attr(x.name)}" aria-describedby="scope-desc-${i}"${dis}> ${esc(x.label ?? x.name)} <code>${esc(x.name)}</code></label>
+    const target = x.takes_target ? `<label class="indent small">${esc(kind)} <input type="text" name="scope_target:${attr(x.name)}" data-scope-target="${attr(x.name)}" aria-label="${attr(`${kind} for ${x.label ?? x.name}`)}" autocomplete="off" spellcheck="false" maxlength="128"${targets.length ? ` placeholder="${attr(targets[0])}"` : ''}${dis}></label>${targets.length ? ` <span class="muted small">credentials configured for ${esc(targets.join(', '))}</span>` : ''}` : '';
+    const blocker = x.ready === false ? ` data-scope-blocker="${attr(`${x.label ?? x.name}: no credentials are configured for this scope, so a run that asks for it is refused. Set them in config.toml first, or untick it.`)}"` : '';
+    return `<div class="scope-option"><label><input type="checkbox" name="scope" value="${attr(x.name)}" aria-describedby="scope-desc-${i}"${blocker}${dis}> ${esc(x.label ?? x.name)} <code>${esc(x.name)}</code></label>
   <p class="muted small" id="scope-desc-${i}">${esc(x.permits ?? '')} ${esc(x.switches ?? '')}</p>${target}</div>`;
   });
   return `<fieldset class="write-scopes"><legend>Write scopes</legend>
   <p class="muted small">Production and external writes this run may make, each only where its patterns in config.toml match. Everything else stays read-only; a write outside them is refused and recorded as a critical change.</p>
   <p class="small scope-reason" id="scope-reason" data-scope-reason${off ? '' : ' hidden'}>${esc(SCOPE_OFF_REASON)}</p>
   ${rows.join('\n  ')}
+  <p class="small critical" role="alert" data-scope-blocked hidden></p>
   </fieldset>`;
 }
 
