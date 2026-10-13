@@ -9,7 +9,7 @@ import { validateHandoffRequest } from './permissions.js';
 import { git, createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
 import { buildPrompt, budgetFor, recipeCaps, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
-import { gatherContext, gatherDiff } from './context.js';
+import { gatherContext, gatherDiff, gatherMemory, inlineBudget, writeContext } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
 import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
 import { recordResult, updateHandoff } from './results.js';
@@ -66,6 +66,14 @@ export function retentionDays(config = {}) {
 
 const isFix = (h) => !!(h.permissions && h.permissions.edit_source);
 
+// Resolves once every promise has settled or `ms` has passed, whichever comes first.
+async function settledWithin(promises, ms) {
+  if (!promises.length) return;
+  let timer;
+  await Promise.race([Promise.allSettled(promises), new Promise((r) => { timer = setTimeout(r, ms); })]);
+  clearTimeout(timer);
+}
+
 function detectRuntime(claudePath) {
   try {
     execFileSync(process.platform === 'win32' ? 'where' : 'which', [claudePath], { stdio: 'ignore', windowsHide: true });
@@ -81,6 +89,7 @@ function detectRuntime(claudePath) {
 export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   const finishing = new Set(); // finish() promises, until memory filing has landed
+  const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
   const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
@@ -523,6 +532,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const fail = (w, run, code, message) => failRun(w, run, code, message, { timings: { ...timings } });
     const ticket = worker.state.tickets.get(h.ticket_id);
     if (!ticket) return fail(worker, h, 'ticket-missing', 'ticket no longer exists');
+    // The ticket's previous run records its terminal state just before its memory filing and Run
+    // note land (cite reads are asynchronous): wait for them, bounded, before anything starts, so
+    // this run's Memory section does not miss that note (spec §6.3).
+    await settledWithin([...(filings.get(ticket.id) ?? [])], FINISH_WAIT_MS);
     const repoCfg = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
     // The recipe must still be the one that was queued: an edited file could otherwise run with
     // instructions or permissions nobody reviewed (ADR 0008).
@@ -589,6 +602,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const deadlineAt = addMs(started, timeoutMs);
     const env = { ...spawnEnv, QUILL_HANDOFF_ID: h.id, QUILL_HANDOFF_TICKET_ID: ticket.id, QUILL_HANDOFF_TICKET_KEY: ticket.key };
     if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
+    // Spec §6.3: no run, whatever its access, writes into the owner's Claude Code memory.
+    env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = '1';
     let auto = null;
     let observe = null;
     if (access === 'autonomous') {
@@ -612,11 +627,29 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // The diff is read from the run's own checkout, so it exists only with source access.
     if (worktreePath && (!inputs || inputs.has('work'))) context.diff = await gatherDiff(worktreePath, context.commits);
     if (staged) context.staged_files = staged;
+    // The docs map is part of every run's Memory section (spec §6.3); a recipe's `docs` input only
+    // decides whether a prompt without memory shows it on its own.
+    let docsMap = null;
     if (worktreePath) {
       context.base_label = base ? base.label : null;
-      if (!inputs || inputs.has('docs')) try { context.docs = renderDocsMap(buildDocsMap(worktreePath)) || null; } catch { context.docs = null; }
-      if (context.docs && h.repo_id) await cacheDocsMap(worker, h.repo_id, worktreePath, context.docs);
+      try { docsMap = renderDocsMap(buildDocsMap(worktreePath)) || null; } catch { docsMap = null; }
+      if (!inputs || inputs.has('docs')) context.docs = docsMap;
+      if (docsMap && h.repo_id) await cacheDocsMap(worker, h.repo_id, worktreePath, docsMap);
     }
+    // Spec §6.3: the ranked Memory section inline, and the full projections (minus quarantine) and
+    // Run notes copied to <run-dir>/context/, which every run reads through --add-dir. Removed with
+    // the run (cleanupRun). Delivery never fails a run.
+    const contextDir = path.join(handoffRunDir(worker.env, h.id), 'context');
+    let memoryDirs = [];
+    try {
+      // Bring the projections up to date with the state first (a no-op when nothing changed).
+      if (typeof worker.publishMemory === 'function') worker.publishMemory();
+      const mem = await gatherMemory(worker.state, worker.state.tickets.get(ticket.id) ?? ticket, { repoCfg, budgetBytes: inlineBudget(ctx.config), checkout: worktreePath, commit: baseCommit, home: quillHome(worker.env), now: worker.now(), run: current, docs: docsMap, contextDir });
+      writeContext({ state: worker.state, home: quillHome(worker.env), paths: mem.paths, contextDir, runNotes: mem.runNotes });
+      memoryDirs = [contextDir];
+      context.memory = mem.inline || null;
+      context.guide = mem.guide;
+    } catch (err) { worker.log(`memory not delivered to ${h.id}: ${err.stack ?? err.message}`); }
     const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
     // Standard access keeps the recipe's own tool narrowing; settings and full access hand the
     // decision to Claude Code itself (ADR 0017).
@@ -624,7 +657,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // tool families (R8).
     const rt = access === 'standard' ? { permissionMode: 'dontAsk', ...(recipe ? recipeTools(recipe, h.permissions ?? {}) : allowedToolsFor({ mode: h.mode, permissions: h.permissions })), keepCredentials: false } : runtimeAccess({ access, mode: h.mode, permissions: h.permissions ?? {}, tools: access === 'autonomous' && recipe ? recipe.tools : null });
     const tools = { allowed: rt.allowed, disallowed: rt.disallowed };
-    const spawnExtras = auto ? { childEnv: auto.childEnv, settingsPath: auto.settingsPath, addDirs: auto.addDirs, permissionPrompts: auto.permissionPrompts, mcpServersPath: auto.mcpServersPath } : observe ? { settingsPath: observe.settingsPath, mcpServersPath: observe.mcpServersPath } : {};
+    const spawnExtras = auto ? { childEnv: auto.childEnv, settingsPath: auto.settingsPath, addDirs: [...new Set([...auto.addDirs, ...memoryDirs])], permissionPrompts: auto.permissionPrompts, mcpServersPath: auto.mcpServersPath } : observe ? { settingsPath: observe.settingsPath, mcpServersPath: observe.mcpServersPath, addDirs: memoryDirs } : { addDirs: memoryDirs };
     // The run's own directory holds its tool ledger (spec §5.4); every turn appends to it.
     const ledgerPath = path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl');
     const onInit = onInitFor(worker, h.id);
@@ -644,7 +677,15 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     entry.finished = run.done.then((outcome) => finish(worker, current, run, outcome)).catch((err) => worker.log(`handoff finish failed: ${err.stack ?? err.message}`));
     const finished = entry.finished;
     finishing.add(finished);
-    finished.then(() => finishing.delete(finished));
+    // By ticket too, so the ticket's next run can wait for this run's filing and Run note.
+    const ofTicket = filings.get(ticket.id) ?? new Set();
+    ofTicket.add(finished);
+    filings.set(ticket.id, ofTicket);
+    finished.then(() => {
+      finishing.delete(finished);
+      ofTicket.delete(finished);
+      if (!ofTicket.size && filings.get(ticket.id) === ofTicket) filings.delete(ticket.id);
+    });
   }
 
   // Whether this Claude Code takes the observer's hook (the guard's runtime floor).

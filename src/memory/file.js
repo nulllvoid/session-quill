@@ -198,7 +198,7 @@ function looksLikePath(p) {
   return /\.[A-Za-z0-9]*[A-Za-z][A-Za-z0-9]{0,9}$/.test(p);
 }
 
-function citesIn(item) {
+export function citesIn(item) {
   const out = [];
   for (const raw of String(item).split(/\s+/)) {
     const token = raw.replace(/^[`'"([<]+|[`'")\]>,;.]+$/g, '');
@@ -219,10 +219,10 @@ const lineCount = (buf) => {
   const text = buf.toString('utf8');
   return text.length === 0 ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 };
-const blobSha = (buf) => createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
+export const blobSha = (buf) => createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
 
 // The checkout-relative path of a cite (forward slashes), or null when it leaves the checkout.
-function relCite(checkoutReal, file) {
+export function relCite(checkoutReal, file) {
   if (/[\r\n\0]/.test(file)) return null;
   const abs = path.isAbsolute(file) ? path.resolve(file) : path.resolve(checkoutReal, file);
   if (!inside(checkoutReal, abs)) return null;
@@ -239,7 +239,7 @@ const GIT_ARGS = ['--no-replace-objects', 'cat-file', '--batch'];
 const GIT_TIMEOUT_MS = 15_000;
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
-function gitEnv() {
+export function cleanGitEnv() {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) if (!/^GIT_/i.test(k)) env[k] = v;
   return { ...env, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: path.join(os.tmpdir(), 'quill-no-grafts-here') };
@@ -270,7 +270,7 @@ const batchInput = (commit, rels) => rels.map((r) => `${commit}:${r}\n`).join(''
 function readAtCommitSync(checkoutReal, commit, rels) {
   if (!rels.length) return new Map();
   try {
-    return parseBatch(execFileSync('git', GIT_ARGS, { cwd: checkoutReal, env: gitEnv(), input: batchInput(commit, rels), maxBuffer: GIT_MAX_BUFFER, timeout: GIT_TIMEOUT_MS, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] }), rels);
+    return parseBatch(execFileSync('git', GIT_ARGS, { cwd: checkoutReal, env: cleanGitEnv(), input: batchInput(commit, rels), maxBuffer: GIT_MAX_BUFFER, timeout: GIT_TIMEOUT_MS, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] }), rels);
   } catch { return new Map(rels.map((r) => [r, null])); }
 }
 
@@ -279,7 +279,7 @@ function readAtCommit(checkoutReal, commit, rels) {
   return new Promise((resolve) => {
     const none = () => resolve(new Map(rels.map((r) => [r, null])));
     try {
-      const child = execFile('git', GIT_ARGS, { cwd: checkoutReal, env: gitEnv(), maxBuffer: GIT_MAX_BUFFER, timeout: GIT_TIMEOUT_MS, windowsHide: true, encoding: 'buffer' }, (err, stdout) => (err ? none() : resolve(parseBatch(stdout, rels))));
+      const child = execFile('git', GIT_ARGS, { cwd: checkoutReal, env: cleanGitEnv(), maxBuffer: GIT_MAX_BUFFER, timeout: GIT_TIMEOUT_MS, windowsHide: true, encoding: 'buffer' }, (err, stdout) => (err ? none() : resolve(parseBatch(stdout, rels))));
       child.stdin.on('error', () => {});
       child.stdin.end(batchInput(commit, rels));
     } catch { none(); }
@@ -309,7 +309,7 @@ function readWorkingTree(checkoutReal, rels, changed) {
 
 const changedSet = (run) => new Set((Array.isArray(run.changed_files) ? run.changed_files : []).filter((f) => typeof f === 'string').map((f) => caseFold(f.split('\\').join('/'))));
 const baseOf = (run) => (typeof run.base_commit === 'string' && FULL_SHA.test(run.base_commit) ? run.base_commit : null);
-const realCheckout = (checkout) => { try { return checkout ? fs.realpathSync.native(checkout) : null; } catch { return null; } };
+export const realCheckout = (checkout) => { try { return checkout ? fs.realpathSync.native(checkout) : null; } catch { return null; } };
 const citedRels = (checkoutReal, evidence) => evidence.flatMap((item) => citesIn(item).map((c) => relCite(checkoutReal, c.file))).filter(Boolean);
 
 /**

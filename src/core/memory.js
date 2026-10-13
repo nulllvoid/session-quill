@@ -13,7 +13,7 @@ const isLive = (e) => e.state === 'active' && !e.superseded_by;
 const scopeId = (e) => (e.scope === 'repo' ? e.repo_id : e.scope === 'task' ? e.ticket_id : '');
 
 // Pinned and owner entries first, then verified > sourced > observed, then recency, then confirmations.
-function rank(a, b) {
+export function rankMemory(a, b) {
   const tier = (e) => (e.pinned === true ? 0 : TRUST_TIER[e.trust]);
   return tier(a) - tier(b) || cmp(b.last_confirmed_at, a.last_confirmed_at) || b.confirmations - a.confirmations || cmp(a.id, b.id);
 }
@@ -27,12 +27,12 @@ function bucket(e) {
 }
 
 function order(a, b) {
-  return bucket(a) - bucket(b) || cmp(a.section, b.section) || rank(a, b);
+  return bucket(a) - bucket(b) || cmp(a.section, b.section) || rankMemory(a, b);
 }
 
 // Listing order for review pages: scope, section, rank.
 function listOrder(a, b) {
-  return SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope] || cmp(a.section, b.section) || rank(a, b);
+  return SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope] || cmp(a.section, b.section) || rankMemory(a, b);
 }
 
 const toMs = (v) => (typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN);
@@ -49,7 +49,7 @@ function conflictGroups(entries) {
   const groups = [];
   for (const list of byKey.values()) {
     if (new Set(list.map((e) => norm(e.text))).size < 2) continue;
-    groups.push({ scope: list[0].scope, repo_id: list[0].repo_id ?? null, ticket_id: list[0].ticket_id ?? null, key: list[0].key, entries: list.sort(rank) });
+    groups.push({ scope: list[0].scope, repo_id: list[0].repo_id ?? null, ticket_id: list[0].ticket_id ?? null, key: list[0].key, entries: list.sort(rankMemory) });
   }
   return groups.sort((a, b) => SCOPE_ORDER[a.scope] - SCOPE_ORDER[b.scope] || cmp(a.repo_id ?? '', b.repo_id ?? '') || cmp(a.ticket_id ?? '', b.ticket_id ?? '') || cmp(a.key, b.key));
 }

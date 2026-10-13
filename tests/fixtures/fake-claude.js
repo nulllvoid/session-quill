@@ -15,7 +15,8 @@
 //   FAKE_CLAUDE_CAPTURE   — file to write { prompt, args } to; --resume turns append to
 //                           <capture>.resume as one JSON line each. With --settings <file> the
 //                           capture also holds that file's JSON (`settings`) and the text of the
-//                           grant.json beside it (`grant_text`)
+//                           grant.json beside it (`grant_text`); `add_dir_files` holds the text
+//                           of every file under each --add-dir directory
 //   FAKE_CLAUDE_ENV_PROBE — comma-separated variable names whose values (or null) the capture
 //                           records as `env_probe`; tests set only fake values
 //   FAKE_CLAUDE_VERSION   — what `--version` prints (default '2.1.296 (Claude Code)')
@@ -76,6 +77,16 @@ function run() {
       try { out.settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { out.settings = null; }
       try { out.grant_text = fs.readFileSync(path.join(path.dirname(file), 'grant.json'), 'utf8'); } catch { out.grant_text = null; }
     }
+    // Every --add-dir directory as the run saw it: { dir: { relative/path: text } }.
+    out.add_dir_files = {};
+    args.forEach((a, i) => {
+      if (a !== '--add-dir') return;
+      const dir = args[i + 1];
+      const files = {};
+      const walk = (d) => { try { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else files[path.relative(dir, f).split(path.sep).join('/')] = fs.readFileSync(f, 'utf8'); } } catch { /* missing */ } };
+      walk(dir);
+      out.add_dir_files[dir] = files;
+    });
     if (process.env.FAKE_CLAUDE_ENV_PROBE) out.env_probe = Object.fromEntries(process.env.FAKE_CLAUDE_ENV_PROBE.split(',').map((k) => [k, process.env[k] ?? null]));
     if (process.env.FAKE_CLAUDE_GUARD_CALLS) out.guard_decisions = guardCalls(out.settings);
     fs.writeFileSync(capture, JSON.stringify(out));
