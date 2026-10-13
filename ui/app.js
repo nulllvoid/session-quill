@@ -918,6 +918,10 @@ function onChange(e) {
     const choices = Object.fromEntries(['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'].map((k) => [k, fd.get(k) === 'on' || !!runForm.querySelector(`[name="${k}"][disabled][checked]`)]));
     const out = runForm.querySelector('.run-summary');
     if (recipe && out) out.textContent = runSummary(recipe, choices, repo);
+    // The time cap follows the checked access level (budgetFor, via the recipe's caps).
+    const cap = runForm.querySelector('.run-cap');
+    const access = fd.get('access');
+    if (cap && typeof access === 'string' && cap.dataset[`cap${access.charAt(0).toUpperCase()}${access.slice(1)}`]) cap.textContent = cap.dataset[`cap${access.charAt(0).toUpperCase()}${access.slice(1)}`];
   }
   if (el.dataset.action === 'status-select') {
     const status = el.value;
@@ -951,6 +955,12 @@ export function startApp() {
   document.addEventListener('click', onClick);
   document.addEventListener('keydown', onKey);
   document.addEventListener('change', onChange);
+  // The Advanced access details stays open while it holds the checked access level, so that
+  // radio is never hidden or unfocusable (design system §8). 'toggle' does not bubble.
+  document.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (d instanceof HTMLDetailsElement && d.classList.contains('access-advanced') && !d.open && d.querySelector('input[name="access"]:checked')) d.open = true;
+  }, true);
   document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { appState.filters.q = e.target.value; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
   document.addEventListener('submit', (e) => { const form = e.target.closest('form[data-form]'); if (form) { e.preventDefault(); handleSubmit(form); } });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

@@ -397,13 +397,18 @@ export function contentViewer(ref, { content = {}, status = {}, generation = '',
 export const FULL_ACCESS_NOTE = 'No Quill guard; prod writes allowed; your Claude Code deny rules still apply.';
 // Insertion point: the scope catalog (Task 11) adds its Write scopes checklist inside the Advanced
 // details below, after "Use my Claude Code settings".
-export function accessFieldset(snapshot = null) {
+// `access` is the level to show checked. When it is the one under Advanced, the details element
+// renders open, so the group's checked member stays visible and focusable (design system §8);
+// app.js keeps it open while it holds the checked radio.
+export function accessFieldset(snapshot = null, { access = 'autonomous' } = {}) {
+  const level = ['autonomous', 'standard', 'full', 'settings'].includes(access) ? access : 'autonomous';
+  const on = (v) => (v === level ? ' checked' : '');
   return `<fieldset class="access"><legend>Access</legend>
-  <label><input type="radio" name="access" value="autonomous" checked> Autonomous <span class="muted small">(your connected tools and local commands; production stays read-only; Quill's guard checks every call)</span></label>
-  <label><input type="radio" name="access" value="standard"> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
-  <label class="danger"><input type="radio" name="access" value="full"> Full access <span class="small access-note">${esc(FULL_ACCESS_NOTE)}</span></label>
-  <details class="advanced access-advanced"><summary>Advanced: other access</summary>
-  <label><input type="radio" name="access" value="settings"> Use my Claude Code settings <span class="muted small">(your permission rules and connectors; anything that would need your approval is refused)</span></label>
+  <label><input type="radio" name="access" value="autonomous"${on('autonomous')}> Autonomous <span class="muted small">(your connected tools and local commands; production stays read-only; Quill's guard checks every call)</span></label>
+  <label><input type="radio" name="access" value="standard"${on('standard')}> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
+  <label class="danger"><input type="radio" name="access" value="full"${on('full')}> Full access <span class="small access-note">${esc(FULL_ACCESS_NOTE)}</span></label>
+  <details class="advanced access-advanced"${level === 'settings' ? ' open' : ''}><summary>Advanced: other access</summary>
+  <label><input type="radio" name="access" value="settings"${on('settings')}> Use my Claude Code settings <span class="muted small">(your permission rules and connectors; anything that would need your approval is refused)</span></label>
   </details>${autonomyNotes(snapshot)}
 </fieldset>`;
 }
@@ -429,7 +434,7 @@ function autonomyNotes(snapshot) {
   else {
     const trusted = new Set(Array.isArray(a.trusted_mcp_servers) ? a.trusted_mcp_servers : []);
     const rows = inv.mcpServers.map((s) => {
-      const source = MCP_SOURCE_TEXT[s.source] ?? (s.source ? `${s.source} configuration` : 'unknown source');
+      const source = typeof s.source === 'string' && Object.hasOwn(MCP_SOURCE_TEXT, s.source) ? MCP_SOURCE_TEXT[s.source] : s.source ? `${s.source} configuration` : 'unknown source';
       const state = s.status === 'pending'
         ? '<span class="chip small">Not connected yet when the run started (pending)</span>'
         : s.status && s.status !== 'connected' ? `<span class="chip small">Unavailable (${esc(s.status === 'needs-auth' ? 'needs auth' : s.status)})</span>`
@@ -446,13 +451,16 @@ function autonomyNotes(snapshot) {
     let text;
     if (report[sys] === 'readonly') text = CRED_VALUE_TEXT.readonly;
     else if (configured.has(sys)) text = cred ? `read-only profile configured; run ${short(cred.run_id)} could not use it` : 'read-only profile configured; checked when a run starts';
-    else text = cred ? CRED_VALUE_TEXT[report[sys]] ?? 'no read-only profile' : 'no read-only profile';
+    else text = cred && typeof report[sys] === 'string' && Object.hasOwn(CRED_VALUE_TEXT, report[sys]) ? CRED_VALUE_TEXT[report[sys]] : 'no read-only profile';
     return `<li>${esc(label)}: ${esc(text)}</li>`;
   });
   out.push(`<p>Production command-line tools <span class="muted">(${cred ? `credentials as run ${short(cred.run_id)} got them` : 'from your config; no autonomous run yet'})</span></p><ul class="cred-systems">${lines.join('')}</ul>`);
   const issues = [];
   const anyReadonly = CRED_SYSTEM_TEXT.some(([sys]) => report[sys] === 'readonly' || configured.has(sys));
   if (!anyReadonly) issues.push('No read-only credentials configured: reads through production commands (kubectl, aws, gcloud, az, psql, argocd) are refused in autonomous runs; connectors and local tools still work. Add profiles under [prod.readonly] in config.toml; quill doctor shows what is set.');
+  // A profile the config names but the latest run could not use is as actionable as none (review M-4).
+  const unusable = cred ? CRED_SYSTEM_TEXT.filter(([sys]) => configured.has(sys) && report[sys] !== 'readonly') : [];
+  if (unusable.length) issues.push(`Read-only profile configured but not used by run ${String(cred.run_id ?? '').slice(0, 8)}: ${unusable.map(([, label]) => label).join(', ')}. Its reads were refused; check the path or profile name under [prod.readonly] (quill doctor shows what is set).`);
   if (report.provider === 'shared') issues.push('Claude Code signs in through Bedrock or Vertex, so the agent can use those provider credentials too.');
   for (const r of Array.isArray(report.residual) ? report.residual : []) issues.push(`Not redirected (the guard refuses reading these files, but a script could still reach them): ${r}`);
   for (const e of Array.isArray(report.scope_errors) ? report.scope_errors : []) issues.push(`Scope setting ignored: ${e}`);

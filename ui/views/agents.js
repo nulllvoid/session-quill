@@ -30,7 +30,7 @@ function recipeRow(r, ticket, canRun) {
   const head = `<strong>${esc(r.name)}</strong> <span class="chip small" data-source="${attr(r.source)}">${esc(SOURCE_LABELS[r.source] ?? r.source)}</span>`;
   if (r.error) return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small critical">${icon('alert')}Invalid: ${esc(r.error)}</span></li>`;
   const run = canRun ? ` <button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(ticket.id)}" data-recipe="${attr(r.name)}">${icon('play')}Run…</button>` : '';
-  return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small">${esc(r.description)}</span><div class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(r.timeout_min)} min${r.legacy ? '' : ' · results are suggestions'}</div>${run}</li>`;
+  return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small">${esc(r.description)}</span><div class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(recipeCap(r))} min${r.legacy ? '' : ' · results are suggestions'}</div>${run}</li>`;
 }
 
 function suggestionText(s) {
@@ -89,6 +89,14 @@ export function testGateBadge(g) {
   if (g.status === 'passed') return '<span class="chip good small">Tests passed (worker)</span>';
   if (g.status === 'skipped') return '<span class="chip small">Not test-verified</span>';
   return `<span class="chip critical small">${g.status === 'timeout' ? 'Tests timed out' : 'Tests failed'}</span>`;
+}
+
+// A recipe's time cap for an access level, as the worker computes it (recipe `caps`, the same
+// budget the CLI and the queued run use); the recipe's own timeout_min only for an older snapshot.
+export const defaultAccess = (recipe) => (recipe && recipe.mode === 'files' ? 'standard' : 'autonomous');
+export function recipeCap(recipe, access = defaultAccess(recipe)) {
+  const caps = recipe && recipe.caps && typeof recipe.caps === 'object' ? recipe.caps : null;
+  return caps && Object.hasOwn(caps, access) && Number.isFinite(caps[access]) ? caps[access] : recipe.timeout_min;
 }
 
 // Whether a run reads or edits, and Full access as a warning.
@@ -192,7 +200,7 @@ ${boxes.length || advanced.length ? `<fieldset><legend>Permissions for this run<
 ${recipe.mode === 'files' ? '' : accessFieldset(snapshot)}
 <label class="label" for="recipe-note">Note <span class="muted">(max 280)</span></label>
 <textarea id="recipe-note" name="note" maxlength="280" rows="2" placeholder="Anything the agent should focus on?"></textarea>
-<p class="muted small">Capped at ${esc(recipe.timeout_min)} minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>
+<p class="muted small">Capped at <span class="run-cap"${['standard', 'settings', 'autonomous', 'full'].map((a) => ` data-cap-${a}="${attr(recipeCap(recipe, a))}"`).join('')}>${esc(recipeCap(recipe))}</span> minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>
 ${blockers.length ? `<ul class="issues">${blockers.map((b) => `<li data-level="${b.level}">${icon('alert')}${esc(b.text)}</li>`).join('')}</ul>` : ''}
 <p class="run-summary" aria-live="polite">${esc(runSummary(recipe, defaults, repo))}</p>
 <div class="dialog-actions"><button type="submit" class="btn primary"${blocked ? ` disabled title="${attr(blockers.find((b) => b.level === 'blocker').text)}"` : ''}>Queue run</button><button type="button" class="btn ghost" data-action="run-agent-back" data-ticket="${attr(ticket.id)}">Back</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>

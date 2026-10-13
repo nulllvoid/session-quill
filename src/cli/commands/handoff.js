@@ -8,7 +8,7 @@ import { requestsDir, handoffsDir } from '../../lib/paths.js';
 import { readJsonIfExists, writeJsonAtomic } from '../../lib/atomic-fs.js';
 import { TrackerError } from '../../lib/errors.js';
 import { bodyHash } from '../../server/requests.js';
-import { budgetFor } from '../../handoff/runner.js';
+import { capMinutes } from '../../handoff/runner.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -63,7 +63,7 @@ export function accessNotice(access) {
 
 async function queue(ctx, io, args, flags) {
   const [key] = args;
-  if (!key) throw new TrackerError('usage', 'usage: handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <branch>] [--draft-pr] [--retry-of <handoff-id>]');
+  if (!key) throw new TrackerError('usage', 'usage: handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <branch>] [--draft-pr] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <handoff-id>]');
   const ticket = findTicketByKey(ctx, key);
   if (!ticket) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
   const repo = ticket.repo_id && ctx.config.repos[ticket.repo_id] ? { id: ticket.repo_id, ...ctx.config.repos[ticket.repo_id] } : null;
@@ -88,7 +88,7 @@ async function queue(ctx, io, args, flags) {
     throw new TrackerError(err.code ?? terminal.state, `handoff request ${terminal.state}: ${err.message ?? ''}${terminal.result && terminal.result.existing_handoff_id ? ` (existing run ${terminal.result.existing_handoff_id})` : ''}`);
   }
   io.println(`Handoff ${terminal.result.handoff_id} queued for ${ticket.key} (${payload.mode}; permissions: ${Object.entries(payload.permissions).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}).`);
-  io.println(`Request accepted is not execution complete: follow progress with \`quill handoff list\` or the dashboard. Execution is capped at ${Math.round(budgetFor(null, ctx.config, access, mode).timeoutMs / 60_000)} minutes.`);
+  io.println(`Request accepted is not execution complete: follow progress with \`quill handoff list\` or the dashboard. Execution is capped at ${capMinutes(null, ctx.config, access, mode)} minutes.`);
   if (flags.json) io.json(terminal);
   return 0;
 }

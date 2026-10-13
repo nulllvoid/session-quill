@@ -243,3 +243,53 @@ test('write scopes on a run fail at dispatch while no scope catalog resolves the
     assert.deepEqual([h.state, h.error.code], ['failed', 'scope-unknown']);
   } finally { await b.w.stop(); }
 });
+
+// Fix round 1 (review I-1): the dialog shows the cap the run really gets, from the same function
+// the CLI and the queued record use, for every access level.
+test('recipe caps: the snapshot carries budgetFor minutes per access level, and the dialog and CLI show them', async () => {
+  const { capMinutes } = await import('../../src/handoff/runner.js');
+  const { renderRunAgentDialog } = await import('../../ui/views/run-dialog.js');
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  try {
+    const t = b.ticket(T1, 'PROJ-12');
+    const recipes = b.w.snapshotOptions().recipes;
+    const by = (n) => recipes.find((r) => r.name === n);
+    for (const name of ['analyse', 'analyse-followups', 'attempt-fix']) {
+      const r = by(name);
+      assert.deepEqual([r.caps.autonomous, r.caps.standard, r.caps.settings, r.caps.full], [30, 20, 20, 20], name);
+      assert.equal(r.caps.autonomous, capMinutes(r, b.config, 'autonomous'), `${name}: the CLI's number`);
+    }
+    assert.equal(by('standup').caps.autonomous, 5, 'a recipe that sets timeout_min keeps it on every level');
+    const snap = { tickets: [{ ...t, status: 'active' }], handoffs: [], recipes, repos: [{ id: 'demo', project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: [] }], capabilities: { read: true, handoff: true }, meta: { timezone: 'UTC' } };
+    for (const name of ['analyse', 'analyse-followups', 'attempt-fix']) {
+      const html = renderRunAgentDialog(snap.tickets[0], snap, { recipe: name });
+      assert.match(html, /Capped at <span class="run-cap" data-cap-standard="20" data-cap-settings="20" data-cap-autonomous="30" data-cap-full="20">30<\/span> minutes/, name);
+    }
+    assert.match(renderRunAgentDialog(snap.tickets[0], snap), /data-recipe="analyse"[^]*?· 30 min<\/span>/, 'the recipe card shows the default (autonomous) cap');
+    // The queued record agrees.
+    const hid = await queueRun(b, 7, { recipe: 'analyse-followups', note: '', permissions: { ...NONE, read_source: true }, access: 'standard' });
+    assert.equal(b.w.state.handoffs.get(hid).deadline_ms, by('analyse-followups').caps.standard * 60_000);
+    await settle(b, hid);
+  } finally { await b.w.stop(); }
+});
+
+// Fix round 1 (review I-2): per-run inventory and credential reports stay on the records; the
+// snapshot's handoff list carries neither, so it grows only by each run's own summary.
+test('the snapshot strips inventory and cred_report from every run; meta.autonomy keeps only the latest', async () => {
+  const { newState } = await import('../core/helpers.js');
+  const { buildSnapshot } = await import('../../src/worker/projections.js');
+  const { autonomyInfo } = await import('../../src/handoff/inventory.js');
+  const bigInventory = { tools: Array.from({ length: 500 }, (_, i) => `mcp__server_${i}__tool_with_a_long_name`), mcpServers: Array.from({ length: 200 }, (_, i) => ({ name: `server-${i}`, status: 'connected', source: 'claudeai' })), plugins: [], skills: [], version: '2.1.296', counts: { tools: 500, mcpServers: 200, plugins: 0, skills: 0 }, at: '2026-10-02T08:00:00Z' };
+  const sizeWith = (n) => {
+    const state = newState();
+    for (let i = 0; i < n; i += 1) state.handoffs.set(`h${i}`, { id: `h${i}`, ticket_id: 't', state: 'done', access: 'autonomous', requested_at: `2026-10-02T08:${String(i).padStart(2, '0')}:00Z`, inventory: bigInventory, cred_report: { kubernetes: 'stub', residual: ['x'.repeat(200)] } });
+    const snap = buildSnapshot(state, { generation_id: 'g', generated_at: '2026-10-02T09:00:00Z', autonomy: autonomyInfo(state, {}) });
+    for (const h of snap.handoffs) assert.ok(!('inventory' in h) && !('cred_report' in h));
+    assert.equal(snap.meta.autonomy.inventory.mcpServers.length, 200, 'the latest inventory is still there once');
+    return JSON.stringify(snap).length;
+  };
+  const one = sizeWith(1);
+  const twenty = sizeWith(20);
+  assert.ok(twenty - one < 19 * 400, `20 runs add ${twenty - one} bytes over 1; only the small per-run summaries`);
+});

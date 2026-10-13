@@ -551,7 +551,7 @@ const SDK_RE = /@aws-sdk|aws-sdk|\bboto3\b|\bbotocore\b|@kubernetes\/client-node
 const PROCESS_IN_CODE_RE = /child_process|\bsubprocess\b|\bos\.(system|popen|exec\w*|spawn\w*)|\bspawn(Sync)?\s*\(|\bexec(Sync|File|FileSync)?\s*\(|\bPopen\b|\bsystem\s*\(|\beval\s*\(|\b__import__\b|\bimportlib\b|Deno\.(run|Command)|Bun\.(spawn|\$)|\bshell_exec\b|\bpassthru\b|\bproc_open\b|\bpopen\s*\(|IO\.popen|%x[({[]|Runtime\.getRuntime|\bnew Function\s*\(/;
 const BACKTICK_LANGS = new Set(['perl', 'ruby', 'php', 'awk']);
 const PG_RE = /require\(\s*['"]pg['"]\s*\)|from\s+['"]pg['"]|import\s+pg\b|import\(\s*['"]pg['"]\s*\)/;
-const QUILL_IN_CODE_RE = /session-quill|[\\/]bin[\\/]quill\.js|src[\\/]cli[\\/]|['"`]quill(\.cmd|\.ps1)?['"`\s]/i;
+const QUILL_IN_CODE_RE = /session-quill|[\\/]bin[\\/]quill\.js|quill-(hook|guard)(\.[cm]?js)?\b|src[\\/]cli[\\/]|['"`]quill(\.cmd|\.ps1)?['"`\s]/i;
 const HTTP_LIB_RE = /\b(requests|httpx|axios|aiohttp|urllib\w*|got|superagent|ky|needle|node-fetch|undici|fetch|http\.client|https?|XMLHttpRequest|WebClient|HttpClient|Net::HTTP|Faraday|curl_init)\b/i;
 const HTTP_WRITE_IN_CODE_RE = /\b(requests|httpx|session|client|aiohttp|axios|got|superagent|ky|needle|urllib3|http)\s*\.\s*(post|put|patch|delete|request)\s*\(|method\s*[:=]\s*['"`]?(post|put|patch|delete)\b|\bbody\s*:|\bdata\s*=\s*b?['"{]|urlopen\s*\([^)]*data\s*=|Request\s*\([^)]*data\s*=|\bsmtplib\b|\bnodemailer\b|\bnet\.(connect|createConnection)\b|\bsocket\.(socket|create_connection)\b|\bftplib\b|\bparamiko\b/i;
 
@@ -567,6 +567,10 @@ function inlineCode(code, kind, lang) {
 
 function scriptByName(file, args = [], what = 'script') {
   const base = String(file).replace(/^.*[\\/]/, '');
+  // Quill's own entry points, from any checkout (ADR 0026, review M-1): the capture hook and the
+  // guard are never a run's to start, and the CLI by path gets the same read-only list as `quill`.
+  if (isQuillEntry(file)) return privileged(`${base} is a Quill entry point (capture hook or guard); a run never starts it`);
+  if (/^quill(\.[cm]?js)?$/i.test(String(file).replace(/[\\/]+$/, '').replace(/^.*[\\/]/, ''))) return quill(args);
   if (SCRIPT_NAME_RE.test(base)) return unknownProd(`${what} ${base} looks like a deploy/release step`);
   const firstArg = args.find((x) => !x.startsWith('-'));
   if (firstArg && SCRIPT_NAME_RE.test(firstArg)) return unknownProd(`${what} ${base} ${firstArg} looks like a deploy/release step`);
@@ -618,6 +622,7 @@ function classifyCommand(name, seg, ctx, h) {
     case 'git': return git(args, ak, seg, ctx, h);
     case 'gh': return gh(args, ak, seg, ctx);
     case 'quill': case 'session-quill': return quill(args);
+    case 'quill-hook': case 'quill-guard': return privileged(`${name} is a Quill entry point (capture hook or guard); a run never starts it`);
     case 'node': case 'deno': case 'bun': case 'tsx': case 'ts-node':
       return nodeLike(name, args, ak, seg, ctx, h);
     case 'python': case 'python3': case 'py': case 'pythonw': case 'python2':
@@ -1728,6 +1733,12 @@ function quill(args) {
 
 // bin/quill.js and friends: quill, quill.js/.mjs/.cjs (any case, trailing slashes), src/cli/*,
 // anything inside a session-quill package.
+// bin/quill-hook.js and bin/quill-guard.js (any case, with or without the extension), wherever they are.
+function isQuillEntry(p) {
+  const base = String(p).replace(/[\\/]+$/, '').replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, '');
+  return /^quill-(hook|guard)(\.[cm]?js)?$/.test(base);
+}
+
 function isQuillScript(p) {
   const t = String(p).replace(/[\\/]+$/, '');
   const base = t.replace(/^.*[\\/]/, '').toLowerCase();
@@ -1755,6 +1766,7 @@ function nodeLike(name, args, ak, seg, ctx, h) {
         if (inFile.kind !== 'lit') return unparseable(`${name} reads its script from a dynamic path`);
         const b = inFile.target.replace(/^.*[\\/]/, '').toLowerCase();
         if (b === 'quill.js' || b === 'quill') return quill(args.slice(i + 1));
+        if (isQuillEntry(inFile.target)) return privileged(`${name} runs a Quill entry point`);
         return scriptByName(inFile.target, args.slice(i + 1));
       }
       break;
@@ -1762,7 +1774,7 @@ function nodeLike(name, args, ak, seg, ctx, h) {
     if (t.startsWith('-')) {
       const v = NODE_VALUES.has(t) ? args[i + 1] : /^--(require|import|loader|experimental-loader)=/.test(t) ? t.slice(t.indexOf('=') + 1) : null;
       if (/^(-r|--require|--import|--loader|--experimental-loader)(=|$)/.test(t) && typeof v === 'string') {
-        if (isQuillScript(v)) return privileged(`${name} preloads the Quill CLI`);
+        if (isQuillScript(v) || isQuillEntry(v)) return privileged(`${name} preloads the Quill CLI`);
         if (SDK_RE.test(v) || v === 'pg' || v.startsWith('pg/')) return unknownProd(`${name} preloads a prod SDK client`);
       }
       if (NODE_VALUES.has(t)) i += 1;

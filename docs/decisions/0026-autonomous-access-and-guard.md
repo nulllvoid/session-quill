@@ -114,7 +114,14 @@ The dialog's "Connected tools this run can use" lists each connector with its so
 
 ### The CLI inside a run (`cli-in-run`)
 
-When `QUILL_HANDOFF_ID` is set, the CLI dispatcher refuses every command except the read list above, before it loads any command module. It exits with code 2 and `quill: refused inside an agent run (cli-in-run)`. This holds in every access level, independently of the guard. A run cannot use the CLI to approve or dismiss proposals, accept suggestions, queue or cancel runs, edit tickets, publish, or hand back a result with `quill handoff result`. Its result comes from the stream's final result event. The plugin's capture hooks run through `bin/quill-hook.js`, not the dispatcher, so capture inside a run is unchanged. `quill hook` typed as a command is refused like any other.
+When `QUILL_HANDOFF_ID` is set, the CLI dispatcher refuses every command except the read list above, before it loads any command module. It exits with code 2 and `quill: refused inside an agent run (cli-in-run)`.
+
+How far this reaches depends on the access level:
+- **Every level:** the refusal stops the normal spelling, independently of the guard.
+- **Autonomous:** the guard also refuses the forms that clear the variable (`env -u QUILL_HANDOFF_ID quill …`, `unset`, PowerShell `$env:`) and Quill's entry points run by path from any checkout (`bin/quill.js`, `bin/quill-hook.js`, `bin/quill-guard.js`): all are `quill-privileged`.
+- **`settings` and `full`:** an agent that clears the variable is stopped only by the owner's own Claude Code rules.
+
+Within those limits, a run cannot use the CLI to approve or dismiss proposals, accept suggestions, queue or cancel runs, edit tickets, publish, or hand back a result with `quill handoff result`. Its result comes from the stream's final result event. The plugin's capture hooks run through `bin/quill-hook.js`, not the dispatcher, so capture inside a run is unchanged. `quill hook` typed as a command is refused like any other. An agent running `bin/quill-hook.js` itself could only forge capture events, never requests; the guard refuses that by path in autonomous runs.
 
 ## Boundary statement and residual risk
 

@@ -1,14 +1,13 @@
 // Worker extension that dispatches queued handoffs, enforces the 20-minute wall-clock cap,
 // honours cancellation, and resolves runs interrupted by a restart (TRD §Handoff execution).
 import fs from 'node:fs';
-import os from 'node:os';
 import { performance } from 'node:perf_hooks';
 import path from 'node:path';
-import { execFileSync, execFile } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
 import { createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
-import { buildPrompt, budgetFor, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
+import { buildPrompt, budgetFor, recipeCaps, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff } from './context.js';
 import { stageFiles, applyFileRun } from './files.js';
@@ -20,14 +19,8 @@ import { reconcileAttempts } from './reconcile.js';
 import { handoffsDir, handoffRunDir, logsDir } from '../lib/paths.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
-import { TrackerError } from '../lib/errors.js';
-import { buildChildEnv, CRED_SYSTEMS } from './cred-env.js';
-import { writeGrant } from './grant.js';
-import { writeRunSettings } from './run-settings.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
-import { MCP_SERVERS_FILE } from './mcp-sources.js';
-import { credentialSettings } from '../config/credentials.js';
-import { mcpSettings } from '../config/mcp-policy.js';
+import { noScopeCatalog, createVersionProbe, prepareAutonomous } from './autonomous.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -63,14 +56,6 @@ export function retentionDays(config = {}) {
 }
 
 const isFix = (h) => !!(h.permissions && h.permissions.edit_source);
-const VERSION_CACHE_MS = 10 * MINUTE;
-
-// Until the scope catalog exists (Task 11), no write scope resolves: a run that names one fails at
-// dispatch instead of running without the grant it asked for.
-function noScopeCatalog(names) {
-  if (names.length) throw new TrackerError('scope-unknown', `no scope catalog resolves ${names.join(', ')}; queue the run again without write scopes`);
-  return [];
-}
 
 function detectRuntime(claudePath) {
   try {
@@ -85,7 +70,7 @@ function detectRuntime(claudePath) {
 // ([{ name, target?, env?, matchers, fingerprint }]) or throws; the default resolves none.
 export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = noScopeCatalog } = {}) {
   const running = new Map(); // handoff id -> { child, done, reason, fix }
-  let versionCache = null; // { at, value }: `claude --version`, refreshed every 10 minutes
+  const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
   const limits = { readonly: maxReadonly ?? maxConcurrent ?? configured.readonly, fix: maxFix ?? maxConcurrent ?? configured.fix };
@@ -129,75 +114,6 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       if (!Object.keys(patch).length || !h || h.state !== 'running') return;
       try { updateHandoff(worker, id, patch); } catch (err) { worker.log(`handoff init not recorded: ${err.message}`); }
     };
-  }
-
-  // `claude --version`, for the autonomous runtime gate; null when it cannot be read. A good answer
-  // is cached for 10 minutes so a batch does not start one probe per run.
-  function probeVersion() {
-    const now = Date.now();
-    if (versionCache && now - versionCache.at < VERSION_CACHE_MS) return Promise.resolve(versionCache.value);
-    return new Promise((resolve) => {
-      try {
-        execFile(claudePath, [...claudeArgs, '--version'], { timeout: 15_000, windowsHide: true, env: { ...process.env, ...spawnEnv } }, (err, stdout) => {
-          const value = err ? null : String(stdout ?? '').trim().split(/\r?\n/)[0] || null;
-          if (value) versionCache = { at: now, value };
-          resolve(value);
-        });
-      } catch { resolve(null); }
-    });
-  }
-
-  // An autonomous run's setup (ADR 0026): the run dir with an empty context snapshot dir, the child
-  // environment with every credential location redirected (Task 9), the frozen grant the guard reads
-  // on every call, and the run settings that wire the guard in. Returns what spawnAgent needs.
-  function prepareAutonomous(worker, h, { cwd, checkout, repoCfg, scopes, env }) {
-    const runDir = handoffRunDir(worker.env, h.id);
-    fs.mkdirSync(runDir, { recursive: true });
-    const contextDir = path.join(runDir, 'context');
-    fs.rmSync(contextDir, { recursive: true, force: true });
-    fs.mkdirSync(contextDir, { recursive: true });
-    const permissions = h.permissions ?? {};
-    const { readonly, keepEnv, apiBilling } = credentialSettings(ctx.config);
-    const { mcpPolicy, trustedMcpServers } = mcpSettings(ctx.config);
-    const built = buildChildEnv({ baseEnv: { ...process.env, ...env }, access: 'autonomous', permissions, scopes, readonly, keepEnv, apiBilling, runDir, platform: process.platform });
-    const win = process.platform === 'win32';
-    const envOf = (name) => { const k = Object.keys(built.env).find((x) => (win ? x.toUpperCase() === name : x === name)); return k === undefined ? undefined : built.env[k]; };
-    const temps = [...new Set([envOf('TEMP'), envOf('TMP'), envOf('TMPDIR'), os.tmpdir()].filter((t) => typeof t === 'string' && path.isAbsolute(t)))];
-    const home = envOf('USERPROFILE') ?? envOf('HOME') ?? os.homedir();
-    const claudeDir = envOf('CLAUDE_CONFIG_DIR') ?? path.join(home, '.claude');
-    const editable = !!(permissions.edit_source || permissions.edit_files || permissions.delete_files);
-    const grant = {
-      access: 'autonomous',
-      permissions,
-      scopes: scopes.map((x) => ({ name: x.name, ...(x.target ? { target: x.target } : {}), matchers: x.matchers ?? {}, fingerprint: x.fingerprint ?? null })),
-      actionPins: [],
-      // Spec §4.2: the checkout or sandbox, the run dir and its context snapshot, temp, and Claude's
-      // plugin and skill directories; the checkout is writable only with an edit permission.
-      readableRoots: [...new Set([cwd, runDir, contextDir, ...temps, path.join(claudeDir, 'plugins'), path.join(claudeDir, 'skills')])],
-      writableRoots: [...new Set([runDir, ...temps, ...(editable ? [cwd] : [])])],
-      // R13: the checkout's Claude and MCP configuration and git's own files never change in a run.
-      protectedPaths: checkout ? [path.join(checkout, '.mcp.json'), path.join(checkout, '.claude'), path.join(checkout, '.git')] : [],
-      mcpPolicy,
-      trustedMcpServers,
-      trackerHosts: [],
-      defaultBranch: repoCfg ? repoCfg.default_branch ?? null : null,
-      // Systems whose credentials are not an empty stub (read-only, scope or the owner's): a prod
-      // CLI read on any other is refused with the onboarding hint (spec §3).
-      credentialSystems: CRED_SYSTEMS.filter((sys) => built.report[sys] && built.report[sys] !== 'stub'),
-    };
-    const { sha256 } = writeGrant(runDir, grant);
-    const settingsPath = writeRunSettings(runDir);
-    const childEnv = {
-      ...built.env,
-      QUILL_HANDOFF_ACCESS: 'autonomous',
-      QUILL_HANDOFF_PERMISSIONS: Object.keys(permissions).filter((k) => permissions[k] === true).join(','),
-      QUILL_HANDOFF_SCOPES: scopes.map((x) => (x.target ? `${x.name}:${x.target}` : x.name)).join(','),
-      QUILL_HANDOFF_GUARD: 'enforce',
-      QUILL_HANDOFF_GRANT_SHA256: sha256,
-      // Runs never write into the owner's Claude Code memory (spec §6.3, P0 disableAutoMemory).
-      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
-    };
-    return { childEnv, settingsPath, addDirs: [contextDir], permissionPrompts: 'none', mcpServersPath: path.join(runDir, MCP_SERVERS_FILE), report: built.report };
   }
 
   // Turns and spend across every turn of a run, from each turn's final result event (spec §5.4).
@@ -604,7 +520,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (ctx.env && ctx.env.QUILL_HOME) env.QUILL_HOME = ctx.env.QUILL_HOME;
     let auto = null;
     if (access === 'autonomous') {
-      try { auto = prepareAutonomous(worker, h, { cwd, checkout: worktreePath, repoCfg, scopes, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
+      try { auto = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, scopes, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
     }
     // The credential report is what the Run dialog's warnings rest on (Task 9): which systems got a
     // read-only profile, a stub or a scope, and what no redirect can close.
@@ -665,7 +581,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     pruneRetention,
     cleanupRun: (id) => cleanupRun(currentWorker, id),
     async onStart(worker) {
-      worker.recipeInfo = () => catalogFor(worker).list();
+      // Each recipe carries its time cap per access level, from the same budget dispatch uses.
+      worker.recipeInfo = () => catalogFor(worker).list().map((r) => (r.error ? r : { ...r, caps: recipeCaps(r, ctx.config) }));
       worker.handoffLimits = () => ({ ...limits });
       worker.autonomyInfo = () => autonomyInfo(worker.state, ctx.config);
       currentWorker = worker;

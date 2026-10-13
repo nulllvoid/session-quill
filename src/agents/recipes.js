@@ -203,7 +203,7 @@ export function renderRecipe(recipe, { ticket = {}, url = null, note = '', prs =
 function publicEntry(r, repoId) {
   return {
     name: r.name, description: r.description, source: r.source, repo_id: repoId, hash: r.hash, error: r.error, mode: r.mode, permissions: r.permissions,
-    tools: r.tools, timeout_min: r.timeout_min, inputs: r.inputs, outputs: r.outputs, self_check: r.self_check, legacy: r.legacy, schedulable: r.schedulable,
+    tools: r.tools, timeout_min: r.timeout_min, timeout_set: r.timeout_set ?? false, inputs: r.inputs, outputs: r.outputs, self_check: r.self_check, legacy: r.legacy, schedulable: r.schedulable,
     overridden_by: r.overridden_by ?? null, preview: r.body ? r.body.slice(0, 600) : '',
   };
 }

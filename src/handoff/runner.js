@@ -6,6 +6,7 @@ import { spawn, execFile } from 'node:child_process';
 import { createStreamCollector } from './stream.js';
 import { buildChildEnv, CREDENTIAL_VARS, GIT_PROGRAM_VARS } from './cred-env.js';
 import { STAGES } from './stage.js';
+import { ACCESS } from './permissions.js';
 import { descriptionProblems, normalizeDescription, DESCRIPTION_TEMPLATE } from '../core/description.js';
 
 const MODE_INSTRUCTIONS = {
@@ -444,6 +445,18 @@ export function budgetFor(recipe, config, access, mode, run = null) {
     timeoutMs: Math.round(minutes * 60_000),
     maxBudgetUsd: num(own.max_budget_usd, num(recipe && recipe.max_budget_usd, num(h.max_budget_usd, BUDGET_DEFAULTS.max_budget_usd, { int: false }), { int: false }), { int: false }),
   };
+}
+
+// The wall clock a run gets, in whole minutes: the one number the CLI, the dashboard dialog and
+// the queued record (`deadline_ms`) all show, for every access level.
+export function capMinutes(recipe, config, access, mode = recipe ? recipe.mode : undefined) {
+  return Math.round(budgetFor(recipe, config, access, mode).timeoutMs / 60_000);
+}
+
+// `{ <access>: minutes }` for a recipe, sent with the snapshot's recipe list so the Run dialog
+// shows the cap of the access level that is checked.
+export function recipeCaps(recipe, config) {
+  return Object.fromEntries(ACCESS.map((a) => [a, capMinutes(recipe, config, a)]));
 }
 
 export function killTree(child) {

@@ -7,7 +7,7 @@ import { validateHandoffRequest } from '../../handoff/permissions.js';
 import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest, runOptions, accessNotice } from './handoff.js';
-import { budgetFor } from '../../handoff/runner.js';
+import { capMinutes } from '../../handoff/runner.js';
 
 const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
 
@@ -87,7 +87,7 @@ async function run(ctx, io, args, flags) {
     const err = terminal.error ?? {};
     throw new TrackerError(err.code ?? terminal.state, `run request ${terminal.state}: ${err.message ?? ''}`);
   }
-  const minutes = Math.round(budgetFor(recipe, ctx.config, access, recipe.mode).timeoutMs / 60_000);
+  const minutes = capMinutes(recipe, ctx.config, access);
   io.println(`${name} queued for ${ticket.key} (permissions: ${grants(payload.permissions)}; capped at ${minutes} min). Run ${terminal.result.handoff_id}.`);
   io.println('Queued is not finished: follow it with `quill handoff list` or on the ticket in the dashboard.');
   if (flags.json) io.json(terminal);

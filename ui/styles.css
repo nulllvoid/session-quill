@@ -805,6 +805,7 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 /* Run access (ADR 0017): Full access reads as a warning where it is chosen. */
 .access label.danger { color: var(--critical); }
 .access label.danger .small { color: var(--critical); opacity: .85; }
+.access label.danger .access-note { opacity: 1; }
 /* Autonomous runs (ADR 0026): connectors and credentials as the worker last recorded them. */
 .autonomy-notes { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline); }
 .autonomy-notes p { margin: 0; }

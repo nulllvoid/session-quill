@@ -147,3 +147,42 @@ test('the bulk dialog offers the same access choice', async () => {
   assert.match(html, /name="access" value="autonomous" checked/);
   assert.match(html, /No read-only credentials configured/);
 });
+
+// Fix round 1 (review M-3, M-4, M-5).
+test('my settings checked: the Advanced details renders open so the checked radio stays visible', async () => {
+  const { accessFieldset } = await import('../../ui/components.js');
+  const html = accessFieldset(null, { access: 'settings' });
+  assert.match(html, /<details class="advanced access-advanced" open>/);
+  assert.match(html, /value="settings" checked/);
+  assert.doesNotMatch(html, /value="autonomous" checked/);
+  assert.match(accessFieldset(null), /<details class="advanced access-advanced">/, 'closed by default');
+  assert.match(accessFieldset(null, { access: 'bogus' }), /value="autonomous" checked/);
+});
+
+test('the Full access note is not dimmed (essential text)', async () => {
+  const fs = await import('node:fs');
+  const css = fs.readFileSync(new URL('../../ui/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.access label\.danger \.access-note \{ opacity: 1; \}/);
+});
+
+test('a configured read-only profile the latest run could not use is a warning', () => {
+  const html = dialogFor(withMeta(autonomy({ readonly_configured: ['kubernetes'], credentials: { report: STUBS, run_id: 'abcdef1234', at: '2026-10-02T10:00:00Z' } })));
+  assert.match(html, /<li data-level="warning">[^<]*<svg[^]*?Read-only profile configured but not used by run abcdef12: Kubernetes \(kubectl\)/);
+  assert.doesNotMatch(html, /No read-only credentials configured/);
+  const used = dialogFor(withMeta(autonomy({ readonly_configured: ['kubernetes'], credentials: { report: { ...STUBS, kubernetes: 'readonly' }, run_id: 'r1', at: 'x' } })));
+  assert.doesNotMatch(used, /configured but not used/);
+});
+
+test('record text that names an object property is shown as text', () => {
+  const inventory = { run_id: 'r1', at: 'x', mcpServers: [{ name: 'odd', status: 'connected', source: '__proto__' }, { name: 'odd2', status: 'connected', source: 'constructor' }] };
+  const html = dialogFor(withMeta(autonomy({ inventory, credentials: { report: { ...STUBS, aws: '__proto__' }, run_id: 'r1', at: 'x' } })));
+  assert.doesNotMatch(html, /\[object Object\]|function Object/);
+  assert.match(html, /__proto__ configuration/);
+  assert.match(html, /AWS \(aws\): no read-only profile/);
+});
+
+test('bulk requests default to autonomous access', async () => {
+  const { bulkRequests } = await import('../../ui/lib/bulk.js');
+  const [body] = bulkRequests([{ ticket: { id: 't1', revision: 1, repo_id: 'demo' }, state: 'ready' }], { mode: 'analyse', batchId: 'b1' });
+  assert.equal(body.payload.access, 'autonomous');
+});

@@ -26,7 +26,7 @@ const FULL_INIT = {
 
 test('parseInit reads the Task 3 init fixture', () => {
   const inv = parseInit(JSON.parse(INIT));
-  assert.deepEqual(inv, { tools: ['Bash'], mcpServers: [{ name: 'claude_ai_Atlassian', status: 'connected', source: 'claudeai' }], plugins: [], skills: [], version: null });
+  assert.deepEqual(inv, { tools: ['Bash'], mcpServers: [{ name: 'claude_ai_Atlassian', status: 'connected', source: 'claudeai' }], plugins: [], skills: [], version: null, counts: { tools: 1, mcpServers: 1, plugins: 0, skills: 0 } });
 });
 
 test('parseInit keeps names, statuses and sources only: plugin paths are dropped, junk is skipped', () => {
@@ -49,7 +49,8 @@ test('parseInit caps every list and every string, and survives a non-object', ()
   assert.ok(big.tools.length <= 500);
   assert.ok(big.mcpServers.length <= 200);
   assert.ok(big.mcpServers.every((s) => s.name.length <= 200));
-  assert.deepEqual(parseInit(null), { tools: [], mcpServers: [], plugins: [], skills: [], version: null });
+  assert.deepEqual(big.counts, { tools: 2000, mcpServers: 500, plugins: 0, skills: 0 }, 'counts show what the cap cut');
+  assert.deepEqual(parseInit(null), { tools: [], mcpServers: [], plugins: [], skills: [], version: null, counts: { tools: 0, mcpServers: 0, plugins: 0, skills: 0 } });
   assert.deepEqual(parseInit({ tools: 'Bash', claude_code_version: 42 }).version, null);
 });
 

@@ -64,7 +64,7 @@ export function assertRuntime(versionString, min = MIN_RUNTIME) {
 
 /**
  * The inventory a run's init event reports: names, statuses and sources only, capped.
- * @returns {{ tools: string[], mcpServers: { name: string, status: string|null, source: string|null }[], plugins: string[], skills: string[], version: string|null }}
+ * @returns {{ tools: string[], mcpServers: { name: string, status: string|null, source: string|null }[], plugins: string[], skills: string[], version: string|null, counts: { tools: number, mcpServers: number, plugins: number, skills: number } }}
  */
 export function parseInit(initEvent) {
   const e = isPlainObject(initEvent) ? initEvent : {};
@@ -77,7 +77,10 @@ export function parseInit(initEvent) {
     if (mcpServers.length >= CAPS.mcpServers) break;
   }
   const v = parseVersion(typeof e.claude_code_version === 'string' ? e.claude_code_version : null);
-  return { tools: names(e.tools, CAPS.tools), mcpServers, plugins: names(e.plugins, CAPS.plugins), skills: names(e.skills, CAPS.skills), version: v ? v.join('.') : null };
+  const total = (list) => (Array.isArray(list) ? list.length : 0);
+  // The lists are capped; the counts say how many the runtime reported, so a cut shows.
+  const counts = { tools: total(e.tools), mcpServers: total(e.mcp_servers), plugins: total(e.plugins), skills: total(e.skills) };
+  return { tools: names(e.tools, CAPS.tools), mcpServers, plugins: names(e.plugins, CAPS.plugins), skills: names(e.skills, CAPS.skills), version: v ? v.join('.') : null, counts };
 }
 
 const handoffList = (state) => {

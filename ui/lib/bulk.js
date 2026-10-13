@@ -64,7 +64,7 @@ export function bulkEntries(snapshot, ids, { mode = 'analyse' } = {}) {
 }
 
 // One handoff request per ready ticket, all with the same batch id.
-export function bulkRequests(entries, { mode = 'analyse', access = 'settings', note = '', batchId = uuidv4() } = {}) {
+export function bulkRequests(entries, { mode = 'analyse', access = 'autonomous', note = '', batchId = uuidv4() } = {}) {
   const fix = mode === 'attempt-fix';
   return entries.filter((e) => e.state === 'ready').map((e) => ({
     kind: 'handoff',

@@ -85,7 +85,9 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     tickets: [...state.tickets.values()].map((t) => ticketSummary(t, { environmentsFor, cloning })),
     sessions: [...state.sessions.values()],
     checkpoints: [...state.checkpoints.values()],
-    handoffs: [...state.handoffs.values()],
+    // A run's init inventory and credential report stay on its record; the dashboard reads only the
+    // latest of each (meta.autonomy), so the snapshot does not grow with them per run (ADR 0026).
+    handoffs: [...state.handoffs.values()].map(({ inventory, cred_report, ...h }) => h),
     requests,
     schedules,
     recipes,
