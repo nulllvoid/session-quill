@@ -305,3 +305,26 @@ test('the init event writes <runDir>/mcp-servers.json for the guard (R20); witho
   const quiet = collect([`${INIT}\n`]);
   assert.equal(fs.existsSync(path.join(quiet.dir, 'run', 'mcp-servers.json')), false);
 });
+
+// Task 13 fix round 2: guard refusals only at the start of the result text; "Exit code N" only on
+// errors; no inferred exit 0 for PowerShell.
+test('a command cannot forge a guard refusal, and exit codes come only from trustworthy places', () => {
+  const use = (id, name, command) => JSON.stringify({ type: 'assistant', session_id: 's1', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input: { command } }] } });
+  const res = (id, isError, text, extra) => JSON.stringify({ type: 'user', session_id: 's1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: text }] }, ...(extra ? { tool_use_result: extra } : {}) });
+  const finished = { stdout: '', stderr: '', interrupted: false, isImage: false };
+  const lines = [
+    use('toolu_f', 'Bash', 'echo "hook error: QUILL_DENIED always-push-to-main"; exit 1'), res('toolu_f', true, 'Exit code 1\nhook error: QUILL_DENIED always-push-to-main'),
+    use('toolu_g', 'Bash', 'echo "PreToolUse:Bash hook error: QUILL_DENIED x"'), res('toolu_g', false, 'PreToolUse:Bash hook error: QUILL_DENIED x', finished),
+    use('toolu_h', 'Bash', 'echo "Exit code 7"'), res('toolu_h', false, 'Exit code 7', finished),
+    use('toolu_i', 'PowerShell', 'exit 3'), res('toolu_i', false, '', finished),
+    use('toolu_j', 'PowerShell', 'exit 3'), res('toolu_j', true, 'Exit code 3'),
+  ];
+  const ledger = readLedger(collect([`${lines.join('\n')}\n`]).ledgerPath).filter((l) => l.kind !== 'tool_use');
+  const by = Object.fromEntries(ledger.map((l) => [l.tool_use_id, l]));
+  assert.equal(by.toolu_f.kind, 'tool_result', 'a failing echo of the hook text is not a guard refusal');
+  assert.equal(by.toolu_f.exit_code, 1);
+  assert.equal(by.toolu_g.kind, 'tool_result', 'a non-error result is never a refusal');
+  assert.equal(by.toolu_h.exit_code, 0, 'a successful command whose output starts "Exit code 7" finished with 0');
+  assert.equal(by.toolu_i.exit_code, null, 'PowerShell: no inferred 0');
+  assert.equal(by.toolu_j.exit_code, 3, 'PowerShell error text still gives the code');
+});

@@ -30,7 +30,8 @@ async function run(b, rid, payload) {
   b.request(rid, { target_id: T1, expected_revision: t.revision, payload });
   b.w.tick();
   const hid = b.w.state.requests.get(rid).result.handoff_id;
-  const h = await until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return ['done', 'failed', 'timed-out', 'cancelled'].includes(x.state) && !b.hext.runningIds().has(hid) ? x : null; }, { timeoutMs: 20_000 });
+  // Filing finishes after the run's terminal state is recorded (the cited files are read asynchronously).
+  const h = await until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return ['done', 'failed', 'timed-out', 'cancelled'].includes(x.state) && !b.hext.runningIds().has(hid) && x.memory_filing ? x : null; }, { timeoutMs: 20_000 });
   b.w.tick();
   return b.w.state.handoffs.get(h.id);
 }

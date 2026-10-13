@@ -17,7 +17,7 @@ import { resultFromStream, sessionIdOf, readLedger } from './stream.js';
 import { buildDocsMap, renderDocsMap } from './docs-map.js';
 import { reconcileAttempts } from './reconcile.js';
 import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js';
-import { fileLearnings, taskLessons, appendRunNotes, workerLearnings } from '../memory/file.js';
+import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSources } from '../memory/file.js';
 import { writeDocsProjection } from '../memory/project.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { readJsonIfExists } from '../lib/atomic-fs.js';
@@ -247,33 +247,33 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // A full-access run's writes, as its observer saw them, whatever state it ends in (spec §7).
     let effects = null;
     if ((current.access ?? 'standard') === 'full' && entry && entry.observed) { try { effects = prodEffects(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { effects = null; } }
-    const record = (w, id, parsed, opts) => {
+    const record = async (w, id, parsed, opts) => {
       const final = withNotes(reconciled(parsed));
       const out = recordResult(w, id, final, timings || usage || effects ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}) } } : opts);
       // Before cleanupRun removes the checkout: repo-file learnings are checked against it.
-      fileMemory(w, id, final);
+      await fileMemory(w, id, final);
       return out;
     };
     const reason = entry ? entry.reason : null;
-    if (reason === 'timeout') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'cancel') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'runtime-too-old') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'runtime-too-old', message: entry.runtimeError ?? 'Claude Code is too old for autonomous runs; queue the run again with standard access' }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'stopped') { record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
-    if (outcome.error) { record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
+    if (reason === 'timeout') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'cancel') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'runtime-too-old') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'runtime-too-old', message: entry.runtimeError ?? 'Claude Code is too old for autonomous runs; queue the run again with standard access' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'stopped') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
+    if (outcome.error) { await record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
     const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
     const explicit = readJsonIfExists(resultFile);
     const streamed = parseOutcome(outcome, parseOpts);
     const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: streamed.raw } : streamed;
-    if (outcome.code !== 0) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
-    if (!explicit && streamed.no_result) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'no-result', message: 'the agent exited without a final result event; its log and tool ledger show how far it got' }, extra: await fixExtras(worker, current) }); return; }
-    if (parsed.is_error) { record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
+    if (outcome.code !== 0) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
+    if (!explicit && streamed.no_result) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'no-result', message: 'the agent exited without a final result event; its log and tool ledger show how far it got' }, extra: await fixExtras(worker, current) }); return; }
+    if (parsed.is_error) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
     // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
     // ticket change, only the diff for the owner to inspect and the reason (ADR 0023).
     if (gate && (gate.status === 'failed' || gate.status === 'timeout')) {
       const extra = { ...(await fixExtras(worker, current)), test_gate: gate };
       if (quality) extra.result_quality = { ...quality, problems: explicit ? [] : parsed.problems };
       const why = gate.status === 'timeout' ? 'did not finish in time' : `exited with code ${gate.exit_code ?? 'unknown'}`;
-      record(worker, h.id, parsed, { state: 'failed', error: { code: gate.status === 'timeout' ? 'tests-timeout' : 'tests-failed', message: `the test command ${why}${gate.attempts > 1 ? ' again after one repair turn' : ' and no repair turn was possible'}; no fix is suggested` }, extra });
+      await record(worker, h.id, parsed, { state: 'failed', error: { code: gate.status === 'timeout' ? 'tests-timeout' : 'tests-failed', message: `the test command ${why}${gate.attempts > 1 ? ' again after one repair turn' : ' and no repair turn was possible'}; no fix is suggested` }, extra });
       return;
     }
     const extras = await fixExtras(worker, current, { finalize: true, gate });
@@ -286,7 +286,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       extras.file_effects = effects;
       if (skipped.length) extras.uncertain_effects = [...(current.uncertain_effects ?? []), ...skipped];
     }
-    record(worker, h.id, parsed, { state: extras.error ? 'failed' : 'done', error: extras.error ?? null, extra: extras });
+    await record(worker, h.id, parsed, { state: extras.error ? 'failed' : 'done', error: extras.error ?? null, extra: extras });
   }
 
   // Spec §6.2: a done run's learnings become memory events, with trust decided by provenance
@@ -294,15 +294,18 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
   // guard denials, init inventory) as verified facts, and leaves a Run note on its ticket when it
   // attempted something. A failed, cancelled or timed-out run files none of the agent's learnings:
   // they were never checked against a finished result. Filing never fails the run.
-  function fileMemory(worker, id, result) {
+  async function fileMemory(worker, id, result) {
     try {
       const h = worker.state.handoffs.get(id);
       if (!h || !TERMINAL.has(h.state) || !result || typeof result !== 'object') return;
       const ledger = readLedger(path.join(handoffRunDir(worker.env, id), 'ledger.jsonl'));
       const checkout = h.worktree_path && fs.existsSync(h.worktree_path) ? h.worktree_path : null;
       const existing = worker.state.memory.entries;
+      // M4: the cited files are read with one asynchronous git call, before the synchronous filing.
+      const learnings = h.state === 'done' ? result.learnings ?? [] : [];
+      const citeSources = learnings.length ? await readCiteSources({ learnings, run: h, checkout }) : new Map();
       const workerFacts = workerLearnings({ run: h, ledger, testGate: h.test_gate ?? null, inventory: h.inventory ?? null });
-      const events = fileLearnings({ learnings: h.state === 'done' ? result.learnings ?? [] : [], run: h, ledger, checkout, existing, now: worker.now(), workerFacts });
+      const events = fileLearnings({ learnings, run: worker.state.handoffs.get(id) ?? h, ledger, checkout, existing, now: worker.now(), workerFacts, citeSources });
       const lessons = taskLessons(events, existing);
       for (const e of events) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
       const note = appendRunNotes(h.ticket_id, result.attempts ?? [], lessons, { run: h, at: worker.now() });

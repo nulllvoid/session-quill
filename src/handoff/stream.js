@@ -10,7 +10,9 @@ import { writeMcpServersFile } from './mcp-sources.js';
 
 export const EXCERPT_BYTES = 2048;
 // The reason codes bin/quill-guard.js puts first in a refusal, as the host shows them.
-const GUARD_REFUSAL = /QUILL-GUARD|(?:^|hook error: )QUILL_(?:DENIED|CRITICAL_CHANGE)\b/;
+// Anchored to the start of the result text: Claude Code puts the hook error first, and a command's
+// own output can never come first (a failed command's result starts "Exit code N").
+const GUARD_REFUSAL = /^\s*(?:PreToolUse:\S{1,200} hook error: )?(?:QUILL_(?:DENIED|CRITICAL_CHANGE)\b|QUILL-GUARD\b)/;
 // The host's tool_use_id, kept on ledger lines so one call's lines can be matched up.
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const idOf = (id) => (typeof id === 'string' && TOOL_USE_ID.test(id) ? { tool_use_id: id } : {});
@@ -142,12 +144,16 @@ export function summarizeInput(tool, input, cwd = null) {
 // with 0 comes back as a non-error with a structured tool_use_result (stdout, stderr,
 // interrupted…) — verified on claude 2.1.296. An interrupted or backgrounded command has no exit
 // code yet, so it stays null.
-function exitCodeOf(item, event, text) {
+function exitCodeOf(item, event, text, tool) {
   const raw = event && event.tool_use_result;
   const extra = raw && typeof raw === 'object' ? raw : {};
   for (const v of [extra.exitCode, extra.exit_code, extra.returnCode, extra.code]) if (Number.isInteger(v)) return v;
-  const m = /^\s*Exit code (-?\d+)\b/.exec(text);
+  // "Exit code N" is read only from an error result: a successful command's own output may start so.
+  const m = item.is_error === true ? /^\s*Exit code (-?\d+)\b/.exec(text) : null;
   if (m) return Number(m[1]);
+  // Only the Bash tool's finished shape was verified (claude 2.1.296); a PowerShell result keeps
+  // what its structured field or its error text says, never an inferred 0.
+  if (tool !== 'Bash') return null;
   const finished = raw && typeof raw === 'object' && item.is_error !== true && extra.interrupted === false
     && !('backgroundTaskId' in extra) && !('backgroundTaskID' in extra) && !('shellId' in extra);
   return finished ? 0 : null;
@@ -244,7 +250,7 @@ export function createStreamCollector({ logPath = null, ledgerPath = null, mcpSe
         const guard = isError && GUARD_REFUSAL.test(text);
         const entry = { kind: guard ? 'guard' : 'tool_result', tool, ...idOf(c.tool_use_id), input_summary: call.summary, is_error: isError, result_excerpt: redactCapped(text, EXCERPT_BYTES) };
         if (guard) Object.assign(entry, { decision: 'deny' });
-        if (SHELL_TOOLS.has(tool)) entry.exit_code = exitCodeOf(c, obj, text);
+        if (SHELL_TOOLS.has(tool)) entry.exit_code = exitCodeOf(c, obj, text, tool);
         ledger(entry);
       }
     }

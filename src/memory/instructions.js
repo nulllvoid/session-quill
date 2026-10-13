@@ -3,11 +3,10 @@
 // to an agent rather than a fact is held for the owner; a false positive only costs one approval,
 // so the list is deliberately broad.
 //
-// Text is normalised before matching (scanForms): Unicode NFKC, format characters (zero-width,
-// bidi controls, soft hyphen: \p{Cf}) removed, whitespace collapsed, lower case. Every pattern is
-// tried on that form, on a copy with common Cyrillic and Greek look-alikes mapped to Latin, and on a
-// copy without any whitespace (for the "ignore previous instructions" family only). Every quantifier
-// is bounded, so matching stays linear in the input, which callers cap at a few KB per field.
+// Text is normalised before matching (scanForms, below): NFKC and an NFKD form with combining marks
+// removed, invisible code points stripped, whitespace collapsed, lower case, and copies with Cyrillic
+// and Greek look-alikes mapped to Latin. Every quantifier is bounded, so matching stays linear in the
+// input, which callers cap at a few KB per field.
 
 // Cyrillic and Greek letters that render like Latin ones (lower case; text is lower-cased first).
 const CONFUSABLES = new Map(Object.entries({
@@ -15,12 +14,30 @@ const CONFUSABLES = new Map(Object.entries({
   α: 'a', β: 'b', ε: 'e', η: 'n', ι: 'i', κ: 'k', ν: 'v', ο: 'o', ρ: 'p', τ: 't', υ: 'u', χ: 'x', γ: 'y', ϲ: 'c', ϳ: 'j', ω: 'w',
 }));
 
-/** The normalised forms a text is matched in: [folded, latin, compact]. */
+// Invisible code points: format characters and every default-ignorable code point (combining
+// grapheme joiner, variation selectors U+FE00-FE0F and U+E0100-E01EF, Mongolian free variation
+// selectors, Hangul fillers U+115F, U+1160, U+3164, U+FFA0, soft hyphen, word joiner, ...). The
+// fillers are listed explicitly as well, in case an engine's property tables are older.
+const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}͏ᅟᅠ᠋-᠏ㅤ︀-️ﾠ\u{E0100}-\u{E01EF}]+/gu;
+const MARKS = /\p{M}+/gu;
+const squash = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+const toLatin = (s) => { let out = ''; for (const ch of s) out += CONFUSABLES.get(ch) ?? ch; return out; };
+
+/**
+ * The normalised forms a text is matched in:
+ *   folded     NFKC, invisible code points removed, whitespace collapsed, lower case
+ *   latin      folded with Cyrillic and Greek look-alikes mapped to Latin
+ *   bare       NFKD with every combining mark (\p{M}) and invisible code point removed, then NFKC
+ *              (so "iǵnore", "i̵gnore" and "git́" read as the plain words)
+ *   bareLatin  bare with look-alikes mapped
+ *   compact    bareLatin without any whitespace (the "ignore previous instructions" family only)
+ */
 export function scanForms(text) {
-  const folded = String(text ?? '').normalize('NFKC').replace(/\p{Cf}+/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
-  let latin = '';
-  for (const ch of folded) latin += CONFUSABLES.get(ch) ?? ch;
-  return [folded, latin, latin.replace(/\s+/g, '')];
+  const s = String(text ?? '');
+  const folded = squash(s.normalize('NFKC').replace(INVISIBLE, ''));
+  const bare = squash(s.normalize('NFKD').replace(INVISIBLE, '').replace(MARKS, '').normalize('NFKC'));
+  const bareLatin = toLatin(bare);
+  return { folded, latin: toLatin(folded), bare, bareLatin, compact: bareLatin.replace(/\s+/g, '') };
 }
 
 const VERBS_IGNORE = '(?:ignore|disregard|forget|override|bypass|skip|abandon|drop)';
@@ -65,9 +82,10 @@ export const INSTRUCTION_PATTERNS = [
 
 /** The name of the first instruction-like pattern the text matches in any normalised form, else null. */
 export function instructionLike(text) {
-  const [folded, latin, compact] = scanForms(text);
+  const f = scanForms(text);
+  const forms = [f.folded, f.latin, f.bare, f.bareLatin];
   for (const p of INSTRUCTION_PATTERNS) {
-    if (p.compact ? p.re.test(compact) : p.re.test(folded) || p.re.test(latin)) return p.name;
+    if (p.compact ? p.re.test(f.compact) : forms.some((s) => p.re.test(s))) return p.name;
   }
   return null;
 }

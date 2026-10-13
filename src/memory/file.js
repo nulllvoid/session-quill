@@ -7,9 +7,11 @@
 //   instruction-like text, any source         -> quarantined  (src/memory/instructions.js, R29)
 //   tool-output / external-text               -> quarantined
 //   own-command, every claimed "<command> -> exit N" matches a shell call in the ledger with
-//     exit code N (ruling R1)                 -> verified     (else observed)
-//   repo-file, every cited path:line exists in the file as it is at the run's base commit (or, with
-//     no base commit, in the checkout's working tree for files the run did not change)
+//     exit code N (ruling R1) and the text names each command as whole words (ruling R32)
+//                                             -> verified     (else observed)
+//   repo-file, every cited path:line exists in the file as it is at the run's base commit, read
+//     with replace refs and grafts ignored (or, with no base commit, in the checkout's working tree
+//     for files the run did not change)
 //                                             -> sourced; each matched evidence item is pinned as
 //                                                " @blob:<git blob sha1>"
 //   repo-file whose cite does not verify (no cite, missing file or line, outside the checkout, no
@@ -27,7 +29,8 @@
 // entry alive, and never supersedes anything.
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import os from 'node:os';
+import { execFile, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { deterministicId } from '../lib/ids.js';
 import { redactCapped, summarizeInput } from '../handoff/stream.js';
@@ -36,6 +39,7 @@ import { instructionLike } from './instructions.js';
 
 export { instructionLike, INSTRUCTION_PATTERNS, scanForms } from './instructions.js';
 export { workerLearnings } from './worker-facts.js';
+import { WORKER_KEY_PREFIXES } from './worker-facts.js';
 
 export const MAX_FILED_PER_RUN = 15;
 // At most this many raw items are even looked at (the result parser caps at 15; an explicit result
@@ -96,7 +100,10 @@ function validate(l) {
   if (!text) return null;
   const rawEvidence = (Array.isArray(l.evidence) ? l.evidence : []).filter(nonEmpty).slice(0, MAX_EVIDENCE_ITEMS).map((e) => rawOf(e).trim());
   const evidence = rawEvidence.map((e) => redact(e, EVIDENCE_ITEM_BYTES)).filter(Boolean);
-  const key = nonEmpty(l.key) ? redact(l.key, KEY_CHARS * 4).slice(0, KEY_CHARS).trim() : null;
+  let key = nonEmpty(l.key) ? redact(l.key, KEY_CHARS * 4).slice(0, KEY_CHARS).trim() : null;
+  // Worker facts own their key prefixes (M3): an agent key using one is moved under `agent:`.
+  const rekeyed = !!key && WORKER_KEY_PREFIXES.some((p) => key.toLowerCase().startsWith(p));
+  if (rekeyed) key = `agent:${key}`.slice(0, KEY_CHARS);
   return {
     scope: l.scope,
     section: canonicalSection(l.scope, l.section, l.kind),
@@ -105,6 +112,7 @@ function validate(l) {
     text,
     evidence,
     derived_from: l.derived_from,
+    rekeyed,
     // The agent's own words before redaction or the evidence cut: the instruction filter reads all
     // of them, and claims are parsed from whole evidence items (a long command keeps its "→ exit N").
     rawEvidence,
@@ -163,14 +171,18 @@ function verifiedClaims(rawEvidence, calls) {
   return claims.length > 0 && claims.every((c) => claimMatches(c, calls)) ? claims : null;
 }
 
-// A verified entry may replace an older value only when it is about the command it verified: the
-// command (or its first two words) appears in its text or key (review Minor 1).
-function aboutCommand(claims, text, key) {
-  const hay = normaliseText(`${text} ${key ?? ''}`);
-  return claims.some((c) => {
-    const words = normaliseText(c.command).split(' ').filter(Boolean);
-    return words.length > 0 && (hay.includes(words.join(' ')) || hay.includes(words.slice(0, 2).join(' ')));
-  });
+// Ruling R32: an own-command learning is verified only when its text (or key) names the command it
+// cites, as whole words: the program (its base name, without leading VAR=value assignments, a path
+// or a .exe/.cmd/.bat/.ps1/.sh suffix) and its subcommand (the next word, unless it is an option).
+// "also" never names `ls`, and `echo ok` never verifies a claim about something else.
+export function namesCommand(command, text, key) {
+  const hay = new Set(normaliseText(`${text} ${key ?? ''}`).split(' ').filter(Boolean));
+  const words = String(command ?? '').trim().split(/\s+/).filter((w) => w && !/^[A-Za-z_]\w*=/.test(w));
+  if (!words.length) return false;
+  const program = words[0].replace(/^["'`]+|["'`]+$/g, '').split(/[\\/]/).pop().replace(/\.(exe|cmd|bat|ps1|sh)$/i, '');
+  const sub = words[1] && !/^[-/]/.test(words[1]) ? words[1] : null;
+  const need = [program, ...(sub ? [sub] : [])].flatMap((w) => normaliseText(w).split(' ').filter(Boolean));
+  return need.length > 0 && need.every((w) => hay.has(w));
 }
 
 // --- repo-file: path:line cites against the run's checkout ----------------------------------------
@@ -216,29 +228,61 @@ function relCite(checkoutReal, file) {
   return path.relative(checkoutReal, abs).split(path.sep).join('/');
 }
 
-// Files as they are at the run's base commit, read in one `git cat-file --batch`: { lines, sha }
-// per relative path, or null. Anything the run created or changed is judged by its base version,
-// so a run cannot make its own cite true (Minor 4).
-function readAtCommit(checkoutReal, commit, rels) {
+// Reading files at the run's base commit. Replace refs (`git replace`, which a run may create in
+// the shared repository) and grafts must not steer what a commit resolves to, so git runs with
+// --no-replace-objects, GIT_NO_REPLACE_OBJECTS=1 and GIT_GRAFT_FILE pointing at a file that does not
+// exist, without any inherited GIT_DIR/GIT_OBJECT_DIRECTORY style overrides, and only for the full
+// sha the worker resolved before the run started (h.base_commit).
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const GIT_ARGS = ['--no-replace-objects', 'cat-file', '--batch'];
+const GIT_TIMEOUT_MS = 15_000;
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
+function gitEnv() {
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) if (!/^GIT_/i.test(k)) env[k] = v;
+  return { ...env, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: path.join(os.tmpdir(), 'quill-no-grafts-here') };
+}
+
+// `git cat-file --batch` output for `rels`, in order: { lines, sha } for a blob, null for anything
+// else ("missing", a tree, a commit). The bytes of every object are skipped, whatever its type, so a
+// cite of a directory cannot shift the reading of the next one (Minor 1).
+function parseBatch(buf, rels) {
   const out = new Map(rels.map((r) => [r, null]));
-  if (!rels.length) return out;
-  let buf;
-  try {
-    buf = execFileSync('git', ['cat-file', '--batch'], { cwd: checkoutReal, input: rels.map((r) => `${commit}:${r}\n`).join(''), maxBuffer: 64 * 1024 * 1024, timeout: 15_000, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
-  } catch { return out; }
   let pos = 0;
   for (const rel of rels) {
     const nl = buf.indexOf(10, pos);
     if (nl < 0) break;
-    const header = buf.subarray(pos, nl).toString('utf8').split(' ');
+    const m = /^([0-9a-f]{40,64}) ([a-z]+) (\d+)$/.exec(buf.subarray(pos, nl).toString('utf8'));
     pos = nl + 1;
-    if (header.length !== 3 || header[1] !== 'blob') continue; // "<name> missing", a tree, ...
-    const size = Number(header[2]);
+    if (!m) continue; // "<name> missing" or "ambiguous": no content follows
+    const size = Number(m[3]);
     const content = buf.subarray(pos, pos + size);
     pos += size + 1;
-    if (size <= MAX_SOURCE_BYTES) out.set(rel, { lines: lineCount(content), sha: header[0] });
+    if (m[2] === 'blob' && size <= MAX_SOURCE_BYTES) out.set(rel, { lines: lineCount(content), sha: m[1] });
   }
   return out;
+}
+
+const batchInput = (commit, rels) => rels.map((r) => `${commit}:${r}\n`).join('');
+
+function readAtCommitSync(checkoutReal, commit, rels) {
+  if (!rels.length) return new Map();
+  try {
+    return parseBatch(execFileSync('git', GIT_ARGS, { cwd: checkoutReal, env: gitEnv(), input: batchInput(commit, rels), maxBuffer: GIT_MAX_BUFFER, timeout: GIT_TIMEOUT_MS, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] }), rels);
+  } catch { return new Map(rels.map((r) => [r, null])); }
+}
+
+function readAtCommit(checkoutReal, commit, rels) {
+  if (!rels.length) return Promise.resolve(new Map());
+  return new Promise((resolve) => {
+    const none = () => resolve(new Map(rels.map((r) => [r, null])));
+    try {
+      const child = execFile('git', GIT_ARGS, { cwd: checkoutReal, env: gitEnv(), maxBuffer: GIT_MAX_BUFFER, timeout: GIT_TIMEOUT_MS, windowsHide: true, encoding: 'buffer' }, (err, stdout) => (err ? none() : resolve(parseBatch(stdout, rels))));
+      child.stdin.on('error', () => {});
+      child.stdin.end(batchInput(commit, rels));
+    } catch { none(); }
+  });
 }
 
 // Files in the working tree (no base commit known): regular files inside the checkout, symlinks
@@ -262,20 +306,41 @@ function readWorkingTree(checkoutReal, rels, changed) {
   return out;
 }
 
-const COMMIT = /^[0-9a-f]{7,64}$/i;
+const changedSet = (run) => new Set((Array.isArray(run.changed_files) ? run.changed_files : []).filter((f) => typeof f === 'string').map((f) => caseFold(f.split('\\').join('/'))));
+const baseOf = (run) => (typeof run.base_commit === 'string' && FULL_SHA.test(run.base_commit) ? run.base_commit : null);
+const realCheckout = (checkout) => { try { return checkout ? fs.realpathSync.native(checkout) : null; } catch { return null; } };
+const citedRels = (checkoutReal, evidence) => evidence.flatMap((item) => citesIn(item).map((c) => relCite(checkoutReal, c.file))).filter(Boolean);
+
+/**
+ * Reads every file the run's repo-file learnings cite, once, before filing (M4: one asynchronous git
+ * call per run, so the worker stays responsive). Pass the result to fileLearnings({ citeSources }).
+ * @returns {Promise<Map<string, { lines: number, sha: string }|null>>}  by checkout-relative path
+ */
+export async function readCiteSources({ learnings, run, checkout }) {
+  const checkoutReal = realCheckout(checkout);
+  if (!checkoutReal || !run) return new Map();
+  const rels = new Set();
+  for (const raw of (Array.isArray(learnings) ? learnings : []).slice(0, MAX_LEARNINGS_READ)) {
+    const l = validate(raw);
+    if (l && l.derived_from === 'repo-file') for (const rel of citedRels(checkoutReal, l.evidence)) rels.add(rel);
+  }
+  const list = [...rels].slice(0, MAX_FILED_PER_RUN * MAX_CITED_FILES);
+  const base = baseOf(run);
+  return base ? readAtCommit(checkoutReal, base, list) : readWorkingTree(checkoutReal, list, changedSet(run));
+}
 
 // Sourced evidence with each matched item pinned, or null when there is no cite or any cite fails.
-function sourcedEvidence(evidence, checkout, run) {
-  if (!checkout) return null;
-  let checkoutReal;
-  try { checkoutReal = fs.realpathSync.native(checkout); } catch { return null; }
+// `citeSources` (readCiteSources) is used when given; a path missing from it does not verify.
+function sourcedEvidence(evidence, checkout, run, citeSources) {
+  const checkoutReal = realCheckout(checkout);
+  if (!checkoutReal) return null;
   const items = evidence.map((item) => ({ item, cites: citesIn(item).map((c) => ({ ...c, rel: relCite(checkoutReal, c.file) })) }));
   const all = items.flatMap((x) => x.cites);
   if (!all.length || all.some((c) => !c.rel)) return null;
   const rels = [...new Set(all.map((c) => c.rel))];
   if (rels.length > MAX_CITED_FILES) return null;
-  const changed = new Set((Array.isArray(run.changed_files) ? run.changed_files : []).filter((f) => typeof f === 'string').map((f) => caseFold(f.split('\\').join('/'))));
-  const sources = typeof run.base_commit === 'string' && COMMIT.test(run.base_commit) ? readAtCommit(checkoutReal, run.base_commit, rels) : readWorkingTree(checkoutReal, rels, changed);
+  const base = baseOf(run);
+  const sources = citeSources instanceof Map ? citeSources : base ? readAtCommitSync(checkoutReal, base, rels) : readWorkingTree(checkoutReal, rels, changedSet(run));
   const pinned = [];
   for (const { item, cites } of items) {
     const shas = [];
@@ -296,16 +361,16 @@ export function isPageProposed(run) {
   return !!(run && run.proposal);
 }
 
-function decideTrust(l, { page, calls, checkout, run }) {
+function decideTrust(l, { page, calls, checkout, run, citeSources }) {
   if (page) return { trust: 'quarantined', reason: 'from a page-proposed run' };
   const hit = instructionLike(l.raw);
   if (hit) return { trust: 'quarantined', reason: `instruction-like text (${hit})` };
   if (l.derived_from === 'tool-output' || l.derived_from === 'external-text') return { trust: 'quarantined', reason: `derived from ${l.derived_from}` };
   if (l.derived_from === 'own-command') {
     const claims = verifiedClaims(l.rawEvidence, calls);
-    return claims ? { trust: 'verified', mayReplace: aboutCommand(claims, l.text, l.key) } : { trust: 'observed' };
+    return claims && claims.every((c) => namesCommand(c.command, l.text, l.key)) ? { trust: 'verified' } : { trust: 'observed' };
   }
-  const pinned = sourcedEvidence(l.evidence, checkout, run);
+  const pinned = sourcedEvidence(l.evidence, checkout, run, citeSources);
   return pinned ? { trust: 'sourced', evidence: pinned } : { trust: 'quarantined', reason: 'unverified-cite' };
 }
 
@@ -333,11 +398,12 @@ const poolEntry = (e, fromRun) => {
  *   run: the handoff record (id, repo_id, ticket_id, proposal, base_commit, changed_files);
  *   learnings: the agent's (pass [] for a run that did not finish done); ledger: readLedger()
  *   lines; checkout: the run's checkout, read before it is removed; existing: state.memory.entries;
- *   workerFacts: workerLearnings() output.
+ *   workerFacts: workerLearnings() output; citeSources: readCiteSources() output (else the cited
+ *   files are read synchronously).
  * @returns {{ kind: string, payload: object, source_identity: string }[]}  memory-tx events in apply
  *   order, then one handoff-tx recording the filing summary (`memory_filing`) on the run.
  */
-export function fileLearnings({ learnings, run, ledger = [], checkout = null, existing = [], now, workerFacts = [] }) {
+export function fileLearnings({ learnings, run, ledger = [], checkout = null, existing = [], now, workerFacts = [], citeSources }) {
   const list = (Array.isArray(learnings) ? learnings : []).slice(0, MAX_LEARNINGS_READ);
   const facts = Array.isArray(workerFacts) ? workerFacts : [];
   if ((!list.length && !facts.length) || !run || !nonEmpty(run.id)) return [];
@@ -350,7 +416,7 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
   const events = [];
 
   // Places one candidate entry: confirm, or file (and supersede or flag a conflict).
-  function place(entry, { tag, mayReplace, tally }) {
+  function place(entry, { tag, tally }) {
     const quarantined = entry.trust === 'quarantined';
     const norm = normaliseText(entry.text);
     const hash = textHash(norm);
@@ -378,7 +444,7 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
       let conflict = false;
       for (const p of keyed) {
         if (p.dead || p.trust === 'quarantined' || p.hash === hash) continue;
-        if (entry.trust === 'verified' && mayReplace && p.trust !== 'owner' && !p.pinned) {
+        if (entry.trust === 'verified' && p.trust !== 'owner' && !p.pinned) {
           p.dead = true;
           tally.superseded += 1;
           events.push({ kind: 'memory-tx', payload: { op: 'superseded', entry: { id: p.id }, superseded_by: entry.id }, source_identity: `memory-tx:${run.id}:${tag}:supersedes:${p.id}` });
@@ -400,7 +466,8 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
     if (l.scope === 'task' && !nonEmpty(run.ticket_id)) { problem('learning-no-ticket'); return; }
     if (accepted >= MAX_FILED_PER_RUN) { counts.dropped += 1; return; }
     accepted += 1;
-    const decided = decideTrust(l, { page, calls, checkout, run });
+    if (l.rekeyed) problem('learning-key-reserved');
+    const decided = decideTrust(l, { page, calls, checkout, run, citeSources });
     const quarantined = decided.trust === 'quarantined';
     const entry = {
       id: deterministicId(`${run.id}:learning:${i}`), scope: l.scope, section: l.section, kind: l.kind, text: l.text, evidence: decided.evidence ?? l.evidence, derived_from: l.derived_from,
@@ -410,7 +477,7 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
       ...(l.scope === 'task' ? { ticket_id: run.ticket_id } : {}),
       ...(quarantined ? { quarantine_reason: decided.reason } : {}),
     };
-    place(entry, { tag: `learning:${i}`, mayReplace: decided.mayReplace === true, tally: counts });
+    place(entry, { tag: `learning:${i}`, tally: counts });
   });
   if (counts.dropped) problem('learnings-capped', counts.dropped);
 
@@ -423,7 +490,7 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
       trust: 'verified', run_id: run.id, created_at: at, last_confirmed_at: at, confirmations: 0, state: 'active',
       ...(f.scope === 'repo' ? { repo_id: run.repo_id } : {}),
     };
-    place(entry, { tag: `worker:${f.key}`, mayReplace: true, tally: counts.worker });
+    place(entry, { tag: `worker:${f.key}`, tally: counts.worker });
   }
 
   const memory_filing = { ...counts, problems: [...problems].map(([code, count]) => ({ code, count })) };

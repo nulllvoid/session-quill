@@ -54,7 +54,8 @@ const shell = (command, exit_code, tool = 'Bash') => ({ kind: 'tool_result', too
 
 test('own-command found in the ledger with the claimed exit code is verified (R1); otherwise observed', () => {
   const ledger = [shell('npm test', 0), shell('npm run lint', 1)];
-  const own = (evidence) => filed(file([learning({ derived_from: 'own-command', evidence })], { ledger }))[0].trust;
+  // R32: the text names the commands it cites.
+  const own = (evidence) => filed(file([learning({ derived_from: 'own-command', text: 'npm test and npm run lint check the repository', evidence })], { ledger }))[0].trust;
   assert.equal(own(['npm test → exit 0']), 'verified');
   assert.equal(own(['`npm test` (exit 0)']), 'verified');
   assert.equal(own(['npm run lint -> exit 1']), 'verified');
