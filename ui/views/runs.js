@@ -3,7 +3,7 @@
 // you also lists quarantined learnings and memory conflicts, which open the Memory page (spec §6.4).
 import { esc, attr, timeEl, handoffChip, ticketById, normalizeSnapshot, emptyState, proposalItem, shortKey, HANDOFF_LABELS, learningItem, memoryConflictItem } from '../components.js';
 import { batchProgress } from '../lib/bulk.js';
-import { runTabs, visibleRunTabs, defaultRunTab, groupRuns, runFacts, RUN_TAB_LABELS } from '../lib/runs.js';
+import { runTabs, visibleRunTabs, defaultRunTab, groupRuns, runFacts, batchBudgetState, RUN_TAB_LABELS } from '../lib/runs.js';
 import { testGateBadge, accessBadge, accessWords } from './agents.js';
 
 const EMPTY = {
@@ -33,7 +33,8 @@ function batchGroup(snapshot, g, { now, tz, caps, selectedRun }) {
   const p = batchProgress(snapshot, g.id);
   const finished = p.done + p.failed + p.cancelled;
   const names = [...new Set(g.items.map((i) => (i.run.recipe ? i.run.recipe.name : i.run.mode)))];
-  const parts = [p.done ? `${p.done} done` : null, p.running ? `${p.running} running` : null, p.queued ? `${p.queued} queued` : null, p.failed ? `${p.failed} failed` : null, p.cancelled ? `${p.cancelled} cancelled` : null].filter(Boolean);
+  const spend = p.queued ? batchBudgetState(snapshot, g.id) : null;
+  const parts = [p.done ? `${p.done} done` : null, p.running ? `${p.running} running` : null, p.queued ? `${p.queued} queued` : null, p.failed ? `${p.failed} failed` : null, p.cancelled ? `${p.cancelled} cancelled` : null, spend && spend.reached ? 'Batch budget reached' : null].filter(Boolean);
   const cancel = caps.handoff && p.queued ? `<button type="button" class="btn small ghost" data-action="cancel-batch" data-batch="${attr(g.id)}">Cancel queued (${esc(p.queued)})</button>` : '';
   const pct = p.total ? Math.round((finished / p.total) * 100) : 0;
   return `<li class="run-batch" data-batch="${attr(g.id)}"><div class="run-batch-head"><span class="eyebrow">Batch ${esc(g.id.slice(0, 8))}</span><span class="small">${esc(names.length === 1 ? names[0] : 'mixed')} · ${esc(parts.join(' · '))}</span><div class="batch-bar" role="progressbar" aria-label="${attr(`Batch ${g.id.slice(0, 8)}: ${finished} of ${p.total} runs finished`)}" aria-valuemin="0" aria-valuenow="${finished}" aria-valuemax="${p.total}"><span style="width:${pct}%"></span></div>${cancel}</div><ul class="run-list">${g.items.map((i) => runRow(snapshot, i.run, { now, tz, selected: selectedRun === i.id })).join('')}</ul></li>`;

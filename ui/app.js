@@ -739,6 +739,8 @@ function handleAction(el) {
     }
     case 'approve-run': submit({ kind: 'approve-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Approving the proposed run; it is queued as an ordinary run' }); break;
     case 'dismiss-run': submit({ kind: 'dismiss-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Dismissing the proposed run; undo within 10 seconds' }); break;
+    // Spec §5.4: a new run that continues the interrupted run's session, with the same access.
+    case 'resume-run': submit({ kind: 'resume-run', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff } }, { announceText: 'Resume requested; it is queued as a new run, not finished' }); break;
     case 'cancel-handoff': {
       const h = s.handoffs.find((x) => x.id === el.dataset.handoff);
       if (h) submit({ kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticketRevision(h.ticket_id), payload: { handoff_id: h.id } }, { announceText: 'Handoff cancellation requested' });

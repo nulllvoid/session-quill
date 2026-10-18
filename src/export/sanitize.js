@@ -165,6 +165,8 @@ export function sanitizeSnapshot(snapshot, options = {}) {
   const tickets = snapshot.tickets.filter((t) => isExportableTicket(t) && (!o.projects || o.projects.includes(t.project_id)));
   const ids = new Set(tickets.map((t) => t.id));
   const meta = { ...snapshot.meta, onboarding: null, autonomy: null, owner_machine_id: null, exported_at: o.exportedAt, active_sync_request_id: null, oldest_pending_event_at: null };
+  // The slot caps stay; the batch budget is the owner's spend setting and never leaves (spec §9).
+  if (meta.handoff_limits && typeof meta.handoff_limits === 'object') meta.handoff_limits = { readonly: meta.handoff_limits.readonly, fix: meta.handoff_limits.fix };
   const out = {
     schema_version: snapshot.schema_version ?? 1,
     generation_id: snapshot.generation_id,

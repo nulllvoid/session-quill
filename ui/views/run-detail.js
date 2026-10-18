@@ -8,6 +8,11 @@ import { esc, attr, icon, timeEl, handoffChip, ticketById, normalizeSnapshot, co
 import { testGateChip, accessBadge, runTimings, runQuality, suggestionItem, fileEffects, SOURCE_LABELS } from './agents.js';
 import { supersededBy } from '../lib/runs.js';
 
+// The worker's own rule (src/handoff/resume.js resumeProblem): interrupted, with a session id that
+// Claude Code reported.
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+export const resumable = (h) => h.state === 'failed' && !!h.error && h.error.code === 'interrupted' && typeof h.session_id === 'string' && SESSION_ID_RE.test(h.session_id);
+
 const section = (title, body) => (body ? `<section class="detail-section"><h3>${esc(title)}</h3>${body}</section>` : '');
 
 // Record values are whatever the agent wrote: only strings (and finite numbers) are shown.
@@ -269,7 +274,10 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
 
   const actions = [];
   if (caps.handoff && ['queued', 'running'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>`);
-  if (caps.handoff && t && !next && ['failed', 'timed-out', 'cancelled'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}" data-recipe="${attr(name)}" data-retry-of="${attr(h.id)}">Retry as new run</button>`);
+  // A run interrupted by a worker restart or stop, with a recorded session, resumes that session as
+  // a new run (spec §5.4); any other failure is retried afresh. Once superseded, neither is offered.
+  if (caps.handoff && t && !next && resumable(h)) actions.push(`<button type="button" class="btn small" data-action="resume-run" data-ticket="${attr(t.id)}" data-handoff="${attr(h.id)}">Resume as new run</button>`);
+  else if (caps.handoff && t && !next && ['failed', 'timed-out', 'cancelled'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}" data-recipe="${attr(name)}" data-retry-of="${attr(h.id)}">Retry as new run</button>`);
 
   return `<article class="detail run-detail" data-run="${attr(h.id)}" aria-labelledby="detail-title">
 ${head}

@@ -114,6 +114,23 @@ export function groupRuns(items) {
   return out;
 }
 
+const FINISHED = new Set(['done', 'failed', 'timed-out', 'cancelled']);
+
+// A batch's recorded spend against its budget (spec §5.2), as the worker counts it
+// (src/handoff/resume.js): the cost each finished member recorded, estimates included. Null when
+// the snapshot carries no budget (an export, an older worker) or the run is in no batch.
+export function batchBudgetState(snapshot, batchId) {
+  const limits = snapshot.meta && snapshot.meta.handoff_limits;
+  const budget = limits ? limits.batch_budget_usd : null;
+  if (typeof batchId !== 'string' || !batchId || typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0) return null;
+  let spent = 0;
+  for (const x of snapshot.handoffs ?? []) {
+    if (x.batch_id === batchId && FINISHED.has(x.state) && typeof x.cost_usd === 'number' && Number.isFinite(x.cost_usd) && x.cost_usd > 0) spent += x.cost_usd;
+  }
+  spent = Math.round(spent * 10000) / 10000;
+  return { spent, budget, reached: spent >= budget };
+}
+
 // What a row may say about a run: occupancy facts while queued, elapsed time while running, and
 // outcomes once finished. Plain text; the caller escapes.
 export function runFacts(snapshot, h, now) {
@@ -126,6 +143,9 @@ export function runFacts(snapshot, h, now) {
     const cap = limits ? limits[fix ? 'fix' : 'readonly'] : null;
     if (Number.isInteger(cap) && running.length >= cap) facts.push(`${fix ? 'fix' : 'read-only'} slots ${running.length}/${cap} in use`);
     if (fix && h.repo_id && running.some((x) => x.repo_id === h.repo_id)) facts.push('repository busy');
+    // The worker starts no further member of a batch whose recorded spend reached its budget.
+    const spend = h.batch_id ? batchBudgetState(snapshot, h.batch_id) : null;
+    if (spend && spend.reached) facts.push('Batch budget reached');
   } else if (h.state === 'running') {
     facts.push(Number.isFinite(Date.parse(h.started_at)) ? runningFor(Math.max(0, Date.parse(now) - Date.parse(h.started_at))) : 'Running');
     if (h.timings && Number.isFinite(h.timings.worktree_ms)) facts.push(`setup ${formatDuration(h.timings.worktree_ms)}`);

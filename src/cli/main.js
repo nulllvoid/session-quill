@@ -62,6 +62,7 @@ Usage: quill <command> [options]
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
   agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
+  agent resume <run-id>                     (a run interrupted by a worker restart, as a new run)
   memory list [--repo <id>] [--machine] [--quarantine] [--json]   memory show <id> [--json]
   memory retire <id>                        memory pin <id> [--unpin]   memory note "<text>" (--repo <id> | --machine) [--section s] [--key k]
   agent install <https git URL|folder> [--ref r] [--only a,b] [--replace] [--confirm]   agent uninstall <recipe> [--force]

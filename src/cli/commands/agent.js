@@ -10,7 +10,7 @@ import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest, runOptions, accessNotice } from './handoff.js';
 import { capMinutes } from '../../handoff/runner.js';
 
-const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
+const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent resume <run-id> | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
 
@@ -132,6 +132,27 @@ async function resolve(ctx, io, verb, args, flags) {
   return 0;
 }
 
+// Resume as new run (spec §5.4): a run interrupted by a worker restart or stop continues its
+// session in a new run with exactly the same access. The worker checks everything again.
+async function resumeRun(ctx, io, args, flags) {
+  const [runId] = args;
+  if (!runId) throw new TrackerError('usage', USAGE);
+  const snap = latestSnapshot(ctx);
+  const matches = snap ? snap.handoffs.filter((x) => x.id === runId || x.id.startsWith(runId)) : [];
+  if (matches.length > 1) throw new TrackerError('handoff-ambiguous', `${runId} matches ${matches.length} runs; give more of the id`);
+  const h = matches[0];
+  if (!h) throw new TrackerError('handoff-unknown', `unknown run ${runId}`);
+  const terminal = await submitCliRequest(ctx, io, { kind: 'resume-run', target_id: h.ticket_id, expected_revision: null, payload: { handoff_id: h.id } }, flags);
+  if (terminal.state !== 'applied') {
+    const err = terminal.error ?? {};
+    throw new TrackerError(err.code ?? terminal.state, `resume ${terminal.state}: ${err.message ?? ''}`);
+  }
+  io.println(`Run ${h.id.slice(0, 8)} resumed as run ${terminal.result.handoff_id} with the same access, scopes and limits.`);
+  io.println('Queued is not finished: follow it with `quill handoff list` or on the ticket in the dashboard.');
+  if (flags.json) io.json(terminal);
+  return 0;
+}
+
 // Shared recipes (ADR 0020): preview by default; --confirm installs.
 export async function install(ctx, io, args, flags, { clone } = {}) {
   const [source] = args;
@@ -181,6 +202,7 @@ export async function run_({ args, flags, io, env }) {
   if (verb === 'list' || !verb) return list(ctx, io, flags);
   if (verb === 'show') return show(ctx, io, rest, flags);
   if (verb === 'run') return run(ctx, io, rest, flags);
+  if (verb === 'resume') return resumeRun(ctx, io, rest, flags);
   if (verb === 'suggestions') return suggestions(ctx, io, rest, flags);
   if (verb === 'accept' || verb === 'dismiss') return resolve(ctx, io, verb, rest, flags);
   throw new TrackerError('usage', USAGE);

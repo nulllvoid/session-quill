@@ -11,6 +11,7 @@
 //   FAKE_CLAUDE_RESULT    — JSON to answer with instead of the default structured result
 //   FAKE_CLAUDE_RESUME_RESULT — JSON to answer a --resume turn with (default: FAKE_CLAUDE_RESULT
 //                           or the default result); 'malformed' answers it without a JSON block
+//   FAKE_CLAUDE_COST      — total_cost_usd each result event reports (default 0.01)
 //   FAKE_CLAUDE_SESSION   — session id to report (default 'fake-session'; a --resume turn keeps its id)
 //   FAKE_CLAUDE_CAPTURE   — file to write { prompt, args } to; --resume turns append to
 //                           <capture>.resume as one JSON line each. With --settings <file> the
@@ -51,7 +52,7 @@ const SESSION = resumed ?? process.env.FAKE_CLAUDE_SESSION ?? 'fake-session';
 const line = (obj) => `${JSON.stringify(obj)}\n`;
 function wrap(text) {
   return line({ type: 'assistant', session_id: SESSION, message: { role: 'assistant', content: [{ type: 'text', text }] } })
-    + line({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: SESSION, num_turns: 3, total_cost_usd: 0.01 });
+    + line({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: SESSION, num_turns: 3, total_cost_usd: Number(process.env.FAKE_CLAUDE_COST ?? 0.01) });
 }
 
 // Runs the settings' PreToolUse hook once per call, as Claude Code would, and returns each decision.

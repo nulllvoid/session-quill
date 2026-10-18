@@ -56,10 +56,12 @@ export async function bootWorker({ repo, fakeEnv = {}, deadlineMs, withServer = 
   return { w, env, meta, config, ticket, request, hext, advance: (ms) => { nowMs += ms; }, iso, mk, home, storePath };
 }
 
-export async function restartWorker(prev, { runtimeAvailable = true, clock } = {}) {
+// `spawnEnv` reaches the fake runtime of the restarted worker; `withServer` applies requests.
+export async function restartWorker(prev, { runtimeAvailable = true, clock, spawnEnv = {}, withServer = false } = {}) {
   const w = new Worker({ config: prev.config, storeMeta: prev.meta, env: prev.env, derive, ...(clock ? { clock } : {}) });
   const ctx = { env: prev.env, config: prev.config, storeMeta: prev.meta };
-  const hext = handoffExt(ctx, { claudePath: process.execPath, claudeArgs: [FAKE_CLAUDE], runtimeAvailable, maxConcurrent: 4 });
+  const hext = handoffExt(ctx, { claudePath: process.execPath, claudeArgs: [FAKE_CLAUDE], spawnEnv, runtimeAvailable, maxConcurrent: 4 });
+  if (withServer) w.use(serverExt(ctx, { port: 0 }));
   w.use(hext);
   await w.start();
   return { ...prev, w, hext };

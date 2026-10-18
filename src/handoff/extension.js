@@ -25,6 +25,7 @@ import { readJsonIfExists } from '../lib/atomic-fs.js';
 import { getBlob } from '../core/blobs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
 import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, prodEffects } from './autonomous.js';
+import { interruptedEffects, batchBudgetUsd, batchBudgetReached, resumePrompt } from './resume.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -94,9 +95,21 @@ function scopeChanged(h, scopes) {
     const s = scopes.find((x) => (x.target ? `${x.name}:${x.target}` : x.name) === spec);
     let got = null;
     try { got = s ? s.fingerprint : null; } catch (err) { return `scope ${spec} cannot be fingerprinted (${err.message})`; }
-    if (got !== want) return `scope ${spec} changed in config.toml after this critical change was approved, so the run did not start: it runs only with the scope exactly as approved`;
+    if (got !== want) return h.action_pins ? `scope ${spec} changed in config.toml after this critical change was approved, so the run did not start: it runs only with the scope exactly as approved` : `scope ${spec} changed in config.toml since the run this one resumes started, so it did not start: a resumed run gets only the scope exactly as it was granted; queue a new run instead`;
   }
   return null;
+}
+
+// `{ 'name:target': fingerprint }` of resolved scopes, or null when one cannot be fingerprinted.
+function grantedFingerprints(scopes) {
+  try {
+    const out = {};
+    for (const s of scopes) {
+      if (typeof s.fingerprint !== 'string' || !s.fingerprint) return null;
+      out[s.target ? `${s.name}:${s.target}` : s.name] = s.fingerprint;
+    }
+    return out;
+  } catch { return null; }
 }
 
 export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
@@ -116,6 +129,12 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
 
   function failRun(worker, h, code, message, extra = {}) {
     recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code, message }, extra });
+  }
+
+  // Spec §5.4: the writes an interrupted run's partial ledger shows the guard allowed. The worker
+  // never saw the run finish, so each only may have run.
+  function mayHaveRun(worker, id) {
+    try { return interruptedEffects(readLedger(path.join(handoffRunDir(worker.env, id), 'ledger.jsonl'))); } catch { return []; }
   }
 
   // The reply of one turn, read only from its final stream `result` event (spec §5.4). A turn with
@@ -291,13 +310,19 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (reason === 'timeout') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'timed-out', error: { code: 'timeout', message: `execution exceeded ${Math.round((entry.timeoutMs ?? HANDOFF_DEADLINE_MS) / 60000)} min wall clock` }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'cancel') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'cancelled', error: { code: 'cancelled', message: 'cancelled by owner' }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'runtime-too-old') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'runtime-too-old', message: entry.runtimeError ?? 'Claude Code is too old for autonomous runs; queue the run again with standard access' }, extra: await fixExtras(worker, current) }); return; }
-    if (reason === 'stopped') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra: await fixExtras(worker, current) }); return; }
+    if (reason === 'stopped') {
+      const extra = await fixExtras(worker, current);
+      const effects = mayHaveRun(worker, h.id);
+      if (effects.length) extra.uncertain_effects = [...(extra.uncertain_effects ?? current.uncertain_effects ?? []), ...effects];
+      await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra });
+      return;
+    }
     if (outcome.error) { await record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
     const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
     const explicit = readJsonIfExists(resultFile);
     const streamed = parseOutcome(outcome, parseOpts);
     const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: streamed.raw } : streamed;
-    if (outcome.code !== 0) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}` }, extra: await fixExtras(worker, current) }); return; }
+    if (outcome.code !== 0) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}${current.resume_session_id ? '; Claude Code may not have found the session to resume, and its log says why. Retry as a new run to start afresh' : ''}` }, extra: await fixExtras(worker, current) }); return; }
     if (!explicit && streamed.no_result) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'no-result', message: 'the agent exited without a final result event; its log and tool ledger show how far it got' }, extra: await fixExtras(worker, current) }); return; }
     if (parsed.is_error) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
     // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
@@ -645,7 +670,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (!stillQueued(worker, h.id)) return undefined;
     // The credential report is what the Run dialog's warnings rest on (Task 9): which systems got a
     // read-only profile, a stub or a scope, and what no redirect can close.
-    updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings, ...(auto ? { cred_report: auto.report } : {}) });
+    // A scoped run records the fingerprints its grant was frozen with, so a resume of it (Task 19)
+    // gets the scopes exactly as granted or is refused with scope-changed.
+    const prints = access === 'autonomous' && scopes.length && !h.scope_fingerprints ? grantedFingerprints(scopes) : null;
+    updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings, ...(auto ? { cred_report: auto.report } : {}), ...(prints ? { scope_fingerprints: prints } : {}) });
     const current = worker.state.handoffs.get(h.id);
     if (!current || current.state !== 'running') return undefined;
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
@@ -679,7 +707,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       context.memory = mem.inline || null;
       context.guide = mem.guide;
     } catch (err) { worker.log(`memory not delivered to ${h.id}: ${err.stack ?? err.message}`); }
-    const prompt = buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
+    // A resumed run (Task 19) continues the interrupted run's session: the session already holds the
+    // task, so its first turn only says what changed. Everything else is set up as for any run.
+    const resumeId = typeof h.resume_session_id === 'string' && h.resume_session_id ? h.resume_session_id : null;
+    const prompt = resumeId ? resumePrompt({ contextDir: memoryDirs.length ? contextDir : null, checkout: !!worktreePath }) : buildPrompt(current, ticket, { repo: repoCfg, recipe, render, context });
     // Standard access keeps the recipe's own tool narrowing; settings and full access hand the
     // decision to Claude Code itself (ADR 0017).
     // Under autonomous access the guard decides, and a recipe's `tools` still narrows the built-in
@@ -693,11 +724,11 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
     // The entry exists before the process does, so the init event always finds it.
-    const entry = { child: null, done: null, reason: null, observed: !!observe, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: null, outputs: recipe ? recipe.outputs : null, budget, timeoutMs, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, access, spawnExtras };
+    const entry = { child: null, done: null, reason: null, observed: !!observe, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: resumeId, outputs: recipe ? recipe.outputs : null, budget, timeoutMs, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, access, spawnExtras };
     running.set(h.id, entry);
     let run;
     try {
-      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, ledgerPath, onInit, model, maxTurns: budget.maxTurns, maxBudgetUsd: budget.maxBudgetUsd, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, ...spawnExtras });
+      run = spawnAgent({ claudePath, claudeArgs, prompt, cwd, tools, env, permissions: h.permissions ?? {}, logPath, ledgerPath, onInit, model, resume: resumeId, maxTurns: budget.maxTurns, maxBudgetUsd: budget.maxBudgetUsd, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, ...spawnExtras });
     } catch (err) {
       running.delete(h.id);
       return fail(worker, h, 'spawn-failed', err.message);
@@ -722,6 +753,15 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     try { assertRuntime(await probeVersion()); return true; } catch { return false; }
   }
 
+  // Spec §5.2: a bulk batch starts no new member once its recorded spend reaches the budget; the
+  // rest stay queued (the owner may cancel them). A member whose process has ended but whose cost
+  // is not recorded yet (it is still finishing) holds the next one back, so spend is never missed.
+  function batchMayStart(worker, batchId, budget) {
+    const members = [...worker.state.handoffs.values()].filter((x) => x.batch_id === batchId);
+    if (members.some((x) => x.state === 'running' && !running.has(x.id))) return false;
+    return !batchBudgetReached(members, batchId, budget);
+  }
+
   function killWithReason(id, reason) {
     const entry = running.get(id);
     if (!entry) return;
@@ -740,12 +780,17 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     async onStart(worker) {
       // Each recipe carries its time cap per access level, from the same budget dispatch uses.
       worker.recipeInfo = () => catalogFor(worker).list().map((r) => (r.error ? r : { ...r, caps: recipeCaps(r, ctx.config) }));
-      worker.handoffLimits = () => ({ ...limits });
+      // The batch budget travels with the slot caps, so a held batch member's row can say why.
+      worker.handoffLimits = () => ({ ...limits, batch_budget_usd: batchBudgetUsd(ctx.config) });
       worker.autonomyInfo = () => autonomyInfo(worker.state, ctx.config);
       currentWorker = worker;
       stopping = false;
       for (const h of [...worker.state.handoffs.values()]) {
-        if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
+        if (h.state !== 'running') continue;
+        // The recorded session id and the partial ledger stay (spec §5.4): the owner may resume the
+        // run as a new one, and its allowed writes become uncertain effects.
+        const effects = mayHaveRun(worker, h.id);
+        recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' }, extra: effects.length ? { uncertain_effects: [...(h.uncertain_effects ?? []), ...effects] } : {} });
       }
       try { await refileMissing(worker); } catch (err) { worker.log(`memory refiling failed: ${err.message}`); }
       // A stop between a done run's handoff-tx and its critical-proposal events (spec §7.2, R47 M2).
@@ -762,9 +807,11 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       for (const [id, entry] of running) {
         if (entry.reason === null && entry.deadlineAt && now >= entry.deadlineAt) killWithReason(id, 'timeout');
       }
+      const batchBudget = batchBudgetUsd(ctx.config);
       for (const h of nextDispatchable(worker.state, { running: new Set(running.keys()) })) {
         const fix = isFix(h);
         if (inUse(fix) >= (fix ? limits.fix : limits.readonly)) continue;
+        if (h.batch_id && !batchMayStart(worker, h.batch_id, batchBudget)) continue;
         running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null, fix });
         dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); return cleanupRun(worker, h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); cleanupRun(worker, h.id).catch(() => {}); });
       }

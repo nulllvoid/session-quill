@@ -18,9 +18,10 @@ import { suggestionMutation } from '../agents/suggestions.js';
 import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
+import { resumeProblem, resumeFields } from '../handoff/resume.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run', 'memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note'];
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run', 'memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note', 'resume-run'];
 // Owner review of memory (spec §6.4, ADR 0027). Entry kinds target a memory entry by id and are
 // revision-checked against it; memory-note adds an owner entry. Approve and edit belong to the
 // dashboard alone; forget, pin and note may also come from the owner's CLI; nothing else qualifies.
@@ -33,10 +34,10 @@ const QUARANTINED_PIN = 'a quarantined learning is not delivered to runs, so it 
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
 // Long-running requests owned by an extension: the scheduler's, and repo-clone (ADR 0024).
 const EXTENSION_KINDS = new Set([...SCHEDULER_KINDS, 'repo-clone']);
-const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run']);
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run', 'resume-run']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
-const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run']);
+const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run', 'resume-run']);
 const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'dismiss-run', 'memory-forget']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
@@ -168,6 +169,61 @@ function approveCritical(worker, req, ticket, p) {
   return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote });
 }
 
+// The interrupted run a resume-run request names (spec §5.4, Task 19): a run of the target ticket
+// that was interrupted with a recorded session, and that no later run on the ticket superseded
+// (the run detail's rule: once resumed or retried, the later run is the one to act on).
+function resumeTarget(state, ticket, payload) {
+  const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
+  if (!h || h.ticket_id !== ticket.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a run of the target ticket');
+  const problem = resumeProblem(h);
+  if (problem) throw new TrackerError(problem.code, problem.message);
+  const later = [...state.handoffs.values()].find((x) => x.id !== h.id && x.ticket_id === ticket.id && x.requested_at > h.requested_at);
+  if (later) throw new TrackerError('run-superseded', `a later run (${later.id.slice(0, 8)}) on ${ticket.key} superseded this one, so it is not resumed`);
+  return h;
+}
+
+// Resume as new run (spec §5.4, Task 19): the owner (dashboard) or the CLI, never a page, schedule
+// or any other actor; the CLI sends nothing from inside a run (cli-in-run). The new run is a
+// fresh, ordinary run of the same recipe with exactly what the interrupted one was granted (see
+// resumeFields): no wider access, the same scopes whose fingerprints must not have changed, and
+// an approved critical change keeps its action pins or is refused. It starts with --resume.
+function evaluateResume(worker, req, ticket) {
+  const { state } = worker;
+  const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
+  const actor = req.actor_id ?? 'owner';
+  if (actor !== 'owner' && actor !== 'cli') return fail('resume-refused', 'resuming a run needs the owner, on the dashboard or with quill agent resume');
+  let orig;
+  let fields;
+  try {
+    orig = resumeTarget(state, ticket, req.payload ?? {});
+    fields = resumeFields(orig);
+  } catch (err) { return fail(err.code ?? 'resume-refused', err.message); }
+  const id8 = orig.id.slice(0, 8);
+  if (fields.scope_fingerprints) {
+    let catalog;
+    try { catalog = loadScopeCatalog(worker.config ?? {}, { env: worker.env }); } catch (err) { return fail('scope-changed', `the scope catalog cannot be read (${err.message}); fix config.toml and resume again`); }
+    for (const [spec, want] of Object.entries(fields.scope_fingerprints)) {
+      let got;
+      try { got = resolveScopes([spec], catalog)[0].fingerprint; } catch (err) { return fail('scope-changed', `scope ${spec} no longer resolves as it did when run ${id8} started (${err.message}); a resumed run gets only the scope exactly as it was granted`); }
+      if (got !== want) return fail('scope-changed', `scope ${spec} changed in config.toml since run ${id8} started (what it allows or the credentials it switches to); a resumed run gets only the scope exactly as it was granted: put the scope back as it was, or queue a new run`);
+    }
+  }
+  // A built-in is pinned by name and source (an upgrade may change its text); any other recipe
+  // must still have the reviewed hash.
+  const ref = fields.recipe ? { name: fields.recipe.name, source: fields.recipe.source, hash: fields.recipe.source === 'builtin' ? null : fields.recipe.hash } : undefined;
+  const payload = { ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
+  const critical = fields.action_pins ? { actionPins: fields.action_pins, scopeFingerprints: fields.scope_fingerprints, originProposalId: fields.origin_proposal_id } : null;
+  const evaluation = evaluateHandoff(worker, req, ticket, payload, critical);
+  if (evaluation.outcome !== 'applied') return evaluation;
+  const h = evaluation.mutation.handoff;
+  Object.assign(h, { retry_of: orig.id, resume_session_id: orig.session_id, batch_id: null });
+  if (fields.scope_fingerprints) h.scope_fingerprints = { ...fields.scope_fingerprints };
+  if (fields.proposal_id) h.proposal_id = fields.proposal_id;
+  if (fields.proposal) h.proposal = fields.proposal;
+  evaluation.result.resumed = orig.id;
+  return evaluation;
+}
+
 // The owner's wording for an entry: trimmed, non-empty and at most MEMORY_TEXT_MAX characters.
 function memoryText(text) {
   if (typeof text !== 'string' || !text.trim()) throw new TrackerError('request-invalid', 'memory text must be a non-empty string');
@@ -274,6 +330,12 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'handoff-cancel': {
       const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
       if (!h || h.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
+      normalized = { handoff_id: h.id };
+      break;
+    }
+    case 'resume-run': {
+      const h = resumeTarget(state, target, payload);
+      resumeFields(h);
       normalized = { handoff_id: h.id };
       break;
     }
@@ -576,6 +638,8 @@ export function evaluateRequest(worker, req) {
       return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { deployments: req.payload.items } } };
     case 'handoff':
       return evaluateHandoff(worker, req, ticket, req.payload);
+    case 'resume-run':
+      return evaluateResume(worker, req, ticket);
     case 'approve-run':
     case 'dismiss-run': {
       let p;
