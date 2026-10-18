@@ -4,7 +4,7 @@
 import { esc, attr, timeEl, handoffChip, ticketById, normalizeSnapshot, emptyState, proposalItem, shortKey, HANDOFF_LABELS, learningItem, memoryConflictItem } from '../components.js';
 import { batchProgress } from '../lib/bulk.js';
 import { runTabs, visibleRunTabs, defaultRunTab, groupRuns, runFacts, RUN_TAB_LABELS } from '../lib/runs.js';
-import { testGateBadge, accessBadge } from './agents.js';
+import { testGateBadge, accessBadge, accessWords } from './agents.js';
 
 const EMPTY = {
   needs: ['Nothing needs you', 'Proposed runs, results with suggestions to decide on, recent failures, quarantined learnings and memory conflicts appear here.'],
@@ -17,7 +17,7 @@ export function runRow(snapshot, h, { now, tz, selected = false }) {
   const t = ticketById(snapshot, h.ticket_id);
   const name = h.recipe ? h.recipe.name : h.mode;
   const facts = runFacts(snapshot, h, now);
-  const label = `${t ? t.key : 'Ticket not in view'}: ${name}, ${HANDOFF_LABELS[h.state] ?? h.state}${facts.length ? `, ${facts.join(', ')}` : ''}`;
+  const label = `${t ? t.key : 'Ticket not in view'}: ${name}, ${HANDOFF_LABELS[h.state] ?? h.state}, ${accessWords(h).join(', ')}${facts.length ? `, ${facts.join(', ')}` : ''}`;
   const ticket = t ? `<code class="key" title="${attr(t.key)}">${esc(shortKey(t.key))}</code> <span class="run-title">${esc(t.title)}</span>` : '<span class="muted">Ticket not in view</span>';
   return `<li class="run-row" data-state="${attr(h.state)}"><button type="button" class="run-open" data-action="open-run" data-run="${attr(h.id)}" aria-label="${attr(label)}" aria-pressed="${selected ? 'true' : 'false'}">${handoffChip({ ...h, error: null })}<span class="run-ticket">${ticket}</span><span class="run-recipe">${esc(name)}</span><span class="run-badges">${accessBadge(h)} ${testGateBadge(h.test_gate)}</span><span class="run-facts small muted">${esc(facts.join(' · '))}</span><span class="run-time small muted">${timeEl(h.requested_at, now, tz)}</span></button></li>`;
 }

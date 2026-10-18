@@ -3,7 +3,7 @@ import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FI
 import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, OWNER_ONLY_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
 import { renderMemory, MEMORY_TABS, memoryEntryBusy, openMemoryEdit, MEMORY_BUSY_MESSAGE } from './views/memory.js';
 import { renderRuns } from './views/runs.js';
-import { renderRunDetail, renderRunNotFound } from './views/run-detail.js';
+import { renderRunDetail, renderRunNotFound, parseRunRecord } from './views/run-detail.js';
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
 import { renderTree } from './views/tree.js';
@@ -48,6 +48,8 @@ const appState = {
   treeRoot: null,
   content: {},
   contentStatus: {},
+  // Result blobs read as run records (run detail sections), by content hash: { status: 'loading' } | { data } | { error }.
+  runRecords: {},
   loadedTicket: null,
   lastFocus: null,
   error: null,
@@ -349,6 +351,30 @@ async function loadContent(hash, generation, retried = false) {
   render();
 }
 
+// A run's record (its result blob) for the run detail's plan, attempts and checks: owner dashboard
+// only, fetched once per content hash (content-addressed, so it never goes stale). Called while
+// rendering, so it never renders synchronously itself.
+function loadRunRecord(hash, generation, retried = false) {
+  appState.runRecords[hash] = { status: 'loading' };
+  api.getContent(hash, generation).then((text) => {
+    const data = parseRunRecord(text);
+    appState.runRecords[hash] = data ? { data } : { error: text === null ? 'the record is no longer stored' : 'the record could not be read' };
+    render();
+  }).catch(async (err) => {
+    if (err.code === 'generation-expired' && !retried) { await poll(); return loadRunRecord(hash, appState.snapshot.generation_id, true); }
+    appState.runRecords[hash] = { error: err.message || 'the request failed' };
+    render();
+  });
+}
+
+function runRecordFor(run, s) {
+  const ref = run && run.result_ref;
+  if (!ref || api.static || !(s.capabilities ?? {}).handoff) return {};
+  if (!Object.hasOwn(appState.runRecords, ref)) loadRunRecord(ref, s.generation_id);
+  const r = appState.runRecords[ref];
+  return { record: r.data ?? null, recordStatus: r.status === 'loading' ? 'loading' : r.error ? { error: r.error } : null };
+}
+
 function renderDetailPanel(now, pending) {
   const panel = $('#detail');
   const s = appState.snapshot;
@@ -375,7 +401,7 @@ function renderDetailPanel(now, pending) {
   const key = ticket ? ticket.id : `run:${runId}`;
   const html = ticket
     ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded })
-    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus }) : renderRunNotFound(runId);
+    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, memory: appState.memory, ...runRecordFor(run, s) }) : renderRunNotFound(runId);
   setMarkup(panel, html);
   // A different ticket or run starts at its title, not at the previous one's scroll offset.
   if (renderedDetail !== key) { panel.scrollTop = 0; renderedDetail = key; }
@@ -612,6 +638,8 @@ function handleAction(el) {
     case 'run-next': stepRun(1); break;
     case 'open-ticket-from-run': { const id = el.dataset.ticket; setView('board'); openDetail(id, null); break; }
     case 'open-runs': setView('runs'); appState.runTab = el.dataset.tab || null; render(); break;
+    // From a run's critical change to where it is approved: the run closes, Needs you opens.
+    case 'open-needs-you': setView('runs'); appState.selectedRun = null; appState.runTab = 'needs'; render(); $('#run-tab-needs')?.focus(); break;
     case 'open-memory': {
       setView('memory');
       appState.memoryTab = MEMORY_TABS.includes(el.dataset.tab) ? el.dataset.tab : null;
@@ -736,6 +764,7 @@ function handleAction(el) {
     case 'dismiss-batch': appState.batches = appState.batches.filter((b) => b !== el.dataset.batch); render(); break;
     case 'load-content': loadContent(el.dataset.hash, el.dataset.generation); break;
     case 'hide-content': delete appState.content[el.dataset.hash]; render(); break;
+    case 'load-run-record': loadRunRecord(el.dataset.hash, appState.snapshot.generation_id); render(); break;
     case 'load-ticket': {
       api.getTicket(el.dataset.ticket, el.dataset.generation).then((t) => { appState.loadedTicket = t; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
       break;

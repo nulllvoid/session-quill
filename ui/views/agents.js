@@ -103,11 +103,33 @@ export function recipeCap(recipe, access = defaultAccess(recipe)) {
   return caps && Object.hasOwn(caps, access) && Number.isFinite(caps[access]) ? caps[access] : recipe.timeout_min;
 }
 
-// Whether a run reads or edits, and Full access as a warning.
+// Whether a run reads or edits, and the access it ran with (spec §8): Autonomous, Autonomous with
+// write scopes (a warning: it may write where they allow), or Full access (a warning). Standard and
+// "my settings" runs show the kind only. Words first; the colour only repeats them.
+const runKind = (h) => { const p = h.permissions ?? {}; return p.edit_source ? 'Edits source' : p.edit_files || p.delete_files ? 'Changes files' : 'Read-only'; };
+function accessTier(h) {
+  if (h.access === 'full') return { id: 'full', text: 'Full access', warn: true };
+  if (h.access !== 'autonomous') return null;
+  const n = Array.isArray(h.scopes) ? h.scopes.length : 0;
+  return n ? { id: 'autonomous-scopes', text: `Autonomous + scopes (${n})`, warn: true, title: h.scopes.map(String).join(', ') } : { id: 'autonomous', text: 'Autonomous', warn: false };
+}
+
+// The badge words, for labels that must say what the chips show (run row buttons).
+export function accessWords(h) {
+  const tier = accessTier(h);
+  return [runKind(h), ...(tier ? [tier.text] : [])];
+}
+
+export function accessTierBadge(h) {
+  const tier = accessTier(h);
+  return tier ? `<span class="chip${tier.warn ? ' warning' : ''} small" data-access="${tier.id}"${tier.title ? ` title="${attr(`Write scopes: ${tier.title}`)}"` : ''}>${esc(tier.text)}</span>` : '';
+}
+
 export function accessBadge(h) {
-  const p = h.permissions ?? {};
-  const kind = p.edit_source ? '<span class="chip warning small">Edits source</span>' : p.edit_files || p.delete_files ? '<span class="chip warning small">Changes files</span>' : '<span class="chip small">Read-only</span>';
-  return h.access === 'full' ? `${kind} <span class="chip warning small">Full access</span>` : kind;
+  const kind = runKind(h);
+  const chip = `<span class="chip${kind === 'Read-only' ? '' : ' warning'} small">${kind}</span>`;
+  const tier = accessTierBadge(h);
+  return tier ? `${chip} ${tier}` : chip;
 }
 
 // What a files run changed (ADR 0015), each with an Undo while it still applies.

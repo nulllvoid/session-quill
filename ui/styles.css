@@ -983,6 +983,24 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-uncertain { display: flex; gap: 8px; padding: 10px 12px; border-radius: var(--radius-ctl); background: var(--status-deploy-bg); color: var(--status-deploy); }
 .run-uncertain ul { margin: 4px 0 0; padding-left: 18px; }
 .run-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 0; }
+/* Run record (autonomous runs spec §8): plan, attempts, checks, critical changes, learnings, tools and
+   Run notes. Every value is agent or tool text, so long words and commands wrap inside the panel. */
+.run-plan { margin: 0; padding-left: 20px; max-width: 70ch; }
+.run-plan li { padding: 2px 0; overflow-wrap: anywhere; }
+.run-attempts, .run-verification, .run-critical, .run-learnings, .run-tools, .run-note-list, .run-lessons { list-style: none; margin: 0; padding: 0; }
+.run-attempts > li, .run-verification > li, .run-critical > li, .run-learnings > li, .run-tools > li, .run-lessons > li { padding: 6px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; min-width: 0; }
+.run-attempts > li:first-child, .run-verification > li:first-child, .run-critical > li:first-child, .run-learnings > li:first-child, .run-tools > li:first-child, .run-lessons > li:first-child { border-top: 0; }
+.run-attempts p, .run-verification p, .run-critical p { margin: 4px 0 0; max-width: 70ch; }
+.run-attempts code, .run-verification code, .run-critical code, .run-tools code, .run-learnings code { overflow-wrap: anywhere; }
+.attempt-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; vertical-align: baseline; }
+.run-critical .critical-action { white-space: pre-wrap; }
+.run-critical .critical-state { color: var(--text-muted); }
+.run-record-status { margin: 12px 0 0; }
+.run-note { padding: 10px 0; border-top: 1px solid var(--hairline); min-width: 0; overflow-wrap: anywhere; }
+.run-note:first-child { border-top: 0; }
+.run-note-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.run-note .run-attempts, .run-note .run-lessons { margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--hairline-strong); }
+.run-note p { margin: 4px 0 0; }
 @media (max-width: 599px) {
   .run-open { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "state ticket" "state recipe" "state badges" "state facts" "state time"; }
   .run-badges { justify-content: flex-start; }

@@ -245,3 +245,58 @@ test('Needs you holds quarantined learnings and memory conflicts as their own it
   const exported = snap([], { meta: { ...snapshot().meta, exported_at: NOW } });
   assert.equal(runTabs(exported, EMPTY_FILTERS, NOW, { memory }).needs.length, 0, 'an export has no Needs you');
 });
+
+// Spec §8: the access a run had, in words, on rows and the run strip.
+test('run rows carry the access badge in words, and the row label says it too', () => {
+  const label = (html) => /aria-label="([^"]*)"/.exec(html)[1];
+  const auto = run({ access: 'autonomous', permissions: { read_source: true } });
+  const a = runRow(snap([auto]), auto, { now: NOW, tz: 'UTC' });
+  assert.match(a, /<span class="chip small" data-access="autonomous">Autonomous<\/span>/);
+  assert.match(a, />Read-only</, 'the read/edit kind stays alongside');
+  assert.match(label(a), /Read-only, Autonomous/);
+  const scoped = run({ access: 'autonomous', scopes: ['jira.write', 'k8s.write:stg'], permissions: { read_source: true, edit_source: true } });
+  const sc = runRow(snap([scoped]), scoped, { now: NOW, tz: 'UTC' });
+  assert.match(sc, /<span class="chip warning small" data-access="autonomous-scopes"[^>]*>Autonomous \+ scopes \(2\)<\/span>/);
+  assert.match(sc, />Edits source</);
+  assert.match(label(sc), /Edits source, Autonomous \+ scopes \(2\)/);
+  const full = run({ access: 'full' });
+  const f = runRow(snap([full]), full, { now: NOW, tz: 'UTC' });
+  assert.match(f, /<span class="chip warning small" data-access="full">Full access<\/span>/);
+  assert.doesNotMatch(f, />Autonomous/);
+  assert.match(label(f), /Full access/);
+  const std = run({ access: 'standard' });
+  assert.doesNotMatch(runRow(snap([std]), std, { now: NOW, tz: 'UTC' }), /Autonomous|Full access/);
+});
+
+test('the run strip names the access a run had', () => {
+  const scoped = run({ access: 'autonomous', scopes: ['jira.write'] });
+  const s = snap([scoped]);
+  const html = renderDetail(s.tickets[0], s, { now: NOW });
+  assert.match(/<button type="button" class="run-strip"[\s\S]*?<\/button>/.exec(html)[0], /Autonomous \+ scopes \(1\)/);
+});
+
+test('the ticket Runs tab shows Run notes, owner only, newest first, escaped', () => {
+  const r1 = run({ requested_at: '2026-10-09T10:00:00Z' });
+  const r2 = run({ requested_at: '2026-10-10T10:00:00Z', proposal: { id: 'p', publisher: 'team' } });
+  const s = snap([r1, r2]);
+  s.tickets[0].run_notes = [
+    { run_id: r1.id, at: '2026-10-09T10:05:00Z', attempts: [{ route: 'Scale <b>it</b>', tool: 'kubectl', target: 'stg', outcome: 'refused', reason: 'QUILL_CRITICAL_CHANGE scope=k8s.write target=stg: not granted', evidence: '', verified: 'seen' }, { route: 'Argo', tool: 'argocd', target: '', outcome: 'worked', reason: '', evidence: '', verified: 'claimed-no-call' }], lessons: [{ entry_id: 'e1', text: 'Staging HPA caps at 4', trust: 'verified' }], withheld: 1 },
+    { run_id: r2.id, at: '2026-10-10T10:05:00Z', attempts: [{ route: '[withheld: instruction-like text — see run x]', tool: 'Bash', target: '', outcome: 'failed', reason: '', evidence: '' }], lessons: [], origin: 'page' },
+  ];
+  const html = renderDetail(s.tickets[0], s, { now: NOW, tab: 'runs' });
+  const notes = /<section class="detail-section run-notes">[\s\S]*?<\/section>/.exec(html);
+  assert.ok(notes, 'Run notes section present');
+  assert.match(notes[0], /<h3>Run notes <span class="count">2<\/span><\/h3>/);
+  assert.ok(notes[0].indexOf(r2.id) < notes[0].indexOf(r1.id), 'newest first');
+  assert.match(notes[0], /Refused \(no scope\)/);
+  assert.match(notes[0], /Claimed, no tool call seen/);
+  assert.match(notes[0], /Scale &lt;b&gt;it&lt;\/b&gt;/);
+  assert.match(notes[0], /data-trust="verified"[^>]*>Verified<\/span> Staging HPA caps at 4/);
+  assert.match(notes[0], /1 field withheld/);
+  assert.match(notes[0], /\[withheld: instruction-like text — see run x\]/);
+  assert.match(notes[0], /proposed on a shared page/);
+  assert.match(notes[0], /data-action="open-run" data-run="run-\d+"/);
+  const viewer = snap([r1, r2], { capabilities: { read: true } });
+  viewer.tickets[0].run_notes = s.tickets[0].run_notes;
+  assert.doesNotMatch(renderDetail(viewer.tickets[0], viewer, { now: NOW, tab: 'runs' }), /Run notes/);
+});
