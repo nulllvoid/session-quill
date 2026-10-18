@@ -11,6 +11,8 @@ import { PROPOSAL_TTL_MS } from '../publish/run-proposals.js';
 import { loadScopeCatalog, resolveScopes } from './scopes.js';
 import { pinOfChange, HIDDEN_CHAR_RE } from './action-pin.js';
 import { CRITICAL_CAPS } from './runner.js';
+import { mcpSettings } from '../config/mcp-policy.js';
+import { coverageAtProposal } from '../gate/run-guard.js';
 
 // Why an entry of a done run did not become a proposal, kept on the run as critical_notes (local
 // only: never exported or written to a vault note).
@@ -18,7 +20,7 @@ export const CRITICAL_NO_SCOPE = 'no matching scope configured';
 export const CRITICAL_NO_PIN = 'the action is not one plain command, or a tool call written as <tool name> <JSON input>, so it cannot be pinned';
 export const CRITICAL_TRUNCATED = 'the entry was longer than the result allows and was cut, so it is not proposed';
 export const CRITICAL_HIDDEN = 'the scope, target or action holds a control, format or bidi character, so what is shown may not be what would run';
-export const criticalTargetMismatch = (want, got) => `the action acts on ${got ? `"${cleanLine(got, 80)}"` : 'no target the guard can read'}, not the scope's target "${cleanLine(want, 80)}"`;
+export const criticalNotCovered = (scope, why) => `scope ${cleanLine(`${scope.name}${scope.target ? `:${scope.target}` : ''}`, 120)} would not cover this action: ${cleanLine(why, 240)}`;
 
 const RISKS = ['low', 'medium', 'high'];
 const CLEAN_RE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu;
@@ -76,19 +78,24 @@ export function buildCriticalProposal({ run, parent, index, change, pin, scopes,
   };
 }
 
-// M1: the pin's own target (context, Argo app, host; an MCP call's identifying argument) must be
-// the scope's target, or the approved run could not make the change.
-function targetProblem(pin, scope) {
-  if (scope.target === null || scope.target === undefined) return null;
-  const want = String(scope.target);
-  if (pin.kind === 'mcp') return Object.values(pin.ids ?? {}).includes(want) ? null : criticalTargetMismatch(want, null);
-  if (typeof pin.target === 'string') {
-    const same = pin.target.toLowerCase().replace(/\.$/, '') === want.toLowerCase().replace(/\.$/, '') && (scope.name === 'http.write' || pin.target === want);
-    return same ? null : criticalTargetMismatch(want, pin.target);
+// The tool call a pin stands for, as the run guard will see it.
+function callOf(pin) {
+  if (pin.kind === 'mcp') return { tool_name: pin.tool_name, tool_input: JSON.parse(pin.guard.slice(pin.tool_name.length + 1)) };
+  return { tool_name: 'Bash', tool_input: { command: pin.guard } };
+}
+
+// R48 (M1): the guard's own coverage decision for the scope the entry names: the guard's reading of
+// the call (its target, the designated identifying field of an MCP call) and the scope's
+// allow-list (one target, given once; listed options only; one app). Not covered: not proposed.
+// An MCP call under a scope with a target must also name no other target in its identifying fields.
+function coverageProblem(pin, scope, mcpPolicy) {
+  const r = coverageAtProposal(callOf(pin), scope, { mcpPolicy });
+  if (!r.ok) return criticalNotCovered(scope, r.why);
+  if (pin.kind === 'mcp' && scope.target) {
+    const other = Object.values(pin.ids ?? {}).find((v) => v !== scope.target);
+    if (other !== undefined) return criticalNotCovered(scope, `the call also names "${other}", so its target is ambiguous`);
   }
-  // An exact pin (a tool or option the built-in tables do not know): the target must be one of its words.
-  if (pin.exact === true) return (pin.values ?? []).includes(want) ? null : criticalTargetMismatch(want, null);
-  return criticalTargetMismatch(want, null);
+  return null;
 }
 
 const hidden = (v) => typeof v === 'string' && HIDDEN_CHAR_RE.test(v);
@@ -103,6 +110,7 @@ export function planCriticalChanges(worker, changes, { loadCatalog = loadScopeCa
   const plans = [];
   const notes = [];
   let catalog = null;
+  let mcpPolicy = null;
   (Array.isArray(changes) ? changes : []).forEach((change, index) => {
     try {
       const c = isPlainObject(change) ? change : {};
@@ -114,16 +122,18 @@ export function planCriticalChanges(worker, changes, { loadCatalog = loadScopeCa
       const pin = pinOfChange(c);
       if (!pin) { notes.push({ index, reason: CRITICAL_NO_PIN }); return; }
       let scopes;
+      let resolved;
       try {
-        const [r] = resolve([catalog[name].takesTarget && target ? `${name}:${target}` : name], catalog);
-        scopes = [{ name: r.name, target: r.target ?? null, fingerprint: r.fingerprint }];
+        [resolved] = resolve([catalog[name].takesTarget && target ? `${name}:${target}` : name], catalog);
+        scopes = [{ name: resolved.name, target: resolved.target ?? null, fingerprint: resolved.fingerprint }];
       } catch (err) {
         if (!(err instanceof TrackerError)) throw err;
         notes.push({ index, reason: cleanLine(err.message, 300) || err.code });
         return;
       }
-      const mismatch = targetProblem(pin, scopes[0]);
-      if (mismatch) { notes.push({ index, reason: mismatch }); return; }
+      mcpPolicy ??= mcpSettings(worker.config ?? {}).mcpPolicy;
+      const notCovered = coverageProblem(pin, { name: resolved.name, target: resolved.target ?? null, matchers: resolved.matchers }, mcpPolicy);
+      if (notCovered) { notes.push({ index, reason: notCovered }); return; }
       plans.push({ index, change: c, pin, scopes });
     } catch (err) {
       if (typeof worker.log === 'function') worker.log(`critical change ${index} not proposed after an unexpected error: ${err && err.stack ? err.stack : err}`);

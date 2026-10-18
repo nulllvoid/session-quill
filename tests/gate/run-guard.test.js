@@ -77,6 +77,9 @@ const JIRA = { name: 'jira.write', matchers: { mcp: ['mcp__claude_ai_Atlassian__
 const HTTP_API = { name: 'http.write', target: 'api.example.com', matchers: { hosts: ['api.example.com'], bash: [], mcp: [] }, fingerprint: 'f-http' };
 const PIN = { scope: 'argo.sync', pin: 'argocd app sync pay-stg' };
 const MCP_PIN = { scope: 'argo.sync', pin: 'mcp__argocd__sync_application {"applicationName":"pay-stg"}' };
+// R48: a pinned write is allowed only when it matches a pin AND a granted scope covers it.
+const ARGO_STG = { ...ARGO, target: 'pay-stg' };
+const PIN_STG = { scope: 'argo.sync:pay-stg', pin: 'argocd app sync pay-stg' };
 const KUBECTL_ONLY = { name: 'k8s.write', target: 'stg', matchers: { bash: ['kubectl *'] }, fingerprint: 'f-kubectl' };
 
 const CRITICAL_TAIL = 'Record it in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.';
@@ -115,7 +118,7 @@ const ROWS = [
   ['unparseable command', bash('$CMD apply -f x.yaml'), {}, denied('unparseable')],
   ['scope k8s.write:stg covers its own context', bash('kubectl --context stg apply -f x.yaml'), { grant: { scopes: [K8S_STG] } }, 'allow'],
   ['scope k8s.write:stg does not cover prod', bash('kubectl --context prod apply -f x.yaml'), { grant: { scopes: [K8S_STG] } }, critical('k8s.write', 'prod'), { scope: 'k8s.write', target: 'prod' }],
-  ['the pinned action is allowed', bash('argocd app sync pay-stg'), { grant: { actionPins: [PIN] } }, 'allow'],
+  ['the pinned action is allowed', bash('argocd app sync pay-stg'), { grant: { scopes: [ARGO_STG], actionPins: [PIN] } }, 'allow'],
   ['another action in the pinned scope is a critical change', bash('argocd app sync pay-prod'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-prod'), { scope: 'argo.sync', target: 'pay-prod' }],
 
   // per-run permissions and branches (R2)
@@ -139,7 +142,7 @@ const ROWS = [
   ['MCP write without a scope', call('mcp__claude_ai_Atlassian__editJiraIssue', { issueIdOrKey: 'PMO-1' }, { mcp_server_source: 'claudeai' }), {}, critical('jira.write', 'PMO-1'), { scope: 'jira.write', target: 'PMO-1' }],
   ['MCP write in a granted scope', call('mcp__claude_ai_Atlassian__editJiraIssue', { issueIdOrKey: 'PMO-1' }, { mcp_server_source: 'claudeai' }), { grant: { scopes: [JIRA] } }, 'allow'],
   ['MCP tool with an unknown verb', call('mcp__warehouse__run_query', { sql: 'select 1' }, { mcp_server_source: 'user' }), {}, denied('unknown-prod')],
-  ['pinned MCP action', call('mcp__argocd__sync_application', { applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { actionPins: [MCP_PIN] } }, 'allow'],
+  ['pinned MCP action', call('mcp__argocd__sync_application', { applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { scopes: [ARGO_STG], actionPins: [MCP_PIN] } }, 'allow'],
   ['MCP action outside the pin', call('mcp__argocd__sync_application', { applicationName: 'pay-prod' }, { mcp_server_source: 'user' }), { grant: { actionPins: [MCP_PIN] } }, critical('argo.sync', 'pay-prod')],
 
   // classifier edges
@@ -429,15 +432,27 @@ const ROWS = [
   ['pin: export earlier in the chain', bash('export ARGOCD_OPTS=x; argocd app sync pay-stg'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
   ['pin: a wrapper shell', bash('bash -c "argocd app sync pay-stg"'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
   ['pin: input from a file', bash('argocd app sync pay-stg < opts.txt'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
-  ['pin: quoting does not change the action', bash('argocd app sync "pay-stg"'), { grant: { actionPins: [PIN] } }, 'allow'],
+  ['pin: quoting does not change the action', bash('argocd app sync "pay-stg"'), { grant: { scopes: [ARGO_STG], actionPins: [PIN] } }, 'allow'],
   ['pin: helm with a context variable', bash('HELM_KUBECONTEXT=prod helm upgrade api ./chart'), { grant: { actionPins: [{ scope: 'k8s.write', pin: 'helm upgrade api ./chart' }] } }, critical('k8s.write', '')],
-  ['pin: helm as pinned', bash('helm upgrade api ./chart'), { grant: { actionPins: [{ scope: 'k8s.write', pin: 'helm upgrade api ./chart' }] } }, 'allow'],
+  ['pin: helm as pinned', bash('helm upgrade api ./chart --kube-context stg'), { grant: { scopes: [K8S_STG], actionPins: [{ scope: 'k8s.write:stg', pin: 'helm upgrade api ./chart --kube-context stg' }] } }, 'allow'],
+  ['pin: helm without its context is not covered by the scope', bash('helm upgrade api ./chart'), { grant: { scopes: [K8S_STG], actionPins: [{ scope: 'k8s.write', pin: 'helm upgrade api ./chart' }] } }, critical('k8s.write', '')],
   ['pin: kubectl with another kubeconfig', bash('KUBECONFIG=/tmp/rw kubectl --context stg apply -f x.yaml'), { grant: { actionPins: [{ scope: 'k8s.write:stg', pin: 'kubectl --context stg apply -f x.yaml' }] } }, critical('k8s.write', 'stg')],
 
   // fix round 1, I2: the whole MCP input is the action
   ['MCP pin: a second app field naming another app', call('mcp__argocd__sync_application', { applicationName: 'pay-stg', name: 'pay-prod' }, { mcp_server_source: 'user' }), { grant: { actionPins: [MCP_PIN] } }, critical('argo.sync', 'pay-stg')],
   ['MCP pin: an extra option', call('mcp__argocd__sync_application', { applicationName: 'pay-stg', prune: true }, { mcp_server_source: 'user' }), { grant: { actionPins: [MCP_PIN] } }, critical('argo.sync', 'pay-stg')],
-  ['MCP pin: the same input in another key order', call('mcp__argocd__sync_application', { revision: 'abc', applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { actionPins: [{ scope: 'argo.sync', pin: 'mcp__argocd__sync_application {"applicationName":"pay-stg","revision":"abc"}' }] } }, 'allow'],
+  ['MCP pin: the same input in another key order', call('mcp__argocd__sync_application', { revision: 'abc', applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { scopes: [ARGO_STG], actionPins: [{ scope: 'argo.sync', pin: 'mcp__argocd__sync_application {"applicationName":"pay-stg","revision":"abc"}' }] } }, 'allow'],
+
+  // R48: a pin equal to each proposal-time bypass is refused, because no granted scope covers it
+  ['R48: a pin without a granted scope allows nothing', bash('argocd app sync pay-stg'), { grant: { actionPins: [PIN] } }, critical('argo.sync', 'pay-stg')],
+  ['R48: duplicate --context, pinned', bash('kubectl --context stg --context prod rollout restart deploy/api'), { grant: { scopes: [K8S_STG], actionPins: [{ scope: 'k8s.write:stg', pin: 'kubectl --context stg --context prod rollout restart deploy/api' }] } }, /^QUILL_CRITICAL_CHANGE scope=k8s\.write target=stg: .*exactly once/],
+  ['R48: an unknown option carrying the target word, pinned', bash('kubectl --context prod --v 9 -n stg rollout restart deploy/api'), { grant: { scopes: [K8S_STG], actionPins: [{ scope: 'k8s.write', pin: 'kubectl --context prod --v 9 -n stg rollout restart deploy/api' }] } }, critical('k8s.write', 'prod')],
+  ['R48: duplicate namespace, pinned', bash('kubectl --context stg -n pay --namespace prod rollout restart deploy/api'), { grant: { scopes: [K8S_STG], actionPins: [{ scope: 'k8s.write:stg', pin: 'kubectl --context stg -n pay --namespace prod rollout restart deploy/api' }] } }, /^QUILL_CRITICAL_CHANGE scope=k8s\.write target=stg: .*more than once/],
+  ['R48: two Argo apps, pinned', bash('argocd app sync pay-stg pay-prod'), { grant: { scopes: [ARGO_STG], actionPins: [{ scope: 'argo.sync:pay-stg', pin: 'argocd app sync pay-stg pay-prod' }] } }, critical('argo.sync', 'pay-stg')],
+  ['R48: --app-namespace naming the target, pinned', bash('argocd app sync pay-prod --app-namespace pay-stg'), { grant: { scopes: [ARGO_STG], actionPins: [{ scope: 'argo.sync', pin: 'argocd app sync pay-prod --app-namespace pay-stg' }] } }, critical('argo.sync', 'pay-prod')],
+  ['R48: the brief\'s argocd pin with --prune is allowed', bash('argocd app sync pay-stg --prune'), { grant: { scopes: [ARGO_STG], actionPins: [{ scope: 'argo.sync:pay-stg', pin: 'argocd app sync pay-stg --prune' }] } }, 'allow'],
+  ['R48: the brief\'s kubectl pin is allowed', bash('kubectl --context stg -n pay rollout restart deploy/api'), { grant: { scopes: [K8S_STG], actionPins: [{ scope: 'k8s.write:stg', pin: 'kubectl --context stg -n pay rollout restart deploy/api' }] } }, 'allow'],
+  ['R48: duplicate namespace without a pin is not covered either', bash('kubectl --context stg -n pay -n prod rollout restart deploy/api'), { grant: { scopes: [K8S_STG] } }, /^QUILL_CRITICAL_CHANGE scope=k8s\.write target=stg: .*more than once/],
   ['MCP pin in the old tool-and-target form matches nothing', call('mcp__argocd__sync_application', { applicationName: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { actionPins: [{ scope: 'argo.sync', pin: 'mcp__argocd__sync_application pay-stg' }] } }, critical('argo.sync', 'pay-stg')],
 
   // fix round 1, I3: command patterns cover only the part they match

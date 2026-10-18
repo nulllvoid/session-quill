@@ -757,19 +757,51 @@ function sameTarget(want, p) {
   return p.class === 'external.write' ? host(got) === host(want) : got === String(want);
 }
 
-// A scope with action pins allows only its pinned actions (§7.5); otherwise a granted scope
-// covers the write when its name and target match and one of its matchers fits the call.
+// A scope with action pins allows only its pinned actions (§7.5), and (R48) only when a granted
+// scope also covers that very call, so a pin can never widen what the scope's allow-list permits
+// (a duplicate target option, a second app, an unlisted option). Otherwise a granted scope covers
+// the write when its name and target match and one of its matchers fits the call.
 function coverOf(p, g, c, e = {}) {
   const pins = (Array.isArray(g.actionPins) ? g.actionPins : [])
     .filter((a) => isPlainObject(a) && typeof a.scope === 'string' && typeof a.pin === 'string' && scopeName(a.scope) === p.scope);
-  if (pins.length) return pins.some((a) => pinMatches(a, p, c)) ? { ok: true, via: 'the approved action pin' } : { ok: false, pins: pins.map((a) => a.pin.trim()) };
+  if (pins.length && !pins.some((a) => pinMatches(a, p, c))) return { ok: false, pins: pins.map((a) => a.pin.trim()) };
   let why = null;
   const scope = (Array.isArray(g.scopes) ? g.scopes : []).find((s) => {
     const r = scopeCovers(s, p, c, g, e);
     if (r !== true && typeof r === 'string') why = why ?? r;
     return r === true;
   });
+  if (pins.length) return scope ? { ok: true, via: 'the approved action pin' } : { ok: false, pins: pins.map((a) => a.pin.trim()), why: why ?? 'no granted scope covers the pinned action' };
   return scope ? { ok: true, via: `scope ${scope.name}${scope.target ? `:${scope.target}` : ''}` } : { ok: false, pins: [], why };
+}
+
+/**
+ * R48: whether a granted scope would cover a proposed action, decided by the guard's own reading
+ * of the call (classifyCall) and its own coverage rules (scopeCovers), without the checks that
+ * depend on where the run executes (its checkout and the files the command reads).
+ * @param {{ tool_name: string, tool_input: object }} call
+ * @param {{ name: string, target?: string|null, matchers?: object }} scope  a resolveScopes() entry
+ * @param {{ mcpPolicy?: object, trackerHosts?: string[] }} [opts]
+ * @returns {{ ok: true } | { ok: false, why: string }}
+ */
+export function coverageAtProposal(call, scope, { mcpPolicy = { read: [], write: {} }, trackerHosts = [] } = {}) {
+  const c = isPlainObject(call) ? call : {};
+  if (!isPlainObject(scope) || typeof scope.name !== 'string') return { ok: false, why: 'there is no scope' };
+  const ctx = { cwd: undefined, home: os.homedir(), env: {}, currentBranch: undefined, defaultBranch: undefined, isProtectedBranch: () => true, mcpPolicy: isPlainObject(mcpPolicy) ? mcpPolicy : { read: [], write: {} }, trackerHosts: strings(trackerHosts) };
+  const cls = classifyCall({ tool_name: c.tool_name, tool_input: c.tool_input }, ctx);
+  const parts = partsOf(cls);
+  const bad = cls.class === 'unparseable' ? cls : parts.find((p) => ['unparseable', 'privileged', 'unknown-prod'].includes(p.class));
+  if (bad) return { ok: false, why: `the guard cannot allow it (${String(bad.reason ?? bad.class).slice(0, 160)})` };
+  const writes = parts.filter((p) => p.class === 'external.write' || (p.class === 'write' && !String(p.scope ?? '').startsWith('git.')));
+  if (!writes.length) return { ok: false, why: 'the guard does not read it as a write a scope covers' };
+  for (const p of writes) {
+    if (p.scope !== scope.name) return { ok: false, why: `the guard reads it as a ${String(p.scope ?? p.class).slice(0, 60)} write, not ${scope.name}` };
+    const want = typeof scope.target === 'string' && scope.target ? scope.target : null;
+    if (want !== null && !sameTarget(want, p)) return { ok: false, why: `the action acts on ${targetOf(p) ? `"${String(targetOf(p)).slice(0, 80)}"` : 'no target the guard can read'}, not the scope's target "${want.slice(0, 80)}"` };
+    const r = scopeCovers({ name: scope.name, target: want ?? undefined, matchers: isPlainObject(scope.matchers) ? scope.matchers : {} }, p, c, {}, {}, { where: false });
+    if (r !== true) return { ok: false, why: typeof r === 'string' ? r : `scope ${scope.name} does not cover it` };
+  }
+  return { ok: true };
 }
 
 // A pin authorises exactly its action. A shell pin matches only a call that is that one command:
@@ -816,7 +848,7 @@ function soleCommand(text, dialect) {
 // (scope-commands.js; a grant without `matchers.commands` uses the built-in lists) and the agent's
 // working directory is inside the run's checkout. Returns true, false, or why a granted scope of
 // this name does not cover the call.
-function scopeCovers(s, p, c, g = {}, e = {}) {
+function scopeCovers(s, p, c, g = {}, e = {}, { where = true } = {}) {
   if (!isPlainObject(s) || s.name !== p.scope) return false;
   if (s.target !== undefined && s.target !== null && s.target !== '' && !sameTarget(s.target, p)) return false;
   const m = isPlainObject(s.matchers) ? s.matchers : {};
@@ -827,6 +859,8 @@ function scopeCovers(s, p, c, g = {}, e = {}) {
   const commands = isPlainObject(m.commands) ? m.commands : BUILTIN_COMMANDS[s.name] ?? {};
   const check = commandCheck(command, dialect === 'bash' ? 'bash' : 'powershell', { commands, target: typeof s.target === 'string' && s.target ? s.target : null, scope: s.name });
   if (check.why) return check.why;
+  // R48: a proposal is checked before any run exists; its checkout and files are checked when it runs.
+  if (!where) return hostsAndPatterns(check, m, p);
   const root = typeof g.checkoutRoot === 'string' && g.checkoutRoot ? g.checkoutRoot : strings(g.readableRoots)[0];
   const cwd = typeof e.cwd === 'string' && e.cwd ? e.cwd : null;
   if (!root || !cwd || !isWithin(path.resolve(cwd), path.resolve(root))) return 'the command does not run inside the run\'s checkout';
@@ -843,6 +877,11 @@ function scopeCovers(s, p, c, g = {}, e = {}) {
     if (!real) return `the file ${f.slice(0, 80)} does not exist, so the guard cannot tell where it is`;
     if (!inside.some((r) => isWithin(real, r))) return `${f.slice(0, 80)} is outside the run's checkout and run directory`;
   }
+  return hostsAndPatterns(check, m, p);
+}
+
+// The last part of scopeCovers: registry hosts (R26.4) and the scope's command or host patterns.
+function hostsAndPatterns(check, m, p) {
   // R26.4: an image push names its registry; it must be one of the scope's hosts.
   for (const h of check.hosts) if (!strings(m.hosts).some((pat) => globMatch(pat.toLowerCase(), h))) return `the registry ${h.slice(0, 80)} is not one of this scope's hosts`;
   if (Array.isArray(p.argv) && p.argv.length && strings(m.bash).some((pat) => globMatch(pat, p.argv.join(' ')))) return true;

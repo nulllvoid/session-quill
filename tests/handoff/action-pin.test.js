@@ -120,10 +120,9 @@ test('an action with a control, format or bidi character is never pinned (nothin
   assert.equal(pinAction({ tool: 'Bash', action: "kubectl --context stg rollout restart $'deploy/api\\u202e'" }), null);
 });
 
-test('pins carry the target the scope binds: context, Argo app, host or the identifying MCP argument', () => {
-  assert.equal(pinAction({ tool: 'Bash', action: 'kubectl --context stg -n pay rollout restart deploy/api' }).target, 'stg');
-  assert.equal(pinAction({ tool: 'Bash', action: 'helm upgrade pay ./chart --kube-context stg' }).target, 'stg');
-  assert.equal(pinAction({ tool: 'Bash', action: 'argocd app sync pay-stg --prune' }).target, 'pay-stg');
-  assert.equal(pinAction({ tool: 'Bash', action: 'curl -X POST https://Hooks.Example.com/x' }).target, 'hooks.example.com');
-  assert.equal(pinAction({ tool: 'Bash', action: 'mytool deploy prod' }).target, undefined, 'an exact pin names no target the tables can read');
+
+// R48: pins read no target of their own; the guard's coverage decision binds a proposal to its scope.
+test('pins carry no target reader of their own', () => {
+  assert.equal('target' in pinAction({ tool: 'Bash', action: 'kubectl --context stg -n pay rollout restart deploy/api' }), false);
+  assert.deepEqual(pinAction({ tool: 'mcp__argocd__sync_application', action: { applicationName: 'pay-stg', name: 'x' } }).ids, { applicationName: 'pay-stg', name: 'x' });
 });

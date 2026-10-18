@@ -14,7 +14,7 @@ import { plainCommand, BUILTIN_COMMANDS } from '../gate/scope-commands.js';
 const SHELLS = { Bash: 'bash', Monitor: 'bash', PowerShell: 'powershell' };
 const MCP_TOOL_RE = /^mcp__[A-Za-z0-9_.-]{1,200}$/;
 // Arguments that say which thing an MCP call acts on (issue key, app name, channel …), for display.
-const ID_KEY_RE = /^(?:id|key|name|app|appname|app_name|application|channel|channel_id|issue|issuekey|issue_key|issueidorkey|project|projectkey|project_key|page|pageid|page_id|space|spacekey|space_key|repo|repository|owner|cloudid|environment|env|namespace|cluster|context|service|database|host)$/i;
+const ID_KEY_RE = /^(?:id|key|name|app|appname|app_name|application|applicationname|channel|channel_id|issue|issuekey|issue_key|issueidorkey|project|projectkey|project_key|page|pageid|page_id|space|spacekey|space_key|repo|repository|owner|cloudid|environment|env|namespace|cluster|context|service|database|host)$/i;
 const ID_SUFFIX_RE = /[a-z0-9](?:Id|ID|Key|_id|_key)$/;
 // Options whose value is the namespace, surfaced on their own (spec §7.1).
 const NAMESPACE_OPTIONS = { kubectl: ['-n', '--namespace'], helm: ['-n', '--namespace'] };
@@ -46,7 +46,6 @@ function structured(bin, spec, args) {
   const values = [];
   const targets = [];
   const namespaces = [];
-  const urls = [];
   for (let i = 0; i < args.length; i += 1) {
     const t = args[i];
     if (t === '--' || t === '--%') return null;
@@ -68,7 +67,6 @@ function structured(bin, spec, args) {
       if (val === undefined || isOption(val)) return null;
       i += 1;
     }
-    if (kind === 'url') urls.push(val);
     if (kind === 'target') targets.push(val);
     else if (nsOpts.has(name)) namespaces.push(val);
     else values.push([name, val]);
@@ -85,23 +83,7 @@ function structured(bin, spec, args) {
   }
   // Sorted by option name only: a stable sort keeps repeated options (helm --set) in their order.
   const ordered = values.slice().sort((a, c) => (a[0] < c[0] ? -1 : a[0] > c[0] ? 1 : 0)).map(([n, v]) => `${n}=${v}`);
-  return { verb, args: rest, context: targets[0] ?? null, namespace: namespaces[0] ?? null, flags: flags.slice().sort(), values: ordered, target: targetOf(spec, targets, rest, urls) };
-}
-
-// What the tool's own table says the command acts on (spec §7.5 target binding): the target
-// option's value (kubectl/helm context, cloud profile, DB host, stack), the first argument (the
-// Argo CD app) or the host of the one http(s) URL. Null when the table names none or it is unclear.
-function targetOf(spec, targets, args, urls) {
-  const t = spec.target ?? null;
-  if (!t) return null;
-  if (t.options) return targets[0] ?? null;
-  if (t.positional) return args[0] ?? null;
-  if (t.url) {
-    const all = [...urls, ...args.filter((a) => /^https?:\/\//i.test(a))];
-    if (all.length !== 1) return null;
-    try { return new URL(all[0]).hostname.toLowerCase().replace(/\.$/, '') || null; } catch { return null; }
-  }
-  return null;
+  return { verb, args: rest, context: targets[0] ?? null, namespace: namespaces[0] ?? null, flags: flags.slice().sort(), values: ordered };
 }
 
 // Whether any key or string value of a JSON value holds a hidden character.
@@ -130,7 +112,6 @@ function shellPin(command, dialect) {
   if (s.args.length) pin.resource = s.args.join(' ');
   if (s.context !== null) pin.context = s.context;
   if (s.namespace !== null) pin.namespace = s.namespace;
-  if (s.target !== null) pin.target = s.target;
   pin.flags = s.flags;
   pin.values = s.values;
   pin.normalized = canonicalJson({ kind: 'bash', binary, verb: s.verb, args: s.args, context: s.context, namespace: s.namespace, flags: s.flags, values: s.values });

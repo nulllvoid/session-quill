@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { recordResult, planCriticalChanges, CRITICAL_NO_SCOPE, CRITICAL_NO_PIN, CRITICAL_TRUNCATED, CRITICAL_HIDDEN } from '../../src/handoff/results.js';
 import { TrackerError } from '../../src/lib/errors.js';
@@ -154,7 +155,7 @@ test('a truncated entry or one with control, format or bidi characters is not pr
   } finally { await b.w.stop(); }
 });
 
-// R47 M1: the action must act on the scope's own target.
+// R48 (M1): the guard's own coverage decision binds a proposal to the scope target.
 test('target binding: a proposal needs the action to act on the scope target', async () => {
   const b = await bootWorker({ runtimeAvailable: true });
   try {
@@ -165,10 +166,46 @@ test('target binding: a proposal needs the action to act on the scope target', a
     ] });
     const notes = b.w.state.handoffs.get(hid).critical_notes;
     assert.deepEqual(notes.map((n) => n.index), [0, 2]);
-    assert.match(notes[0].reason, /acts on "pay-prod", not the scope's target "pay-stg"/);
-    assert.match(notes[1].reason, /acts on "other\.example\.com", not the scope's target "hooks\.example\.com"/);
+    assert.match(notes[0].reason, /^scope argo\.sync:pay-stg would not cover this action: the action acts on "pay-prod", not the scope's target "pay-stg"/);
+    assert.match(notes[1].reason, /^scope http\.write:hooks\.example\.com would not cover this action: the action acts on "other\.example\.com"/);
     assert.deepEqual(runProposals(b.w).map((p) => p.id), [deterministicId(`${hid}:critical:1`)]);
   } finally { await b.w.stop(); }
+});
+
+test('R48: every known target-binding bypass is refused at proposal; the brief\'s examples still propose', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quill-r48-'));
+  try {
+    const w = { config: { scopes: { 'k8s.write': { env: { KUBECONFIG: 'env:QUILL_TEST_KUBECONFIG' } } } }, env: { QUILL_HOME: home }, log: (m) => { throw new Error(`unexpected log: ${m}`); } };
+    const entry = (scope, target, action) => ({ ...base, title: 't', scope, target, action, risk: 'high' });
+    const refused = [
+      entry('k8s.write', 'stg', 'kubectl --context stg --context prod rollout restart deploy/api'),
+      entry('k8s.write', 'stg', 'kubectl --context prod --v 9 -n stg rollout restart deploy/api'),
+      entry('k8s.write', 'stg', 'kubectl --context stg -n pay --namespace prod rollout restart deploy/api'),
+      entry('argo.sync', 'pay-stg', 'argocd app sync pay-stg pay-prod'),
+      entry('argo.sync', 'pay-stg', 'argocd app sync pay-prod --app-namespace pay-stg'),
+      entry('argo.sync', 'pay-stg', 'argocd app sync pay-stg --server argo-prod.example'),
+      entry('argo.sync', 'pay-stg', 'mcp__argocd__sync_application {"applicationName":"pay-prod","name":"pay-stg"}'),
+      entry('argo.sync', 'pay-stg', 'mcp__argocd__sync_application {"applicationName":"pay-stg","name":"pay-prod"}'),
+    ];
+    const out = planCriticalChanges(w, refused);
+    assert.equal(out.plans.length, 0, JSON.stringify(out.plans.map((p) => p.change.action)));
+    assert.deepEqual(out.notes.map((n) => n.index), refused.map((_, i) => i));
+    for (const n of out.notes) assert.match(n.reason, /^scope (k8s\.write:stg|argo\.sync:pay-stg) would not cover this action: \S/, JSON.stringify(n));
+    assert.match(out.notes[0].reason, /exactly once/);
+    assert.match(out.notes[2].reason, /more than once/);
+    assert.match(out.notes[3].reason, /exactly one item/);
+    assert.match(out.notes[6].reason, /acts on "pay-prod"/);
+    assert.match(out.notes[7].reason, /also names "pay-prod"/);
+    const legit = [
+      entry('argo.sync', 'pay-stg', 'argocd app sync pay-stg --prune'),
+      entry('k8s.write', 'stg', 'kubectl --context stg -n pay rollout restart deploy/api'),
+      entry('jira.write', 'PMO-1', 'mcp__atlassian__transitionJiraIssue {"issueIdOrKey":"PMO-1","transition":"Done"}'),
+      entry('argo.sync', 'pay-stg', 'mcp__argocd__sync_application {"applicationName":"pay-stg"}'),
+    ];
+    const ok = planCriticalChanges(w, legit);
+    assert.deepEqual(ok.notes, []);
+    assert.deepEqual(ok.plans.map((p) => [p.scopes[0].name, p.scopes[0].target]), [['argo.sync', 'pay-stg'], ['k8s.write', 'stg'], ['jira.write', null], ['argo.sync', 'pay-stg']]);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
 // R47 M2: a stop between the run's handoff-tx and its proposals is made good at the next start, once.

@@ -14,7 +14,9 @@
 //   options: { '<exact name>': 'flag' | 'bool' | 'value' | 'url' },
 //   args: 'any' | 'none' | 'one' | 'target' | 'target-revision' | 'url' | 'httpie' (or per verb:
 //   { '<verb>': … }), requires?: [names, at least one present], patterns?: { name: regexp source },
-//   ps?: true (a PowerShell cmdlet: names compare case-insensitively, `-Name:value` accepted) }
+//   ps?: true (a PowerShell cmdlet: names compare case-insensitively, `-Name:value` accepted),
+//   once?: [[names that spell one option]] (R48: given at most once, whatever the spelling; the
+//   target options are always exactly once) }
 import { parseShell, binName } from './shell-tokens.js';
 
 const PLAIN = '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$';
@@ -32,6 +34,7 @@ const KUBECTL = {
     '--wait': b, '--timeout': v, '--replicas': v, '-o': v, '--output': v, '--overwrite': b, '--all': b, '--server-side': b, '--field-manager': v, '--force-conflicts': b,
     '--type': v, '-p': v, '--patch': v, '--cascade': v, '-c': v, '--container': v, '--to-revision': v, '--record': b, '--dry-run': v,
   },
+  once: [['-n', '--namespace']],
   args: 'any',
 };
 const HELM = {
@@ -41,6 +44,7 @@ const HELM = {
     '-n': v, '--namespace': v, '-f': v, '--values': v, '--set': v, '--set-string': v, '--set-file': v, '--version': v, '--wait': b, '--timeout': v, '--atomic': b,
     '-i': f, '--install': f, '--create-namespace': b, '--reuse-values': b, '--reset-values': b, '--description': v,
   },
+  once: [['-n', '--namespace']],
   args: 'any',
 };
 const AWS = {
@@ -50,24 +54,28 @@ const AWS = {
     '--region': v, '--recursive': f, '--exclude': v, '--include': v, '--delete': f, '--dryrun': f, '--cluster': v, '--service': v, '--force-new-deployment': f,
     '--desired-count': v, '--function-name': v, '--zip-file': v, '--s3-bucket': v, '--s3-key': v, '--content-type': v, '--cache-control': v, '--no-cli-pager': f,
   },
+  once: [['--region'], ['--cluster'], ['--service'], ['--function-name']],
   args: 'any',
 };
 const GCLOUD = {
   verbs: ['run deploy', 'run services update', 'app deploy'],
   target: { options: ['--project'] },
   options: { '--region': v, '--image': v, '--source': v, '--platform': v, '--quiet': f, '-q': f, '--no-promote': f, '--version': v },
+  once: [['--region']],
   args: 'any',
 };
 const AZ = {
   verbs: ['webapp restart', 'webapp deploy', 'functionapp restart', 'containerapp update'],
   target: { options: ['--subscription'] },
   options: { '-g': v, '--resource-group': v, '-n': v, '--name': v, '--src-path': v, '--type': v, '--image': v, '--yes': f, '-y': f },
+  once: [['-g', '--resource-group'], ['-n', '--name']],
   args: 'none',
 };
 const ARGOCD = {
   verbs: ['app sync', 'app rollback'],
   target: { positional: true },
   options: { '--prune': f, '--force': f, '--timeout': v, '--revision': v, '--async': f, '--retry-limit': v, '--apply-out-of-sync-only': f, '--grpc-web': f, '--server-side': f },
+  once: [['--revision']],
   args: { 'app sync': 'target', 'app rollback': 'target-revision' },
 };
 const PSQL = {
@@ -75,6 +83,7 @@ const PSQL = {
   target: { options: ['-h', '--host'] },
   options: { '-c': v, '--command': v, '-d': v, '--dbname': v, '-U': v, '--username': v, '-p': v, '--port': v, '-X': f, '--no-psqlrc': f, '-q': f, '--quiet': f },
   patterns: { '-d': PLAIN, '--dbname': PLAIN, '-U': PLAIN, '--username': PLAIN, '-p': DIGITS, '--port': DIGITS },
+  once: [['-d', '--dbname'], ['-U', '--username'], ['-p', '--port']],
   requires: ['-c', '--command'],
   sql: ['-c', '--command'],
   args: 'none',
@@ -84,14 +93,15 @@ const MYSQL = {
   target: { options: ['-h', '--host'] },
   options: { '-e': v, '--execute': v, '-u': v, '--user': v, '-P': v, '--port': v, '-D': v, '--database': v, '--batch': f },
   patterns: { '-D': PLAIN, '--database': PLAIN, '-u': PLAIN, '--user': PLAIN, '-P': DIGITS, '--port': DIGITS },
+  once: [['-D', '--database'], ['-u', '--user'], ['-P', '--port']],
   requires: ['-e', '--execute'],
   sql: ['-e', '--execute'],
   args: 'none',
 };
-const REDIS = { verbs: [], target: { options: ['-h'] }, options: { '-p': v, '-n': v }, patterns: { '-p': DIGITS, '-n': DIGITS }, args: 'any' };
+const REDIS = { verbs: [], target: { options: ['-h'] }, options: { '-p': v, '-n': v }, patterns: { '-p': DIGITS, '-n': DIGITS }, once: [['-p'], ['-n']], args: 'any' };
 const PULUMI = { verbs: ['up', 'refresh'], target: { options: ['-s', '--stack'] }, options: { '--yes': f, '-y': f, '--skip-preview': f, '-m': v, '--message': v, '--non-interactive': f, '--diff': f }, args: 'none' };
 const CDK = { verbs: ['deploy'], target: { options: ['--profile'] }, options: { '--require-approval': v }, args: 'any' };
-const SERVERLESS = { verbs: ['deploy', 'deploy function'], target: { options: ['-s', '--stage'] }, options: { '-r': v, '--region': v, '--verbose': f, '--force': f, '-f': v, '--function': v }, args: 'none' };
+const SERVERLESS = { verbs: ['deploy', 'deploy function'], target: { options: ['-s', '--stage'] }, options: { '-r': v, '--region': v, '--verbose': f, '--force': f, '-f': v, '--function': v }, once: [['-r', '--region'], ['-f', '--function']], args: 'none' };
 const CURL = {
   verbs: [],
   target: { url: true },
@@ -280,6 +290,10 @@ function toolProblem(bin, spec, args, target, out) {
   const targets = [];
   const urls = [];
   const seen = new Set();
+  // R48: an option that says where (namespace, region, database …) may be given once, in one spelling.
+  const onceOf = new Map();
+  (Array.isArray(spec.once) ? spec.once : []).forEach((group, i) => { for (const n of Array.isArray(group) ? group : []) onceOf.set(key(n), i); });
+  const onceSeen = new Set();
   for (let i = 0; i < args.length; i += 1) {
     const t = args[i];
     if (t === '--' || t === '--%') return `${t} ends the options`;
@@ -290,6 +304,11 @@ function toolProblem(bin, spec, args, target, out) {
     name = key(name);
     const kind = targetOpts.has(name) ? 'target' : Object.hasOwn(options, name) ? options[name] : null;
     if (!kind) return `option ${name.slice(0, 60)} is not on the ${bin} list (options are matched exactly, never abbreviated)`;
+    if (kind === 'target' && targets.length) return `${[...targetOpts].join(' or ')} must be given exactly once`;
+    if (onceOf.has(name)) {
+      if (onceSeen.has(onceOf.get(name))) return `${name} is given more than once (in one spelling or another)`;
+      onceSeen.add(onceOf.get(name));
+    }
     if (kind === 'flag' && val !== undefined) return `${name} takes no value`;
     if (kind === 'bool' && val !== undefined && !/^(true|false)$/.test(val)) return `${name} takes only true or false`;
     if (kind === 'value' || kind === 'target' || kind === 'url') {
