@@ -28,6 +28,7 @@ export const MEMORY_KINDS = new Set(['memory-approve', 'memory-edit', 'memory-fo
 const MEMORY_ENTRY_KINDS = new Set(['memory-approve', 'memory-edit', 'memory-forget', 'memory-pin']);
 const DASHBOARD_ONLY = { 'memory-approve': 'memory-approve-dashboard-only', 'memory-edit': 'memory-edit-dashboard-only' };
 const MEMORY_TEXT_MAX = 2000;
+const QUARANTINED_PIN = 'a quarantined learning is not delivered to runs, so it cannot be pinned; approve it first';
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
 // Long-running requests owned by an extension: the scheduler's, and repo-clone (ADR 0024).
@@ -295,6 +296,7 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       break;
     case 'memory-pin':
       if (typeof payload.pinned !== 'boolean') throw new TrackerError('request-invalid', 'memory-pin needs payload.pinned, true or false');
+      if (memoryEntry.trust === 'quarantined') throw new TrackerError('memory-quarantined', QUARANTINED_PIN);
       normalized = { pinned: payload.pinned };
       break;
     case 'memory-note':
@@ -489,6 +491,8 @@ function evaluateMemoryRequest(worker, req) {
       return { outcome: 'applied', memoryTx: { op: 'retired', entry: { id: entry.id }, ...guarded }, result };
     case 'memory-pin':
       if (typeof payload.pinned !== 'boolean') return memoryFailure('request-invalid', 'memory-pin needs payload.pinned, true or false', entry.revision);
+      // A held learning is never delivered, pinned or not: approve it first (pinning would claim an effect it has not).
+      if (entry.trust === 'quarantined') return memoryFailure('memory-quarantined', QUARANTINED_PIN, entry.revision);
       return { outcome: 'applied', memoryTx: { op: payload.pinned ? 'pinned' : 'unpinned', entry: { id: entry.id }, ...guarded }, result };
     default:
       return memoryFailure('kind-invalid', 'unsupported memory request kind');

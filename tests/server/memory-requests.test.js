@@ -76,6 +76,17 @@ test('approve and edit from the CLI are refused as dashboard-only; forget, pin a
   } finally { await s.stop(); }
 });
 
+test('a quarantined learning cannot be pinned (approve it first), from the dashboard or the CLI', async () => {
+  const s = await started();
+  try {
+    assert.throws(() => owner(s, { kind: 'memory-pin', target_id: 'q1', expected_revision: entry(s, 'q1').revision, payload: { pinned: true } }), (e) => e.code === 'memory-quarantined');
+    const r = viaCli(s, { kind: 'memory-pin', target_id: 'q1', expected_revision: entry(s, 'q1').revision, payload: { pinned: true } });
+    assert.equal(r.state, 'failed');
+    assert.equal(r.error.code, 'memory-quarantined');
+    assert.equal(entry(s, 'q1').pinned, false);
+  } finally { await s.stop(); }
+});
+
 test('only the owner (dashboard or CLI) touches memory: a page or a schedule is refused', async () => {
   const s = await started();
   try {

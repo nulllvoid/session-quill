@@ -1,7 +1,7 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
-import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER, scopeChoices } from './components.js';
+import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER, scopeChoices, tracksSnapshotRequest } from './components.js';
 import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, OWNER_ONLY_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
-import { renderMemory, MEMORY_TABS } from './views/memory.js';
+import { renderMemory, MEMORY_TABS, memoryEntryBusy, openMemoryEdit, MEMORY_BUSY_MESSAGE } from './views/memory.js';
 import { renderRuns } from './views/runs.js';
 import { renderRunDetail, renderRunNotFound } from './views/run-detail.js';
 import { renderPickNext } from './views/picknext.js';
@@ -70,6 +70,8 @@ const appState = {
   memoryRepo: null,
   memoryEditing: null,
   memoryDrafts: {},
+  // Request ids whose conflict or failure the owner dismissed; syncRequests leaves them out.
+  dismissedRequests: new Set(),
 };
 
 // A read-only snapshot (export) has no owner-only views, whatever its address says.
@@ -205,14 +207,21 @@ function render() {
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
   else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun, memory: appState.memory });
-  else if (appState.view === 'memory') html = renderMemory(appState.memory, s, { now, pending, tab: appState.memoryTab, repo: appState.memoryRepo, editing: appState.memoryEditing, drafts: appState.memoryDrafts, status: appState.memoryStatus, filters: appState.filters, online: appState.online });
+  else if (appState.view === 'memory') html = renderMemory(appState.memory, s, { now, pending, tab: appState.memoryTab, repo: appState.memoryRepo, editing: appState.memoryEditing, status: appState.memoryStatus, filters: appState.filters, online: appState.online });
   if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
   renderBulkBar(s);
-  // A focused element of the page with an id (a Memory edit, the repository selector, a tab, an
-  // entry's text) keeps focus, and a text field its caret, across a re-render; typed text is kept in state.
   const active = document.activeElement;
-  const keep = active && active !== main && main.contains(active) && active.id ? { id: active.id, start: active.tagName === 'TEXTAREA' ? active.selectionStart : null, end: active.tagName === 'TEXTAREA' ? active.selectionEnd : null } : null;
-  setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
+  // While the owner types in a Memory edit, the page is not rebuilt at all (like the detail panel's
+  // editing guard): the field keeps IME composition, undo history, caret and scroll.
+  const typing = appState.view === 'memory' && appState.memoryEditing && active instanceof HTMLTextAreaElement && main.contains(active) && active.dataset.memoryDraft === appState.memoryEditing.id;
+  // A focused element of the page with an id (the repository selector, a tab, an entry's text) keeps
+  // focus, and a text field its caret, across a re-render.
+  const keep = !typing && active && active !== main && main.contains(active) && active.id ? { id: active.id, start: active.tagName === 'TEXTAREA' ? active.selectionStart : null, end: active.tagName === 'TEXTAREA' ? active.selectionEnd : null } : null;
+  if (!typing) setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
+  // A rebuilt edit form opens with the text Edit was pressed on; put back what has been typed since.
+  const field = appState.view === 'memory' && appState.memoryEditing ? main.querySelector(`textarea[data-memory-draft="${CSS.escape(appState.memoryEditing.id)}"]`) : null;
+  const draft = field ? appState.memoryDrafts[appState.memoryEditing.id] : undefined;
+  if (field && typeof draft === 'string' && field.value !== draft) field.value = draft;
   if (keep) { const el = document.getElementById(keep.id); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (keep.start !== null && el.setSelectionRange) el.setSelectionRange(keep.start, keep.end); } }
   main.scrollTop = renderedView === appState.view ? scroll : 0;
   renderedView = appState.view;
@@ -475,8 +484,7 @@ function syncRequests(snap) {
   }
   for (const r of snap.requests ?? []) {
     const local = appState.requests.get(r.id);
-    if (local && local.state === 'already-applied') continue;
-    if (local || ['pending', 'applying', 'conflict', 'failed'].includes(r.state)) {
+    if (tracksSnapshotRequest(r, local, appState.dismissedRequests)) {
       const prev = local ? local.state : null;
       appState.requests.set(r.id, { ...local, ...r, original: local ? local.original : null });
       if (prev && prev !== r.state && ['applied', 'conflict', 'failed', 'cancelled'].includes(r.state)) {
@@ -545,13 +553,15 @@ function memoryRevision(id) {
   return e ? e.revision : null;
 }
 
-// One memory change (spec §6.4) against the revision the owner saw; ignored while one is in flight
-// for the same entry (the buttons are disabled too).
+// One memory change (spec §6.4) against the revision the owner saw. While another change to the
+// same entry is in flight it is refused, said out loud, and false is returned (the caller keeps an
+// open edit form and its draft).
 function submitMemory(kind, id, revision, payload, announceText) {
-  if ([...appState.requests.values()].some((r) => r.target_id === id && typeof r.kind === 'string' && r.kind.startsWith('memory-') && ['sending', 'pending', 'applying'].includes(r.state))) return;
+  if (memoryEntryBusy(id, [...appState.requests.values()])) { announce(MEMORY_BUSY_MESSAGE); setReceipt(MEMORY_BUSY_MESSAGE, 'neutral'); return false; }
   submit({ kind, target_id: id, expected_revision: Number.isInteger(revision) ? revision : memoryRevision(id), payload }, { announceText });
   // The entry's buttons are disabled while the change is in flight: keep focus on the entry itself.
   document.getElementById(`memory-text-${id}`)?.focus({ preventScroll: true });
+  return true;
 }
 
 // Inbox requests are checked against the session's unlinked-work revision, not a ticket's.
@@ -622,7 +632,9 @@ function handleAction(el) {
     }
     case 'memory-retire': submitMemory('memory-forget', el.dataset.entry, Number(el.dataset.revision), {}, 'Retiring the entry; undo within 10 seconds'); break;
     case 'memory-edit': {
-      appState.memoryEditing = el.dataset.entry;
+      const entry = appState.memory ? appState.memory.entries.find((x) => x.id === el.dataset.entry) : null;
+      if (!entry) break;
+      appState.memoryEditing = openMemoryEdit(entry, appState.memoryDrafts);
       render();
       const ta = $(`#main textarea[data-memory-draft="${CSS.escape(el.dataset.entry)}"]`);
       if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
@@ -673,7 +685,8 @@ function handleAction(el) {
     case 'clear-filter': appState.filters[el.dataset.filter] = el.dataset.filter === 'stale' ? false : ''; render(); break;
     case 'clear-filters': appState.filters = { ...appState.filters, category: '', tag: '', repo: '', machine: '', stale: false, q: '' }; render(); break;
     case 'cancel-request': cancelRequest(el.dataset.request); break;
-    case 'discard-request': appState.requests.delete(el.dataset.request); render(); break;
+    // Dismissed stays dismissed: later polls do not bring the request's feedback back.
+    case 'discard-request': appState.dismissedRequests.add(el.dataset.request); appState.requests.delete(el.dataset.request); render(); break;
     case 'retry-request':
     case 'resubmit-request': {
       const r = appState.requests.get(el.dataset.request);
@@ -905,6 +918,8 @@ function handleSubmit(form) {
     if (!text) { announce('The wording cannot be empty'); return; }
     // The draft stays until the edit applies, so a conflict or failure loses nothing.
     appState.memoryDrafts[id] = text;
+    // Refused while another change to the entry is in flight: the form stays open with the draft.
+    if (memoryEntryBusy(id, [...appState.requests.values()])) { submitMemory('memory-edit', id, revision, { text }, ''); return; }
     appState.memoryEditing = null;
     submitMemory('memory-edit', id, revision, { text }, 'Saving your wording as an owner entry');
   } else if (kind === 'bulk-handoff') {

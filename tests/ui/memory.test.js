@@ -3,8 +3,8 @@
 // tell no memory from no matches, Memory under Track on shortcut 8, and nothing of it in an export.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeSnapshot, EMPTY_FILTERS, trustChip, TRUST_LABELS } from '../../ui/components.js';
-import { renderMemory, MEMORY_TABS, memoryTabEntries } from '../../ui/views/memory.js';
+import { normalizeSnapshot, EMPTY_FILTERS, trustChip, TRUST_LABELS, tracksSnapshotRequest } from '../../ui/components.js';
+import { renderMemory, MEMORY_TABS, memoryTabEntries, memoryRequestFor, memoryEntryBusy, openMemoryEdit, MEMORY_BUSY_MESSAGE } from '../../ui/views/memory.js';
 import { renderSidebar, NAV_ITEMS, PHONE_PRIMARY, SHORTCUT_VIEWS } from '../../ui/views/header.js';
 import { renderHelpDialog } from '../../ui/views/dialogs.js';
 import { buildStaticHtml } from '../../src/export/static.js';
@@ -77,10 +77,71 @@ test('a pending change disables the entry actions and offers Undo while a retire
   assert.match(li, /data-action="memory-pin"[^>]*disabled/);
   assert.match(li, /data-action="cancel-request" data-request="r1"/);
   assert.match(li, /applies in 8 s/);
-  const editing = renderMemory(memory(), snapshot(), { now: NOW, tab: 'repo', editing: 'v1', drafts: { v1: 'draft wording' } });
+  const edit = openMemoryEdit(memory().entries[0], { v1: 'draft wording' });
+  assert.deepEqual(edit, { id: 'v1', text: 'draft wording' }, 'reopening Edit starts from the saved draft');
+  assert.deepEqual(openMemoryEdit(memory().entries[0], {}), { id: 'v1', text: 'Text of v1' });
+  const editing = renderMemory(memory(), snapshot(), { now: NOW, tab: 'repo', editing: edit });
   assert.match(editing, /<form class="memory-edit" data-form="memory-edit" data-entry="v1" data-revision="3">/);
   assert.match(editing, /<label for="memory-edit-text-[^"]+">Owner wording<\/label>/);
-  assert.match(editing, />draft wording<\/textarea>/, 'a draft survives a re-render');
+  assert.match(editing, />draft wording<\/textarea>/);
+});
+
+test('I1: while an edit is open the markup is identical across polls, whatever the owner has typed since', () => {
+  const edit = openMemoryEdit(memory().entries[0], {});
+  // The owner types: the app keeps the draft in its own state, never in the markup.
+  const poll1 = renderMemory(memory(), snapshot(), { now: NOW, tab: 'repo', editing: edit });
+  const drafts = { v1: 'Text of v1 and more typed since' };
+  assert.ok(drafts.v1);
+  const poll2 = renderMemory(memory(), snapshot(), { now: NOW, tab: 'repo', editing: edit });
+  assert.equal(poll1, poll2);
+  assert.match(poll1, />Text of v1<\/textarea>/, 'the textarea holds the text it opened with');
+  assert.doesNotMatch(poll2, /typed since/);
+});
+
+test('I2: an entry shows its newest request; a pending one shows Undo and disables the actions', () => {
+  const conflict = { id: 'r-old', kind: 'memory-forget', target_id: 'v1', state: 'conflict', created_at: '2026-10-02T11:00:00Z', error: { current_revision: 4 }, payload: {} };
+  const pending = { id: 'r-new', kind: 'memory-forget', target_id: 'v1', state: 'pending', created_at: '2026-10-02T11:59:58Z', not_before: '2026-10-02T12:00:08Z', payload: {} };
+  assert.equal(memoryRequestFor('v1', [conflict, pending]).id, 'r-new', 'a pending request beats an older conflict');
+  assert.equal(memoryRequestFor('v1', [pending, conflict]).id, 'r-new', 'whatever order they arrive in');
+  assert.equal(memoryEntryBusy('v1', [conflict, pending]), true);
+  const html = renderMemory(memory(), snapshot(), { now: NOW, tab: 'repo', pending: [conflict, pending] });
+  const li = /<li class="memory-entry" data-entry="v1"[\s\S]*?<\/li>/.exec(html)[0];
+  assert.match(li, /data-action="cancel-request" data-request="r-new"/);
+  assert.match(li, /Undo/);
+  assert.doesNotMatch(li, /Conflict:/);
+  for (const action of ['memory-edit', 'memory-pin', 'memory-retire']) assert.match(li, new RegExp(`data-action="${action}"[^>]*disabled`), action);
+  const older = { ...conflict, id: 'r-a', created_at: '2026-10-02T10:00:00Z', state: 'failed', error: { message: 'x' } };
+  const newer = { ...conflict, id: 'r-b', created_at: '2026-10-02T11:00:00Z' };
+  assert.equal(memoryRequestFor('v1', [newer, older]).id, 'r-b', 'the newest settled request, not the first');
+  const applied = { id: 'r-c', kind: 'memory-forget', target_id: 'v1', state: 'applied', created_at: '2026-10-02T11:30:00Z', payload: {} };
+  assert.equal(memoryRequestFor('v1', [newer, applied]), null, 'a later applied change clears an old conflict');
+  assert.equal(memoryEntryBusy('v1', [newer]), false);
+  const sending = { id: 'r-d', kind: 'memory-pin', target_id: 'v1', state: 'sending', payload: { pinned: true } };
+  assert.equal(memoryRequestFor('v1', [newer, sending]).id, 'r-d', 'a request still being sent is the newest');
+});
+
+test('I2: a dismissed conflict or failure stays dismissed when the next poll brings it back', () => {
+  const r = { id: 'r1', kind: 'memory-forget', target_id: 'v1', state: 'conflict' };
+  assert.equal(tracksSnapshotRequest(r, undefined, new Set()), true, 'a conflict is tracked from the snapshot');
+  assert.equal(tracksSnapshotRequest(r, undefined, new Set(['r1'])), false, 'until the owner dismisses it');
+  assert.equal(tracksSnapshotRequest({ ...r, state: 'failed' }, { state: 'failed' }, new Set(['r1'])), false);
+  assert.equal(tracksSnapshotRequest({ ...r, state: 'applied' }, undefined, new Set()), false, 'settled successes are tracked only when sent from here');
+  assert.equal(tracksSnapshotRequest({ ...r, state: 'applied' }, { state: 'pending' }, new Set()), true);
+  assert.equal(tracksSnapshotRequest({ ...r, state: 'applied' }, { state: 'already-applied' }, new Set()), false);
+});
+
+test('M2: Quarantine entries offer Approve, Edit and Retire but not Pin', () => {
+  const q = renderMemory(memory(), snapshot(), { now: NOW, tab: 'quarantine' });
+  assert.doesNotMatch(q, /data-action="memory-pin"/);
+  assert.match(q, /data-action="memory-retire" data-entry="q1"/);
+  assert.match(q, /data-action="memory-approve" data-entry="q1"/);
+});
+
+test('M9: a second change while one is in flight is refused with a message, not dropped', () => {
+  const pending = [{ id: 'r1', kind: 'memory-forget', target_id: 'v1', state: 'pending', created_at: NOW, payload: {} }];
+  assert.equal(memoryEntryBusy('v1', pending), true);
+  assert.equal(memoryEntryBusy('m1', pending), false);
+  assert.equal(MEMORY_BUSY_MESSAGE, 'A change to this entry is still being applied');
 });
 
 test('empty states tell no memory, an empty tab, no matches and a failed load apart', () => {

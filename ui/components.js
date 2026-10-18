@@ -571,3 +571,12 @@ export function memoryConflictItem(c, snapshot) {
   const where = c.scope === 'repo' ? `repo ${repoName(snapshot, c.repo_id) ?? c.repo_id}` : 'machine';
   return `<li class="run-row memory-item" data-state="conflict" data-conflict="${attr(c.id)}"><span class="chip warning small">Memory conflict</span> <span>Key <code>${esc(c.key)}</code>: ${esc(c.entry_ids.length)} entries disagree (${esc(where)}). Runs get only the higher-ranked one.</span> <button type="button" class="btn small" data-action="open-memory" data-tab="${c.scope === 'repo' ? 'repo' : 'machine'}"${c.repo_id ? ` data-repo="${attr(c.repo_id)}"` : ''} aria-label="${attr(`Resolve the memory conflict on ${c.key}`)}">Resolve in Memory</button></li>`;
 }
+
+// Whether a request record from the snapshot is tracked on this page (shown as feedback): one sent
+// from here, or any still pending, applying, in conflict or failed. A request the owner dismissed
+// stays dismissed when later polls bring it back, and a lost cancel race keeps its local state.
+export function tracksSnapshotRequest(r, local, dismissed) {
+  if (dismissed && dismissed.has(r.id)) return false;
+  if (local && local.state === 'already-applied') return false;
+  return !!local || ['pending', 'applying', 'conflict', 'failed'].includes(r.state);
+}

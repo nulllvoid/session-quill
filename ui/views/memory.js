@@ -30,8 +30,35 @@ export function memoryTabEntries(memory, tab, { q = '', repo = null } = {}) {
   return (memory ? memory.entries : []).filter((e) => inTab(e, tab) && (tab !== 'repo' || !repo || e.repo_id === repo) && (!needle || `${e.text} ${e.key ?? ''} ${e.section ?? ''}`.toLowerCase().includes(needle)));
 }
 
-function entryRequest(e, pending) {
-  return pending.find((r) => typeof r.kind === 'string' && r.kind.startsWith('memory-') && r.target_id === e.id && (MEMORY_IN_FLIGHT.has(r.state) || r.state === 'conflict' || r.state === 'failed')) ?? null;
+export const MEMORY_BUSY_MESSAGE = 'A change to this entry is still being applied';
+
+// Requests for one entry, oldest first: by created_at, and a request still being sent (no
+// created_at yet) after every recorded one; ties keep the order they were given in.
+function entryRequests(entryId, requests) {
+  const list = [...requests].map((r, i) => ({ r, i })).filter(({ r }) => typeof r.kind === 'string' && r.kind.startsWith('memory-') && r.target_id === entryId);
+  const key = ({ r }) => (typeof r.created_at === 'string' ? r.created_at : '￿');
+  return list.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : a.i - b.i)).map(({ r }) => r);
+}
+
+/** Whether a change to this entry is being sent, waiting out its undo window or applying. */
+export function memoryEntryBusy(entryId, requests) {
+  return entryRequests(entryId, requests).some((r) => MEMORY_IN_FLIGHT.has(r.state));
+}
+
+/** The request an entry shows: its newest in-flight one, else its newest conflict or failure
+ * unless a later change to the entry applied (an old conflict says nothing about the entry now). */
+export function memoryRequestFor(entryId, requests) {
+  const list = entryRequests(entryId, requests);
+  const inFlight = list.filter((r) => MEMORY_IN_FLIGHT.has(r.state));
+  if (inFlight.length) return inFlight.at(-1);
+  const last = list.filter((r) => r.state === 'applied' || r.state === 'conflict' || r.state === 'failed').at(-1);
+  return last && last.state !== 'applied' ? last : null;
+}
+
+/** Edit state for an entry: the text the form opens with (a kept draft, else the entry's text). The
+ * markup carries only this, never what is typed afterwards, so a poll does not rebuild the field. */
+export function openMemoryEdit(entry, drafts = {}) {
+  return { id: entry.id, text: typeof drafts[entry.id] === 'string' ? drafts[entry.id] : entry.text };
 }
 
 function sourceRun(e, snapshot, now, tz) {
@@ -41,14 +68,15 @@ function sourceRun(e, snapshot, now, tz) {
   return `From ${run ? `<button type="button" class="link" data-action="open-run" data-run="${attr(run.id)}">${esc(label)}</button>${run.finished_at ? ` ${timeEl(run.finished_at, now, tz)}` : ''}` : esc(label)}`;
 }
 
-function editForm(e, draft) {
+function editForm(e, editing) {
   const field = `memory-edit-text-${e.id}`;
-  return `<form class="memory-edit" data-form="memory-edit" data-entry="${attr(e.id)}" data-revision="${attr(e.revision)}"><label for="${attr(field)}">Owner wording</label><textarea id="${attr(field)}" name="text" rows="3" maxlength="2000" required data-memory-draft="${attr(e.id)}" aria-describedby="${attr(`${field}-help`)}">${esc(draft ?? e.text)}</textarea><p class="small muted" id="${attr(`${field}-help`)}">Saved as your entry: it keeps this id, becomes Owner and never goes stale.</p><div class="memory-actions"><button type="submit" class="btn small primary">Save</button> <button type="button" class="btn small ghost" data-action="memory-edit-cancel" data-entry="${attr(e.id)}">Cancel</button></div></form>`;
+  return `<form class="memory-edit" data-form="memory-edit" data-entry="${attr(e.id)}" data-revision="${attr(e.revision)}"><label for="${attr(field)}">Owner wording</label><textarea id="${attr(field)}" name="text" rows="3" maxlength="2000" required data-memory-draft="${attr(e.id)}" aria-describedby="${attr(`${field}-help`)}">${esc(editing.text)}</textarea><p class="small muted" id="${attr(`${field}-help`)}">Saved as your entry: it keeps this id, becomes Owner and never goes stale.</p><div class="memory-actions"><button type="submit" class="btn small primary">Save</button> <button type="button" class="btn small ghost" data-action="memory-edit-cancel" data-entry="${attr(e.id)}">Cancel</button></div></form>`;
 }
 
-function entryItem(e, snapshot, { now, tz, pending, editing, drafts, canAct }) {
-  const req = entryRequest(e, pending);
-  const busy = !!(req && MEMORY_IN_FLIGHT.has(req.state));
+function entryItem(e, snapshot, { now, tz, pending, editing, canAct }) {
+  const req = memoryRequestFor(e.id, pending);
+  const busy = memoryEntryBusy(e.id, pending);
+  const isEditing = !!(editing && editing.id === e.id);
   const textId = `memory-text-${e.id}`;
   const chips = [trustChip(e.trust)];
   if (e.pinned) chips.push(`<span class="chip small" data-pinned="true">${icon('check')}Pinned</span>`);
@@ -64,11 +92,11 @@ function entryItem(e, snapshot, { now, tz, pending, editing, drafts, canAct }) {
   if (e.scope === 'task') meta.push('<span>Task note</span>');
   const held = e.trust === 'quarantined' ? `<p class="memory-held small" data-level="warning">${icon('alert')}Held: ${esc(e.quarantine_reason || 'awaiting your approval')}</p>` : '';
   const dis = busy ? ' disabled' : '';
-  const actions = !canAct || editing === e.id ? '' : `<div class="memory-actions">${e.trust === 'quarantined' ? `<button type="button" class="btn small primary" data-action="memory-approve" data-entry="${attr(e.id)}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>Approve</button> ` : ''}<button type="button" class="btn small" data-action="memory-edit" data-entry="${attr(e.id)}" aria-describedby="${attr(textId)}"${dis}>Edit</button> <button type="button" class="btn small ghost" data-action="memory-pin" data-entry="${attr(e.id)}" data-pinned="${e.pinned ? 'false' : 'true'}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>${e.pinned ? 'Unpin' : 'Pin'}</button> <button type="button" class="btn small ghost" data-action="memory-retire" data-entry="${attr(e.id)}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>Retire</button></div>`;
-  return `<li class="memory-entry" data-entry="${attr(e.id)}" data-trust="${attr(e.trust)}"><div class="memory-head">${chips.join(' ')}${section ? ` <span class="small muted">${esc(section)}</span>` : ''}</div><p class="memory-text" id="${attr(textId)}" tabindex="-1">${esc(e.text)}</p>${held}<p class="memory-meta small muted">${meta.join(' · ')}</p>${editing === e.id && canAct ? editForm(e, drafts[e.id]) : actions}${req ? requestFeedback(req, { now }) : ''}</li>`;
+  const actions = !canAct || isEditing ? '' : `<div class="memory-actions">${e.trust === 'quarantined' ? `<button type="button" class="btn small primary" data-action="memory-approve" data-entry="${attr(e.id)}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>Approve</button> ` : ''}<button type="button" class="btn small" data-action="memory-edit" data-entry="${attr(e.id)}" aria-describedby="${attr(textId)}"${dis}>Edit</button> ${e.trust === 'quarantined' ? '' : `<button type="button" class="btn small ghost" data-action="memory-pin" data-entry="${attr(e.id)}" data-pinned="${e.pinned ? 'false' : 'true'}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>${e.pinned ? 'Unpin' : 'Pin'}</button> `}<button type="button" class="btn small ghost" data-action="memory-retire" data-entry="${attr(e.id)}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>Retire</button></div>`;
+  return `<li class="memory-entry" data-entry="${attr(e.id)}" data-trust="${attr(e.trust)}"><div class="memory-head">${chips.join(' ')}${section ? ` <span class="small muted">${esc(section)}</span>` : ''}</div><p class="memory-text" id="${attr(textId)}" tabindex="-1">${esc(e.text)}</p>${held}<p class="memory-meta small muted">${meta.join(' · ')}</p>${isEditing && canAct ? editForm(e, editing) : actions}${req ? requestFeedback(req, { now }) : ''}</li>`;
 }
 
-export function renderMemory(memory, rawSnapshot, { now, tab = null, repo = null, pending = [], editing = null, drafts = {}, status = null, filters = {}, online = true } = {}) {
+export function renderMemory(memory, rawSnapshot, { now, tab = null, repo = null, pending = [], editing = null, status = null, filters = {}, online = true } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const tz = snapshot.meta.timezone;
   if (!memory) {
@@ -93,6 +121,6 @@ export function renderMemory(memory, rawSnapshot, { now, tab = null, repo = null
   if (!memory.entries.length) body = emptyState('No memory yet', 'Runs file what they learn when they finish. Add your own notes with quill memory note; they are delivered first and never go stale.');
   else if (!shown.length && String(filters.q ?? '').trim() && counts[current]) body = emptyState('No entries match', `Nothing in ${MEMORY_TAB_LABELS[current]} matches the search. Clear the search to see every entry.`);
   else if (!shown.length) body = emptyState(MEMORY_EMPTY[current][0], MEMORY_EMPTY[current][1]);
-  else body = `${conflictNote}<ul class="memory-list">${shown.map((e) => entryItem(e, snapshot, { now, tz, pending, editing, drafts, canAct })).join('')}</ul>`;
+  else body = `${conflictNote}<ul class="memory-list">${shown.map((e) => entryItem(e, snapshot, { now, tz, pending, editing, canAct })).join('')}</ul>`;
   return `<section class="view view-memory" aria-labelledby="tab-memory">${tablist}<div role="tabpanel" id="memory-panel" aria-labelledby="memory-tab-${current}">${selector}${body}</div></section>`;
 }
