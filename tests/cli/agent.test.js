@@ -31,11 +31,19 @@ test('quill agent list, show and run: recipes with their permissions; a run is q
     assert.equal(list.code, 0, list.err);
     assert.match(list.out, /deploy-check\s+builtin\s+analyse\s+read_source\s+10 min/);
     assert.match(list.out, /standup\s+builtin\s+analyse\s+none\s+5 min/);
+    // A recipe without its own timeout_min shows the cap of the access a run gets by default
+    // (autonomous: 30 min), not the raw 20 min recipe default.
+    assert.match(list.out, /^analyse\s+builtin\s+analyse\s+read_source\s+30 min/m);
     const json = JSON.parse((await cli(['agent', 'list', '--json'], fx.env)).out);
     assert.ok(json.some((r) => r.name === 'attempt-fix' && r.permissions.edit_source === true));
+    assert.deepEqual(json.find((r) => r.name === 'analyse').caps, { standard: 20, settings: 20, autonomous: 30, full: 20 });
+    assert.deepEqual(json.find((r) => r.name === 'standup').caps, { standard: 5, settings: 5, autonomous: 5, full: 5 });
+    const showDefault = await cli(['agent', 'show', 'analyse'], fx.env);
+    assert.match(showDefault.out, /^timeout: 30 min autonomous \(the default\); 20 min standard, settings or full$/m);
     const show = await cli(['agent', 'show', 'deploy-check'], fx.env);
     assert.match(show.out, /Check the deployment state of \{\{ticket\.key\}\}/);
     assert.match(show.out, /outputs: summary, deploy_evidence, next_action/);
+    assert.match(show.out, /^timeout: 10 min$/m);
     const beyond = await cli(['agent', 'run', 'deploy-check', 'PROJ-1', '--commit'], fx.env);
     assert.notEqual(beyond.code, 0);
     assert.match(beyond.err, /does not allow commit/);

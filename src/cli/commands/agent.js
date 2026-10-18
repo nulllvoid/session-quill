@@ -3,16 +3,35 @@ import { loadContext, findTicketByKey, latestSnapshot } from '../context.js';
 import { createRecipeCatalog, PERMISSION_KEYS, personalRecipesDir } from '../../agents/recipes.js';
 import { fetchSource, discoverRecipes, planInstall, applyInstall, describeRecipe, uninstall, readInstalled } from '../../agents/install.js';
 import { nowIso } from '../../lib/time.js';
-import { validateHandoffRequest } from '../../handoff/permissions.js';
+import { validateHandoffRequest, ACCESS } from '../../handoff/permissions.js';
 import { scopeValidator } from '../../handoff/scopes.js';
 import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest, runOptions, accessNotice } from './handoff.js';
-import { capMinutes } from '../../handoff/runner.js';
+import { capMinutes, recipeCaps } from '../../handoff/runner.js';
 
 const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent resume <run-id> | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
+
+// The access a CLI run of this recipe gets unless --access says otherwise (see `run` below).
+const defaultAccess = (r) => (r.mode === 'files' ? 'standard' : 'autonomous');
+
+// The wall clock a run actually gets (budgetFor), not the recipe's raw timeout_min: a recipe that
+// sets none gets the configured default, which is longer for autonomous runs.
+function capFor(r, config) {
+  return recipeCaps(r, config)[defaultAccess(r)];
+}
+
+function capText(r, config) {
+  const caps = recipeCaps(r, config);
+  const first = defaultAccess(r);
+  const others = new Map();
+  for (const a of ACCESS) if (a !== first && caps[a] !== caps[first]) others.set(caps[a], [...(others.get(caps[a]) ?? []), a]);
+  if (!others.size) return `${caps[first]} min`;
+  const names = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}` : xs[0]);
+  return [`${caps[first]} min ${first} (the default)`, ...[...others].map(([m, xs]) => `${m} min ${names(xs)}`)].join('; ');
+}
 
 function repoIdFor(ctx, flags) {
   if (!flags.ticket) return null;
@@ -29,10 +48,10 @@ function list(ctx, io, flags) {
   const recipes = [...catalog(ctx).forRepo(repoIdFor(ctx, flags)).effective.values()];
   const installed = readInstalled(ctx.env);
   const label = (r) => (r.source === 'personal' && installed[r.name] ? 'installed' : r.source);
-  if (flags.json) { io.json(recipes.map(({ path, body, ...r }) => ({ ...r, installed_from: r.source === 'personal' && installed[r.name] ? installed[r.name].source : null }))); return 0; }
+  if (flags.json) { io.json(recipes.map(({ path, body, ...r }) => ({ ...r, ...(r.error ? {} : { caps: recipeCaps(r, ctx.config) }), installed_from: r.source === 'personal' && installed[r.name] ? installed[r.name].source : null }))); return 0; }
   for (const r of recipes) {
     if (r.error) { io.println(`${r.name.padEnd(20)} ${label(r).padEnd(9)} invalid: ${r.error}`); continue; }
-    io.println(`${r.name.padEnd(20)} ${label(r).padEnd(9)} ${r.mode.padEnd(18)} ${grants(r.permissions).padEnd(24)} ${String(r.timeout_min).padStart(2)} min  ${r.description}`);
+    io.println(`${r.name.padEnd(20)} ${label(r).padEnd(9)} ${r.mode.padEnd(18)} ${grants(r.permissions).padEnd(24)} ${String(capFor(r, ctx.config)).padStart(2)} min  ${r.description}`);
   }
   return 0;
 }
@@ -48,7 +67,7 @@ function show(ctx, io, args, flags) {
   io.println(`mode: ${r.mode}`);
   io.println(`permissions (at most): ${grants(r.permissions)}`);
   io.println(`tools: ${r.tools ? r.tools.join(', ') : 'default for its permissions'}`);
-  io.println(`timeout: ${r.timeout_min} min`);
+  io.println(`timeout: ${capText(r, ctx.config)}`);
   io.println(`inputs: ${r.inputs.join(', ')}`);
   io.println(`outputs: ${r.outputs.join(', ')}`);
   io.println('');
@@ -163,13 +182,13 @@ export async function install(ctx, io, args, flags, { clone } = {}) {
   try {
     const plan = planInstall(discoverRecipes(fetched.root), { env: ctx.env, only, replace: flags.replace === true });
     if (!plan.length) throw new TrackerError('no-recipes', `no recipe files found in ${source}${only ? ` named ${only.join(', ')}` : ''} (looked in .quill/agents, recipes, agents and the top folder)`);
-    const rows = plan.map((p) => ({ name: p.name, file: p.file, action: p.action, reason: p.reason ?? null, ...(p.recipe && !p.error ? describeRecipe(p.recipe) : {}) }));
+    const rows = plan.map((p) => ({ name: p.name, file: p.file, action: p.action, reason: p.reason ?? null, ...(p.recipe && !p.error ? { ...describeRecipe(p.recipe), cap_min: capFor(p.recipe, ctx.config), caps: recipeCaps(p.recipe, ctx.config) } : {}) }));
     if (!flags.confirm) {
       if (flags.json) { io.json({ preview: true, source, ref, commit: fetched.commit, recipes: rows }); return 0; }
       io.println(`Preview of ${source}${ref ? ` at ${ref}` : ''}${fetched.commit ? ` (commit ${fetched.commit.slice(0, 12)})` : ''}; nothing is installed yet.`);
       for (const r of rows) {
         if (r.action === 'skip') { io.println(`  skip     ${r.name}: ${r.reason}`); continue; }
-        io.println(`  ${r.action.padEnd(8)} ${r.name} (${r.mode}, ${r.timeout_min} min): ${r.description}`);
+        io.println(`  ${r.action.padEnd(8)} ${r.name} (${r.mode}, ${r.cap_min} min): ${r.description}`);
         io.println(`           permissions: ${r.permissions.join(', ') || 'none'}${r.tools ? `; tools: ${r.tools.join(', ')}` : ''}`);
         if (r.changes.length) io.println(`           can change things: ${r.changes.join(', ')}. Each run still asks for these, and they are never scheduled.`);
       }

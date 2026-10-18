@@ -39,9 +39,9 @@ The runtime probes (research 03, "P0 results", Claude Code 2.1.296 on Windows) s
 ### Wiring
 
 For an autonomous run, dispatch writes these into the run directory `quillHome()/handoffs/runs/<id>/`:
-- `grant.json`: `access`, `permissions`, `scopes`, `actionPins` (empty until critical changes ship), `readableRoots`, `writableRoots`, `protectedPaths`, `mcpPolicy`, `trustedMcpServers`, `trackerHosts` and `defaultBranch`. It is written once and its SHA-256 goes into `QUILL_HANDOFF_GRANT_SHA256`. A missing or changed file denies everything except local calls that touch no file.
+- `grant.json`: `access`, `permissions`, `scopes`, `actionPins` (empty except on a run approved from a critical change, ADR 0028), `readableRoots`, `writableRoots`, `protectedPaths`, `mcpPolicy`, `trustedMcpServers`, `trackerHosts` and `defaultBranch`. It is written once and its SHA-256 goes into `QUILL_HANDOFF_GRANT_SHA256`. A missing or changed file denies everything except local calls that touch no file.
 - `run-settings.json`: the guard as a PreToolUse hook (`node bin/quill-guard.js` as command plus arguments, no shell; matcher `Bash|PowerShell|Monitor|mcp__.*|WebFetch|WebSearch|Read|Glob|Grep|Edit|Write|MultiEdit|NotebookEdit|Task|Agent`; timeout 10 s; `onFailure: "block"`), with empty allow and deny lists. It is passed with `--settings`.
-- `context/`: the memory snapshot directory, passed with `--add-dir`. It is empty until run memory ships.
+- `context/`: the memory snapshot directory, passed with `--add-dir`. It holds the run's memory projections, never the quarantine (ADR 0027).
 - `env/`: credential stubs.
 - `mcp-servers.json`: `{ "<server>": "<source>" }`, written by the stream collector as soon as the init event arrives (ruling R20).
 

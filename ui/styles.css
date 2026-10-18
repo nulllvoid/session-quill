@@ -567,6 +567,9 @@ table.sessions th { font-size: 12px; color: var(--text-faint); font-weight: 500;
 .proposal[data-kind="critical"] .critical-body { flex-basis: 100%; min-width: 0; }
 .proposal[data-kind="critical"] .critical-body p { margin: 2px 0; }
 .proposal[data-kind="critical"] .critical-action { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* "Approve and queue (scopes: …)" names each scope target, which may be long: the button wraps. */
+.proposal[data-kind="critical"] .proposal-actions { flex-wrap: wrap; max-width: 100%; min-width: 0; }
+.proposal[data-kind="critical"] .proposal-actions .btn { white-space: normal; overflow-wrap: anywhere; text-align: start; max-width: 100%; }
 .today-day { margin-bottom: 24px; max-width: 920px; }
 .today-day h3 { font-size: 16px; margin-bottom: 6px; }
 .today-tickets, .today-items { list-style: none; margin: 0; padding: 0; }
@@ -995,6 +998,9 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .attempt-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; vertical-align: baseline; }
 .run-critical .critical-action { white-space: pre-wrap; }
 .run-critical .critical-state { color: var(--text-muted); }
+/* Chips that carry a scope target or a memory key (up to 128 characters) wrap inside a narrow panel
+   instead of running past its edge. */
+.run-critical .chip, .critical-scopes .chip, .memory-head .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .run-record-status { margin: 12px 0 0; }
 .run-note { padding: 10px 0; border-top: 1px solid var(--hairline); min-width: 0; overflow-wrap: anywhere; }
 .run-note:first-child { border-top: 0; }

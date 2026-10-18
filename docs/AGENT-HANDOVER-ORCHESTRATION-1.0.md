@@ -18,6 +18,73 @@ Still open: authoritative wait reasons and phases, worker readiness projections,
 
 Prepared 11 October 2026 (Asia/Calcutta).
 
+## Autonomous runs 1.1
+
+Added 19 October 2026 at the end of the FEAT-12 plan (branch `feat/autonomous-runs`, version 1.1.0). This section describes what is implemented on that branch. Everything under "Open" is not.
+
+### Where to read
+
+- Behaviour: spec `docs/superpowers/specs/2026-10-12-autonomous-runs-design.md`, and the ADRs that supersede it where they differ: [0026](decisions/0026-autonomous-access-and-guard.md) (access, guard, credentials, boundary statement and residual risks), [0027](decisions/0027-run-memory.md) (memory) and [0028](decisions/0028-critical-changes.md) (critical changes and action pins).
+- Data: `docs/DATA-CONTRACT.md`, section "Autonomous runs index (1.1.0)", which lists every new request kind, event, field, error code and Needs you item type.
+- UI: design system §5–§7 (access badge, run detail sections, Run agent dialog, critical change item, Memory page and shortcut 8, recorded and claimed stage, estimated cost).
+- Setup: README, "Autonomous runs".
+
+### What shipped, and where the code is
+
+- **Access ladder.** `autonomous` is the default for the dashboard, bulk dialog, `quill agent run` and `quill handoff`; schedules, page proposals and file runs stay `standard`. It needs Claude Code 2.1.295 or later (`runtime-too-old`). Code: `src/handoff/permissions.js`, `src/handoff/autonomous.js`, `src/handoff/inventory.js`.
+- **Run guard.** A PreToolUse hook (`bin/quill-guard.js`) decides every call against a frozen, hashed `grant.json`. It uses the classifier `src/gate/prod-classify.js` (with `shell-tokens.js`) and the decision logic `src/gate/run-guard.js`. It fails closed, and in full access it only observes, recording `prod_effects`. Run settings: `src/handoff/run-settings.js`, `grant.js`.
+- **Credential isolation.** `src/handoff/cred-env.js` redirects every known credential location to `[prod.readonly]` profiles or empty stubs and records `cred_report`. Settings live in `src/config/credentials.js`.
+- **Write scopes.** The catalog is `src/config/scopes.js`. Shell coverage uses allow-lists in `src/gate/scope-commands.js` (rulings R24–R26). Request and dispatch checks are in `src/handoff/scopes.js`.
+- **Run method, budgets and the result contract.** `src/handoff/runner.js` (METHOD, `budgetFor`, `recipeCaps`), `stream.js` (stream-json, result event only, ledger), `reconcile.js` and `stage.js` (recorded stage). The recipes are in `recipes/`, including the new `critical-change` and `verify-deploy`.
+- **Memory.** Files: `src/memory/*` (filing, delivery, projections, instruction filter, worker facts), the `memory-tx` reducer `src/core/reduce/memory.js`, the Memory page `ui/views/memory.js`, and `quill memory` in `src/cli/commands/memory.js`.
+- **Critical changes.** Files: `src/handoff/critical-changes.js`, `action-pin.js`, the reducer `src/core/reduce/critical.js`, and approval in `src/server/requests.js`. Child tickets are local-only.
+- **Run detail, Runs and Needs you.** Files: `ui/views/run-detail.js`, `ui/views/runs.js`, `ui/lib/runs.js`, `ui/components.js` (critical change and memory items, access fieldset, autonomy notes) and `ui/views/agents.js` (access badge, recipe caps, §7.6 note).
+- **Resume and batch budget.** `src/handoff/resume.js` (R54–R56).
+- **Privacy.** The allow-lists are in `src/export/sanitize.js` and `src/worker/notes.js`. A sentinel test asserts that nothing new reaches exports, the mirror, publishers, tracker pushes or vault notes.
+
+### Deliberate deviations from the spec
+
+These are recorded in the ADRs and DATA-CONTRACT; keep them unless the owner decides otherwise:
+- R38: the guard refuses `quill memory list|show` in autonomous runs.
+- R43: an approved critical run must run the exact pinned command or MCP input; normalised equality is used only to validate a proposal.
+- R44–R48: critical proposals are validated once, at emission. Truncated or hidden-character actions are never pinned. A pin must pass the guard's own scope coverage.
+- R46/R49: local-only tickets and their runs never reach the vault.
+- R51–R53: the recorded stage never shows the floor, full-access production writes are owner-only, and exports carry `scope_count` only.
+- R55/R56: an interrupted run's possible writes are owner-only beyond a count, and a scoped resume is dashboard-only.
+
+### Verified in Task 20
+
+These checks ran on the branch:
+- `node scripts/build-ui-assets.mjs --check`
+- `npm test`
+- `node --test "tests/ui/*.test.js" "tests/export/*.test.js"`
+- `npm run test:acceptance`
+- A Playwright (msedge) check with a real viewport, against an isolated dev-seed store. The snapshot was patched in the browser with an autonomous scoped run, a full-access run, an interrupted run, a batch over budget and a critical change. It ran at 390×844, 1024×768, 1280×720 and 1440×900, light and dark. It covered the Run dialog, run detail with every section, Memory, Needs you with a critical change item, Runs with "Batch budget reached", sticky dismissal across polls, an edit draft across polls, and Save while a change applies.
+
+The check found that long scope targets overflowed run detail and the Needs you item; this is fixed in `ui/styles.css`.
+
+### Open, not done
+
+- **Real end-to-end acceptance (spec §11, last bullet).** It needs owner actions first: read-only profiles in `[prod.readonly]`, and the Argo CD and Elastic MCP servers. Then check these:
+  - a run uses Jira, the repository, Argo CD and Kibana reads;
+  - a second run reuses memory;
+  - an unscoped run proposes a critical change;
+  - the approved run performs exactly the pinned change and is refused a different write in the same scope;
+  - a full run is not blocked.
+- **The live recipe-driven production-write refusal check** (deferred from Task 10): an autonomous run told to make a prod write must be refused and record a critical change.
+- **CLIs not exercised against redirection.** kubectl, aws, gcloud, az, argocd, glab and psql were not installed on the probe machine. git and gh were verified.
+- **`quill doctor` does not yet show read-only profile health or the tool inventory** (spec §4.4, §8). It checks only the Claude Code and git versions for autonomous runs. The guard's onboarding refusal and the Run dialog still say "quill doctor shows what is set"; the Run dialog is where that state is shown today.
+- **Turn and spend fields in the Run dialog** (spec §8). They are CLI only (`--max-turns`, `--budget`).
+- **Final-review candidates** recorded in the FEAT-12 ledger:
+  - Windows `git.exe` resolution inside a checkout.
+  - The reducer accepts `memory-tx` and `request-tx` events from any ingress producer.
+  - `git replace`, `update-ref` and `notes` in a worktree.
+  - Unchecked directory options: `go -C`, `gradle -p`, `just -d`, `cargo --manifest-path`.
+  - `npm publish` with a `publishConfig.registry` or project `.npmrc` registry.
+  - Memory re-filing at worker start can be slow.
+  - `runHistory` for page-proposed runs.
+  - Small TOCTOU windows in resume.
+
 ## Start here
 
 The user requested a UI/UX audit, approved the recommended update, then asked to push it and re-analyse remaining gaps and user friction against the orchestration-engine scope. The latest request is to prepare this handover document.

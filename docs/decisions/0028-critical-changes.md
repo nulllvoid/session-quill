@@ -39,5 +39,5 @@ Those entries must reach the owner as decisions, not as prose to copy into a ter
 
 ## Not done
 
-- Live phases of an approved run and its verify outcome on the Needs you item (the run detail shows them once Task 18 lands).
+- Live phases of an approved run and its verify outcome on the Needs you item (the approved run's own run detail shows its sections: attempts, verification, recorded stage and so on).
 - A dedicated "Retry as new run" for a failed critical run: a retry needs a fresh proposal, since only an approval supplies a pin.

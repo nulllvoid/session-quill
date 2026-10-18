@@ -4,6 +4,84 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-19
+
+Autonomous runs: an agent run can use your connected tools and read production like your own Claude Code session would. It still cannot change production unless you grant a write scope or approve an exact change. Runs leave what they learned for the next run. See [ADR 0026](docs/decisions/0026-autonomous-access-and-guard.md), [ADR 0027](docs/decisions/0027-run-memory.md), [ADR 0028](docs/decisions/0028-critical-changes.md) and README "Autonomous runs".
+
+### Added
+
+- **Autonomous access** (`access: autonomous`): every tool and connector. A per-run guard (`bin/quill-guard.js`, a PreToolUse hook with `onFailure: block` under `dontAsk` and an empty allow list) decides each call against a frozen, hashed `grant.json`. It covers:
+  - readable and writable roots, with links resolved;
+  - the per-run permissions (commit, push, draft PR, protected branches);
+  - Quill's own CLI, which a run may only read;
+  - MCP server trust by source (`[handoff] trusted_mcp_servers`) and read/write verbs (`[mcp_policy]` overrides);
+  - production CLIs by verb; network writes (`external.write`); write scopes; action pins.
+
+  Refusals reach the agent as `QUILL_CRITICAL_CHANGE scope=… target=…: …` or `QUILL_DENIED <reason>: …`. Autonomous needs Claude Code 2.1.295 or later (`runtime-too-old`).
+- **Credential isolation**: Kubernetes, AWS, Google Cloud, Azure, databases, Argo CD, git (helper, ssh, gh, glab), netrc, npm and Docker credentials point at read-only profiles (`[prod.readonly]`) or empty stubs in the run directory. Other secret-looking variables are removed unless they are listed in `[handoff] keep_env`. Each run records a credential report, and the Run dialog shows it with warnings.
+- **Write scopes**: `jira.write`, `confluence.write`, `slack.post`, `k8s.write:<context>`, `argo.sync:<app>`, `cloud.write:<target>`, `db.write:<target>`, `deploy:<target>`, `http.write:<host>` and `package.publish`, plus your own MCP-only `[scopes."<name>"]`. You grant them per run in the Run dialog (Advanced → Write scopes) or with `--scope`. A granted scope switches to its own credentials. A shell write is covered only by a strict per-tool allow-list with one exact target.
+- **Full access is observed**: the guard runs in observe mode, never refuses, and records production writes as `prod_effects`. Run detail shows them as *Production writes (full access)*.
+- **Run method and result contract**: every recipe gets a METHOD: plan, try at least two routes, verify, record critical changes, record learnings. The run's result may carry `stage_reached`, `plan`, `attempts`, `verification`, `critical_changes` and `learnings`, with caps. Results come from stream-json's final result event only. A redacted tool ledger is reconciled with the agent's claimed attempts.
+- **Budgets**: per-run turn caps (80, fix runs 150; repair 4; self-check 20), wall clock up to 60 min (30 for autonomous), `max_budget_usd` (10) and `max_batch_budget_usd` (30). They are set in `[handoff]`, in recipe frontmatter (`max_turns`, `max_budget_usd`) or per run (`--max-turns`, `--budget`). A batch that reaches its spend budget starts no further member and shows *Batch budget reached*.
+- **Recorded stage**: the worker's own record (tested, committed, pushed, PR opened) beside the agent's claim. Turns and cost are recorded, and the cost is marked *estimated* under a subscription.
+- **Run memory**: journaled `memory-tx` events and projections under `~/.claude/quill/memory/`.
+  - Filing by provenance: verified, sourced, observed or quarantined. Instruction-like text is always quarantined.
+  - Delivery: up to 48 KB of ranked memory goes into the prompt, and the rest goes into the run's `context/` folder.
+  - Each ticket gets local Run notes.
+  - The owner-only **Memory** page (Track, shortcut 8) offers Approve, Edit, Pin and Retire.
+  - `quill memory list|show|note|pin|retire`.
+  - Quarantined learnings and memory conflicts appear in Runs → Needs you.
+- **Critical changes**: a write a run was refused becomes a local-only child ticket and a run-origin proposal with an exact action pin. **Approve and queue (scopes: …)** on the dashboard queues one run of the new built-in `critical-change` recipe, which may perform exactly that action. A change that cannot be pinned is listed on the run with the reason.
+- **Run detail** sections: Recorded stage, Plan, Attempts, Verification, Critical changes, Production writes (full access), Learnings filed, Tools used, Turns & cost. The ticket Runs tab shows Run notes. Access badges read "Autonomous", "Autonomous + scopes (n)" and "Full access".
+- **Resume as new run** (and `quill agent resume <run-id>`) continues an interrupted run's Claude Code session in a new run with the same access and limits. The interrupted run's guard-allowed writes are listed as "may have run".
+- The Run dialog lists "Connected tools this run can use" from the latest run's inventory, and each production CLI's credential state.
+- The built-in `verify-deploy` recipe checks post-deploy health read-only (Argo CD sync and health, Kibana error rates).
+- Recipe frontmatter: `max_turns`, `max_budget_usd`, `requires` and `quill_min_version`. Keys starting with `x-` are ignored.
+- Each run gets a map of the repository's documentation: entry docs, `docs/**/*.md` and runbooks, with their titles and headings.
+- New request kinds: `memory-approve`, `memory-edit`, `memory-forget`, `memory-pin`, `memory-note` and `resume-run`. New events: `memory-tx` and `critical-proposal`. Every new field and error code is listed in DATA-CONTRACT, section "Autonomous runs index (1.1.0)".
+
+### Changed
+
+- New runs from the dashboard, the bulk dialog, `quill agent run` and `quill handoff` default to **Autonomous** (they used your Claude Code settings). "Use my Claude Code settings" moved under Advanced. Schedules, page proposals and `file-task` stay Standard. A queued run keeps the access it was recorded with.
+- Built-in recipes gained "Definition of done" lines. `attempt-fix` no longer stops at the first blocker. `deploy-check` names the Argo CD and Kibana read routes. Built-in recipe hashes changed.
+- The default wall clock is 30 minutes for autonomous runs and stays 20 otherwise. Recipes may set up to 60. `quill agent list`, `show` and the install preview print the cap a run actually gets, not the recipe's raw `timeout_min`.
+- Run worktrees, run directories and context snapshots are removed when a run ends. Fix checkouts are kept 7 days. Ledgers and logs are kept `[handoff] log_retention_days` (30). Logs no longer contain tool results.
+- The worktree is based on the ticket's branch when it is known.
+- The plugin's own PreToolUse hook only records events inside a guarded run, so each call is decided once.
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are removed from autonomous runs unless `[handoff] api_billing = true`, because they would drop claude.ai connectors.
+- `quill doctor` warns when Claude Code is older than 2.1.295 or git is older than 2.31.
+- `npm test` and `npm run test:acceptance` run in a private temp root that is removed afterwards.
+
+### Fixed
+
+- Runs honour `claude_path`.
+- Long scope targets in run detail and in the Needs you critical change item wrap inside the panel instead of running past it.
+
+### Security
+
+- Static exports, the mirror, publisher payloads, tracker push bodies and vault notes use allow-lists. None of the following ever leaves the machine:
+  - attempts, learnings, critical changes and their specs, action pins, scope names and targets, the ledger, `prod_effects`, the inventory, the credential report or memory;
+  - local-only tickets (with their runs and notes).
+
+  Exports carry only counts, the recorded stage and `scope_count`. A sentinel test enforces this.
+- Inside any agent run the `quill` CLI refuses every mutating command (`cli-in-run`). Approving a run's critical change, approving or editing memory, and resuming a scoped run are owner dashboard actions only. They are never available to the CLI or to an ingress request that claims to be the owner (ADR 0026 amends ADR 0017 and ADR 0025; ADR 0028 amends ADR 0025).
+- Repository `.mcp.json` servers, `.claude/` and `.git/` hooks and config, Quill's own guard code and the run's grant cannot be changed by an autonomous run.
+- **Boundary statement**: the guard is defence in depth. The boundary for production is credential redirection plus server-side read-only credentials. ADR 0026 lists the owner credentials no redirect closes; one example is `ssh` reading `~/.ssh` directly.
+
+### Not done in this release
+
+- **Real end-to-end acceptance is still open.** It needs your read-only credentials in `[prod.readonly]` and the Argo CD and Elastic MCP servers installed. The planned scenarios have not been run against real systems:
+  - a run reads Jira, the repository, Argo CD and Kibana;
+  - a second run reuses memory;
+  - an unscoped run proposes a critical change;
+  - the approved run makes exactly that change and is refused another;
+  - a full run is not blocked.
+
+  A live recipe-driven check that an autonomous run's production write is refused is also open. kubectl, aws, gcloud, az, argocd, glab and psql were not available to verify against the redirected environment; git and gh were.
+- `quill doctor` does not yet report read-only profile health or the tool inventory (spec §4.4, §8); the Run dialog shows both.
+- The Run dialog has no turn or spend fields (use `--max-turns` and `--budget`).
+- An approved critical run's live phase and verify outcome are not shown on its Needs you item.
+
 ## [1.0.0] - 2026-10-11
 
 Orchestration-first 1.0: the dashboard is always reachable, runs can be queued in bulk and are verified by the worker's own test run, assigned issues arrive with their repositories resolved, a shared page can propose (never start) a run, and a Runs page brings dispatch, monitoring and review into one place.

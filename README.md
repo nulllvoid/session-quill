@@ -370,7 +370,7 @@ token_env = "BITBUCKET_TOKEN"                       # an access token, sent as a
 
 ## Agent recipes
 
-A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check`, `file-task`, `standup` and `workspace-setup`; add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
+A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check`, `verify-deploy` (read-only post-deploy health through Argo CD and Kibana), `file-task`, `standup` and `workspace-setup`, plus `critical-change`, which runs only from an approved critical change; add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
 
 ```markdown
 ---
@@ -379,10 +379,13 @@ description: Check whether each merged PR reached each environment
 mode: analyse                      # analyse | analyse-followups | attempt-fix
 permissions: { read_source: true } # the most a run may get
 tools: [Read, Grep, "Bash(git log:*)"]
-timeout_min: 10
+timeout_min: 10                    # 1 to 60; without it, 30 for autonomous runs and 20 otherwise
 inputs: [ticket, prs, deployments, work]   # also notes, related, history; omit for all
 outputs: [summary, deploy_evidence, next_action]
 self_check: true                   # verify each claim against its source before finishing (always on with edit_source)
+# max_turns: 60                    # optional turn and spend caps (1.1.0); a recipe that uses them,
+# max_budget_usd: 3                #   or requires, must declare quill_min_version: "1.1.0"
+# x-team-owner: payments           # keys starting with x- are yours and ignored (1.1.0)
 ---
 For {{ticket.key}} ({{ticket.url}}): for each merged PR {{prs}}, find the deployment evidence...
 ```
@@ -412,7 +415,7 @@ Every run sees the ticket's Notes section, the full latest plan and checkpoint, 
 
 **Tickets without a repository** have no PRs to move their status, so after a turn that worked on one, Claude checks its Done when items and sets it to Review when they are met (at most once per 30 minutes of work; [ADR 0016](docs/decisions/0016-done-when-check.md)). They can also run `file-task` on their attached files, for chores such as deleting a leftover script. The agent works on copies; Quill applies its edits and deletions to the originals, moves deleted files to a Quill trash folder, and shows each change on the run with **Undo**. Edit and delete permissions stay off until you tick them, nothing outside the ticket's attached files is in reach, and a run that changed files moves the ticket to Review for you to confirm ([ADR 0015](docs/decisions/0015-file-runs.md)).
 
-**Access.** Runs are **Autonomous** by default, from the dashboard and from `quill agent run` / `quill handoff`: the agent may use your connected tools and local commands, Quill's guard checks every call, production stays read-only, and the credentials it finds are the read-only profiles below or empty ones. Commit, push and draft PRs still need their own checkbox. Autonomous runs need Claude Code 2.1.295 or later; an older one fails the run with `runtime-too-old`, and **Standard** (Quill's narrow profile) still works. **Use my Claude Code settings** (under Advanced, `--access settings`) lets your own permission rules decide, refusing anything that would need your approval. **Full access** (`--access full`) has no Quill guard and allows prod writes; your Claude Code deny rules still apply. It is never the default and never scheduled. Schedules, page proposals and `file-task` use the standard profile. Inside a run, the `quill` command refuses everything except its read commands (`cli-in-run`). See [ADR 0017](docs/decisions/0017-run-access-levels.md) and [ADR 0026](docs/decisions/0026-autonomous-access-and-guard.md).
+**Access.** Runs are **Autonomous** by default, from the dashboard and from `quill agent run` / `quill handoff`: the agent may use your connected tools and local commands, Quill's guard checks every call, production stays read-only, and the credentials it finds are your read-only profiles or empty ones (see [Autonomous runs](#autonomous-runs)). Commit, push and draft PRs still need their own checkbox. Autonomous runs need Claude Code 2.1.295 or later; an older one fails the run with `runtime-too-old`, and **Standard** (Quill's narrow profile) still works. **Use my Claude Code settings** (under Advanced, `--access settings`) lets your own permission rules decide, refusing anything that would need your approval. **Full access** (`--access full`) has no Quill guard and allows prod writes; your Claude Code deny rules still apply. It is never the default and never scheduled. Schedules, page proposals and `file-task` use the standard profile. Inside a run, the `quill` command refuses everything except its read commands (`cli-in-run`). See [ADR 0017](docs/decisions/0017-run-access-levels.md) and [ADR 0026](docs/decisions/0026-autonomous-access-and-guard.md).
 
 The run dialog shows what a recipe may do before you queue it; anything with a side effect stays off until you tick it, and scheduled runs only ever read. Results from your own recipes and `deploy-check` or `standup` arrive as suggestions on the ticket: accept or dismiss each one. A comment draft is never posted to your tracker.
 
@@ -426,18 +429,171 @@ test_timeout_ms = 600000      # default 10 minutes
 [handoff]
 max_concurrent_readonly = 2   # runs that only read (default 2)
 max_concurrent_fix = 1        # runs that edit source (default 1; and one per repository)
-keep_env = []                 # names exempt from the token/secret name filter only (not from the redirects)
-api_billing = false           # true keeps ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN
-
-[prod.readonly]               # read-only profiles for autonomous runs, referenced by absolute path
-kubeconfig = "/home/me/.kube/readonly.yaml"
-aws_profile = "readonly"      # only this profile's section is copied into the run
-# also: aws_config_file, aws_credentials_file, gcloud_config, google_application_credentials,
-# azure_config_dir, and [prod.readonly.db_env] / [prod.readonly.argocd_env] tables of
-# NAME = "value" or NAME = "env:OTHER_NAME"
 ```
 
-In an autonomous run, the credential locations of Kubernetes, AWS, Google Cloud, Azure (`az`, `azd`), databases, Argo CD, git (helper, ssh, `gh`, `glab`), netrc, npm and Docker point at these read-only profiles or at empty files in the run's directory, and any other variable whose name looks like a token, secret, password, API key or credential is removed. `keep_env` only exempts a name from that last filter; a redirected system's credentials come from `[prod.readonly]`, a granted scope, push permission or `api_billing`. Some owner credentials cannot be redirected through the environment (keys in `~/.ssh` used by `ssh` directly, `~/.netrc` read by curl, the Az PowerShell context, an OS credential store reached through a credential helper, other tools' own files in your home directory, a credential helper, extra header or password in the checkout's own git config). The run's credential report lists the first four when they exist on your machine, and the Run dialog shows them; for all of them the guard is the only protection ([ADR 0026](docs/decisions/0026-autonomous-access-and-guard.md) lists every residual risk). These settings come from your user config only, never from a repository's `.quill.toml`.
+**Bulk runs.** On Board or Pick next, press **Select** (or `x` on a focused card; Shift-click selects a range, Esc clears) and choose **Analyze**, **Attempt fix** or **Change status** for every checked ticket. The bulk dialog shows which tickets are ready, already running, have no repository or are not eligible, and asks once for the recipe and access; bulk fixes need an explicit edit-source confirmation. Each ticket gets its own request, so one stale ticket does not stop the rest, and the runs share a batch id with a progress strip and **Cancel batch** for the queued ones (`quill handoff cancel --batch <id>` from a terminal). Bulk status changes keep their 10-second undo, gathered under **Undo all**. Large analyses may split the work across Claude Code subagents inside the one run ([ADR 0023](docs/decisions/0023-bulk-runs-and-test-gate.md)).
+
+## Autonomous runs
+
+An autonomous run (the default access) works like a careful engineer in your own Claude Code session:
+- It plans and tries more than one route before it reports a blocker.
+- It uses your connectors (Jira, Slack, Argo CD, Kibana …), the repository's code and docs, and command-line tools with read-only credentials.
+- It verifies by running things, and leaves what it learned for the next run.
+
+Production stays readable and nothing more. A run writes to production or an external system only through a write scope you grant for that run. Any other write it needs becomes a **critical change** for you to approve. [ADR 0026](docs/decisions/0026-autonomous-access-and-guard.md), [ADR 0027](docs/decisions/0027-run-memory.md) and [ADR 0028](docs/decisions/0028-critical-changes.md) have the details.
+
+**What protects production.** Quill's guard (a per-run hook) checks every tool call against what the run was granted, and it refuses when it fails. The guard is defence in depth, not the boundary. The boundary is the credentials: the run's processes see only your read-only profiles (below) or empty ones. The read-only profiles must be read-only on the server side, not just named that way. ADR 0026 lists what no redirect closes; for those, the guard is the only layer. For example, it denies reading `~/.ssh` or `~/.aws` directly, but a sufficiently indirect script could still open them.
+
+**What a run reports.** Run detail shows these sections:
+- **Plan**.
+- **Attempts**: every route tried, with outcomes such as *Refused (no scope)* or *Unavailable (needs auth)*, checked against the run's own tool ledger. A claimed call that never happened reads *Claimed, no tool call seen*.
+- **Verification**: the agent's own checks. Only *Tests passed (worker)* is Quill's check.
+- **Critical changes**.
+- **Learnings filed**, with their trust.
+- **Tools used**.
+- **Recorded stage**: what the worker itself saw (tests passed, commit, push, PR). A higher stage the agent claims reads *(not recorded)*.
+- **Turns & cost**: under a claude.ai subscription the cost reads *≈ $N (estimated)*.
+
+The result comes only from the run's final result event, never from tool output. A run's tool ledger and log are kept for `log_retention_days` (default 30).
+
+**Budgets.** Defaults, all configurable:
+
+| Limit | Default |
+| --- | --- |
+| Main turns | 80 (fix runs 150) |
+| Repair turns | 4 |
+| Self-check turns | 20 |
+| Wall clock | 30 min autonomous, 20 min otherwise; at most 60 |
+| Spend per run | $10 |
+| Spend per bulk batch | $30 |
+
+A recipe may set `max_turns` and `max_budget_usd`. One run can override both with `--max-turns N --budget USD`, which win over the recipe and the config. `quill agent list` and `show` print the time cap a run actually gets. Once a batch's recorded spend reaches its budget, the worker starts no further member: the remaining runs show *Batch budget reached* and stay queued until you cancel them.
+
+```toml
+[handoff]
+max_turns = 80                 # max_turns_fix = 150, repair_turns = 4, self_check_turns = 20
+timeout_min_autonomous = 30    # timeout_min = 20 for other access levels; a recipe's own timeout_min wins; 60 at most
+max_budget_usd = 10
+max_batch_budget_usd = 30
+log_retention_days = 30
+
+[memory]
+inline_budget_bytes = 48000    # how much memory goes into the prompt; the rest is readable in the run's context/ folder
+```
+
+### Set up read-only credentials
+
+With no read-only profile, an autonomous run still works through your connectors and local tools. Commands such as `kubectl`, `aws`, `gcloud`, `az`, `psql` and `argocd` get empty credentials, and the guard refuses their reads with "no read-only credentials configured for <system>", so the run records that route as unavailable. The Run dialog shows this as a warning, not a blocker.
+
+To let runs read production, create identities that are read-only where they are enforced, then point Quill at them in `~/.claude/quill/config.toml`:
+- a Kubernetes service account bound to the `view` ClusterRole;
+- an AWS role with `ReadOnlyAccess` or narrower;
+- a database user with only `SELECT`;
+- an Argo CD account with `role:readonly`.
+
+These settings come from your user config only; a repository's `.quill.toml` cannot set them.
+
+```toml
+[prod.readonly]
+kubeconfig = "/home/me/.kube/readonly.yaml"           # absolute paths only; the file is used where it is, never copied
+aws_profile = "readonly"                              # only this profile's section is copied into the run
+aws_config_file = "/home/me/.aws/config"              # optional: where that profile lives (default ~/.aws/config)
+aws_credentials_file = "/home/me/.aws/credentials"    # optional (default ~/.aws/credentials)
+gcloud_config = "/home/me/.config/gcloud-readonly"    # a gcloud config directory signed in as a read-only account
+google_application_credentials = "/home/me/.config/gcloud-readonly/viewer-key.json"
+azure_config_dir = "/home/me/.azure-readonly"         # an az config directory signed in with a Reader role
+
+[prod.readonly.db_env]                                # set in the run's environment; "env:NAME" takes a variable the worker inherits
+PGHOST = "orders-replica.internal"
+PGDATABASE = "orders"
+PGUSER = "quill_readonly"
+PGPASSWORD = "env:ORDERS_RO_PGPASSWORD"               # keep passwords out of config.toml
+
+[prod.readonly.argocd_env]
+ARGOCD_SERVER = "argocd.example.com"
+ARGOCD_AUTH_TOKEN = "env:ARGOCD_RO_TOKEN"             # argocd account generate-token --account quill-readonly
+```
+
+The Run dialog shows, for each production tool, the credentials the latest autonomous run got: a read-only profile, none (reads refused), write scope credentials, or your own (only with Bedrock or Vertex sign-in). It also flags a configured profile that run could not use. `quill doctor` checks that Claude Code (2.1.295 or later) and git (2.31 or later) are recent enough for autonomous runs; it does not yet report profile health, so use the Run dialog for that.
+
+Without push permission, a run's `GH_TOKEN` is a placeholder so `gh` never falls back to your keyring. As a result `gh api` fails in such runs, even for public repositories. That is expected; use a connector or `curl` for public reads.
+
+In an autonomous run, the credential locations of Kubernetes, AWS, Google Cloud, Azure (`az`, `azd`), databases, Argo CD, git (helper, ssh, `gh`, `glab`), netrc, npm and Docker point at the read-only profiles above or at empty files in the run's directory, and any other variable whose name looks like a token, secret, password, API key or credential is removed. `keep_env` only exempts a name from that last filter; a redirected system's credentials come from `[prod.readonly]`, a granted scope, push permission or `api_billing`. Some owner credentials cannot be redirected through the environment (keys in `~/.ssh` used by `ssh` directly, `~/.netrc` read by curl, the Az PowerShell context, an OS credential store reached through a credential helper, other tools' own files in your home directory, a credential helper, extra header or password in the checkout's own git config). The run's credential report lists the first four when they exist on your machine, and the Run dialog shows them; for all of them the guard is the only protection ([ADR 0026](docs/decisions/0026-autonomous-access-and-guard.md) lists every residual risk). These settings come from your user config only, never from a repository's `.quill.toml`.
+
+```toml
+[handoff]
+keep_env = []                 # names exempt from the token/secret name filter only (not from the redirects)
+api_billing = false           # true keeps ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN and CLAUDE_CODE_OAUTH_TOKEN
+```
+
+### Argo CD and Elastic through MCP (read-only)
+
+MCP servers are the preferred route to Argo CD and Kibana. Add them to your user Claude Code settings (`--scope user`), not a repository's `.mcp.json`: autonomous runs trust only claude.ai connectors, your settings and plugins. Make each one read-only twice: a read-only token on the server side, and the server's own read-only mode where it has one.
+
+1. **Argo CD.**
+   - Create a local account with read-only rights. In `argocd-cm` set `accounts.quill-readonly: apiKey`; in `argocd-rbac-cm` set `policy.csv: g, quill-readonly, role:readonly`.
+   - Generate its token: `argocd account generate-token --account quill-readonly`.
+   - Add an Argo CD MCP server, for example [argocd-mcp](https://github.com/argoproj-labs/mcp-for-argocd), with its read-only switch (check the server's README for its current options):
+
+   ```bash
+   claude mcp add argocd --scope user -e ARGOCD_BASE_URL=https://argocd.example.com -e ARGOCD_API_TOKEN=<read-only token> -e MCP_READ_ONLY=true -- npx argocd-mcp@latest stdio
+   ```
+
+   Keep `argo` in the server name: the guard then treats a sync or rollback tool as an `argo.sync` write (a critical change unless granted). Reads such as `list_applications`, `get_application` and the resource-tree and log tools are allowed.
+
+2. **Elastic (Kibana logs).**
+   - Create an Elasticsearch API key that can only read the indices runs need (Stack Management → API keys, or `POST /_security/api_key` with `indices: [{ names: ["logs-*"], privileges: ["read", "view_index_metadata"] }]` and no cluster write privileges).
+   - Add an Elasticsearch MCP server with it, for example Elastic's [mcp-server-elasticsearch](https://github.com/elastic/mcp-server-elasticsearch) (check its README for the current package and options):
+
+   ```bash
+   claude mcp add elastic --scope user -e ES_URL=https://es.example.com:9200 -e ES_API_KEY=<read-only key> -- npx -y @elastic/mcp-server-elasticsearch
+   ```
+
+   Its `search`, `list_indices`, `get_mappings` and `get_shards` tools are reads. A tool named for queries or execution (ES|QL, `query`, `execute`, `run…`) is refused as "unavailable for policy" until you list it: `[mcp_policy] read = ["mcp__elastic__esql"]`. List it only when the key is read-only.
+
+3. **Check it.** Run any recipe once. The Run dialog's "Connected tools this run can use" lists each server with its source and status. A server waiting for sign-in shows *Unavailable (needs auth)*; a repository server shows *Not trusted for autonomous runs*.
+
+**CLI fallback.** `argocd` works through `[prod.readonly.argocd_env]` above. Kibana's HTTP API has no profile redirect. Its API key variable is removed like any secret-looking name, unless you list it in `[handoff] keep_env`, and then it must be a read-only key. Only plain GET requests are reads; any request with a body, including a `_search` with a JSON query, is an external write and is refused. Prefer the MCP server.
+
+### Memory
+
+Runs file what they learn when they finish, and Quill decides how far to trust it by where it came from, not by what the agent says:
+- **Verified**: the worker saw it itself, or the run's own command is in its ledger with the claimed result.
+- **Sourced**: the cited file and line exist; the claim itself is not proven.
+- **Observed**: the agent's word.
+- **Quarantined**: from tool output, external text (Jira, logs, the web), a page-proposed run, or text that reads like an instruction. It waits for your approval and never reaches a run until you give it.
+
+Each run gets a Memory section in its prompt (up to `[memory] inline_budget_bytes`: this ticket's Run notes, then your notes and pinned entries, then the rest by trust and recency) and read-only copies of the full memory files. The quarantine is never copied. Memory lives under `~/.claude/quill/memory/`, never in your store or vault, and never in an export. A ticket's **Run notes** (its Runs tab) record what each run tried, so the next run on it does not repeat a failed route.
+
+The **Memory** page (shortcut 8) has Repo, Machine and Quarantine tabs, with Approve, Edit (your wording becomes an Owner entry), Pin and Retire. Quarantined learnings and conflicting entries also show in Runs → Needs you. From a terminal:
+
+```bash
+quill memory list [--repo <id>] [--machine] [--quarantine] [--json]
+quill memory show <id>
+quill memory note "Staging deploys go through the Argo CD app pay-stg" --repo payments --section environments
+quill memory pin <id> [--unpin]
+quill memory retire <id>
+```
+
+Approve and Edit are dashboard-only. Ids need at least 8 characters and must match one entry. Inside an agent run the CLI refuses every memory change, and an autonomous run cannot run `quill memory` at all; it already has its memory inline and in its `context/` folder.
+
+### Critical changes
+
+When a run needs a write it was not granted, the guard refuses the call. The run records the change (action, target, why, evidence, verify, rollback, risk) and finishes everything else.
+
+When the run finishes `done`, the worker checks each recorded change against the scope catalog and pins its action to the exact command or tool call. A change that passes becomes two things:
+- a local-only child ticket, tagged `critical`, never exported, mirrored, published, pushed to a tracker or written to your vault;
+- a proposal in Runs → Needs you: "Critical change · <key> <title> · proposed by run <id> of <parent key>", with the scopes as warnings, the exact action, and its verify and rollback.
+
+**Approve and queue (scopes: …)** is a dashboard action only. It checks that the scope definitions have not changed since the proposal (`scope-changed` otherwise). It then queues one autonomous run of the built-in `critical-change` recipe, which may make exactly that change, as written, and verify it. Any other write is refused as a new critical change, even in the same scope, and so is the same action with reordered options. The run's `done` does not close the child; you do.
+
+A change Quill cannot pin is listed on the run with its reason ("Not proposed: …"). Examples: an unknown scope, a chained command, or a target the scope would not cover. Proposals lapse after 7 days. The child ticket stays, and you can run it by hand with write scopes ticked in the Run dialog. That run is a scope grant without a pinned action, and the dialog says so. Full-access runs make such writes directly; the run lists them under *Production writes (full access)*.
+
+### Resume an interrupted run
+
+A run interrupted by a worker restart or stop keeps its Claude Code session id and partial ledger. **Resume as new run** on its run detail, or `quill agent resume <run-id>`, continues that session in a new run with the same access, permissions, scopes and limits. The new run is told that nothing may be assumed done. Every write the guard allowed in the interrupted run is listed as "… may have run" (in exports, only as a count). A run with write scopes, an approved critical change included, resumes only from the dashboard. If Claude Code can no longer find the session, the run fails with "session not found - retry as a new run".
+
+### MCP trust, write scopes and full access
 
 ```toml
 [handoff]
@@ -474,7 +630,7 @@ A scope covers an MCP call when the guard classifies it as that scope and one of
 - for `http.write`: `curl`, HTTPie or `Invoke-RestMethod`/`Invoke-WebRequest` with exactly one full `http(s)://` URL on the scope's host, its default port, no user name or password;
 - option values are checked too (ruling R26): SQL in `psql -c` / `mysql -e` has no backslash (no `\!`, `\copy`, `\c` …) and no client command (`system`, `connect`, `source`, `tee`, `pager` …); every file a request sends (`-d @file`, `-T`, `-F f=@file`, `-H @file`, HTTPie `@` items, `-InFile`) exists inside the run's checkout or run directory, and stdin is never sent; no `Host`, `X-Forwarded-Host` or similar header, and no header naming another host; an image push names no registry, or one of the scope's `hosts` (`[scopes."package.publish"] hosts = ["ghcr.io"]`).
 
-Anything else is refused as a critical change, and the reason says which rule it broke, so the agent can retry with a plain command. The lists are small on purpose; you can add verbs and options in config (`[scopes."k8s.write".commands.kubectl] verbs = ["drain"]`, `flags = [...]`, `values = [...]`), but never a target-changing verb or option. Credentials and patterns come from your user config only:Credentials and patterns come from your user config only:
+Anything else is refused as a critical change, and the reason says which rule it broke, so the agent can retry with a plain command. The lists are small on purpose; you can add verbs and options in config (`[scopes."k8s.write".commands.kubectl] verbs = ["drain"]`, `flags = [...]`, `values = [...]`), but never a target-changing verb or option. Credentials and patterns come from your user config only:
 
 ```toml
 [scopes."k8s.write"]
@@ -497,8 +653,6 @@ mcp = ["mcp__pager__create_incident"]
 Naming `mcp`, `bash` or `hosts` replaces that built-in list; `label` and `permits` change the dialog's words. Your own scopes cover MCP tools only (commands and hosts are classified under the built-in names), so they take `mcp` patterns and an `[mcp_policy.write]` mapping. config.toml never holds a literal secret: a variable whose name looks secret (token, secret, password, `_PWD`, `_PASS` …), a database or registry connection URL (`DATABASE_URL`, `REDIS_URL`, `MONGO_URI` …), a URL with a password in it or an Authorization value must be an `env:NAME` reference, or it is ignored with a warning. Every variable a scope references with `env:NAME` is removed from every autonomous run, granted or not (even if `keep_env` lists it); a granted scope's value reaches the run only under the scope's own variable name. A scope sets only its own system's variables (the run's credential report names any it ignored, never their values). Credentials never enter the run's grant file; the grant holds each scope's name, target, patterns and a fingerprint of what it allows. The fingerprint covers the label, the patterns, the variable names, `env:` references as written and literal values only as an HMAC under a per-install key (`scope-fingerprint.key` in your Quill home, created when a scoped run is first dispatched, readable by you only), so it shows any change without revealing a value. Two targets of one scope with different credentials cannot share a run (`scope-conflict`).
 
 **Full access is observed.** A full-access run gets the guard in observe mode: it never refuses a call, and a failing observer never blocks one. On a Claude Code older than 2.1.295 the run goes unobserved and records no `prod_effects`. Each production or external write it would have refused in an autonomous run is recorded on the run as `prod_effects` (scope, target, tool and time only), whether the run finishes or not.
-
-**Bulk runs.** On Board or Pick next, press **Select** (or `x` on a focused card; Shift-click selects a range, Esc clears) and choose **Analyze**, **Attempt fix** or **Change status** for every checked ticket. The bulk dialog shows which tickets are ready, already running, have no repository or are not eligible, and asks once for the recipe and access; bulk fixes need an explicit edit-source confirmation. Each ticket gets its own request, so one stale ticket does not stop the rest, and the runs share a batch id with a progress strip and **Cancel batch** for the queued ones (`quill handoff cancel --batch <id>` from a terminal). Bulk status changes keep their 10-second undo, gathered under **Undo all**. Large analyses may split the work across Claude Code subagents inside the one run ([ADR 0023](docs/decisions/0023-bulk-runs-and-test-gate.md)).
 
 ## Example walkthrough
 
