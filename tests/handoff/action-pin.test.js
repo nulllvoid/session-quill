@@ -89,3 +89,41 @@ test('pinOfChange reads a critical_changes entry: a tool call as `<tool> <JSON>`
   assert.equal(pinOfChange({}), null);
   assert.equal(pinOfChange(null), null);
 });
+
+// M8: frozen normalised and guard forms. A change here changes what earlier proposals pinned:
+// update these only on purpose, with a note on what happens to proposals already made.
+test('golden: normalized and guard forms of the brief\'s examples are frozen', () => {
+  const golden = [
+    ['Bash', 'argocd app sync pay-stg --prune', '{"args":["pay-stg"],"binary":"argocd","context":null,"flags":["--prune"],"kind":"bash","namespace":null,"values":[],"verb":"app sync"}', 'argocd app sync pay-stg --prune'],
+    ['Bash', 'argocd app sync pay-stg', '{"args":["pay-stg"],"binary":"argocd","context":null,"flags":[],"kind":"bash","namespace":null,"values":[],"verb":"app sync"}', 'argocd app sync pay-stg'],
+    ['Bash', 'kubectl --context stg -n pay rollout restart deploy/api', '{"args":["deploy/api"],"binary":"kubectl","context":"stg","flags":[],"kind":"bash","namespace":"pay","values":[],"verb":"rollout restart"}', 'kubectl --context stg -n pay rollout restart deploy/api'],
+    ['Bash', 'kubectl rollout restart deploy/api -n pay --context stg', '{"args":["deploy/api"],"binary":"kubectl","context":"stg","flags":[],"kind":"bash","namespace":"pay","values":[],"verb":"rollout restart"}', 'kubectl rollout restart deploy/api -n pay --context stg'],
+    ['Bash', 'mytool --x 1 deploy prod', '{"binary":"mytool","exact":["--x","1","deploy","prod"],"kind":"bash"}', 'mytool --x 1 deploy prod'],
+    [JIRA, { issueIdOrKey: 'PMO-1', transition: 'Done' }, '{"input":{"issueIdOrKey":"PMO-1","transition":"Done"},"kind":"mcp","tool_name":"mcp__atlassian__transitionJiraIssue"}', 'mcp__atlassian__transitionJiraIssue {"issueIdOrKey":"PMO-1","transition":"Done"}'],
+  ];
+  for (const [tool, action, normalized, guard] of golden) {
+    const pin = pinAction({ tool, action });
+    assert.deepEqual([pin.normalized, pin.guard], [normalized, guard], String(action));
+  }
+});
+
+test('an action with a control, format or bidi character is never pinned (nothing is stripped)', () => {
+  const hidden = [0x07, 0x200b, 0x200e, 0x202e, 0x2066, 0xfeff, 0xad, 0x61c, 0x2028, 0x85].map((c) => String.fromCodePoint(c));
+  for (const ch of hidden) {
+    const code = ch.codePointAt(0).toString(16);
+    assert.equal(pinAction({ tool: 'Bash', action: `kubectl --context stg rollout restart 'deploy/api${ch}'` }), null, `shell U+${code}`);
+    assert.equal(pinAction({ tool: JIRA, action: { issueIdOrKey: `PMO-1${ch}`, transition: 'Done' } }), null, `mcp value U+${code}`);
+    assert.equal(pinAction({ tool: JIRA, action: { [`issue${ch}`]: 'PMO-1' } }), null, `mcp key U+${code}`);
+    assert.equal(pinOfChange({ action: `${JIRA} {"issueIdOrKey":"PMO-1\\u${code.padStart(4, '0')}"}` }), null, `escaped in JSON U+${code}`);
+  }
+  // ANSI-C quoting can spell a hidden character with plain ASCII.
+  assert.equal(pinAction({ tool: 'Bash', action: "kubectl --context stg rollout restart $'deploy/api\\u202e'" }), null);
+});
+
+test('pins carry the target the scope binds: context, Argo app, host or the identifying MCP argument', () => {
+  assert.equal(pinAction({ tool: 'Bash', action: 'kubectl --context stg -n pay rollout restart deploy/api' }).target, 'stg');
+  assert.equal(pinAction({ tool: 'Bash', action: 'helm upgrade pay ./chart --kube-context stg' }).target, 'stg');
+  assert.equal(pinAction({ tool: 'Bash', action: 'argocd app sync pay-stg --prune' }).target, 'pay-stg');
+  assert.equal(pinAction({ tool: 'Bash', action: 'curl -X POST https://Hooks.Example.com/x' }).target, 'hooks.example.com');
+  assert.equal(pinAction({ tool: 'Bash', action: 'mytool deploy prod' }).target, undefined, 'an exact pin names no target the tables can read');
+});

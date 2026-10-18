@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { newState, createTicket, ev, STORE, MACHINE } from './helpers.js';
 import { EVENT_KINDS, makeEvent, validateEvent } from '../../src/core/events.js';
 import { applyEvent } from '../../src/core/reducer.js';
-import { attachBlobReader } from '../../src/core/state.js';
 import { deterministicId } from '../../src/lib/ids.js';
-import { buildCriticalProposal } from '../../src/core/reduce/critical.js';
+import { buildCriticalProposal } from '../../src/handoff/critical-changes.js';
 import { pinOfChange } from '../../src/handoff/action-pin.js';
 import { descriptionProblems } from '../../src/core/description.js';
 import { proposalState } from '../../src/publish/run-proposals.js';
@@ -18,17 +18,14 @@ const FP = 'f'.repeat(64);
 
 const CHANGES = [
   { title: 'Sync payments to staging', scope: 'argo.sync', target: 'pay-stg', action: 'argocd app sync pay-stg --prune', why: 'the fix is merged', evidence: 'PR 12 merged', verify: 'argocd app get pay-stg shows Synced', rollback: 'argocd app rollback pay-stg 3', risk: 'medium' },
-  { title: 'Close PMO-1\u0007 <script>x</script>', scope: 'jira.write', target: 'PMO-1', action: 'mcp__atlassian__transitionJiraIssue {"issueIdOrKey":"PMO-1","transition":"Done"}', why: 'done', evidence: 'e', verify: 'v', rollback: 'r', risk: 'low' },
+  { title: 'Close PMO-1 <script>x</script>', scope: 'jira.write', target: 'PMO-1', action: 'mcp__atlassian__transitionJiraIssue {"issueIdOrKey":"PMO-1","transition":"Done"}', why: 'done', evidence: 'e', verify: 'v', rollback: 'r', risk: 'low' },
 ];
 
-function setup({ state: runState = 'done', changes = CHANGES } = {}) {
+// No result blob exists anywhere: the reducer must not need one (R44).
+function setup({ state: runState = 'done' } = {}) {
   const state = newState();
   const parent = createTicket(state, { id: PARENT, key: 'PMO-7', title: 'Payments fix' });
-  const text = JSON.stringify({ summary: 's', critical_changes: changes });
-  const hash = createHash('sha256').update(text).digest('hex');
-  const blobs = new Map([[hash, text]]);
-  attachBlobReader(state, (h) => blobs.get(h) ?? null);
-  state.handoffs.set(HID, { id: HID, ticket_id: PARENT, state: runState, result_ref: hash, revision: 1 });
+  state.handoffs.set(HID, { id: HID, ticket_id: PARENT, state: runState, result_ref: 'e'.repeat(64), revision: 1 });
   return { state, parent };
 }
 
@@ -45,7 +42,7 @@ test('critical-proposal is a registered, valid event kind', () => {
   assert.doesNotThrow(() => validateEvent(makeEvent({ kind: 'critical-proposal', payload: { id: 'x' }, store_id: STORE, machine_id: MACHINE, producer: 'worker', occurred_at: T0 })));
 });
 
-test('a valid event creates a local-only critical child ticket and an autonomous run proposal', () => {
+test('a valid event creates a local-only critical child ticket and an autonomous run proposal, from the event alone', () => {
   const { state } = setup();
   const p = payload(state, 0);
   assert.equal(p.id, deterministicId(`${HID}:critical:0`));
@@ -53,40 +50,38 @@ test('a valid event creates a local-only critical child ticket and an autonomous
   assert.equal(r.rejected, undefined);
   const child = [...state.tickets.values()].find((t) => t.key === 'PMO-7.1');
   assert.ok(child);
-  assert.equal(child.local_only, true);
-  assert.deepEqual(child.tags, ['critical']);
-  assert.equal(child.status, 'todo');
-  assert.equal(child.parent_id, PARENT);
-  assert.equal(child.title, 'Sync payments to staging');
+  assert.deepEqual([child.local_only, child.tags, child.status, child.parent_id, child.title], [true, ['critical'], 'todo', PARENT, 'Sync payments to staging']);
   assert.deepEqual(descriptionProblems(child.summary), [], child.summary);
+  for (const secret of ['argocd app sync', 'PR 12 merged', 'rollback pay-stg', 'the fix is merged', 'shows Synced']) assert.equal(child.summary.includes(secret), false, `description leaves out ${secret} (R46)`);
+  assert.deepEqual(child.critical_spec, p.child.critical_spec);
   assert.equal(child.critical_spec.action_pin.guard, 'argocd app sync pay-stg --prune');
-  assert.equal(child.critical_spec.action_pin.normalized, pinOfChange(CHANGES[0]).normalized);
   assert.deepEqual([child.critical_spec.target, child.critical_spec.verify, child.critical_spec.rollback, child.critical_spec.risk], ['pay-stg', 'argocd app get pay-stg shows Synced', 'argocd app rollback pay-stg 3', 'medium']);
-  assert.deepEqual(child.critical_spec.scopes, [{ name: 'argo.sync', target: 'pay-stg', fingerprint: FP }]);
   const prop = state.runProposals.get(p.id);
-  assert.equal(prop.ticket_id, child.id);
-  assert.equal(prop.origin, 'run');
-  assert.equal(prop.from_handoff_id, HID);
+  assert.deepEqual([prop.ticket_id, prop.origin, prop.from_handoff_id, prop.access, prop.state], [child.id, 'run', HID, 'autonomous', 'proposed']);
   assert.deepEqual(prop.recipe, { name: 'critical-change', source: 'builtin', hash: null });
-  assert.equal(prop.access, 'autonomous');
   assert.deepEqual(prop.scopes, [{ name: 'argo.sync', target: 'pay-stg', fingerprint: FP }]);
-  assert.deepEqual(prop.action_pin, pinOfChange(CHANGES[0]));
-  assert.equal(prop.state, 'proposed');
-  assert.equal(proposalState(prop, child, T0), 'proposed');
+  assert.deepEqual(prop.action_pin, p.pin);
+  assert.notEqual(prop.action_pin, p.pin, 'stored as a copy, never aliasing the payload');
   assert.equal(proposalState(prop, child, '2026-10-09T08:00:01Z'), 'expired', '7-day TTL like other proposals');
   assert.equal(state.criticalProblems.length, 0);
 });
 
-test('agent text is cleaned: control characters stripped, lengths capped', () => {
+test('an MCP critical change keeps its pin and a scope without a target', () => {
   const { state } = setup();
-  const r = worker(state, payload(state, 1));
-  assert.equal(r.rejected, undefined);
+  assert.equal(worker(state, payload(state, 1)).rejected, undefined);
   const child = [...state.tickets.values()].find((t) => t.key === 'PMO-7.2');
   assert.equal(child.title, 'Close PMO-1 <script>x</script>', 'stored as text; the UI escapes it');
-  assert.equal(/[\u0000-\u001f]/.test(child.title), false);
-  assert.equal(child.critical_spec.action_pin.kind, 'mcp');
   assert.deepEqual(child.critical_spec.action_pin.ids, { issueIdOrKey: 'PMO-1' });
-  assert.equal(child.critical_spec.target, null, 'jira.write takes no target');
+  assert.equal(child.critical_spec.target, null);
+});
+
+test('replay keeps an accepted event whatever the pin code would say today (R44)', () => {
+  const { state } = setup();
+  // A pin the current parser would normalise differently (or not pin at all): replay still applies it.
+  const p = payload(state, 0, { pin: { kind: 'bash', binary: 'argocd', normalized: '{"older":"form"}', guard: 'argocd app sync pay-stg --prune' } });
+  assert.notEqual(p.pin.normalized, pinOfChange(CHANGES[0]).normalized);
+  assert.equal(worker(state, p).rejected, undefined);
+  assert.equal(state.runProposals.get(p.id).action_pin.normalized, '{"older":"form"}');
 });
 
 test('the event is accepted once: redelivery and replay are idempotent', () => {
@@ -97,22 +92,18 @@ test('the event is accepted once: redelivery and replay are idempotent', () => {
   assert.equal(applyEvent(state, e).rejected, undefined);
   const count = state.tickets.size;
   assert.equal(applyEvent(state, e).duplicate, true);
-  // A second event (another event id) for the same run entry changes nothing either.
-  const again = worker(state, payload(state, 0));
-  assert.equal(again.duplicate, true);
+  assert.equal(worker(state, payload(state, 0)).duplicate, true, 'a second event for the same entry');
   assert.equal(state.tickets.size, count);
   assert.equal([...state.runProposals.values()].filter((x) => x.origin === 'run').length, 1);
-  // Replaying the same journal into fresh state gives the same child and proposal.
   const { state: fresh } = setup();
   applyEvent(fresh, e);
   const child = [...state.tickets.values()].find((t) => t.key === 'PMO-7.1');
-  const replayed = fresh.tickets.get(child.id);
-  assert.deepEqual([replayed.title, replayed.summary, replayed.critical_spec], [child.title, child.summary, child.critical_spec]);
+  assert.deepEqual([fresh.tickets.get(child.id).summary, fresh.tickets.get(child.id).critical_spec], [child.summary, child.critical_spec]);
   assert.deepEqual(fresh.runProposals.get(p.id), state.runProposals.get(p.id));
 });
 
 function rejects(name, make, code) {
-  test(`rejected, nothing changes: ${name}`, () => {
+  test(`rejected, nothing changes, problem recorded: ${name}`, () => {
     const s = make();
     const before = { tickets: s.state.tickets.size, proposals: s.state.runProposals.size, revision: s.state.tickets.get(PARENT).revision };
     const r = s.apply();
@@ -122,81 +113,44 @@ function rejects(name, make, code) {
   });
 }
 
-rejects('wrong index (entry 1 with the pin of entry 0)', () => {
-  const { state } = setup();
-  const p = payload(state, 0, { index: 1, id: deterministicId(`${HID}:critical:1`) });
-  return { state, apply: () => worker(state, p) };
-}, 'critical-pin-mismatch');
+const make = (over, opts) => () => { const { state } = setup(opts); const p = typeof over === 'function' ? over(state) : payload(state, 0, over); return { state, apply: () => worker(state, p) }; };
 
-rejects('index past the end of critical_changes', () => {
-  const { state } = setup();
-  const p = payload(state, 0, { index: 5, id: deterministicId(`${HID}:critical:5`) });
-  return { state, apply: () => worker(state, p) };
-}, 'critical-index-invalid');
-
-rejects('wrong pin', () => {
-  const { state } = setup();
-  const p = payload(state, 0, { pin: pinOfChange({ action: 'argocd app sync pay-stg' }) });
-  return { state, apply: () => worker(state, p) };
-}, 'critical-pin-mismatch');
-
-rejects('a pin whose guard form was changed', () => {
-  const { state } = setup();
-  const good = payload(state, 0);
-  const p = { ...good, pin: { ...good.pin, guard: 'argocd app sync pay-prod --prune' } };
-  return { state, apply: () => worker(state, p) };
-}, 'critical-pin-mismatch');
-
-rejects('wrong id', () => {
-  const { state } = setup();
-  const p = payload(state, 0, { id: deterministicId(`${HID}:critical:9`) });
-  return { state, apply: () => worker(state, p) };
-}, 'critical-id-mismatch');
-
-for (const runState of ['running', 'failed', 'cancelled', 'timed-out', 'queued']) {
-  rejects(`run not done (${runState})`, () => {
-    const { state } = setup({ state: runState });
-    const p = payload(state, 0);
-    return { state, apply: () => worker(state, p) };
-  }, 'critical-run-not-done');
-}
-
-rejects('unknown run', () => {
-  const { state } = setup();
-  const p = payload(state, 0, { from_handoff_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', id: deterministicId('dddddddd-dddd-4ddd-8ddd-dddddddddddd:critical:0') });
-  return { state, apply: () => worker(state, p) };
-}, 'critical-run-unknown');
-
-rejects('the result blob is unavailable', () => {
-  const { state } = setup();
-  attachBlobReader(state, () => null);
-  const p = payload(state, 0);
-  return { state, apply: () => worker(state, p) };
-}, 'critical-result-unavailable');
-
-rejects('scopes that do not name the entry\'s scope', () => {
-  const { state } = setup();
-  const p = payload(state, 0, { scopes: [{ name: 'k8s.write', target: 'stg', fingerprint: FP }] });
-  return { state, apply: () => worker(state, p) };
-}, 'critical-scope-invalid');
-
-rejects('a scope without a fingerprint', () => {
-  const { state } = setup();
-  const p = payload(state, 0, { scopes: [{ name: 'argo.sync', target: 'pay-stg' }] });
-  return { state, apply: () => worker(state, p) };
-}, 'critical-scope-invalid');
-
+rejects('wrong id', make({ id: deterministicId(`${HID}:critical:9`) }), 'critical-id-mismatch');
+rejects('wrong index (id of index 0)', make({ index: 1 }), 'critical-id-mismatch');
+for (const runState of ['running', 'failed', 'cancelled', 'timed-out', 'queued']) rejects(`run not done (${runState})`, make({}, { state: runState }), 'critical-run-not-done');
+rejects('unknown run', make({ from_handoff_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', id: deterministicId('dddddddd-dddd-4ddd-8ddd-dddddddddddd:critical:0') }), 'critical-run-unknown');
+rejects('a pin with no guard form', make((state) => { const p = payload(state, 0); return { ...p, pin: { ...p.pin, guard: '' } }; }), 'critical-pin-invalid');
+rejects('a pin of an unknown kind', make((state) => { const p = payload(state, 0); return { ...p, pin: { ...p.pin, kind: 'python' } }; }), 'critical-pin-invalid');
+rejects('an oversized pin', make((state) => { const p = payload(state, 0); return { ...p, pin: { ...p.pin, values: ['x'.repeat(20000)] } }; }), 'critical-pin-invalid');
+rejects('a scope without a fingerprint', make({ scopes: [{ name: 'argo.sync', target: 'pay-stg' }] }), 'critical-scope-invalid');
+rejects('a git pseudo-scope', make({ scopes: [{ name: 'git.push', target: null, fingerprint: FP }] }), 'critical-scope-invalid');
+rejects('no scopes', make({ scopes: [] }), 'critical-scope-invalid');
+rejects('a child title over 200 characters', make((state) => { const p = payload(state, 0); return { ...p, child: { ...p.child, title: 't'.repeat(201) } }; }), 'critical-child-invalid');
+rejects('a child description over 4000 characters', make((state) => { const p = payload(state, 0); return { ...p, child: { ...p.child, description: 'd'.repeat(4001) } }; }), 'critical-child-invalid');
+rejects('a child with no critical_spec', make((state) => { const p = payload(state, 0); return { ...p, child: { ...p.child, critical_spec: null } }; }), 'critical-child-invalid');
+rejects('an index out of range', make({ index: 100, id: deterministicId(`${HID}:critical:100`) }), 'critical-proposal-invalid');
 for (const producer of ['cli', 'hook', 'page', 'publisher']) {
-  rejects(`delivered through ingress (producer ${producer})`, () => {
-    const { state } = setup();
-    const p = payload(state, 0);
-    return { state, apply: () => ev(state, 'critical-proposal', p, { producer, occurred_at: T0 }) };
-  }, 'critical-proposal-source');
+  rejects(`delivered through ingress (producer ${producer})`, () => { const { state } = setup(); const p = payload(state, 0); return { state, apply: () => ev(state, 'critical-proposal', p, { producer, occurred_at: T0 }) }; }, 'critical-proposal-source');
 }
-
 rejects('a key another ticket holds', () => {
   const { state } = setup();
   createTicket(state, { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', key: 'PMO-7.1', title: 'Other', parent_id: PARENT });
   const p = payload(state, 0);
   return { state, apply: () => worker(state, p) };
 }, 'key-collision');
+
+// R44: the reducer's verdict must not depend on the guard's parser, pin code or blobs.
+test('import boundary: the critical reducer reaches nothing in src/gate, action-pin.js or blobs.js', () => {
+  const seen = new Set();
+  const walk = (file) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    const src = fs.readFileSync(file, 'utf8');
+    for (const m of src.matchAll(/^\s*(?:import|export)\s[^'"]*?from\s+['"](\.[^'"]+)['"]/gm)) walk(path.resolve(path.dirname(file), m[1]));
+  };
+  walk(path.resolve('src/core/reduce/critical.js'));
+  const rel = [...seen].map((f) => path.relative(path.resolve('src'), f).split(path.sep).join('/'));
+  const bad = rel.filter((f) => f.startsWith('gate/') || f === 'handoff/action-pin.js' || f === 'core/blobs.js' || f === 'handoff/grant.js');
+  assert.deepEqual(bad, [], `reached: ${bad.join(', ')}`);
+  assert.ok(rel.includes('core/reduce/critical.js'));
+});

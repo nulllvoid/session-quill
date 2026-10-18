@@ -5,8 +5,7 @@ import fs from 'node:fs';
 import { Journal } from '../core/journal.js';
 import { validateEvent, makeEvent } from '../core/events.js';
 import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.js';
-import { createState, sessionKey, attachBlobReader } from '../core/state.js';
-import { getBlob } from '../core/blobs.js';
+import { createState, sessionKey } from '../core/state.js';
 import { applyEvent } from '../core/reducer.js';
 import { safeKeyFileName } from '../core/keys.js';
 import { journalPath, stateDir, requestsDir, configPath, quillHome } from '../lib/paths.js';
@@ -106,7 +105,6 @@ export class Worker {
       repos: this.config.repos,
       tracker_version: this.config.tracker_version ?? '1.0.0',
     });
-    attachBlobReader(this.state, (hash) => getBlob(hash, this.env));
     for (const ev of this.journal.read()) this.safeApply(ev, { replay: true });
     this.notesIndex = readJsonIfExists(path.join(stateDir(this.env), 'notes-index.json')) ?? {};
     const manifest = readJsonIfExists(path.join(stateDir(this.env), '..', 'projections', 'MANIFEST.json'));
@@ -339,7 +337,14 @@ export class Worker {
   // deterministic), rejected with a health error, and the loop continues.
   safeApply(record, { replay = false } = {}) {
     try {
-      return applyEvent(this.state, record);
+      const result = applyEvent(this.state, record);
+      // A refused critical-proposal (spec §7.2) is never silent: it becomes a health error.
+      if (record.kind === 'critical-proposal' && result.rejected) {
+        const problem = { kind: 'critical-proposal-rejected', event_id: record.event_id, code: result.rejected };
+        if (!replay) this.recordHealthError(problem);
+        else this.replayErrors = [...(this.replayErrors ?? []), problem];
+      }
+      return result;
     } catch (err) {
       this.state.appliedEvents.add(record.event_id);
       if (record.source_identity) this.state.appliedSources.add(record.source_identity);
@@ -441,7 +446,7 @@ export class Worker {
 
   // Dirty notes flush no later than 30 s after the first unmaterialized event (TRD §Durability 5).
   flushNotes() {
-    const outcomes = { written: 0, unchanged: 0, conflict: 0 };
+    const outcomes = { written: 0, unchanged: 0, conflict: 0, skipped: 0 };
     for (const id of this.dirtyTickets) {
       const ticket = this.state.tickets.get(id);
       if (!ticket) continue;

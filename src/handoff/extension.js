@@ -13,6 +13,7 @@ import { gatherContext, gatherDiff, gatherMemory, inlineBudget, writeContext } f
 import { stageFiles, applyFileRun } from './files.js';
 import { catalogFor, renderRecipe, recipeTools } from '../agents/recipes.js';
 import { recordResult, updateHandoff } from './results.js';
+import { reemitMissingCriticalProposals } from './critical-changes.js';
 import { resultFromStream, sessionIdOf, readLedger } from './stream.js';
 import { buildDocsMap, renderDocsMap } from './docs-map.js';
 import { reconcileAttempts } from './reconcile.js';
@@ -731,6 +732,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
         if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
       }
       try { await refileMissing(worker); } catch (err) { worker.log(`memory refiling failed: ${err.message}`); }
+      // A stop between a done run's handoff-tx and its critical-proposal events (spec §7.2, R47 M2).
+      try { reemitMissingCriticalProposals(worker); } catch (err) { worker.log(`critical proposals not re-emitted: ${err.message}`); }
       // Housekeeping at start: checkouts past their keep time, stale registrations, old ledgers and logs.
       try { await pruneOldWorktrees(); pruneRetention(); } catch (err) { worker.log(`handoff housekeeping failed: ${err.message}`); }
     },

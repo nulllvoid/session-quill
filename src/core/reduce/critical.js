@@ -1,13 +1,13 @@
-// Critical changes (spec §7.1–7.3, ADR 0028): a done run's critical_changes[i] becomes a local-only
-// child ticket and a run proposal, through one `critical-proposal` event that only the worker
-// emits. The reducer accepts it only when it names a done run whose stored result blob has entry
-// `index` with the same action pin, and when its id is deterministicId(`<run>:critical:<index>`).
-// A refused event records a problem in state.criticalProblems and changes nothing else. The child
-// is built from the result blob, never from the event's text, so a forged payload cannot word it.
+// Critical changes (spec §7.2–7.3, ADR 0028; ruling R44): a `critical-proposal` event creates a
+// local-only child ticket and a run proposal. The worker validated everything when it emitted the
+// event (src/handoff/critical-changes.js: action pin, scopes and fingerprints, the child's text)
+// and journaled the result; this reducer only checks what replay can check the same way forever:
+// the event's structure and size caps, its deterministic id, that the worker produced it, and that
+// the run exists and is done. It never re-pins an action, reads a blob or imports the guard's
+// parser, so an accepted event stays accepted whatever later releases change there.
+// A refused event changes nothing and is recorded in state.criticalProblems (the worker also
+// records it as a health error).
 import { deterministicId } from '../../lib/ids.js';
-import { SCOPE_NAME_RE } from '../../config/scopes.js';
-import { pinOfChange } from '../../handoff/action-pin.js';
-import { canonicalJson } from '../../handoff/grant.js';
 import { createTicket } from './tickets.js';
 import { timelineEntry } from './common.js';
 import { pruneProposals } from './integrations.js';
@@ -15,72 +15,16 @@ import { pruneProposals } from './integrations.js';
 export const CRITICAL_PROBLEM_CAP = 100;
 export const CRITICAL_RECIPE = Object.freeze({ name: 'critical-change', source: 'builtin' });
 export const CRITICAL_TAG = 'critical';
-const RISKS = ['low', 'medium', 'high'];
-const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
+// Frozen here on purpose (same text as config/scopes.js SCOPE_NAME_RE when this was written).
+const SCOPE_NAME_RE = /^[a-z][a-z0-9_-]{0,31}(\.[a-z0-9_-]{1,31}){0,3}$/;
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/;
-// C0/C1 controls and the invisible format characters (zero-width, bidi overrides, BOM).
-const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁠-⁩﻿]+/g;
+const LIMITS = Object.freeze({ id: 64, index: 100, key: 120, title: 200, description: 4000, pinText: 8000, pinJson: 16000, specJson: 32000, scopes: 5, target: 300, payloadJson: 64000 });
+const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-
-/** Agent text as one plain line: controls stripped, whitespace collapsed, dash runs broken, capped. */
-export function cleanLine(value, max) {
-  if (typeof value !== 'string') return '';
-  return value.replace(CONTROL_RE, ' ').replace(/-{3,}/g, '–').replace(/\s+/g, ' ').trim().slice(0, max);
-}
-
-// The command as one line, controls stripped and capped, but otherwise exact.
-const cleanAction = (value) => (typeof value !== 'string' ? '' : value.replace(CONTROL_RE, ' ').replace(/\s+/g, ' ').trim().slice(0, 500));
-
-/** The scope an entry names: `name:target` or `name` with its `target` field. */
-export function changeScope(change) {
-  const raw = isPlainObject(change) && typeof change.scope === 'string' ? change.scope.trim() : '';
-  const colon = raw.indexOf(':');
-  const name = colon < 0 ? raw : raw.slice(0, colon);
-  const own = colon < 0 ? '' : raw.slice(colon + 1).trim();
-  const field = isPlainObject(change) && typeof change.target === 'string' ? change.target.trim() : '';
-  return { name, target: own || field || null };
-}
-
-/**
- * The child ticket of one critical change: title, a Goal/Context/Done-when description (ADR 0014)
- * and the local critical_spec. Every text comes from the run's result and is cleaned here.
- */
-export function criticalChild(change, { run, parent, index, pin, scopes }) {
-  const c = isPlainObject(change) ? change : {};
-  const title = cleanLine(c.title, 200) || 'Critical change';
-  const scope = scopes[0];
-  const scopeText = `${scope.name}${scope.target ? `:${scope.target}` : ''}`;
-  const why = cleanLine(c.why, 400);
-  const evidence = cleanLine(c.evidence, 400);
-  const verify = cleanLine(c.verify, 400);
-  const rollback = cleanLine(c.rollback, 400);
-  const action = cleanAction(c.action);
-  const risk = RISKS.includes(c.risk) ? c.risk : 'high';
-  const id8 = String(run.id).slice(0, 8);
-  const description = [
-    `**Goal:** Make the critical change "${title}" in scope ${scopeText}, exactly as proposed, once you approve it.`,
-    '',
-    `**Context:** Run ${id8} of ${parent.key} needed this write but its scopes did not allow it, so it proposed it instead. Why: ${why || 'not given'}. Evidence: ${evidence || 'none given'}. Risk: ${risk}. Rollback: ${rollback || 'not given'}. Action: ${action}`,
-    '',
-    '**Done when:**',
-    `- ${verify || 'The change is checked as the proposing run describes'}`,
-    '- An approved run of this ticket made the change exactly as pinned',
-  ].join('\n');
-  const critical_spec = {
-    from_handoff_id: run.id, index, title, action, action_pin: pin, scope: scope.name, target: scope.target,
-    scopes: scopes.map((s) => ({ name: s.name, target: s.target, fingerprint: s.fingerprint })), why, evidence, verify, rollback, risk,
-  };
-  return { title, description, critical_spec };
-}
-
-/** The `critical-proposal` payload the worker emits for critical_changes[index] of a done run. */
-export function buildCriticalProposal({ run, parent, index, change, pin, scopes, key }) {
-  return {
-    id: deterministicId(`${run.id}:critical:${index}`), from_handoff_id: run.id, index, pin, scopes,
-    child: { key, ...criticalChild(change, { run, parent, index, pin, scopes }) },
-  };
-}
+const text = (v, max, min = 1) => typeof v === 'string' && v.length >= min && v.length <= max;
+const jsonSize = (v) => { try { return JSON.stringify(v).length; } catch { return Infinity; } };
+const copy = (v) => JSON.parse(JSON.stringify(v));
 
 function problem(state, ev, code) {
   const p = isPlainObject(ev.payload) ? ev.payload : {};
@@ -91,66 +35,62 @@ function problem(state, ev, code) {
   return { rejected: code };
 }
 
-function storedResult(state, h) {
-  if (typeof h.result_ref !== 'string' || typeof state.readBlob !== 'function') return null;
-  try {
-    const parsed = JSON.parse(state.readBlob(h.result_ref));
-    return isPlainObject(parsed) ? parsed : null;
-  } catch { return null; }
+function validPin(pin) {
+  return isPlainObject(pin) && (pin.kind === 'bash' || pin.kind === 'mcp') && text(pin.normalized, LIMITS.pinText) && text(pin.guard, LIMITS.pinText) && jsonSize(pin) <= LIMITS.pinJson;
 }
 
-// Exactly the entry's one scope, with a fingerprint; the target is the entry's, or none.
-function validScopes(list, change) {
-  if (!Array.isArray(list) || list.length !== 1 || !isPlainObject(list[0])) return null;
-  const s = list[0];
-  const want = changeScope(change);
-  if (typeof s.name !== 'string' || !SCOPE_NAME_RE.test(s.name) || s.name.startsWith('git.') || s.name !== want.name) return null;
-  if (typeof s.fingerprint !== 'string' || !FINGERPRINT_RE.test(s.fingerprint)) return null;
-  if (s.target !== null && (typeof s.target !== 'string' || s.target !== want.target)) return null;
-  return [{ name: s.name, target: s.target, fingerprint: s.fingerprint }];
+function validScopes(list) {
+  if (!Array.isArray(list) || list.length < 1 || list.length > LIMITS.scopes) return null;
+  const out = [];
+  for (const s of list) {
+    if (!isPlainObject(s) || typeof s.name !== 'string' || !SCOPE_NAME_RE.test(s.name) || s.name.startsWith('git.')) return null;
+    if (typeof s.fingerprint !== 'string' || !FINGERPRINT_RE.test(s.fingerprint)) return null;
+    if (s.target !== null && !text(s.target, LIMITS.target)) return null;
+    out.push({ name: s.name, target: s.target, fingerprint: s.fingerprint });
+  }
+  return out;
+}
+
+function validChild(c) {
+  return isPlainObject(c) && text(c.key, LIMITS.key) && text(c.title, LIMITS.title) && text(c.description, LIMITS.description) && isPlainObject(c.critical_spec) && jsonSize(c.critical_spec) <= LIMITS.specJson;
 }
 
 export function applyCriticalProposal(state, ev, result) {
   // Only the worker emits this kind (spec §7.2): page ingress and the CLI cannot produce it.
   if (ev.producer !== 'worker') return problem(state, ev, 'critical-proposal-source');
   const p = ev.payload;
-  if (!isPlainObject(p) || typeof p.id !== 'string' || typeof p.from_handoff_id !== 'string' || !Number.isInteger(p.index) || p.index < 0 || !isPlainObject(p.child) || typeof p.child.key !== 'string') return problem(state, ev, 'critical-proposal-invalid');
+  if (!isPlainObject(p) || jsonSize(p) > LIMITS.payloadJson || !text(p.id, LIMITS.id) || !text(p.from_handoff_id, LIMITS.id) || !Number.isInteger(p.index) || p.index < 0 || p.index >= LIMITS.index) return problem(state, ev, 'critical-proposal-invalid');
   if (p.id !== deterministicId(`${p.from_handoff_id}:critical:${p.index}`)) return problem(state, ev, 'critical-id-mismatch');
   const childId = deterministicId(`${p.id}:child`);
   if (state.runProposals.has(p.id) || state.tickets.has(childId)) return { duplicate: true };
+  if (!validPin(p.pin)) return problem(state, ev, 'critical-pin-invalid');
+  const scopes = validScopes(p.scopes);
+  if (!scopes) return problem(state, ev, 'critical-scope-invalid');
+  if (!validChild(p.child)) return problem(state, ev, 'critical-child-invalid');
   const h = state.handoffs.get(p.from_handoff_id);
   if (!h) return problem(state, ev, 'critical-run-unknown');
   if (h.state !== 'done') return problem(state, ev, 'critical-run-not-done');
   const parent = state.tickets.get(h.ticket_id);
   if (!parent) return problem(state, ev, 'ticket-unknown');
-  const stored = storedResult(state, h);
-  if (!stored) return problem(state, ev, 'critical-result-unavailable');
-  const changes = Array.isArray(stored.critical_changes) ? stored.critical_changes : [];
-  if (p.index >= changes.length) return problem(state, ev, 'critical-index-invalid');
-  const change = changes[p.index];
-  const pin = pinOfChange(change);
-  if (!pin || !isPlainObject(p.pin) || p.pin.normalized !== pin.normalized || p.pin.guard !== pin.guard || canonicalJson(p.pin) !== canonicalJson(pin)) return problem(state, ev, 'critical-pin-mismatch');
-  const scopes = validScopes(p.scopes, change);
-  if (!scopes) return problem(state, ev, 'critical-scope-invalid');
-  const child = criticalChild(change, { run: h, parent, index: p.index, pin, scopes });
+  const id8 = String(h.id).slice(0, 8);
   const created = createTicket(state, ev, {
-    id: childId, key: p.child.key, title: child.title, project_id: parent.project_id, project_name: parent.project_name, category: parent.category, priority: parent.priority,
-    parent_id: parent.id, repo_id: parent.repo_id ?? null, summary: child.description, next_action: 'Approve or dismiss the proposed critical change in Runs → Needs you',
-    created_via: `critical change proposed by run ${String(h.id).slice(0, 8)}`,
+    id: childId, key: p.child.key, title: p.child.title, project_id: parent.project_id, project_name: parent.project_name, category: parent.category, priority: parent.priority,
+    parent_id: parent.id, repo_id: parent.repo_id ?? null, summary: p.child.description, next_action: 'Approve or dismiss the proposed critical change in Runs → Needs you',
+    created_via: `critical change proposed by run ${id8}`,
   }, 'manual', result);
   if (created.rejected) return problem(state, ev, created.rejected);
   const ticket = state.tickets.get(childId);
-  // Local only (spec §9.2): never exported, mirrored, published or pushed to a tracker.
+  // Local only (spec §9.2, R46): never exported, mirrored, published, pushed or written to a vault note.
   ticket.local_only = true;
   ticket.tags = [CRITICAL_TAG];
-  ticket.critical_spec = child.critical_spec;
+  ticket.critical_spec = copy(p.child.critical_spec);
   pruneProposals(state, ev.occurred_at);
   state.runProposals.set(p.id, {
     id: p.id, ticket_id: childId, origin: 'run', from_handoff_id: h.id, publisher: null, editor: null, edited_at: null,
     recipe: { ...CRITICAL_RECIPE, hash: null }, mode: null, permissions: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])), access: 'autonomous', read_only: false,
-    scopes, action_pin: pin, expected_revision: null, proposed_at: ev.occurred_at, lapsed_at: null, state: 'proposed', resolved_at: null, resolved_by: null, request_id: null, handoff_id: null,
+    scopes, action_pin: copy(p.pin), expected_revision: null, proposed_at: ev.occurred_at, lapsed_at: null, state: 'proposed', resolved_at: null, resolved_by: null, request_id: null, handoff_id: null,
   });
-  ticket.timeline.push(timelineEntry(ev, 'proposal', `Critical change proposed by run ${String(h.id).slice(0, 8)} of ${parent.key}; it waits for your approval`));
+  ticket.timeline.push(timelineEntry(ev, 'proposal', `Critical change proposed by run ${id8} of ${parent.key}; it waits for your approval`));
   result.changed.add(childId);
   return {};
 }

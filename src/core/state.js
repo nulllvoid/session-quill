@@ -62,14 +62,6 @@ export function createState(meta) {
   };
 }
 
-// The reducer reads a done run's result blob to check a critical-proposal against it (spec §7.2).
-// Blobs are content-addressed and never rewritten, so replay reads the same bytes. The reader is
-// not enumerable: state is never serialised with it.
-export function attachBlobReader(state, readBlob) {
-  Object.defineProperty(state, 'readBlob', { value: typeof readBlob === 'function' ? readBlob : null, enumerable: false, configurable: true, writable: true });
-  return state;
-}
-
 export function sessionKey({ session_id, agent_id = null }) {
   return agent_id ? `${session_id}:${agent_id}` : `${session_id}`;
 }

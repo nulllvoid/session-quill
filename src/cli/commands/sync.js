@@ -3,10 +3,9 @@ import path from 'node:path';
 import { loadContext, cliEvent, submitAndWait, writeControl, findTicketByKey, latestTicketDetail, workerStatus } from '../context.js';
 import { Journal } from '../../core/journal.js';
 import { journalPath } from '../../lib/paths.js';
-import { createState, sessionKey, attachBlobReader } from '../../core/state.js';
-import { getBlob } from '../../core/blobs.js';
+import { createState, sessionKey } from '../../core/state.js';
 import { applyEvent } from '../../core/reducer.js';
-import { renderTicketNote, renderSessionNote, renderHandoffNote, parseNote } from '../../worker/notes.js';
+import { renderTicketNote, renderSessionNote, renderHandoffNote, parseNote, hasVaultNote } from '../../worker/notes.js';
 import { safeKeyFileName, validateKey } from '../../core/keys.js';
 import { writeFileAtomic, ensureDir } from '../../lib/atomic-fs.js';
 import { snapshotFileName } from '../../hooks/binding-snapshot.js';
@@ -48,7 +47,6 @@ export function replayState(ctx, { readOnly = false } = {}) {
     timezone: ctx.storeMeta.timezone, key_prefix: ctx.config.key_prefix, stale_days: ctx.config.stale_days, sync_interval_hours: ctx.config.sync_interval_hours,
     approval_phrases_enabled: ctx.config.approval_phrases_enabled, projects: ctx.config.projects, repos: ctx.config.repos,
   });
-  attachBlobReader(state, (hash) => getBlob(hash, ctx.env));
   for (const ev of j.read()) applyEvent(state, ev);
   return { state, info };
 }
@@ -62,6 +60,7 @@ export function replayToStaging(ctx, into) {
   let authoredRecovered = 0;
   let authoredMissing = 0;
   for (const t of state.tickets.values()) {
+    if (!hasVaultNote(t)) continue;
     const livePath = path.join(ctx.config.store_path, 'tickets', `${safeKeyFileName(t.key)}.md`);
     let authored = {};
     if (fs.existsSync(livePath)) { authored = parseNote(fs.readFileSync(livePath, 'utf8')).authored; authoredRecovered += 1; } else authoredMissing += 1;

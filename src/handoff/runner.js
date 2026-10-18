@@ -337,11 +337,20 @@ function profileTools({ mode, permissions = {} }) {
 export const CONFIDENCE = ['high', 'medium', 'low'];
 
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+// Per-field caps of a critical_changes entry; a longer field is cut and listed in `truncated`.
+export const CRITICAL_CAPS = Object.freeze({ title: 200, scope: 200, target: 300, action: 500, why: 500, evidence: 500, verify: 500, rollback: 500 });
 const oneOf = (v, list) => typeof v === 'string' && list.includes(v);
 const ITEM_SHAPES = {
   attempts: (a) => (oneOf(a.outcome, ['worked', 'failed', 'refused', 'unavailable', 'skipped']) && str(a.route, 1) ? { route: str(a.route, 300), tool: str(a.tool, 200), target: str(a.target, 300), outcome: a.outcome, reason: str(a.reason, 500), evidence: str(a.evidence, 500) } : null),
   verification: (v) => (oneOf(v.method, ['test', 'build', 'lint', 'query', 'manual-read']) && oneOf(v.result, ['passed', 'failed', 'not-run']) && str(v.claim, 1) ? { claim: str(v.claim, 300), method: v.method, command: str(v.command, 500), result: v.result, detail: str(v.detail, 500) } : null),
-  critical_changes: (c) => (oneOf(c.risk, ['low', 'medium', 'high']) && str(c.title, 1) ? { title: str(c.title, 200), scope: str(c.scope, 200), target: str(c.target, 300), action: str(c.action, 500), why: str(c.why, 500), evidence: str(c.evidence, 500), verify: str(c.verify, 500), rollback: str(c.rollback, 500), risk: c.risk } : null),
+  critical_changes: (c) => {
+    if (!oneOf(c.risk, ['low', 'medium', 'high']) || !str(c.title, 1)) return null;
+    const out = { title: str(c.title, CRITICAL_CAPS.title), scope: str(c.scope, CRITICAL_CAPS.scope), target: str(c.target, CRITICAL_CAPS.target), action: str(c.action, CRITICAL_CAPS.action), why: str(c.why, CRITICAL_CAPS.why), evidence: str(c.evidence, CRITICAL_CAPS.evidence), verify: str(c.verify, CRITICAL_CAPS.verify), rollback: str(c.rollback, CRITICAL_CAPS.rollback), risk: c.risk };
+    // R45: a field cut to its cap is named, so a cut action is never proposed as if it were whole.
+    const cut = Object.keys(CRITICAL_CAPS).filter((k) => typeof c[k] === 'string' && c[k].trim().length > CRITICAL_CAPS[k]);
+    if (cut.length) out.truncated = cut;
+    return out;
+  },
   learnings: (l) => (oneOf(l.scope, ['repo', 'task', 'machine']) && oneOf(l.kind, ['fact', 'procedure', 'pitfall', 'tool', 'pointer']) && oneOf(l.derived_from, ['repo-file', 'own-command', 'tool-output', 'external-text']) && str(l.text, 1)
     ? { scope: l.scope, section: str(l.section, 100), key: typeof l.key === 'string' && l.key.trim() ? l.key.trim().slice(0, 100) : null, kind: l.kind, text: str(l.text, 1000), evidence: Array.isArray(l.evidence) ? l.evidence.filter((e) => typeof e === 'string' && e.trim()).slice(0, 10).map((e) => e.trim().slice(0, 300)) : [], derived_from: l.derived_from } : null),
 };

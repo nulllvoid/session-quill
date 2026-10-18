@@ -56,8 +56,8 @@ export async function bootWorker({ repo, fakeEnv = {}, deadlineMs, withServer = 
   return { w, env, meta, config, ticket, request, hext, advance: (ms) => { nowMs += ms; }, iso, mk, home, storePath };
 }
 
-export async function restartWorker(prev, { runtimeAvailable = true } = {}) {
-  const w = new Worker({ config: prev.config, storeMeta: prev.meta, env: prev.env, derive });
+export async function restartWorker(prev, { runtimeAvailable = true, clock } = {}) {
+  const w = new Worker({ config: prev.config, storeMeta: prev.meta, env: prev.env, derive, ...(clock ? { clock } : {}) });
   const ctx = { env: prev.env, config: prev.config, storeMeta: prev.meta };
   const hext = handoffExt(ctx, { claudePath: process.execPath, claudeArgs: [FAKE_CLAUDE], runtimeAvailable, maxConcurrent: 4 });
   w.use(hext);

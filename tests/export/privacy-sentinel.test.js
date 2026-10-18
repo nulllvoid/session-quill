@@ -10,7 +10,7 @@ import { buildStaticHtml } from '../../src/export/static.js';
 import { writeMirror } from '../../src/mirror/mirror.js';
 import { rowsFor } from '../../src/publish/content.js';
 import { PUBLISH_FIELDS } from '../../src/publish/config.js';
-import { renderHandoffNote, renderTicketNote, renderSessionNote, HANDOFF_NOTE_FIELDS } from '../../src/worker/notes.js';
+import { renderHandoffNote, renderTicketNote, renderSessionNote, writeNote, hasVaultNote, HANDOFF_NOTE_FIELDS } from '../../src/worker/notes.js';
 import { syncable } from '../../src/tracker/client.js';
 import { snapshot, TID } from '../ui/fixtures.js';
 
@@ -101,14 +101,41 @@ test('local-only tickets are never exportable or synced to a tracker', () => {
   assert.equal(syncable({ ...linked, local_only: true }, tracker), false);
 });
 
-test('vault ticket and session notes never contain run notes or the critical spec (local-only tickets stay in the vault)', () => {
+test('vault ticket and session notes never contain run notes or the critical spec', () => {
   const s = fixture();
   const state = { tickets: new Map(s.tickets.map((t) => [t.id, t])), handoffs: new Map(s.handoffs.map((h) => [h.id, h])) };
   const base = { plans: [], conclusions: [], timeline: [], files_touched: [], prs: [], deployments: [], children_ids: [], handoff_ids: [], tags: [] };
   const ticket = { ...base, ...s.tickets[0], run_notes: [S], critical_spec: { rule: S } };
   assert.equal(renderTicketNote(ticket, { state }).includes(S), false);
-  const local = { ...base, ...s.tickets[s.tickets.length - 1] };
-  assert.equal(renderTicketNote(local, { state }).includes('local_only: true'), true, 'local-only ticket notes are still written for the owner');
   const session = { ...s.sessions[0], run_notes: [S], critical_spec: S, bindings: s.sessions[0].bindings, ticket_ids: [] };
   assert.equal(renderSessionNote(session, { state }).includes(S), false);
+});
+
+// R46: a local-only ticket (a critical child) has no vault note at all, and no other note names it.
+test('a local-only critical child yields no vault note, and parent, session and run notes do not name it', () => {
+  const s = fixture();
+  const base = { plans: [], conclusions: [], timeline: [], files_touched: [], prs: [], deployments: [], children_ids: [], handoff_ids: [], tags: [], validation_issues: [] };
+  const parent = { ...base, ...s.tickets[0], children_ids: [] };
+  const child = { ...base, ...s.tickets[1], id: TID(41), key: `${parent.key}.1`, title: `Critical ${S}`, parent_id: parent.id, local_only: true, tags: ['critical'], summary: `**Goal:** ${S} goal sentence here.\n\n**Context:** ${S}\n\n**Done when:**\n- ${S}`, critical_spec: { action: S, action_pin: { guard: S } } };
+  parent.children_ids = [child.id];
+  const state = { tickets: new Map([[parent.id, parent], [child.id, child]]), handoffs: new Map() };
+  assert.equal(hasVaultNote(child), false);
+  assert.equal(hasVaultNote(parent), true);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quill-vault-'));
+  try {
+    const file = path.join(dir, 'child.md');
+    assert.equal(writeNote(file, child, { state, index: {} }), 'skipped');
+    assert.equal(fs.existsSync(file), false, 'no vault note, so no front matter with its description or critical_spec');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const parentNote = renderTicketNote(parent, { state });
+  assert.equal(parentNote.includes(S), false);
+  assert.equal(parentNote.includes(child.id), false, 'the child id is left out of the parent front matter');
+  const session = { ...s.sessions[0], bindings: [{ ...s.sessions[0].bindings[0], ticket_id: child.id }], ticket_ids: [parent.id, child.id] };
+  const sessionNote = renderSessionNote(session, { state });
+  assert.equal(sessionNote.includes(S), false);
+  assert.equal(sessionNote.includes(child.key), false);
+  const run = { ...s.handoffs[0], id: 'h-critical-0000', ticket_id: child.id, children_ids: [child.id] };
+  const runNote = renderHandoffNote(run, { state });
+  assert.equal(runNote.includes(S), false);
+  assert.equal(runNote.includes(child.key), false);
 });
