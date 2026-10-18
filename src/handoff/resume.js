@@ -187,19 +187,42 @@ export function projectDirName(cwd) {
   return path.resolve(cwd).replace(/[^A-Za-z0-9]/g, '-');
 }
 
-const regularFile = (f) => { try { return fs.lstatSync(f).isFile(); } catch { return false; } };
+// Links are never followed (R54): a project folder or transcript whose lstat reports a symbolic link
+// (Windows junctions included) is refused, and what is used must really be inside the real
+// projects folder: a folder is a direct child of it, a file a direct child of such a folder.
+const lstatOf = (f) => { try { return fs.lstatSync(f); } catch { return null; } };
+const realOf = (f) => { try { return fs.realpathSync.native(f); } catch { return null; } };
+const samePath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+// The real path of project folder `dir` when it is a plain folder directly inside `realRoot`, else null.
+function plainProjectDir(realRoot, dir) {
+  const st = lstatOf(dir);
+  if (!st || st.isSymbolicLink() || !st.isDirectory()) return null;
+  const real = realOf(dir);
+  return real && samePath(path.dirname(real), realRoot) ? real : null;
+}
+
+// The real path of transcript `name` in the plain project folder `realDir` when it is a plain file, else null.
+function plainTranscript(realDir, name) {
+  const f = path.join(realDir, name);
+  const st = lstatOf(f);
+  if (!st || st.isSymbolicLink() || !st.isFile()) return null;
+  const real = realOf(f);
+  return real && samePath(path.dirname(real), realDir) ? real : null;
+}
 
 // The interrupted session's transcript: under the original working directory's project folder,
-// else (a long name Claude Code shortened) the one project folder that holds it.
-function sessionSource(projects, fromCwd, file) {
+// else (a long name Claude Code shortened) the one plain project folder that holds it.
+function sessionSource(realRoot, fromCwd, file) {
   if (fromCwd) {
     const name = projectDirName(fromCwd);
-    const direct = path.join(projects, name, file);
-    if (name.length <= PROJECT_NAME_MAX && isUnder(projects, direct) && regularFile(direct)) return direct;
+    const dir = name.length <= PROJECT_NAME_MAX ? plainProjectDir(realRoot, path.join(realRoot, name)) : null;
+    const direct = dir ? plainTranscript(dir, file) : null;
+    if (direct) return direct;
   }
-  let dirs = [];
-  try { dirs = fs.readdirSync(projects, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { dirs = []; }
-  const found = dirs.map((d) => path.join(projects, d.name, file)).filter((f) => isUnder(projects, f) && regularFile(f));
+  let entries = [];
+  try { entries = fs.readdirSync(realRoot, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.isSymbolicLink()); } catch { entries = []; }
+  const found = entries.map((d) => plainProjectDir(realRoot, path.join(realRoot, d.name))).filter(Boolean).map((dir) => plainTranscript(dir, file)).filter(Boolean);
   return found.length === 1 ? found[0] : null;
 }
 
@@ -215,9 +238,10 @@ function sessionSource(projects, fromCwd, file) {
  */
 export function carrySession({ configRoot, sessionId, fromCwd = null, toCwd }) {
   if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) throw new TrackerError('no-session', 'the recorded session id is not a Claude Code session id, so it cannot be resumed; retry as a new run');
-  const projects = path.join(path.resolve(configRoot), 'projects');
   const file = `${sessionId}.jsonl`;
-  const source = sessionSource(projects, fromCwd, file);
+  // Containment is judged on real paths: the projects folder as it really is on disk.
+  const realRoot = realOf(path.join(path.resolve(configRoot), 'projects'));
+  const source = realRoot ? sessionSource(realRoot, fromCwd, file) : null;
   if (!source) throw new TrackerError('resume-session-missing', SESSION_MISSING);
   let real = null;
   try { real = fs.realpathSync.native(toCwd); } catch { real = null; }
@@ -226,18 +250,22 @@ export function carrySession({ configRoot, sessionId, fromCwd = null, toCwd }) {
   const out = [];
   for (const name of names) {
     if (name.length > PROJECT_NAME_MAX) throw new TrackerError('resume-session-unreachable', "the resumed run's working directory has a path too long for Claude Code to find the session under; retry as a new run");
-    const dest = path.join(projects, name, file);
-    if (!isUnder(projects, dest)) throw new TrackerError('resume-session-unreachable', 'the session cannot be placed under the Claude Code projects folder; retry as a new run');
-    const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
-    if (same(path.resolve(dest), path.resolve(source))) { out.push(dest); continue; }
-    let exists = true;
-    try { fs.lstatSync(dest); } catch { exists = false; }
-    if (exists) {
-      if (!regularFile(dest) || !fs.readFileSync(dest).equals(bytes)) throw new TrackerError('resume-session-conflict', "a different session transcript with this id already exists for the resumed run's working directory; it was left as it is. Retry as a new run");
+    const unreachable = () => new TrackerError('resume-session-unreachable', 'the session cannot be placed in a plain folder under the Claude Code projects folder (a link is never followed); retry as a new run');
+    const wanted = path.join(realRoot, name);
+    if (!isUnder(realRoot, wanted)) throw unreachable();
+    // Created only directly under the real projects folder, then checked again as it really is.
+    if (!lstatOf(wanted)) { try { fs.mkdirSync(wanted); } catch (err) { if (err.code !== 'EEXIST') throw err; } }
+    const dir = plainProjectDir(realRoot, wanted);
+    if (!dir) throw unreachable();
+    const dest = path.join(dir, file);
+    if (samePath(dest, source)) { out.push(dest); continue; }
+    const st = lstatOf(dest);
+    if (st) {
+      if (st.isSymbolicLink() || !st.isFile() || !fs.readFileSync(dest).equals(bytes)) throw new TrackerError('resume-session-conflict', "a different session transcript with this id already exists for the resumed run's working directory; it was left as it is. Retry as a new run");
       out.push(dest);
       continue;
     }
-    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    // 'wx' fails on anything already there, a dangling link included.
     fs.writeFileSync(dest, bytes, { flag: 'wx', mode: 0o600 });
     out.push(dest);
   }

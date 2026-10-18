@@ -403,3 +403,56 @@ test('claudeConfigRoot: CLAUDE_CONFIG_DIR, else the platform home', () => {
   assert.equal(claudeConfigRoot({ userprofile: 'C:\\Users\\me' }, 'win32'), path.join('C:\\Users\\me', '.claude'), 'names compare case-insensitively on Windows');
   assert.equal(claudeConfigRoot({ USERPROFILE: '/u', HOME: '/h' }, 'linux'), path.join('/h', '.claude'));
 });
+
+// R54: a project folder or transcript that is a link (a symlink, or a junction on Windows, which
+// lstat reports as a symbolic link) is never followed, for reading or for writing.
+function linkDir(target, at) {
+  try { fs.symlinkSync(target, at, process.platform === 'win32' ? 'junction' : 'dir'); return true; } catch (err) { if (err.code === 'EPERM' || err.code === 'ENOSYS') return false; throw err; }
+}
+
+test('carrySession never reads through a linked (junctioned) old project folder', (t) => {
+  const root = configRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'st-out-'));
+  const projects = path.join(root, 'projects');
+  fs.mkdirSync(projects, { recursive: true });
+  const oldCwd = path.join(root, 'work', 'old');
+  const newCwd = path.join(root, 'work', 'new');
+  fs.mkdirSync(newCwd, { recursive: true });
+  fs.writeFileSync(path.join(outside, `${S1}.jsonl`), 'outside');
+  const link = path.join(projects, projectDirName(oldCwd));
+  if (!linkDir(outside, link)) { t.skip('this platform cannot create a directory link'); return; }
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true, 'a junction reads as a link to lstat');
+  assert.throws(() => carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: newCwd }), (err) => err.code === 'resume-session-missing', 'the direct folder is a link');
+  assert.throws(() => carrySession({ configRoot: root, sessionId: S1, fromCwd: null, toCwd: newCwd }), (err) => err.code === 'resume-session-missing', 'the search skips linked folders too');
+  assert.equal(fs.existsSync(path.join(projects, projectDirName(newCwd))), false, 'nothing was copied');
+});
+
+test('carrySession never writes through a linked (junctioned) new project folder', (t) => {
+  const root = configRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'st-out-'));
+  const projects = path.join(root, 'projects');
+  const oldCwd = path.join(root, 'work', 'old');
+  const newCwd = path.join(root, 'work', 'new');
+  fs.mkdirSync(newCwd, { recursive: true });
+  const src = path.join(projects, projectDirName(oldCwd), `${S1}.jsonl`);
+  fs.mkdirSync(path.dirname(src), { recursive: true });
+  fs.writeFileSync(src, 'transcript');
+  if (!linkDir(outside, path.join(projects, projectDirName(newCwd)))) { t.skip('this platform cannot create a directory link'); return; }
+  assert.throws(() => carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: newCwd }), (err) => err.code === 'resume-session-unreachable');
+  assert.deepEqual(fs.readdirSync(outside), [], 'nothing was written outside the projects folder');
+  assert.equal(fs.readFileSync(src, 'utf8'), 'transcript');
+});
+
+test('carrySession never reads a transcript that is itself a link', (t) => {
+  const root = configRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'st-out-'));
+  const oldCwd = path.join(root, 'work', 'old');
+  const newCwd = path.join(root, 'work', 'new');
+  fs.mkdirSync(newCwd, { recursive: true });
+  const dir = path.join(root, 'projects', projectDirName(oldCwd));
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'secret.jsonl'), 'outside');
+  try { fs.symlinkSync(path.join(outside, 'secret.jsonl'), path.join(dir, `${S1}.jsonl`), 'file'); } catch (err) { if (err.code === 'EPERM') { t.skip('file symlinks need a privilege this account lacks'); return; } throw err; }
+  assert.throws(() => carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: newCwd }), (err) => err.code === 'resume-session-missing');
+  assert.equal(fs.existsSync(path.join(root, 'projects', projectDirName(newCwd))), false);
+});
