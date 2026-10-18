@@ -96,7 +96,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
   const limits = { readonly: maxReadonly ?? maxConcurrent ?? configured.readonly, fix: maxFix ?? maxConcurrent ?? configured.fix };
   const inUse = (fix) => [...running.values()].filter((e) => e.fix === fix).length;
   let paused = false;
+  let stopping = false;
   let currentWorker = null;
+  // Whether a run the tick handed to dispatch may still start: queued in the state, no cancel asked.
+  const stillQueued = (worker, id) => { const cur = worker.state.handoffs.get(id); return !!cur && cur.state === 'queued' && !cur.cancel_requested; };
 
   function failRun(worker, h, code, message, extra = {}) {
     recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code, message }, extra });
@@ -536,6 +539,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // note land (cite reads are asynchronous): wait for them, bounded, before anything starts, so
     // this run's Memory section does not miss that note (spec §6.3).
     await settledWithin([...(filings.get(ticket.id) ?? [])], FINISH_WAIT_MS);
+    // The run is still `queued` in the state during that wait: the owner may have cancelled it, or
+    // the worker paused or began to stop. Such a run never starts and nothing is recorded for it;
+    // a paused or stopped one stays queued for the next dispatch (review I3).
+    if (!stillQueued(worker, h.id) || paused || stopping) return undefined;
     const repoCfg = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
     // The recipe must still be the one that was queued: an edited file could otherwise run with
     // instructions or permissions nobody reviewed (ADR 0008).
@@ -615,10 +622,15 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       try { observe = prepareObserve({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the full-access observer: ${err.message}`); }
       Object.assign(env, observe.vars);
     }
+    // A cancel can also land during the setup awaits above (version probe, checkout): the run is
+    // still queued until the next line, so check once more. Its checkout and run files go with the
+    // cancelled run's cleanup.
+    if (!stillQueued(worker, h.id)) return undefined;
     // The credential report is what the Run dialog's warnings rest on (Task 9): which systems got a
     // read-only profile, a stub or a scope, and what no redirect can close.
     updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings, ...(auto ? { cred_report: auto.report } : {}) });
     const current = worker.state.handoffs.get(h.id);
+    if (!current || current.state !== 'running') return undefined;
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
     const environments = worker.environmentsFor ? worker.environmentsFor(ticket.repo_id) : repoCfg ? repoCfg.deployment_environments ?? [] : [];
     const render = (r) => renderRecipe(r, { ticket, url, note: h.note, prs: ticket.prs ?? [], deployments: ticket.deployments ?? [], environments });
@@ -644,7 +656,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     try {
       // Bring the projections up to date with the state first (a no-op when nothing changed).
       if (typeof worker.publishMemory === 'function') worker.publishMemory();
-      const mem = await gatherMemory(worker.state, worker.state.tickets.get(ticket.id) ?? ticket, { repoCfg, budgetBytes: inlineBudget(ctx.config), checkout: worktreePath, commit: baseCommit, home: quillHome(worker.env), now: worker.now(), run: current, docs: docsMap, contextDir });
+      const mem = await gatherMemory(worker.state, worker.state.tickets.get(ticket.id) ?? ticket, { repoCfg, budgetBytes: inlineBudget(ctx.config), checkout: worktreePath, commit: baseCommit, home: quillHome(worker.env), now: worker.now(), run: current, docs: docsMap, contextDir, log: (line) => worker.log(`${line} (run ${h.id})`) });
       writeContext({ state: worker.state, home: quillHome(worker.env), paths: mem.paths, contextDir, runNotes: mem.runNotes });
       memoryDirs = [contextDir];
       context.memory = mem.inline || null;
@@ -714,6 +726,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       worker.handoffLimits = () => ({ ...limits });
       worker.autonomyInfo = () => autonomyInfo(worker.state, ctx.config);
       currentWorker = worker;
+      stopping = false;
       for (const h of [...worker.state.handoffs.values()]) {
         if (h.state === 'running') recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' } });
       }
@@ -738,6 +751,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       }
     },
     async onStop(worker, { abandonRuns = false } = {}) {
+      // A run still waiting in dispatch for an earlier filing must not start once a stop began.
+      stopping = true;
       if (abandonRuns) { running.clear(); return; }
       const pending = [];
       for (const [id, entry] of running) {

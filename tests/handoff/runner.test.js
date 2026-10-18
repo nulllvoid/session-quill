@@ -192,6 +192,54 @@ test('cancellation stops the subprocess and reports cancelled; queued cancellati
   } finally { await b.w.stop(); }
 });
 
+test('a run cancelled while it waits for the previous run\'s filing never starts, stays cancelled and does not block the ticket (review I3)', async () => {
+  const repo = makeRepo();
+  const capture = path.join(repo.dir, '..', `capture-i3-${path.basename(repo.dir)}.json`);
+  // The first run's finish is held in its checkout removal, after its terminal state is recorded:
+  // its filing promise stays pending, so the ticket's next run waits for it.
+  let held = null;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const removeWorktreeFn = async (args) => {
+    if (!held) { held = args; await gate; }
+    fs.rmSync(args.dir, { recursive: true, force: true });
+  };
+  const b = await bootWorker({ repo, runtimeAvailable: true, removeWorktreeFn, fakeEnv: { FAKE_CLAUDE_CAPTURE: capture } });
+  const readOnly = { ...analyse, permissions: { ...analyse.permissions, read_source: true } };
+  const rid = (n) => `33333333-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const queue = (n) => { b.request(rid(n), { target_id: T1, expected_revision: b.w.state.tickets.get(T1).revision, payload: readOnly }); b.w.tick(); assert.equal(b.w.state.requests.get(rid(n)).state, 'applied'); return b.w.state.requests.get(rid(n)).result.handoff_id; };
+  const terminal = (hid) => until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return ['done', 'failed', 'cancelled', 'timed-out'].includes(x.state) ? x : null; }, { timeoutMs: 20_000 });
+  try {
+    b.ticket(T1, 'LOCAL-a-00000001');
+    const first = await terminal(queue(1));
+    assert.equal(first.state, 'done', JSON.stringify(first.error));
+    await until(() => held);
+    fs.rmSync(capture, { force: true });
+    // The next run is dispatched and now waits for the first run's filing.
+    const second = queue(2);
+    await until(() => { b.w.tick(); return b.hext.runningIds().has(second); });
+    b.w.emit('request', { id: rid(3), kind: 'handoff-cancel', target_id: T1, expected_revision: null, payload: { handoff_id: second }, created_at: b.iso(), not_before: b.iso(), actor_id: 'test' }, { source_identity: `request:${rid(3)}` });
+    b.w.tick();
+    assert.equal(b.w.state.handoffs.get(second).state, 'cancelled');
+    release();
+    await until(() => { b.w.tick(); return !b.hext.runningIds().has(second); }, { timeoutMs: 20_000 });
+    const h = b.w.state.handoffs.get(second);
+    assert.equal(h.state, 'cancelled');
+    assert.equal(h.error.code, 'cancelled');
+    assert.equal(h.started_at ?? null, null, 'nothing recorded that implies it ran');
+    assert.equal(h.log_path ?? null, null);
+    assert.ok(!fs.existsSync(capture), 'the agent was never spawned');
+    // The ticket is free: its next run is queued and runs.
+    const third = await terminal(queue(4));
+    assert.equal(third.state, 'done', JSON.stringify(third.error));
+    assert.ok(fs.existsSync(capture), 'the next run did spawn');
+  } finally {
+    release();
+    await b.w.stop();
+    for (const d of [repo.dir, b.home, capture]) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* temp root */ } }
+  }
+});
+
 test('missing runtime fails at dispatch with a reason; a crash is failed with exit code; restart marks running runs failed/interrupted', async () => {
   const b = await bootWorker({ runtimeAvailable: false });
   try {

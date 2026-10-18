@@ -20,6 +20,8 @@ const CONFUSABLES = new Map(Object.entries({
 // fillers are listed explicitly as well, in case an engine's property tables are older.
 const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}͏ᅟᅠ᠋-᠏ㅤ︀-️ﾠ\u{E0100}-\u{E01EF}]+/gu;
 const MARKS = /\p{M}+/gu;
+/** The text without its invisible code points (format characters, zero-width and bidi controls, ...): the filter's own removal, shared with memory delivery. */
+export const stripInvisible = (text) => String(text ?? '').replace(INVISIBLE, '');
 const squash = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 const toLatin = (s) => { let out = ''; for (const ch of s) out += CONFUSABLES.get(ch) ?? ch; return out; };
 
@@ -34,8 +36,8 @@ const toLatin = (s) => { let out = ''; for (const ch of s) out += CONFUSABLES.ge
  */
 export function scanForms(text) {
   const s = String(text ?? '');
-  const folded = squash(s.normalize('NFKC').replace(INVISIBLE, ''));
-  const bare = squash(s.normalize('NFKD').replace(INVISIBLE, '').replace(MARKS, '').normalize('NFKC'));
+  const folded = squash(stripInvisible(s.normalize('NFKC')));
+  const bare = squash(stripInvisible(s.normalize('NFKD')).replace(MARKS, '').normalize('NFKC'));
   const bareLatin = toLatin(bare);
   return { folded, latin: toLatin(folded), bare, bareLatin, compact: bareLatin.replace(/\s+/g, '') };
 }
