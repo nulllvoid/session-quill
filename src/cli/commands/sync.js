@@ -5,7 +5,7 @@ import { Journal } from '../../core/journal.js';
 import { journalPath } from '../../lib/paths.js';
 import { createState, sessionKey } from '../../core/state.js';
 import { applyEvent } from '../../core/reducer.js';
-import { renderTicketNote, renderSessionNote, renderHandoffNote, parseNote, hasVaultNote } from '../../worker/notes.js';
+import { renderTicketNote, renderSessionNote, writeHandoffNote, parseNote, hasVaultNote } from '../../worker/notes.js';
 import { safeKeyFileName, validateKey } from '../../core/keys.js';
 import { writeFileAtomic, ensureDir } from '../../lib/atomic-fs.js';
 import { snapshotFileName } from '../../hooks/binding-snapshot.js';
@@ -67,7 +67,8 @@ export function replayToStaging(ctx, into) {
     writeFileAtomic(path.join(into, 'tickets', `${safeKeyFileName(t.key)}.md`), renderTicketNote(t, { state, authored }));
   }
   for (const [key, s] of state.sessions) writeFileAtomic(path.join(into, 'sessions', `${snapshotFileName(key).replace(/\.json$/, '')}.md`), renderSessionNote(s, { state }));
-  for (const h of state.handoffs.values()) writeFileAtomic(path.join(into, 'handoffs', `${h.id}.md`), renderHandoffNote(h, { state }));
+  // R49: a run on a local-only ticket has no vault note (the same decision the worker makes).
+  for (const h of state.handoffs.values()) writeHandoffNote(path.join(into, 'handoffs', `${h.id}.md`), h, { state, write: writeFileAtomic });
   fs.copyFileSync(path.join(ctx.config.store_path, 'store.json'), path.join(into, 'store.json'));
   return { events: info.lastSequence, tickets: state.tickets.size, sessions: state.sessions.size, handoffs: state.handoffs.size, authoredRecovered, authoredMissing };
 }

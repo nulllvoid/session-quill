@@ -19,7 +19,7 @@ import { onboardSettings } from '../onboard/settings.js';
 import { keyExample } from '../core/external-keys.js';
 import { acquireLock } from './lock.js';
 import { writeBindingSnapshot, readBindingSnapshot, writeHeartbeat, writeRuntimeIdentity, snapshotFileName } from '../hooks/binding-snapshot.js';
-import { renderSessionNote, renderHandoffNote, writeNote, writeGeneratedNote } from './notes.js';
+import { renderSessionNote, writeNote, writeGeneratedNote, writeHandoffNote, handoffHasVaultNote } from './notes.js';
 import { publishGeneration, buildSnapshot } from './projections.js';
 import { captureHealth } from './health.js';
 import { effectiveEnvironments } from '../deploy/environments.js';
@@ -472,10 +472,13 @@ export class Worker {
       if (!session) continue;
       writeGeneratedNote(path.join(this.layout.sessions, `${snapshotFileName(key).replace(/\.json$/, '')}.md`), renderSessionNote(session, { state: this.state }));
     }
+    // R49: a requested flush (`quill sync --notes`) also sweeps runs that have no vault note, so a
+    // note an earlier version wrote for one is removed; worker start marks every run dirty anyway.
+    if (this.flushRequested) for (const h of this.state.handoffs.values()) if (!handoffHasVaultNote(h, this.state)) this.dirtyHandoffs.add(h.id);
     for (const id of this.dirtyHandoffs) {
       const handoff = this.state.handoffs.get(id);
       if (!handoff) continue;
-      writeGeneratedNote(path.join(this.layout.handoffs, `${id}.md`), renderHandoffNote(handoff, { state: this.state }));
+      writeHandoffNote(path.join(this.layout.handoffs, `${id}.md`), handoff, { state: this.state });
     }
     writeJsonAtomic(path.join(stateDir(this.env), 'notes-index.json'), this.notesIndex);
     this.dirtyTickets.clear();

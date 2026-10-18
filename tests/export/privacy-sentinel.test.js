@@ -10,7 +10,7 @@ import { buildStaticHtml } from '../../src/export/static.js';
 import { writeMirror } from '../../src/mirror/mirror.js';
 import { rowsFor } from '../../src/publish/content.js';
 import { PUBLISH_FIELDS } from '../../src/publish/config.js';
-import { renderHandoffNote, renderTicketNote, renderSessionNote, writeNote, hasVaultNote, HANDOFF_NOTE_FIELDS } from '../../src/worker/notes.js';
+import { renderHandoffNote, renderTicketNote, renderSessionNote, writeNote, hasVaultNote, handoffHasVaultNote, writeHandoffNote, HANDOFF_NOTE_FIELDS } from '../../src/worker/notes.js';
 import { syncable } from '../../src/tracker/client.js';
 import { snapshot, TID } from '../ui/fixtures.js';
 
@@ -138,4 +138,30 @@ test('a local-only critical child yields no vault note, and parent, session and 
   const runNote = renderHandoffNote(run, { state });
   assert.equal(runNote.includes(S), false);
   assert.equal(runNote.includes(child.key), false);
+});
+
+// R49: a run on a local-only ticket (every approved critical-change run) has no vault note either,
+// decided in one place (writeHandoffNote) for the worker and quill sync; a stale one is removed.
+test('a run on a local-only ticket gets no vault note, and a note an earlier version wrote is removed', () => {
+  const s = fixture();
+  const base = { plans: [], conclusions: [], timeline: [], files_touched: [], prs: [], deployments: [], children_ids: [], handoff_ids: [], tags: [], validation_issues: [] };
+  const parent = { ...base, ...s.tickets[0] };
+  const child = { ...base, ...s.tickets[1], id: TID(42), key: `${parent.key}.2`, local_only: true, tags: ['critical'] };
+  const state = { tickets: new Map([[parent.id, parent], [child.id, child]]), handoffs: new Map() };
+  const critical = { ...s.handoffs[0], id: 'h-critical-0001', ticket_id: child.id, result_summary: `Ran argocd app sync ${S}`, suggestions: [{ id: 's1', type: 'next-action', text: `rollback ${S}`, state: 'proposed' }], error: { code: 'scope-changed', message: `scope argo.sync:${S} changed` }, proposal: { id: 'p', origin: 'run', from_handoff_id: 'x', recipe: 'critical-change' }, action_pins: [{ scope: `argo.sync:${S}`, pin: S }] };
+  const normal = { ...s.handoffs[0], id: 'h-normal-0001', ticket_id: parent.id };
+  assert.equal(handoffHasVaultNote(critical, state), false);
+  assert.equal(handoffHasVaultNote(normal, state), true);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quill-vault-'));
+  try {
+    const file = path.join(dir, `${critical.id}.md`);
+    assert.equal(writeHandoffNote(file, critical, { state }), 'skipped');
+    assert.equal(fs.existsSync(file), false);
+    fs.writeFileSync(file, renderHandoffNote(critical, { state }));
+    assert.equal(writeHandoffNote(file, critical, { state }), 'removed', 'a note written by an earlier version goes');
+    assert.equal(fs.existsSync(file), false);
+    const ok = path.join(dir, `${normal.id}.md`);
+    assert.equal(writeHandoffNote(ok, normal, { state }), 'written');
+    assert.equal(fs.readFileSync(ok, 'utf8').includes(S), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

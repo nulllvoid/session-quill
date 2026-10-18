@@ -124,6 +124,23 @@ export function renderHandoffNote(handoff, { state }) {
   return `---\n${stringifyYaml(fm)}---\n${block('handoff', body)}## Notes\n\n`;
 }
 
+// R49 (extends R46): a run whose ticket is local-only (every approved critical-change run) has no
+// vault note either: its summary, suggestions, error and proposal are the critical change itself.
+export function handoffHasVaultNote(handoff, state) {
+  const ticket = handoff && state && state.tickets ? state.tickets.get(handoff.ticket_id) : null;
+  return hasVaultNote(ticket);
+}
+
+// The one decision point for run notes, shared by the worker and quill sync's staging: write the
+// note, or, for a run with no vault note, write nothing and remove one an earlier version wrote.
+// Returns 'written' | 'unchanged' | 'skipped' | 'removed'.
+export function writeHandoffNote(file, handoff, { state, write = writeGeneratedNote } = {}) {
+  if (!handoffHasVaultNote(handoff, state)) {
+    try { fs.unlinkSync(file); return 'removed'; } catch (err) { if (err.code === 'ENOENT') return 'skipped'; throw err; }
+  }
+  return write(file, renderHandoffNote(handoff, { state })) ?? 'written';
+}
+
 export function parseNote(text) {
   const result = { frontmatter: null, frontmatterText: null, authored: { summary: '\n', notes: '\n' }, generated: {}, hasMarkers: false };
   let rest = text;

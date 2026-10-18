@@ -11,9 +11,10 @@ import { submitRequest } from '../../src/server/requests.js';
 import { recordResult } from '../../src/handoff/results.js';
 import { parseAgentResult } from '../../src/handoff/runner.js';
 import { deterministicId } from '../../src/lib/ids.js';
-import { handoffRunDir } from '../../src/lib/paths.js';
+import { handoffRunDir, stateDir } from '../../src/lib/paths.js';
 import { writeIngress } from '../../src/core/ingress.js';
 import { decide } from '../../src/gate/run-guard.js';
+import { replayToStaging } from '../../src/cli/commands/sync.js';
 import { bootWorker, until, T1 } from '../handoff/helpers.js';
 
 const RID = '77777777-0000-4000-8000-000000000001';
@@ -195,4 +196,53 @@ test('a run-proposal event cannot carry a run origin: only the critical-proposal
     }
     assert.equal(b.w.state.runProposals.size, 0);
   } finally { await b.w.stop(); }
+});
+
+// R49: an approved critical run is on a local-only ticket, so it has no vault note and no other
+// note names it; a note an earlier version wrote for it is removed on `quill sync --notes`.
+function vaultFiles(dir) {
+  const out = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); if (e.isDirectory()) walk(f); else if (f.endsWith('.md')) out.push(f); } };
+  walk(dir);
+  return out;
+}
+
+test('R49: an approved critical run leaves nothing in the vault; a stale note for it is removed on sync', async () => {
+  const MARK = 'VAULT-MARK-49';
+  const result = { summary: `Ran ${PINNED}; ${MARK}`, next_action: `argocd app rollback pay-stg ${MARK}`, verification: [], attempts: [], critical_changes: [] };
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_RESULT: JSON.stringify(result) } });
+  let stopped = false;
+  try {
+    const { hid: parentRun, p } = proposeCritical(b);
+    const req = applied(b, approve(b, p).request);
+    assert.equal(req.state, 'applied', JSON.stringify(req.error));
+    const h = await settle(b, req.result.handoff_id);
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.match(h.result_summary, new RegExp(MARK));
+    b.w.flushNotes();
+    const files = vaultFiles(b.storePath);
+    assert.ok(files.some((f) => f.endsWith(`${parentRun}.md`)), 'a normal run still gets its note');
+    assert.equal(fs.existsSync(path.join(b.storePath, 'handoffs', `${h.id}.md`)), false, 'no note for the critical run');
+    for (const f of files) {
+      const text = fs.readFileSync(f, 'utf8');
+      for (const needle of [h.id, MARK, PINNED, 'argo.sync', 'pay-stg']) assert.equal(text.includes(needle), false, `${path.basename(f)} names ${needle}`);
+    }
+    // A note an earlier version wrote for the run goes on the next `quill sync --notes`.
+    const stale = path.join(b.storePath, 'handoffs', `${h.id}.md`);
+    fs.writeFileSync(stale, `---\nid: ${h.id}\n---\nRan ${PINNED}\n`);
+    const control = path.join(stateDir(b.env), 'control');
+    fs.mkdirSync(control, { recursive: true });
+    fs.writeFileSync(path.join(control, 'flush.json'), '{}');
+    b.w.tick();
+    assert.equal(fs.existsSync(stale), false);
+    // `quill sync replay` rebuilds the vault from the journal through the same decision.
+    await b.w.stop();
+    stopped = true;
+    const into = fs.mkdtempSync(path.join(path.dirname(b.storePath), 'staging-'));
+    fs.rmSync(into, { recursive: true });
+    replayToStaging({ env: b.env, config: b.config, storeMeta: b.meta }, into);
+    assert.ok(fs.existsSync(path.join(into, 'handoffs', `${parentRun}.md`)));
+    assert.equal(fs.existsSync(path.join(into, 'handoffs', `${h.id}.md`)), false);
+    for (const f of vaultFiles(into)) for (const needle of [h.id, MARK, PINNED]) assert.equal(fs.readFileSync(f, 'utf8').includes(needle), false, `${path.basename(f)} names ${needle}`);
+  } finally { if (!stopped) await b.w.stop(); }
 });
