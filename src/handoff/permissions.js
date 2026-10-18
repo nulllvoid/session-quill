@@ -34,7 +34,10 @@ export function isProtectedBranch(branch, repo) {
 // throws for a scope the catalog does not grant; every request path passes it, so the dashboard,
 // the CLI and the worker refuse the same scopes. The catalog comes in as a function so that this
 // module, which the guard loads, does not load the catalog and its imports.
-export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null, attachedFileCount = null, scopeCheck = null } = {}) {
+// `actionPins` (ADR 0028) come only from the owner's approval of a critical-change proposal, never
+// from a request payload: a recipe that requires an action pin runs only with them, and they
+// need autonomous access and a granted scope for each pin.
+export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null, attachedFileCount = null, scopeCheck = null, actionPins = null } = {}) {
   if (recipe && payload.mode !== undefined && payload.mode !== null && payload.recipe !== undefined && payload.mode !== recipe.mode) throw new TrackerError('mode-mismatch', `recipe ${recipe.name} runs in mode ${recipe.mode}`);
   const mode = recipe ? recipe.mode : payload.mode ?? 'analyse-followups';
   if (!MODES.includes(mode)) throw new TrackerError('mode-invalid', `handoff mode must be one of ${MODES.join(', ')}`);
@@ -48,6 +51,7 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   const scopes = scopeList(payload.scopes, access);
   if (scopes.scopes && typeof scopeCheck === 'function') scopeCheck(scopes.scopes);
   const limits = runLimits(payload);
+  pinRequirements(recipe, access, scopes.scopes ?? [], actionPins);
   const raw = payload.permissions ?? {};
   const permissions = {};
   for (const k of PERMISSION_KEYS) permissions[k] = raw[k] === true;
@@ -94,6 +98,19 @@ function scopeList(raw, access) {
   if (!raw.length) return {};
   if (access !== 'autonomous') throw new TrackerError('scope-needs-autonomous', 'write scopes need autonomous access: only its guard can hold a run to them');
   return { scopes: [...new Set(raw)] };
+}
+
+function pinRequirements(recipe, access, scopes, actionPins) {
+  const pins = Array.isArray(actionPins) ? actionPins : [];
+  const requires = recipe && Array.isArray(recipe.requires) ? recipe.requires : [];
+  if (requires.includes('action_pin') && !pins.length) throw new TrackerError('recipe-needs-approval', `recipe ${recipe.name} runs only as an approved critical change: approve its proposal in Runs → Needs you on the dashboard`);
+  if (requires.includes('scopes') && !scopes.length) throw new TrackerError('recipe-needs-scopes', `recipe ${recipe.name} needs at least one write scope`);
+  if (!pins.length) return;
+  if (access !== 'autonomous') throw new TrackerError('pin-needs-autonomous', 'an action pin needs autonomous access: only its guard holds a run to it');
+  for (const a of pins) {
+    if (!a || typeof a.scope !== 'string' || typeof a.pin !== 'string' || !a.pin.trim()) throw new TrackerError('pin-invalid', 'an action pin names a scope and the exact action');
+    if (!scopes.includes(a.scope)) throw new TrackerError('pin-without-scope', `the action pin for ${a.scope} needs that scope granted to the run`);
+  }
 }
 
 function runLimits(payload) {

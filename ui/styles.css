@@ -562,6 +562,11 @@ table.sessions th { font-size: 12px; color: var(--text-faint); font-weight: 500;
 .proposal { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 8px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; }
 .proposal code { overflow-wrap: anywhere; }
 .proposal .proposal-actions { margin-left: auto; display: inline-flex; gap: 6px; }
+/* A run's critical change (ADR 0028): the action and its verify/rollback lines take a full row. */
+.proposal[data-kind="critical"] .critical-scopes { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.proposal[data-kind="critical"] .critical-body { flex-basis: 100%; min-width: 0; }
+.proposal[data-kind="critical"] .critical-body p { margin: 2px 0; }
+.proposal[data-kind="critical"] .critical-action { white-space: pre-wrap; overflow-wrap: anywhere; }
 .today-day { margin-bottom: 24px; max-width: 920px; }
 .today-day h3 { font-size: 16px; margin-bottom: 6px; }
 .today-tickets, .today-items { list-style: none; margin: 0; padding: 0; }

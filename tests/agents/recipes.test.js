@@ -68,7 +68,7 @@ test('recipes: a read-only recipe may narrow its tools; git log is accepted in e
 
 test('recipes: built-ins ship the three handoff modes plus deploy-check and standup, all valid', () => {
   const { effective } = loadRecipes({ env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-rec-')) } });
-  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check', 'file-task', 'standup', 'workspace-setup']);
+  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'critical-change', 'deploy-check', 'file-task', 'standup', 'verify-deploy', 'workspace-setup']);
   assert.deepEqual([effective.get('file-task').mode, effective.get('file-task').schedulable], ['files', false], 'a files run is never scheduled');
   for (const r of effective.values()) assert.equal(r.error, null, r.name);
   assert.deepEqual(['analyse', 'analyse-followups', 'attempt-fix'].map((n) => effective.get(n).legacy), [true, true, true]);
@@ -168,4 +168,31 @@ test('recipes: the built-ins state a definition of done; attempt-fix no longer s
   const dc = fs.readFileSync(path.join(BUILTIN_DIR, 'deploy-check.md'), 'utf8');
   assert.match(dc, /Argo CD \(MCP `argocd` tools or `argocd app get\|history`\)/);
   assert.match(dc, /Kibana\/Elastic \(MCP search tools or the Kibana API with a read-only key\)/);
+});
+
+// Spec §5.1, §7 (ADR 0028): critical-change performs one approved, pinned change; verify-deploy
+// checks a deployment's health read-only.
+test('recipes: critical-change needs an action pin and scopes and is never offered or scheduled; verify-deploy is read-only', () => {
+  const load = (name) => normalizeRecipe({ name, text: fs.readFileSync(path.join(BUILTIN_DIR, `${name}.md`), 'utf8'), source: 'builtin' });
+  const cc = load('critical-change');
+  assert.equal(cc.error, null);
+  assert.deepEqual(cc.requires, ['action_pin', 'scopes']);
+  assert.equal(cc.schedulable, false, 'a pin only comes from an approval');
+  assert.equal(cc.legacy, false, 'its results are suggestions');
+  assert.deepEqual(Object.entries(cc.permissions).filter(([, v]) => v), [], 'no source, commit, push or PR');
+  assert.ok(cc.outputs.includes('verification') && cc.outputs.includes('critical_changes'));
+  assert.match(cc.body, /^## Definition of done$/m);
+  const vd = load('verify-deploy');
+  assert.equal(vd.error, null);
+  assert.deepEqual(vd.requires, []);
+  assert.equal(vd.mode, 'analyse');
+  assert.deepEqual(Object.entries(vd.permissions).filter(([, v]) => v).map(([k]) => k), ['read_source']);
+  assert.match(vd.body, /^## Definition of done$/m);
+  assert.match(vd.body, /Argo CD/);
+  assert.match(vd.body, /Kibana/);
+  // `requires` is versioned (ADR 0020) and takes only known values.
+  const recipe = (fm) => `---\nname: r\ndescription: d\n${fm}---\nGo.`;
+  assert.match(normalizeRecipe({ name: 'r', text: recipe('requires: [action_pin]\n'), source: 'repo' }).error, /needs quill_min_version/);
+  assert.match(normalizeRecipe({ name: 'r', text: recipe('requires: [root]\nquill_min_version: 1.1.0\n'), source: 'repo' }).error, /unknown requirement "root"/);
+  assert.equal(normalizeRecipe({ name: 'r', text: recipe('requires: [scopes]\nquill_min_version: 1.1.0\n'), source: 'repo' }).error, null);
 });

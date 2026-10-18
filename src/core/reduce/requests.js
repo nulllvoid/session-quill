@@ -14,6 +14,10 @@ export function handleRequest(state, ev, result) {
     actor_id: r.actor_id ?? 'owner', kind: r.kind, target_id: r.target_id ?? null, expected_revision: r.expected_revision ?? null, payload: r.payload ?? {},
     not_before: r.not_before ?? ev.occurred_at, state: 'pending', applied_revision: null, error: null, result: null, retry_of: r.retry_of ?? null, sequence: ev.sequence ?? 0,
     body_hash: r.body_hash ?? null,
+    // Who journaled it: 'worker' for requests submitted through the worker (the dashboard, schedules,
+    // publishers), else the ingress producer (the CLI). Approving a critical change needs both the
+    // owner and the worker (ADR 0028); ingress cannot claim the worker.
+    producer: typeof ev.producer === 'string' ? ev.producer.slice(0, 40) : null,
   });
   result.requestsChanged.add(r.id);
   return {};

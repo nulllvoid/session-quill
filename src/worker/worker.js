@@ -295,6 +295,13 @@ export class Worker {
         quarantineIngress(entry.name, this.env);
         continue;
       }
+      // Requests the worker journals itself (dashboard, schedules) never arrive through ingress, so a
+      // request there claiming the worker as producer is forged (ADR 0028: critical approval).
+      if (ev.kind === 'request' && ev.producer === 'worker') {
+        this.log(`quarantining ${entry.name}: a request through ingress cannot claim the worker as producer`);
+        quarantineIngress(entry.name, this.env);
+        continue;
+      }
       if (this.journal.hasEvent(ev.event_id) || this.journal.hasSource(ev.source_identity)) {
         // Duplicate delivery has one effect; CLI producers still get an acknowledgement.
         this.ack({ ...ev, sequence: null }, { duplicate: true });

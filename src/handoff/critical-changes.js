@@ -7,6 +7,7 @@ import { getBlob } from '../core/blobs.js';
 import { deterministicId } from '../lib/ids.js';
 import { TrackerError } from '../lib/errors.js';
 import { childKeys } from '../agents/suggestions.js';
+import { catalogFor } from '../agents/recipes.js';
 import { PROPOSAL_TTL_MS } from '../publish/run-proposals.js';
 import { loadScopeCatalog, resolveScopes } from './scopes.js';
 import { pinOfChange, HIDDEN_CHAR_RE } from './action-pin.js';
@@ -16,6 +17,7 @@ import { coverageAtProposal } from '../gate/run-guard.js';
 
 // Why an entry of a done run did not become a proposal, kept on the run as critical_notes (local
 // only: never exported or written to a vault note).
+const CRITICAL_RECIPE_NAME = 'critical-change';
 export const CRITICAL_NO_SCOPE = 'no matching scope configured';
 export const CRITICAL_NO_PIN = 'the action is not one plain command, or a tool call written as <tool name> <JSON input>, so it cannot be pinned';
 export const CRITICAL_TRUNCATED = 'the entry was longer than the result allows and was cut, so it is not proposed';
@@ -71,9 +73,9 @@ export function criticalChild(change, { run, parent, index, pin, scopes }) {
 }
 
 /** The `critical-proposal` payload for critical_changes[index] of a done run. */
-export function buildCriticalProposal({ run, parent, index, change, pin, scopes, key }) {
+export function buildCriticalProposal({ run, parent, index, change, pin, scopes, key, recipeHash = null }) {
   return {
-    id: deterministicId(`${run.id}:critical:${index}`), from_handoff_id: run.id, index, pin, scopes,
+    id: deterministicId(`${run.id}:critical:${index}`), from_handoff_id: run.id, index, pin, scopes, ...(recipeHash ? { recipe_hash: recipeHash } : {}),
     child: { key, ...criticalChild(change, { run, parent, index, pin, scopes }) },
   };
 }
@@ -142,6 +144,11 @@ export function planCriticalChanges(worker, changes, { loadCatalog = loadScopeCa
   return { plans, notes };
 }
 
+// The built-in critical-change recipe's hash, recorded so approval can note a newer text (spec §7.3).
+function builtinHash(worker) {
+  try { const r = catalogFor(worker).builtin(CRITICAL_RECIPE_NAME); return r && !r.error ? r.hash : null; } catch { return null; }
+}
+
 const proposed = (worker, id) => worker.state.runProposals.has(id) || worker.state.appliedSources.has(`critical-proposal:${id}`);
 
 /**
@@ -159,7 +166,7 @@ export function emitCriticalProposals(worker, handoffId, plans) {
     if (proposed(worker, id)) continue;
     try {
       const [key] = childKeys(worker.state, ticket, 1);
-      const payload = buildCriticalProposal({ run, parent: ticket, index: plan.index, change: plan.change, pin: plan.pin, scopes: plan.scopes, key });
+      const payload = buildCriticalProposal({ run, parent: ticket, index: plan.index, change: plan.change, pin: plan.pin, scopes: plan.scopes, key, recipeHash: builtinHash(worker) });
       const { result } = worker.emit('critical-proposal', payload, { source_identity: `critical-proposal:${id}`, ticket_id: ticket.id });
       emitted += 1;
       if (result && result.rejected && typeof worker.log === 'function') worker.log(`critical-proposal ${id} for run ${run.id} refused: ${result.rejected}`);

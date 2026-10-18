@@ -61,7 +61,7 @@ export function renderBulkHandoffForm(rawSnapshot, ids, { mode = 'analyse' } = {
   <label><input type="radio" name="mode" value="analyse-followups"> Analyse with follow-ups: may create child tickets and suggest a next action</label>
 </fieldset>`;
   // The built-in recipe's defaults; the repository varies per ticket, so the test line stays generic.
-  const builtin = (snapshot.recipes ?? []).find((r) => r.source === 'builtin' && r.mode === mode) ?? { legacy: true };
+  const builtin = (snapshot.recipes ?? []).find((r) => r.source === 'builtin' && r.name === mode) ?? { legacy: true };
   const summary = runSummary(builtin, fix ? { read_source: true, edit_source: true } : { read_source: true }, null);
   return `<form class="handoff-form bulk-form" data-form="bulk-handoff" data-ids="${attr(ids.join(','))}">
 <h2 id="dialog-title">${icon('play')}${fix ? 'Attempt fix' : 'Analyze'} for ${esc(countLabel(ids.length, 'ticket'))}</h2>

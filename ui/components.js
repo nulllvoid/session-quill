@@ -526,8 +526,9 @@ const IN_FLIGHT = new Set(['sending', 'pending', 'applying']);
 export function proposalItem(p, snapshot, { now, pending = [], withTicket = false } = {}) {
   const caps = snapshot.capabilities ?? {};
   const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
-  const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
   const sent = pending.find((r) => (r.kind === 'approve-run' || r.kind === 'dismiss-run') && r.payload && r.payload.proposal_id === p.id && IN_FLIGHT.has(r.state));
+  if (p.origin === 'run') return criticalItem(p, snapshot, { now, tz, caps, sent });
+  const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
   const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : p.access === 'autonomous' ? '<span class="chip small">Autonomous</span>' : '<span class="chip small">Standard access</span>';
   const perms = p.permissions ?? {};
   const kind = p.read_only ? '<span class="chip small">Read-only</span>' : perms.edit_source ? '<span class="chip warning small">Edits source</span>' : perms.edit_files || perms.delete_files ? '<span class="chip warning small">Changes files</span>' : '';
@@ -536,6 +537,30 @@ export function proposalItem(p, snapshot, { now, pending = [], withTicket = fals
     ? ` <span class="muted small">${sent.kind === 'approve-run' ? 'Approval sent' : 'Dismissal queued'}${sent.kind === 'dismiss-run' && sent.state === 'pending' ? ` <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(sent.id)}" aria-label="${attr(`Undo dismissing the ${p.recipe.name} run`)}">${icon('undo')}Undo</button>` : ''}</span>`
     : ` <span class="proposal-actions"><button type="button" class="btn small" data-action="approve-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Approve the ${p.recipe.name} run on ${key}`)}">Approve</button> <button type="button" class="btn small ghost" data-action="dismiss-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Dismiss the ${p.recipe.name} run on ${key}`)}">Dismiss</button></span>`;
   return `<li class="proposal" data-proposal="${attr(p.id)}">${t ? `<button type="button" class="link" data-open="${attr(t.id)}">${keyEl(t.key)} ${esc(t.title)}</button> ` : ''}<strong>${esc(p.recipe.name)}</strong> ${access}${kind ? ` ${kind}` : ''} <span class="muted small">proposed on the ${esc(p.publisher)} page by ${p.editor ? `<code>${esc(p.editor)}</code>` : 'an unknown editor'} ${timeEl(p.proposed_at, now, tz)}</span>${actions}</li>`;
+}
+
+// A critical change a run proposed (spec §7.4, ADR 0028), on its local-only child ticket: what it
+// is and which run of which ticket proposed it, the write scopes it needs as warning chips (in
+// words), the exact action the guard would allow as code, the proposal's verify and rollback, and
+// Approve and queue (scopes: …) / Dismiss. Every word came from an agent or config: all escaped.
+// Verify, rollback and risk are omitted when the record has none.
+function criticalItem(p, snapshot, { now, tz, caps, sent }) {
+  const child = ticketById(snapshot, p.ticket_id);
+  const spec = child && child.critical_spec && typeof child.critical_spec === 'object' ? child.critical_spec : {};
+  const run = (snapshot.handoffs ?? []).find((h) => h.id === p.from_handoff_id) ?? null;
+  const parent = (run && ticketById(snapshot, run.ticket_id)) || (child && child.parent_id ? ticketById(snapshot, child.parent_id) : null);
+  const id8 = String(p.from_handoff_id ?? '').slice(0, 8);
+  const key = child ? child.key : p.ticket_key ?? '';
+  const scopes = (Array.isArray(p.scopes) ? p.scopes : []).filter((s) => s && typeof s.name === 'string').map((s) => (s.target ? `${s.name}:${s.target}` : s.name));
+  const chips = scopes.map((s) => `<span class="chip warning small" title="${attr(`The approved run may write in ${s}, and only the pinned action`)}">${icon('alert')}Write scope ${esc(s)}</span>`).join(' ');
+  const action = p.action_pin && typeof p.action_pin.guard === 'string' ? p.action_pin.guard : '';
+  const line = (label, v) => (typeof v === 'string' && v.trim() ? `<p class="small">${label}: ${esc(v)}</p>` : '');
+  const what = child ? `<button type="button" class="link" data-open="${attr(child.id)}">${keyEl(child.key)} ${esc(child.title)}</button>` : keyEl(key);
+  const scopeText = scopes.join(', ');
+  const actions = !caps.handoff ? '' : sent
+    ? ` <span class="muted small">${sent.kind === 'approve-run' ? 'Approval sent' : 'Dismissal queued'}${sent.kind === 'dismiss-run' && sent.state === 'pending' ? ` <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(sent.id)}" aria-label="${attr(`Undo dismissing the critical change on ${key}`)}">${icon('undo')}Undo</button>` : ''}</span>`
+    : ` <span class="proposal-actions"><button type="button" class="btn small" data-action="approve-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Approve and queue (scopes: ${scopeText}): the critical change on ${key}`)}">Approve and queue (scopes: ${esc(scopeText)})</button> <button type="button" class="btn small ghost" data-action="dismiss-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Dismiss the critical change on ${key}`)}">Dismiss</button></span>`;
+  return `<li class="proposal" data-kind="critical" data-proposal="${attr(p.id)}"><span class="critical-head"><strong>Critical change</strong> · ${what} · <span class="muted small">proposed by run <code>${esc(id8)}</code>${parent ? ` of ${esc(parent.key)}` : ''} ${timeEl(p.proposed_at, now, tz)}</span></span>${chips ? ` <span class="critical-scopes">${chips}</span>` : ''}<div class="critical-body"><p class="small">Action: <code class="critical-action">${esc(action)}</code></p>${line('Verify', spec.verify)}${line('Rollback', spec.rollback)}${line('Risk', spec.risk)}</div>${actions}</li>`;
 }
 
 // Whether the ticket already has a run, which an approval would then report instead of queueing.

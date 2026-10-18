@@ -93,6 +93,9 @@ const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 export function applyRunProposal(state, ev, result) {
   const p = ev.payload;
   if (!p || typeof p.id !== 'string' || !p.recipe || typeof p.recipe.name !== 'string' || !NAME_RE.test(p.recipe.name) || typeof p.publisher !== 'string' || !NAME_RE.test(p.publisher)) return { rejected: 'proposal-invalid' };
+  // A run-origin proposal (ADR 0028) comes only from a validated critical-proposal event
+  // (reduce/critical.js); a page proposal can never carry a run origin, scopes or an action pin.
+  if ((p.origin !== undefined && p.origin !== 'page') || p.from_handoff_id !== undefined || p.action_pin !== undefined || p.scopes !== undefined) return { rejected: 'proposal-origin-invalid' };
   const t = state.tickets.get(p.ticket_id);
   if (!t) return { rejected: 'ticket-unknown' };
   if (state.runProposals.has(p.id)) return { duplicate: true };

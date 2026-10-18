@@ -54,7 +54,7 @@ export function createVersionProbe({ claudePath = 'claude', claudeArgs = [], spa
 
 // The run's frozen grant (spec §4.1, §4.2): what the guard reads on every call. Scopes carry name,
 // target, matchers and fingerprint only; a scope's credentials never enter the grant.
-function grantFor({ access, permissions, scopes, cwd, runDir, contextDir, checkout, repoCfg, config, envOf, credentialSystems }) {
+function grantFor({ access, permissions, scopes, actionPins = [], cwd, runDir, contextDir, checkout, repoCfg, config, envOf, credentialSystems }) {
   const { mcpPolicy, trustedMcpServers } = mcpSettings(config);
   const temps = [...new Set([envOf('TEMP'), envOf('TMP'), envOf('TMPDIR'), os.tmpdir()].filter((t) => typeof t === 'string' && path.isAbsolute(t)))];
   const home = envOf('USERPROFILE') ?? envOf('HOME') ?? os.homedir();
@@ -64,7 +64,8 @@ function grantFor({ access, permissions, scopes, cwd, runDir, contextDir, checko
     access,
     permissions,
     scopes: scopes.map((x) => ({ name: x.name, ...(x.target ? { target: x.target } : {}), matchers: x.matchers ?? {}, fingerprint: x.fingerprint ?? null })),
-    actionPins: [],
+    // An approved critical change's pinned action per scope (ADR 0028, R43: the exact pin string).
+    actionPins: actionPins.filter((a) => a && typeof a.scope === 'string' && typeof a.pin === 'string').map((a) => ({ scope: a.scope, pin: a.pin })),
     // Spec §4.2: the checkout or sandbox, the run dir and its context snapshot, temp, and Claude's
     // plugin and skill directories; the checkout is writable only with an edit permission.
     // R25: a covered shell write must run with the agent's working directory inside this root.
@@ -112,7 +113,8 @@ export function prepareAutonomous({ storeEnv, config, handoff: h, cwd, checkout,
   // Systems whose credentials are not an empty stub (read-only, scope or the owner's): a prod
   // CLI read on any other is refused with the onboarding hint (spec §3).
   const credentialSystems = CRED_SYSTEMS.filter((sys) => built.report[sys] && built.report[sys] !== 'stub');
-  const grant = grantFor({ access: 'autonomous', permissions, scopes, cwd, runDir, contextDir, checkout, repoCfg, config, envOf: lookup(built.env), credentialSystems });
+  const actionPins = Array.isArray(h.action_pins) ? h.action_pins : [];
+  const grant = grantFor({ access: 'autonomous', permissions, scopes, actionPins, cwd, runDir, contextDir, checkout, repoCfg, config, envOf: lookup(built.env), credentialSystems });
   const { sha256 } = writeGrant(runDir, grant);
   const settingsPath = writeRunSettings(runDir);
   const childEnv = {

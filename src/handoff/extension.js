@@ -87,6 +87,18 @@ function detectRuntime(claudePath) {
 // `resolveScopes(names, config, env)` turns a run's requested write scopes into resolved entries
 // ([{ name, target, env, matchers, fingerprint, credentials, systems }]) or throws; the default is
 // the scope catalog of the config (src/handoff/scopes.js).
+// The first scope of an approved critical change whose table no longer has the approved fingerprint.
+function scopeChanged(h, scopes) {
+  if (!h.scope_fingerprints || typeof h.scope_fingerprints !== 'object') return null;
+  for (const [spec, want] of Object.entries(h.scope_fingerprints)) {
+    const s = scopes.find((x) => (x.target ? `${x.name}:${x.target}` : x.name) === spec);
+    let got = null;
+    try { got = s ? s.fingerprint : null; } catch (err) { return `scope ${spec} cannot be fingerprinted (${err.message})`; }
+    if (got !== want) return `scope ${spec} changed in config.toml after this critical change was approved, so the run did not start: it runs only with the scope exactly as approved`;
+  }
+  return null;
+}
+
 export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   const finishing = new Set(); // finish() promises, until memory filing has landed
@@ -558,7 +570,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // A queued run keeps the access it was queued with.
     const access = h.access ?? 'standard';
     try {
-      validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, access, scopes: h.scopes ?? null, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null });
+      validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, access, scopes: h.scopes ?? null, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null, actionPins: h.action_pins ?? null });
     } catch (err) {
       return fail(worker, h, err.code ?? 'permission-invalid', err.message);
     }
@@ -570,6 +582,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (access === 'autonomous') {
       try { assertRuntime(await probeVersion()); } catch (err) { return fail(worker, h, err.code ?? 'runtime-too-old', err.message); }
       try { scopes = resolveScopes([...(h.scopes ?? [])], ctx.config, worker.env) ?? []; } catch (err) { return fail(worker, h, err.code ?? 'unknown-scope', err.message); }
+      // An approved critical change (ADR 0028) runs only with the scopes exactly as approved: the
+      // grant frozen below must hold the tables whose fingerprints the approval checked.
+      const changed = scopeChanged(h, scopes);
+      if (changed) return fail(worker, h, 'scope-changed', changed);
     }
     const needsSource = h.permissions && h.permissions.read_source;
     let cwd;

@@ -6,6 +6,10 @@ export const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 
 const ACTIVE = new Set(['pending', 'applying']);
 
 // Repository recipes replace global ones of the same name for that repository only.
+// A recipe that runs only as an approved critical change (ADR 0028: it requires an action pin) is
+// never offered to pick: its runs come from Runs → Needs you.
+export const offeredRecipe = (r) => !(Array.isArray(r.requires) && r.requires.includes('action_pin'));
+
 export function effectiveRecipes(rawSnapshot, repoId) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const byName = new Map();
@@ -134,7 +138,7 @@ export function renderAgentsSection(ticket, rawSnapshot, { busy = false } = {}) 
   const caps = snapshot.capabilities ?? {};
   // A files recipe is offered only where there are attached files for it to work on.
   const hasFiles = attachedFilePaths(ticket).length > 0;
-  const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => r.mode !== 'files' || hasFiles);
+  const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => offeredRecipe(r) && (r.mode !== 'files' || hasFiles));
   const canRun = !!caps.handoff && ticket.status !== 'done';
   return `<section class="detail-section agents"><h3>Recipes</h3>
 ${recipes.length ? `<ul class="recipes">${recipes.map((r) => recipeRow(r, ticket, canRun && !busy)).join('')}</ul>${canRun && busy ? '<p class="muted small">One run per ticket: wait for the current run or cancel it.</p>' : ''}` : '<p class="muted small">No recipes found. Add one in <code>.quill/agents/</code> or <code>~/.claude/quill/agents/</code>.</p>'}</section>`;
@@ -152,6 +156,11 @@ export function runSummary(recipe, c = {}, repo = null) {
   return cap(parts.join(' · '));
 }
 
+// Spec §7.6: a critical change's child can also be run by hand with write scopes; that is the
+// owner's explicit choice and is named for what it is.
+export const SCOPE_GRANT_NOTE = 'This ticket holds a critical change. Write scopes you tick here are a scope grant without a pinned action: the guard allows every write they cover, not only the proposed action. To make only the proposed change, approve it in Runs → Needs you.';
+const isCriticalChild = (t) => !!(t && (t.critical_spec || (t.local_only === true && Array.isArray(t.tags) && t.tags.includes('critical'))));
+
 // What stops a run (blocker) or limits it (warning), from facts the snapshot has.
 export function runBlockers(ticket, rawSnapshot, recipe) {
   const snapshot = normalizeSnapshot(rawSnapshot);
@@ -165,6 +174,7 @@ export function runBlockers(ticket, rawSnapshot, recipe) {
     out.push(p.edit_source || recipe.mode === 'attempt-fix' ? { level: 'blocker', text: `${why}: this recipe edits source.` } : { level: 'warning', text: `${why}: the run works from the ticket notes only.` });
   }
   if (repo && (p.edit_source || recipe.mode === 'attempt-fix') && !repo.test_command) out.push({ level: 'warning', text: 'No test command: fixes will be marked Not test-verified.' });
+  if (recipe.mode !== 'files' && isCriticalChild(ticket)) out.push({ level: 'warning', text: SCOPE_GRANT_NOTE });
   return out;
 }
 

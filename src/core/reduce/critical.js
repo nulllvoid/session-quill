@@ -67,6 +67,8 @@ export function applyCriticalProposal(state, ev, result) {
   const scopes = validScopes(p.scopes);
   if (!scopes) return problem(state, ev, 'critical-scope-invalid');
   if (!validChild(p.child)) return problem(state, ev, 'critical-child-invalid');
+  // The built-in recipe's hash when proposed (optional): approval notes a newer text (ADR 0028).
+  if (p.recipe_hash !== undefined && p.recipe_hash !== null && !(typeof p.recipe_hash === 'string' && FINGERPRINT_RE.test(p.recipe_hash))) return problem(state, ev, 'critical-proposal-invalid');
   const h = state.handoffs.get(p.from_handoff_id);
   if (!h) return problem(state, ev, 'critical-run-unknown');
   if (h.state !== 'done') return problem(state, ev, 'critical-run-not-done');
@@ -87,7 +89,7 @@ export function applyCriticalProposal(state, ev, result) {
   pruneProposals(state, ev.occurred_at);
   state.runProposals.set(p.id, {
     id: p.id, ticket_id: childId, origin: 'run', from_handoff_id: h.id, publisher: null, editor: null, edited_at: null,
-    recipe: { ...CRITICAL_RECIPE, hash: null }, mode: null, permissions: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])), access: 'autonomous', read_only: false,
+    recipe: { ...CRITICAL_RECIPE, hash: typeof p.recipe_hash === 'string' ? p.recipe_hash : null }, mode: null, permissions: Object.fromEntries(PERMISSION_KEYS.map((k) => [k, false])), access: 'autonomous', read_only: false,
     scopes, action_pin: copy(p.pin), expected_revision: null, proposed_at: ev.occurred_at, lapsed_at: null, state: 'proposed', resolved_at: null, resolved_by: null, request_id: null, handoff_id: null,
   });
   ticket.timeline.push(timelineEntry(ev, 'proposal', `Critical change proposed by run ${id8} of ${parent.key}; it waits for your approval`));

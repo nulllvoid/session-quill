@@ -7,7 +7,7 @@ import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
 import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
 import { budgetFor } from '../handoff/runner.js';
-import { scopeValidator } from '../handoff/scopes.js';
+import { scopeValidator, loadScopeCatalog, resolveScopes } from '../handoff/scopes.js';
 import { attachedFiles, undoFileEffect } from '../handoff/files.js';
 import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
@@ -125,9 +125,47 @@ function findProposal(state, ticket, payload, now) {
 
 // Only the owner approves or dismisses: the dashboard (actor owner) or the CLI. There is no
 // auto-approval (ADR 0025); page edits, schedules and anything else acting for them are refused.
-function approvalRefusal(actor, p, kind) {
+// A run's critical-change proposal (ADR 0028) is approved on the dashboard alone: the owner actor
+// on a request the worker journaled itself (submitted over the dashboard's authenticated API). The
+// CLI, an ingress request claiming the owner, a schedule or a page never approve one.
+function approvalRefusal(req, p, kind) {
+  const actor = req.actor_id ?? 'owner';
+  if (kind === 'approve-run' && p.origin === 'run') {
+    if (actor === 'owner' && req.producer === 'worker') return null;
+    return { code: 'critical-approve-dashboard-only', message: 'approving a critical change is a dashboard action by the owner: open Runs → Needs you with quill ui' };
+  }
   if (actor === 'owner' || actor === 'cli') return null;
-  return `${kind === 'approve-run' ? 'approving' : 'dismissing'} a proposed run needs the owner, on the dashboard or with quill approve --run`;
+  return { code: 'approval-refused', message: `${kind === 'approve-run' ? 'approving' : 'dismissing'} a proposed run needs the owner, on the dashboard or with quill approve --run` };
+}
+
+// Approval of a run's critical-change proposal (spec §7.5, ADR 0028). Each scope must still resolve
+// in the current catalog to the fingerprint the proposal recorded (else scope-changed: what the
+// scope allows or the credentials it switches to changed since, Review Focus 4). The built-in
+// recipe is pinned by name and source; a newer text is noted, not refused. The run it queues is
+// autonomous, holds exactly the proposal's scopes, and every scope carries the action pin (the
+// pin object's guard string, ruling R43), so the guard allows only that action (R48).
+function approveCritical(worker, req, ticket, p) {
+  const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
+  const id8 = String(p.from_handoff_id ?? '').slice(0, 8);
+  const pin = p.action_pin && typeof p.action_pin.guard === 'string' && p.action_pin.guard.trim() ? p.action_pin.guard : null;
+  const listed = Array.isArray(p.scopes) ? p.scopes : [];
+  if (!pin || !listed.length) return fail('proposal-invalid', 'this critical change has no pinned action or scope, so it cannot be approved');
+  const specs = [];
+  const fingerprints = {};
+  let catalog;
+  try { catalog = loadScopeCatalog(worker.config ?? {}, { env: worker.env }); } catch (err) { return fail('scope-changed', `the scope catalog cannot be read (${err.message}); fix config.toml and approve again`); }
+  for (const s of listed) {
+    const spec = s.target ? `${s.name}:${s.target}` : s.name;
+    let fingerprint;
+    try { fingerprint = resolveScopes([spec], catalog)[0].fingerprint; } catch (err) { return fail('scope-changed', `scope ${spec} no longer resolves as it did when run ${id8} proposed this change (${err.message}); dismiss the proposal, or put the scope back as it was`); }
+    if (fingerprint !== s.fingerprint) return fail('scope-changed', `scope ${spec} changed in config.toml since run ${id8} proposed this change (what it allows or the credentials it switches to); dismiss the proposal, or put the scope back as it was`);
+    specs.push(spec);
+    fingerprints[spec] = fingerprint;
+  }
+  const builtin = catalogFor(worker).builtin(p.recipe.name);
+  const recipeNote = builtin && p.recipe.hash && builtin.hash !== p.recipe.hash ? 'recipe updated since proposed' : null;
+  const actionPins = specs.map((scope) => ({ scope, pin }));
+  return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote });
 }
 
 // The owner's wording for an entry: trimmed, non-empty and at most MEMORY_TEXT_MAX characters.
@@ -403,7 +441,9 @@ function evaluateSessionRequest(worker, req) {
 }
 
 // A handoff request, or an approved proposal, becomes a queued run (TRD §Handoff execution).
-function evaluateHandoff(worker, req, ticket, payload) {
+// `critical` (ADR 0028) comes only from approveCritical, never from a request payload: the action
+// pins, the fingerprints the scopes must still have at dispatch, and the proposal it came from.
+function evaluateHandoff(worker, req, ticket, payload, critical = null) {
   const { state } = worker;
   // Re-checked here because CLI requests arrive through ingress without submit validation, and
   // the recipe file may have changed during the request's lifetime.
@@ -412,7 +452,7 @@ function evaluateHandoff(worker, req, ticket, payload) {
   try {
     recipe = resolveRecipe(catalogFor(worker), payload, ticket.repo_id);
     // Write scopes are checked against the worker's catalog here too (spec §4.3).
-    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(worker.config ?? {}, { env: worker.env }) });
+    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(worker.config ?? {}, { env: worker.env }), actionPins: critical ? critical.actionPins : null });
   } catch (err) {
     return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
   }
@@ -435,8 +475,11 @@ function evaluateHandoff(worker, req, ticket, payload) {
     ...(checked.scopes ? { scopes: checked.scopes } : {}),
     ...(checked.max_turns !== undefined ? { max_turns: checked.max_turns } : {}),
     ...(checked.max_budget_usd !== undefined ? { max_budget_usd: checked.max_budget_usd } : {}),
+    // An approved critical change (ADR 0028): its pinned action per scope, the fingerprints dispatch
+    // checks again before the grant is frozen, and the proposal. Never exported (allow-lists).
+    ...(critical ? { action_pins: critical.actionPins, scope_fingerprints: critical.scopeFingerprints, origin_proposal_id: critical.originProposalId } : {}),
   };
-  return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
+  return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id, ...(critical && critical.recipeNote ? { note: critical.recipeNote } : {}) } };
 }
 
 const memorySource = (requestId) => `memory-tx:request:${requestId}`;
@@ -539,17 +582,18 @@ export function evaluateRequest(worker, req) {
       try { p = findProposal(state, ticket, req.payload, worker.now()); } catch (err) {
         return { outcome: 'failed', error: { code: err.code, message: err.message, retryable: false, current_revision: ticket.revision } };
       }
-      const refusal = approvalRefusal(req.actor_id, p, req.kind);
-      if (refusal) return { outcome: 'failed', error: { code: 'approval-refused', message: refusal, retryable: false, current_revision: ticket.revision } };
+      const refusal = approvalRefusal(req, p, req.kind);
+      if (refusal) return { outcome: 'failed', error: { code: refusal.code, message: refusal.message, retryable: false, current_revision: ticket.revision } };
       if (req.kind === 'dismiss-run') return { outcome: 'applied', mutation: { type: 'run-proposal-dismiss', proposal_id: p.id }, result: { proposal_id: p.id } };
+      const critical = p.origin === 'run';
       // The recipe this ticket would run must still be the one the page offered (same layer and
       // text); a repository recipe of that name shadows it and is refused.
-      const shadow = shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
+      const shadow = critical ? null : shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
       if (shadow) return { outcome: 'failed', error: { code: shadow.code, message: shadow.message, retryable: false, current_revision: ticket.revision } };
       // Approval queues an ordinary run through the same checks and reservation as the Run dialog.
       // It suggests rather than applies: whoever proposed it, the owner reviews what it found. Page
       // text never becomes the owner's note; where the run came from travels as `proposal`.
-      const evaluation = evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
+      const evaluation = critical ? approveCritical(worker, req, ticket, p) : evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
       if (evaluation.outcome !== 'applied') {
         if (evaluation.error && evaluation.error.code === 'handoff-reserved') {
           const existing = state.handoffs.get(evaluation.result.existing_handoff_id);

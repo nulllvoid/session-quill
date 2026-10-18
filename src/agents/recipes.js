@@ -23,10 +23,14 @@ export const PLACEHOLDERS = ['ticket.key', 'ticket.url', 'ticket.title', 'ticket
 // (20 min, or the longer autonomous default from `budgetFor`).
 export const MAX_TIMEOUT_MIN = 60;
 export const DEFAULT_TIMEOUT_MIN = 20;
-export const FRONTMATTER_KEYS = ['name', 'description', 'mode', 'permissions', 'tools', 'timeout_min', 'inputs', 'outputs', 'self_check', 'max_turns', 'max_budget_usd', 'quill_min_version'];
+export const FRONTMATTER_KEYS = ['name', 'description', 'mode', 'permissions', 'tools', 'timeout_min', 'inputs', 'outputs', 'self_check', 'max_turns', 'max_budget_usd', 'quill_min_version', 'requires'];
 // Keys a recipe must not use without declaring the Quill release that understands them: an older
 // Quill rejects unknown keys (ADR 0020), so the declaration documents why it does.
-const VERSIONED_KEYS = ['max_turns', 'max_budget_usd'];
+const VERSIONED_KEYS = ['max_turns', 'max_budget_usd', 'requires'];
+// What a run of the recipe must carry (ADR 0028): `action_pin` (the approved action of a critical
+// change, which only an owner's approval of a run's proposal supplies) and `scopes` (write scopes).
+// A recipe that requires either is never scheduled and never offered on a page.
+export const REQUIREMENTS = ['action_pin', 'scopes'];
 const MAX_RECIPE_TURNS = 1000;
 const MAX_RECIPE_BUDGET_USD = 1000;
 // The input a placeholder reads from; a recipe must declare it (environments come from config).
@@ -97,6 +101,9 @@ export function normalizeRecipe({ name, text, source, path: filePath = null }) {
     if (maxBudget !== null && (typeof maxBudget !== 'number' || !(maxBudget > 0) || maxBudget > MAX_RECIPE_BUDGET_USD)) throw new Error(`max_budget_usd must be a number above 0 and at most ${MAX_RECIPE_BUDGET_USD}`);
     const inputs = list(data.inputs, 'inputs', INPUTS, INPUTS);
     const outputs = list(data.outputs, 'outputs', OUTPUTS, ['summary', 'next_action']);
+    const requires = data.requires === undefined || data.requires === null ? [] : data.requires;
+    if (!Array.isArray(requires)) throw new Error('requires must be a list such as [action_pin, scopes]');
+    for (const v of requires) if (!REQUIREMENTS.includes(v)) throw new Error(`unknown requirement "${v}"; use ${REQUIREMENTS.join(', ')}`);
     if (data.self_check !== undefined && data.self_check !== null && typeof data.self_check !== 'boolean') throw new Error('self_check must be true or false');
     if (!body.trim()) throw new Error('the prompt body is empty');
     for (const m of body.matchAll(PLACEHOLDER_RE)) {
@@ -105,14 +112,14 @@ export function normalizeRecipe({ name, text, source, path: filePath = null }) {
       if (needs && !inputs.includes(needs)) throw new Error(`placeholder {{${m[1]}}} needs input ${needs}`);
     }
     return {
-      ...base, description: data.description.trim().slice(0, 300), mode, permissions, tools, timeout_min: timeout, timeout_set: data.timeout_min !== undefined && data.timeout_min !== null, max_turns: maxTurns, max_budget_usd: maxBudget, quill_min_version: minVersion, inputs, outputs, self_check: data.self_check === true, body: body.trim(),
+      ...base, description: data.description.trim().slice(0, 300), mode, permissions, tools, timeout_min: timeout, timeout_set: data.timeout_min !== undefined && data.timeout_min !== null, max_turns: maxTurns, max_budget_usd: maxBudget, quill_min_version: minVersion, inputs, outputs, self_check: data.self_check === true, body: body.trim(), requires: REQUIREMENTS.filter((r) => requires.includes(r)),
       // Only Quill's own handoff modes keep applying results directly; every other recipe suggests.
       legacy: source === 'builtin' && MODES.includes(name),
       // Changing files is never left to a schedule (ADR 0015), as fixes never are.
-      schedulable: mode !== 'attempt-fix' && mode !== 'files',
+      schedulable: mode !== 'attempt-fix' && mode !== 'files' && !requires.length,
     };
   } catch (err) {
-    return { ...base, description: '', mode: null, permissions: null, tools: null, timeout_min: null, timeout_set: false, max_turns: null, max_budget_usd: null, quill_min_version: null, inputs: [], outputs: [], self_check: false, body: '', legacy: false, schedulable: false, error: err.message };
+    return { ...base, description: '', mode: null, permissions: null, tools: null, timeout_min: null, timeout_set: false, max_turns: null, max_budget_usd: null, quill_min_version: null, inputs: [], outputs: [], self_check: false, body: '', requires: [], legacy: false, schedulable: false, error: err.message };
   }
 }
 
@@ -203,7 +210,7 @@ export function renderRecipe(recipe, { ticket = {}, url = null, note = '', prs =
 function publicEntry(r, repoId) {
   return {
     name: r.name, description: r.description, source: r.source, repo_id: repoId, hash: r.hash, error: r.error, mode: r.mode, permissions: r.permissions,
-    tools: r.tools, timeout_min: r.timeout_min, timeout_set: r.timeout_set ?? false, inputs: r.inputs, outputs: r.outputs, self_check: r.self_check, legacy: r.legacy, schedulable: r.schedulable,
+    tools: r.tools, timeout_min: r.timeout_min, timeout_set: r.timeout_set ?? false, inputs: r.inputs, outputs: r.outputs, self_check: r.self_check, legacy: r.legacy, schedulable: r.schedulable, requires: r.requires ?? [],
     overridden_by: r.overridden_by ?? null, preview: r.body ? r.body.slice(0, 600) : '',
   };
 }

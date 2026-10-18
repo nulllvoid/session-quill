@@ -1,13 +1,13 @@
 // Run agent (spec §5): one dialog for every recipe, built-in modes included. Step 1 picks what to
 // run; step 2 is the recipe form with a plain summary of what the run will do.
 import { esc, attr, icon, keyEl, normalizeSnapshot, normalizeTicket } from '../components.js';
-import { effectiveRecipes, attachedFilePaths, permissionSummary, renderRecipeRunDialog, recipeCap, SOURCE_LABELS } from './agents.js';
+import { effectiveRecipes, offeredRecipe, attachedFilePaths, permissionSummary, renderRecipeRunDialog, recipeCap, SOURCE_LABELS } from './agents.js';
 
 export function renderRunAgentDialog(rawTicket, rawSnapshot, { recipe = null, retryOf = null } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const ticket = normalizeTicket(rawTicket);
   const hasFiles = attachedFilePaths(ticket).length > 0;
-  const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => r.mode !== 'files' || hasFiles);
+  const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => offeredRecipe(r) && (r.mode !== 'files' || hasFiles));
   const chosen = recipe ? recipes.find((r) => r.name === recipe && !r.error) : null;
   if (chosen) return renderRecipeRunDialog(chosen, ticket, snapshot, { retryOf });
   const cards = recipes.map((r) => {

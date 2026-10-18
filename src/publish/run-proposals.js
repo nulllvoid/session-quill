@@ -1,7 +1,8 @@
 // Runs proposed from a shared page (ADR 0025). A "Run agent" pick on a two-way artifact page is a
 // proposal, never a run: it names the page editor (as the page reported them), the recipe and the
 // access the run would get, and nothing queues until the owner approves it on the dashboard or with
-// `quill approve --run`; there is no auto-approval. These helpers are pure, so the worker's publish job and a session's
+// `quill approve --run`; there is no auto-approval. A run's own critical-change proposal (origin
+// 'run', ADR 0028) is made only by the critical-proposal reducer and approved on the dashboard alone. These helpers are pure, so the worker's publish job and a session's
 // `quill publish --result` turn the same edit into the same proposal.
 import { editRequestId } from './artifact.js';
 
@@ -17,8 +18,9 @@ const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 
 
 // Read-only: an analysis that may at most read source. Only these are offered by default and only
 // these can ever be queued without the owner.
+// A recipe that requires an action pin or write scopes (ADR 0028) is never one of them.
 export function isReadOnlyRecipe(r) {
-  return !!r && !r.error && READ_MODES.includes(r.mode) && !WRITE_PERMISSIONS.some((k) => r.permissions && r.permissions[k]);
+  return !!r && !r.error && READ_MODES.includes(r.mode) && !WRITE_PERMISSIONS.some((k) => r.permissions && r.permissions[k]) && !(Array.isArray(r.requires) && r.requires.length);
 }
 
 // The recipe the page offers under a name: the valid one of the personal and built-in layers. A
@@ -26,7 +28,7 @@ export function isReadOnlyRecipe(r) {
 export function offeredRecipe(recipes, publisher, name) {
   if (!publisher || publisher.run_agent !== true || !recipes) return null;
   const r = recipes.forRepo(null).effective.get(name);
-  if (!r || r.error || r.source === 'repo') return null;
+  if (!r || r.error || r.source === 'repo' || (Array.isArray(r.requires) && r.requires.includes('action_pin'))) return null;
   return isReadOnlyRecipe(r) || (publisher.run_recipes ?? []).includes(name) ? r : null;
 }
 
@@ -96,7 +98,9 @@ export function proposalState(p, ticket, now) {
 }
 
 // Where an approved run came from, kept beside the run and never as the owner's note: the editor
-// is whatever the page reported, so it reaches a prompt only as labelled, untrusted data.
+// is whatever the page reported, so it reaches a prompt only as labelled, untrusted data. A run's
+// critical-change proposal (ADR 0028) names the run that proposed it instead of a page.
 export function proposalProvenance(p) {
+  if (p.origin === 'run') return { id: p.id, origin: 'run', from_handoff_id: p.from_handoff_id, recipe: p.recipe.name };
   return { id: p.id, publisher: p.publisher, editor: p.editor ?? null, recipe: p.recipe.name };
 }
