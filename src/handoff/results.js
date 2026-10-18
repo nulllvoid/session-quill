@@ -6,6 +6,51 @@ import { deterministicId } from '../lib/ids.js';
 import { CATEGORIES, PRIORITIES } from '../core/state.js';
 import { recordedStage } from './stage.js';
 import { childKeys, buildSuggestions } from '../agents/suggestions.js';
+import { loadScopeCatalog, resolveScopes } from './scopes.js';
+import { pinOfChange } from './action-pin.js';
+import { buildCriticalProposal, changeScope, cleanLine } from '../core/reduce/critical.js';
+
+// Why a critical_changes entry of a done run did not become a proposal (spec §7.1), kept on the
+// run record as critical_notes (local only: never exported or written to a vault note).
+export const CRITICAL_NO_SCOPE = 'no matching scope configured';
+export const CRITICAL_NO_PIN = 'the action is not one plain command, or a tool call written as <tool name> <JSON input>, so it cannot be pinned';
+
+/**
+ * Splits a done run's critical_changes into entries that become critical-proposal events (scope in
+ * the catalog and resolvable, action pinnable) and notes saying why the others do not.
+ * @returns {{ plans: { index, change, pin, scopes: { name, target, fingerprint }[] }[], notes: { index, reason }[] }}
+ */
+export function planCriticalChanges(worker, changes) {
+  const plans = [];
+  const notes = [];
+  let catalog = null;
+  changes.forEach((change, index) => {
+    try {
+      catalog ??= loadScopeCatalog(worker.config ?? {}, { env: worker.env });
+      const { name, target } = changeScope(change);
+      if (!name || name.startsWith('git.') || !Object.hasOwn(catalog, name)) { notes.push({ index, reason: CRITICAL_NO_SCOPE }); return; }
+      const pin = pinOfChange(change);
+      if (!pin) { notes.push({ index, reason: CRITICAL_NO_PIN }); return; }
+      const [r] = resolveScopes([catalog[name].takesTarget && target ? `${name}:${target}` : name], catalog);
+      plans.push({ index, change, pin, scopes: [{ name: r.name, target: r.target, fingerprint: r.fingerprint }] });
+    } catch (err) {
+      notes.push({ index, reason: cleanLine(String(err && err.message ? err.message : err), 300) || 'the scope could not be resolved' });
+    }
+  });
+  return { plans, notes };
+}
+
+// One critical-proposal per planned entry, only once the run's recorded state is done; the
+// deterministic id keeps a second emission to one effect.
+function emitCriticalProposals(worker, handoffId, ticket, plans) {
+  const run = worker.state.handoffs.get(handoffId);
+  if (!run || run.state !== 'done' || !ticket) return;
+  for (const plan of plans) {
+    const [key] = childKeys(worker.state, ticket, 1);
+    const payload = buildCriticalProposal({ run, parent: ticket, index: plan.index, change: plan.change, pin: plan.pin, scopes: plan.scopes, key });
+    worker.emit('critical-proposal', payload, { source_identity: `critical-proposal:${payload.id}`, ticket_id: ticket.id });
+  }
+}
 
 export function recordResult(worker, handoffId, result, { state = 'done', error = null, extra = {} } = {}) {
   const h = worker.state.handoffs.get(handoffId);
@@ -51,7 +96,13 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
   update.stage_reached = result && result.stage_reached ? result.stage_reached : h.stage_reached ?? null;
   update.recorded_stage = recordedStage({ ...h, ...update });
   if (suggesting && state === 'done' && !(h.suggestions ?? []).length) update.suggestions = buildSuggestions(h.outputs ?? [], result, worker.now());
-  return worker.emit('handoff-tx', { handoff_id: h.id, update, result_items: items }, { source_identity: `handoff-tx:${h.id}:${state}:${worker.now()}` });
+  // Spec §7.1–7.2: a done run's critical changes become proposals after the run is recorded done.
+  const changes = state === 'done' && ticket && result && Array.isArray(result.critical_changes) ? result.critical_changes : [];
+  const critical = changes.length ? planCriticalChanges(worker, changes) : { plans: [], notes: [] };
+  if (critical.notes.length) update.critical_notes = critical.notes;
+  const out = worker.emit('handoff-tx', { handoff_id: h.id, update, result_items: items }, { source_identity: `handoff-tx:${h.id}:${state}:${worker.now()}` });
+  if (critical.plans.length) emitCriticalProposals(worker, h.id, ticket, critical.plans);
+  return out;
 }
 
 export function updateHandoff(worker, handoffId, update) {

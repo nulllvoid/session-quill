@@ -50,6 +50,8 @@ export function createState(meta) {
     publishers: new Map(),
     // Runs proposed from a shared page, by proposal id (ADR 0025).
     runProposals: new Map(),
+    // critical-proposal events the reducer refused (spec §7.2), newest last, capped.
+    criticalProblems: [],
     // Learned memory (FEAT-12): local only, never part of a snapshot, export or publisher payload.
     memory: createMemoryState(),
     lastSequence: 0,
@@ -58,6 +60,14 @@ export function createState(meta) {
     lastCaptureAt: null,
     healthErrors: [],
   };
+}
+
+// The reducer reads a done run's result blob to check a critical-proposal against it (spec §7.2).
+// Blobs are content-addressed and never rewritten, so replay reads the same bytes. The reader is
+// not enumerable: state is never serialised with it.
+export function attachBlobReader(state, readBlob) {
+  Object.defineProperty(state, 'readBlob', { value: typeof readBlob === 'function' ? readBlob : null, enumerable: false, configurable: true, writable: true });
+  return state;
 }
 
 export function sessionKey({ session_id, agent_id = null }) {

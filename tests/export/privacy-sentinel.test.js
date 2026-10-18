@@ -24,6 +24,7 @@ function fixture() {
     prod_effects: [{ what: S }], scopes: ['k8s.write:prod', S], action_pin: { sha: S }, inventory: { items: [S] }, recorded_stage: 'attempt',
     cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S] }, max_turns: 7, max_budget_usd: 1,
     memory_filing: { filed: 1, problems: [{ code: S, count: 1 }] },
+    critical_notes: [{ index: 0, reason: S }],
   });
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
   s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
@@ -37,6 +38,9 @@ function fixture() {
   s.picknext.push({ rank: 3, ticket_id: local.id, raw_score: 1, score: 1, reasons: [S], limitations: [] });
   s.sessions.push({ ...s.sessions[0], id: 'sess-local', ticket_ids: [local.id], current_ticket_id: local.id, bindings: [{ ...s.sessions[0].bindings[0], ticket_id: local.id }] });
   s.sessions[0].ticket_ids = [s.sessions[0].ticket_ids[0], local.id];
+  // A critical-change proposal (spec §7.3): its action pin, scopes and local-only child stay on the dashboard.
+  local.critical_spec = { action: S, action_pin: { guard: S, normalized: S }, scopes: [{ name: 'argo.sync', target: S, fingerprint: S }] };
+  s.run_proposals = [{ id: 'p-critical', ticket_id: local.id, origin: 'run', from_handoff_id: h.id, recipe: { name: 'critical-change', source: 'builtin', hash: null }, access: 'autonomous', scopes: [{ name: 'argo.sync', target: S, fingerprint: S }], action_pin: { guard: S, normalized: S }, state: 'proposed', ticket_key: local.key }];
   return s;
 }
 
@@ -51,6 +55,7 @@ test('static export and sanitized snapshot never contain the sentinel or a local
     assert.equal(text.includes(TID(40)), false, 'local-only id absent from relationships, sessions, handoffs and picknext');
   }
   assert.equal(previewExport(s, {}).ticket_count, s.tickets.length - 1);
+  assert.equal('run_proposals' in sanitizeSnapshot(s, ALL), false, 'run proposals (action pins, scopes) never leave the dashboard');
 });
 
 test('exported handoffs carry counts and the stage, not the records', () => {

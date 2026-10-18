@@ -13,6 +13,7 @@ import { applyTrackerSync, applyTrackerPush, applyArtifactComment, applyPublishR
 import { resolveAttribution, sweepDeferred, handlePostTool, handleStop } from './reduce/capture.js';
 import { handleRequest, handleRequestTx, handleHandoffTx } from './reduce/requests.js';
 import { applyMemoryTx } from './reduce/memory.js';
+import { applyCriticalProposal } from './reduce/critical.js';
 
 export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 
@@ -237,6 +238,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'artifact-comment': Object.assign(result, applyArtifactComment(state, ev, result)); break;
     case 'run-proposal': Object.assign(result, applyRunProposal(state, ev, result)); break;
     case 'memory-tx': Object.assign(result, applyMemoryTx(state, ev)); break;
+    case 'critical-proposal': Object.assign(result, applyCriticalProposal(state, ev, result)); break;
     case 'schedule-run':
       Object.assign(result, applyScheduleRun(state, ev));
       break;

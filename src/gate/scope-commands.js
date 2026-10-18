@@ -232,27 +232,41 @@ export function commandCheck(command, dialect, opts = {}) {
   return out;
 }
 
-function commandShape(command, dialect, { commands, target = null, scope = 'this scope' } = {}, out = { files: [], hosts: [] }) {
-  if (typeof command !== 'string' || !command.trim()) return 'there is no command';
+/**
+ * The one plain command a text holds (R25's shape, shared with action pins): { argv, bin, word }
+ * or { why }. Plain means one literal command run by the bare name of its tool: no chain, pipe,
+ * redirect, stdin, background, environment assignment, wrapper (`env`, `sudo`, `bash -c` …) or
+ * expansion.
+ * @param {string} command
+ * @param {'bash'|'powershell'} dialect
+ */
+export function plainCommand(command, dialect) {
+  if (typeof command !== 'string' || !command.trim()) return { why: 'there is no command' };
   const parsed = parseShell(command.trim(), dialect);
-  if (parsed.error) return 'the command cannot be read';
-  if (parsed.segments.some((s) => s.cwdMark)) return 'it runs inside another shell or directory';
+  if (parsed.error) return { why: 'the command cannot be read' };
+  if (parsed.segments.some((s) => s.cwdMark)) return { why: 'it runs inside another shell or directory' };
   const segs = parsed.segments;
-  if (segs.length !== 1) return 'it is more than one command (run a covered write as a command of its own)';
+  if (segs.length !== 1) return { why: 'it is more than one command (run a covered write as a command of its own)' };
   const s = segs[0];
-  if (s.unparseable) return 'the command cannot be read';
-  if (Object.keys(s.env ?? {}).length) return 'it sets an environment variable';
-  if (!Array.isArray(s.argv) || !s.argv.length) return 'there is no command';
-  if (Array.isArray(s.assign) && s.assign.length !== s.argv.length) return 'a wrapper command runs it';
-  if ((s.redirects ?? []).length || s.piped || s.nested || s.stdin !== null || s.stdinDyn || s.funcDef || s.sep === '&') return 'it redirects, pipes, reads stdin or runs in the background';
-  if ((s.kinds ?? []).some((k) => k !== 'lit')) return 'part of the command is not literal';
+  if (s.unparseable) return { why: 'the command cannot be read' };
+  if (Object.keys(s.env ?? {}).length) return { why: 'it sets an environment variable' };
+  if (!Array.isArray(s.argv) || !s.argv.length) return { why: 'there is no command' };
+  if (Array.isArray(s.assign) && s.assign.length !== s.argv.length) return { why: 'a wrapper command runs it' };
+  if ((s.redirects ?? []).length || s.piped || s.nested || s.stdin !== null || s.stdinDyn || s.funcDef || s.sep === '&') return { why: 'it redirects, pipes, reads stdin or runs in the background' };
+  if ((s.kinds ?? []).some((k) => k !== 'lit')) return { why: 'part of the command is not literal' };
   const word = s.argv[0];
-  if (/[\\/]/.test(word)) return `${word.slice(0, 80)} is run by a path, not by its bare name`;
-  const bin = binName(word);
+  if (/[\\/]/.test(word)) return { why: `${word.slice(0, 80)} is run by a path, not by its bare name` };
+  return { argv: s.argv.slice(), bin: binName(word), word };
+}
+
+function commandShape(command, dialect, { commands, target = null, scope = 'this scope' } = {}, out = { files: [], hosts: [] }) {
+  const plain = plainCommand(command, dialect);
+  if (plain.why) return plain.why;
+  const { bin, word } = plain;
   const tools = commands && typeof commands === 'object' ? commands : {};
   if (!Object.hasOwn(tools, bin)) return `${bin} is not a tool ${scope} covers`;
   if (dialect === 'powershell' && (bin === 'curl' || bin === 'wget') && !/\.exe$/i.test(word)) return `${bin} is Invoke-WebRequest in PowerShell; run ${bin}.exe`;
-  return toolProblem(bin, tools[bin], s.argv.slice(1), target, out);
+  return toolProblem(bin, tools[bin], plain.argv.slice(1), target, out);
 }
 
 function toolProblem(bin, spec, args, target, out) {

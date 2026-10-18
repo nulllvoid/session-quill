@@ -8,7 +8,7 @@ export const EVENT_KINDS = [
   'session-start', 'prompt', 'pre-tool', 'post-tool', 'tool-failure', 'stop', 'pre-compact',
   'subagent-start', 'subagent-stop', 'session-end',
   'bind', 'gate-off', 'gate-on', 'ticket-create', 'ticket-update', 'relink', 'approve', 'dismiss',
-  'request', 'request-tx', 'handoff-tx', 'migration', 'import', 'notify', 'reconcile', 'schedule-run', 'publish-run', 'tracker-sync', 'artifact-comment', 'tracker-push', 'run-proposal', 'memory-tx',
+  'request', 'request-tx', 'handoff-tx', 'migration', 'import', 'notify', 'reconcile', 'schedule-run', 'publish-run', 'tracker-sync', 'artifact-comment', 'tracker-push', 'run-proposal', 'memory-tx', 'critical-proposal',
 ];
 
 const KIND_SET = new Set(EVENT_KINDS);

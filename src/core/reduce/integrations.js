@@ -96,10 +96,7 @@ export function applyRunProposal(state, ev, result) {
   const t = state.tickets.get(p.ticket_id);
   if (!t) return { rejected: 'ticket-unknown' };
   if (state.runProposals.has(p.id)) return { duplicate: true };
-  for (const [id, x] of state.runProposals) {
-    const last = x.resolved_at && x.resolved_at > x.proposed_at ? x.resolved_at : x.proposed_at;
-    if (proposalState(x, state.tickets.get(x.ticket_id), ev.occurred_at) !== 'proposed' && Date.parse(ev.occurred_at) - Date.parse(last) > PROPOSAL_KEEP_MS) state.runProposals.delete(id);
-  }
+  pruneProposals(state, ev.occurred_at);
   const open = [...state.runProposals.values()].find((x) => x.ticket_id === t.id && x.recipe.name === p.recipe.name && proposalState(x, t, ev.occurred_at) === 'proposed');
   if (open) return { rejected: 'run-already-proposed' };
   const editor = editorLabel(p.editor);
@@ -113,6 +110,14 @@ export function applyRunProposal(state, ev, result) {
   t.timeline.push(timelineEntry(ev, 'proposal', `Run of ${p.recipe.name} proposed on the ${p.publisher} page; it waits for your approval`));
   result.changed.add(t.id);
   return {};
+}
+
+// Resolved and expired proposals are dropped PROPOSAL_KEEP_MS after they last changed.
+export function pruneProposals(state, now) {
+  for (const [id, x] of state.runProposals) {
+    const last = x.resolved_at && x.resolved_at > x.proposed_at ? x.resolved_at : x.proposed_at;
+    if (proposalState(x, state.tickets.get(x.ticket_id), now) !== 'proposed' && Date.parse(now) - Date.parse(last) > PROPOSAL_KEEP_MS) state.runProposals.delete(id);
+  }
 }
 
 // A ticket that becomes done lapses its open proposals for good (ADR 0025): reopening it later does

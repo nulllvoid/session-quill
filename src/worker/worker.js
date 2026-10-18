@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import { Journal } from '../core/journal.js';
 import { validateEvent, makeEvent } from '../core/events.js';
 import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.js';
-import { createState, sessionKey } from '../core/state.js';
+import { createState, sessionKey, attachBlobReader } from '../core/state.js';
+import { getBlob } from '../core/blobs.js';
 import { applyEvent } from '../core/reducer.js';
 import { safeKeyFileName } from '../core/keys.js';
 import { journalPath, stateDir, requestsDir, configPath, quillHome } from '../lib/paths.js';
@@ -105,6 +106,7 @@ export class Worker {
       repos: this.config.repos,
       tracker_version: this.config.tracker_version ?? '1.0.0',
     });
+    attachBlobReader(this.state, (hash) => getBlob(hash, this.env));
     for (const ev of this.journal.read()) this.safeApply(ev, { replay: true });
     this.notesIndex = readJsonIfExists(path.join(stateDir(this.env), 'notes-index.json')) ?? {};
     const manifest = readJsonIfExists(path.join(stateDir(this.env), '..', 'projections', 'MANIFEST.json'));
@@ -285,6 +287,13 @@ export class Worker {
         continue;
       }
       if (ev.store_id !== this.storeMeta.store_id) {
+        quarantineIngress(entry.name, this.env);
+        continue;
+      }
+      // Only the worker emits a critical-proposal (spec §7.2): one arriving through ingress (a page,
+      // the CLI, or anything that can write the ingress folder) is never journaled, whatever producer it claims.
+      if (ev.kind === 'critical-proposal') {
+        this.log(`quarantining ${entry.name}: critical-proposal events come only from the worker`);
         quarantineIngress(entry.name, this.env);
         continue;
       }
