@@ -187,6 +187,43 @@ test('the recorded stage is the worker\'s; a higher claim is the agent\'s and sa
   assert.doesNotMatch(sm, /agent reports/);
 });
 
+test('the worker\'s floor stage is not an observation: no "Recorded: investigated" (R51)', () => {
+  const early = autonomous({ state: 'failed', recorded_stage: 'investigated', stage_reached: null, error: { message: 'spawn failed' } });
+  const e = renderRunDetail(early, snap(early), { now: NOW });
+  assert.doesNotMatch(e, /Recorded: investigated/);
+  assert.doesNotMatch(e, heading('Recorded stage'), 'nothing recorded and nothing claimed: no section');
+  const claimed = autonomous({ recorded_stage: 'investigated', stage_reached: 'deployed' });
+  const c = renderRunDetail(claimed, snap(claimed), { now: NOW });
+  assert.doesNotMatch(c, /Recorded:/);
+  assert.match(c, /Agent reports: deployed \(not recorded\)/);
+});
+
+// R52 (spec §7): what a full-access run wrote in production, as its observer recorded it.
+test('production writes of a full-access run: owner only, warning, escaped, omitted when absent', () => {
+  const effects = [{ scope: 'k8s.write', target: 'stg', tool: 'Bash', t: '2026-10-10T10:03:00Z' }, { scope: 'http.write', target: null, tool: XSS, t: null, ambiguous: true }];
+  const h = fix({ access: 'full', prod_effects: effects });
+  const html = renderRunDetail(h, snap(h), { now: NOW });
+  const sec = /<h3>Production writes \(full access\)<\/h3>[\s\S]*?<\/section>/.exec(html);
+  assert.ok(sec, 'section present');
+  assert.match(sec[0], /class="chip warning small"[^>]*>[\s\S]*?Written in production<\/span>/);
+  assert.match(sec[0], /<code>Bash<\/code>[\s\S]*?k8s\.write:stg[\s\S]*?<time datetime="2026-10-10T10:03:00Z"/);
+  assert.match(sec[0], /<code>&lt;img src=x onerror=alert\(1\)&gt;<\/code>[\s\S]*?http\.write · target not pinned to one/);
+  assert.doesNotMatch(sec[0], /<img/);
+  assert.doesNotMatch(renderRunDetail(fix(), snap(fix()), { now: NOW }), /Production writes/);
+  assert.doesNotMatch(renderRunDetail(h, snap(h, { capabilities: { read: true } }), { now: NOW }), /Production writes/, 'owner only');
+});
+
+test('an export of a full-access run has no production writes, and a scoped run keeps its scope count', async () => {
+  const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
+  const full = fix({ access: 'full', prod_effects: [{ scope: 'k8s.write', target: 'stg', tool: 'Bash', t: null }] });
+  const scoped = fix({ id: 'run-2', access: 'autonomous', scopes: ['jira.write', 'k8s.write:stg'] });
+  const s = normalizeSnapshot(sanitizeSnapshot(normalizeSnapshot({ ...snapshot(), handoffs: [full, scoped] }), { exportedAt: NOW, includeCheckpoints: true, includeLinks: true }));
+  assert.doesNotMatch(renderRunDetail(s.handoffs[0], s, { now: NOW }), /Production writes|k8s\.write/);
+  const html = renderRunDetail(s.handoffs[1], s, { now: NOW });
+  assert.match(html, /data-access="autonomous-scopes"[^>]*>Autonomous \+ scopes \(2\)<\/span>/);
+  assert.doesNotMatch(html, /jira\.write|k8s\.write/, 'the count travels, never the names');
+});
+
 test('attempt outcomes use the honest labels and never success styling', () => {
   const h = autonomous();
   const html = renderRunDetail(h, snap(h), { now: NOW, record: record() });
@@ -265,7 +302,7 @@ test('an export shows none of the record sections, only the recorded stage it ke
   for (const name of NEW_SECTIONS.filter((n) => n !== 'Recorded stage')) assert.doesNotMatch(html, heading(name), `${name} omitted in an export`);
   assert.match(html, /Recorded: pushed</);
   assert.doesNotMatch(html, /agent reports|no matching scope configured|load-run-record/);
-  assert.match(html, /<span class="chip small" data-access="autonomous">Autonomous<\/span>/, 'scopes are stripped, so an export shows the access level alone');
+  assert.match(html, /<span class="chip small" data-access="autonomous">Autonomous<\/span>/, 'a run without scopes exports as Autonomous');
   const { renderDetail } = await import('../../ui/views/detail.js');
   const ticketHtml = renderDetail(s.tickets[0], s, { now: NOW, tab: 'runs' });
   assert.doesNotMatch(ticketHtml, /Run notes|lesson/, 'an export has no Run notes');

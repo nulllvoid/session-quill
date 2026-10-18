@@ -110,8 +110,10 @@ const runKind = (h) => { const p = h.permissions ?? {}; return p.edit_source ? '
 function accessTier(h) {
   if (h.access === 'full') return { id: 'full', text: 'Full access', warn: true };
   if (h.access !== 'autonomous') return null;
-  const n = Array.isArray(h.scopes) ? h.scopes.length : 0;
-  return n ? { id: 'autonomous-scopes', text: `Autonomous + scopes (${n})`, warn: true, title: h.scopes.map(String).join(', ') } : { id: 'autonomous', text: 'Autonomous', warn: false };
+  // An export carries only scope_count (R53), never the scope names.
+  const named = Array.isArray(h.scopes) ? h.scopes : null;
+  const n = named ? named.length : Number.isInteger(h.scope_count) && h.scope_count > 0 ? h.scope_count : 0;
+  return n ? { id: 'autonomous-scopes', text: `Autonomous + scopes (${n})`, warn: true, title: named ? named.map(String).join(', ') : null } : { id: 'autonomous', text: 'Autonomous', warn: false };
 }
 
 // The badge words, for labels that must say what the chips show (run row buttons).

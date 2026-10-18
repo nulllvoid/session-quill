@@ -987,11 +987,11 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
    Run notes. Every value is agent or tool text, so long words and commands wrap inside the panel. */
 .run-plan { margin: 0; padding-left: 20px; max-width: 70ch; }
 .run-plan li { padding: 2px 0; overflow-wrap: anywhere; }
-.run-attempts, .run-verification, .run-critical, .run-learnings, .run-tools, .run-note-list, .run-lessons { list-style: none; margin: 0; padding: 0; }
-.run-attempts > li, .run-verification > li, .run-critical > li, .run-learnings > li, .run-tools > li, .run-lessons > li { padding: 6px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; min-width: 0; }
-.run-attempts > li:first-child, .run-verification > li:first-child, .run-critical > li:first-child, .run-learnings > li:first-child, .run-tools > li:first-child, .run-lessons > li:first-child { border-top: 0; }
+.run-attempts, .run-verification, .run-critical, .run-prod-writes, .run-learnings, .run-tools, .run-note-list, .run-lessons { list-style: none; margin: 0; padding: 0; }
+.run-attempts > li, .run-verification > li, .run-critical > li, .run-prod-writes > li, .run-learnings > li, .run-tools > li, .run-lessons > li { padding: 6px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; min-width: 0; }
+.run-attempts > li:first-child, .run-verification > li:first-child, .run-critical > li:first-child, .run-prod-writes > li:first-child, .run-learnings > li:first-child, .run-tools > li:first-child, .run-lessons > li:first-child { border-top: 0; }
 .run-attempts p, .run-verification p, .run-critical p { margin: 4px 0 0; max-width: 70ch; }
-.run-attempts code, .run-verification code, .run-critical code, .run-tools code, .run-learnings code { overflow-wrap: anywhere; }
+.run-attempts code, .run-verification code, .run-critical code, .run-prod-writes code, .run-tools code, .run-learnings code { overflow-wrap: anywhere; }
 .attempt-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; vertical-align: baseline; }
 .run-critical .critical-action { white-space: pre-wrap; }
 .run-critical .critical-state { color: var(--text-muted); }

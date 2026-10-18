@@ -29,10 +29,16 @@ const STAGE_ORDER = ['investigated', 'planned', 'changed', 'tested', 'committed'
 const STAGE_WORDS = { pr_opened: 'PR opened', ci_checked: 'CI checked' };
 const stageWord = (s) => STAGE_WORDS[s] ?? s;
 
+// recordedStage() returns 'investigated' when it saw no evidence at all: that floor is a default,
+// not an observation, so it is never shown as "Recorded" (R51).
+const STAGE_FLOOR = 'investigated';
+
 function stageLine(h) {
-  if (!STAGE_ORDER.includes(h.recorded_stage)) return '';
-  const rec = h.recorded_stage;
   const claim = STAGE_ORDER.includes(h.stage_reached) ? h.stage_reached : null;
+  if (!STAGE_ORDER.includes(h.recorded_stage) || h.recorded_stage === STAGE_FLOOR) {
+    return claim ? `<p>${esc(`Agent reports: ${stageWord(claim)} (not recorded)`)}</p><p class="small muted">The worker saw no test gate pass, commit, push or pull request for this run.</p>` : '';
+  }
+  const rec = h.recorded_stage;
   let text = `Recorded: ${stageWord(rec)}`;
   if (claim && claim !== rec) text += ` · agent reports: ${stageWord(claim)}${STAGE_ORDER.indexOf(claim) > STAGE_ORDER.indexOf(rec) ? ' (not recorded)' : ''}`;
   return `<p>${esc(text)}</p><p class="small muted">The recorded stage is what the worker saw for itself: the test gate passing, a commit, a push, a pull request.</p>`;
@@ -144,6 +150,23 @@ function runCriticalChanges(h, changes, snapshot, caps) {
     const state = criticalState(h, i, snapshot, caps);
     return `<li class="critical-change"><strong>${esc(recordText(c.title) || 'Untitled change')}</strong>${scopeText ? ` <span class="chip warning small">${icon('alert')}Needs write scope ${esc(scopeText)}</span>` : ''}${risk ? ` <span class="chip small">Risk: ${esc(risk)}</span>` : ''}${action ? `<p class="small">Action: <code class="critical-action">${esc(action)}</code></p>` : ''}${line('Why', c.why)}${line('Evidence', c.evidence)}${line('Verify', c.verify)}${line('Rollback', c.rollback)}${state ? `<p class="small critical-state">${state}</p>` : ''}</li>`;
   }).join('');
+}
+
+// What a full-access run wrote in production, as the observe-mode guard recorded it (spec §7, R52):
+// owner only (exports drop prod_effects), each as a warning in words. The ledger keeps the tool,
+// scope, target and time, not the command line.
+function productionWrites(h, caps, { now, tz }) {
+  if (!caps.handoff) return '';
+  const effects = recordRows(h.prod_effects);
+  if (!effects.length) return '';
+  const items = effects.map((e) => {
+    const scope = recordText(e.scope);
+    const target = recordText(e.target);
+    const where = scope ? `${scope}${target ? `:${target}` : e.ambiguous === true ? ' · target not pinned to one' : ''}` : 'scope not recorded';
+    const when = typeof e.t === 'string' && e.t ? ` ${timeEl(e.t, now, tz)}` : '';
+    return `<li><span class="chip warning small">${icon('alert')}Written in production</span> <code>${esc(recordText(e.tool) || 'tool not recorded')}</code> <span class="small">${esc(where)}</span>${when}</li>`;
+  });
+  return `<p class="small muted">Full access lifts the guard: it recorded these writes and did not stop them.</p><ul class="run-prod-writes">${items.join('')}</ul>`;
 }
 
 // What the worker filed from this run (spec §6.2): memory entries that name it (repo, machine and
@@ -258,6 +281,7 @@ ${section(`Attempts (${attempts.length})`, attempts.length ? `<ul class="run-att
 ${section('Verification', runVerification(verification))}
 ${section('Changes', changes)}
 ${section(`Critical changes (${critical.length})`, critical.length ? `<p class="small muted">Writes this run was not allowed to make. One Quill can pin to an exact action becomes its own ticket, which you approve in Runs → Needs you.</p><ul class="run-critical">${runCriticalChanges(h, critical, snapshot, caps)}</ul>` : '')}
+${section('Production writes (full access)', productionWrites(h, caps, { now, tz }))}
 ${section('Delivery', delivery)}
 ${section(`Learnings filed (${learned.length})`, learned.length ? `<ul class="run-learnings">${learned.map((e) => learningItemOfRun(e, snapshot, caps)).join('')}</ul>` : '')}
 ${section('Tools used', toolsUsed(attempts))}

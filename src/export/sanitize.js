@@ -114,7 +114,9 @@ function sanitizeSession(s, o) {
 const HANDOFF_PLAIN_FIELDS = ['schema_version', 'store_id', 'id', 'revision', 'created_at', 'updated_at', 'ticket_id', 'request_id', 'mode', 'note', 'permissions', 'access', 'base_ticket_revision', 'base_next_action', 'repo_id', 'base_commit', 'branch', 'state', 'requested_at', 'started_at', 'finished_at', 'deadline_at', 'error', 'children_ids', 'test_results', 'commit_sha', 'uncertain_effects', 'retry_of', 'batch_id', 'recipe', 'legacy', 'outputs', 'deadline_ms', 'timings', 'cancel_requested', 'proposal_id', 'proposal'];
 const HANDOFF_SHAPED_FIELDS = ['test_gate', 'file_effects', 'suggestions', 'pr_url', 'result_summary', 'result_confidence', 'result_sources', 'changed_files'];
 // Counts and the recorded stage stand in for the attempt, learning and critical-change records, which stay local.
-const HANDOFF_COUNT_FIELDS = ['attempt_count', 'learning_count', 'critical_count', 'recorded_stage'];
+// scope_count (R53) says how many write scopes a run had, so an export can say "Autonomous + scopes (n)"; the
+// scope names, targets and fingerprints never travel.
+const HANDOFF_COUNT_FIELDS = ['attempt_count', 'learning_count', 'critical_count', 'recorded_stage', 'scope_count'];
 export const HANDOFF_EXPORT_FIELDS = [...HANDOFF_PLAIN_FIELDS, ...HANDOFF_SHAPED_FIELDS, ...HANDOFF_COUNT_FIELDS];
 
 // Local-only tickets never leave the machine: not in exports, mirrors, publishers or tracker pushes.
@@ -152,6 +154,8 @@ function sanitizeHandoff(h, o) {
   if (learnings !== undefined) out.learning_count = learnings;
   if (critical !== undefined) out.critical_count = critical;
   if (typeof h.recorded_stage === 'string') out.recorded_stage = h.recorded_stage;
+  const scopes = countOf(h, 'scopes', 'scope_count');
+  if (scopes) out.scope_count = scopes;
   return out;
 }
 

@@ -61,6 +61,12 @@ test('static export and sanitized snapshot never contain the sentinel or a local
 test('exported handoffs carry counts and the stage, not the records', () => {
   const out = sanitizeSnapshot(fixture(), ALL).handoffs[0];
   assert.deepEqual([out.attempt_count, out.learning_count, out.critical_count, out.recorded_stage], [1, 1, 1, 'attempt']);
+  assert.equal(out.scope_count, 2, 'a scoped run exports how many scopes it had (R53), never which');
+  assert.equal(JSON.stringify(out).includes('k8s.write'), false, 'scope names and targets never leave the dashboard');
+  const forged = fixture();
+  delete forged.handoffs[0].scopes;
+  forged.handoffs[0].scope_count = 'k8s.write:prod';
+  assert.equal('scope_count' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a numeric count travels');
   for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report']) assert.equal(k in out, false, k);
   assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
   assert.ok(Object.keys(out).every((k) => HANDOFF_EXPORT_FIELDS.includes(k)));
