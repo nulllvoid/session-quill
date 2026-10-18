@@ -25,6 +25,7 @@ const COMMANDS = {
   repo: () => import('./commands/repo.js'),
   tracker: () => import('./commands/tracker.js'),
   mirror: () => import('./commands/mirror.js'),
+  memory: () => import('./commands/memory.js'),
 };
 
 // Every command the dispatcher knows; tests enumerate it to check the in-run refusal.
@@ -61,6 +62,8 @@ Usage: quill <command> [options]
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
   agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
+  memory list [--repo <id>] [--machine] [--quarantine] [--json]   memory show <id> [--json]
+  memory retire <id>                        memory pin <id> [--unpin]   memory note "<text>" (--repo <id> | --machine) [--section s] [--key k]
   agent install <https git URL|folder> [--ref r] [--only a,b] [--replace] [--confirm]   agent uninstall <recipe> [--force]
   publish list [--json]                     publish [<name>] [--confirm]
   tracker import [--json]                   (open issues assigned to you become tickets)
@@ -68,7 +71,7 @@ Usage: quill <command> [options]
   migrate --source <dir> [--profile <name|path.json>] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>
   hook <EventName>                          (reads host JSON on stdin)
 
-Inside an agent run (QUILL_HANDOFF_ID set) only status, doctor, ticket show|list|children, agent list|show|suggestions, handoff list and repo list run; everything else exits 2 (cli-in-run).
+Inside an agent run (QUILL_HANDOFF_ID set) only status, doctor, ticket show|list|children, agent list|show|suggestions, handoff list, repo list and memory list|show (without quarantined learnings) run; everything else exits 2 (cli-in-run).
 `;
 
 export async function main(argv, { env = process.env, stdout, stderr, stdin } = {}) {

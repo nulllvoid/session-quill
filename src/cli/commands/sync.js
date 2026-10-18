@@ -34,9 +34,12 @@ async function sync(ctx, io, flags) {
   return 0;
 }
 
-export function replayToStaging(ctx, into) {
+// The state the journal replays to. readOnly (commands that only read while the worker may be
+// appending) never opens the journal: open() would rewrite a torn last line, which may be the line
+// the worker is writing; read() stops before it instead.
+export function replayState(ctx, { readOnly = false } = {}) {
   const j = new Journal(journalPath(ctx.env));
-  const info = fs.existsSync(journalPath(ctx.env)) ? j.open() : { lastSequence: 0 };
+  const info = readOnly || !fs.existsSync(journalPath(ctx.env)) ? { lastSequence: 0 } : j.open();
   j.close();
   if (info.corrupt) throw new TrackerError('journal-corrupt', 'journal has mid-log corruption; recovery required');
   const state = createState({
@@ -45,6 +48,11 @@ export function replayToStaging(ctx, into) {
     approval_phrases_enabled: ctx.config.approval_phrases_enabled, projects: ctx.config.projects, repos: ctx.config.repos,
   });
   for (const ev of j.read()) applyEvent(state, ev);
+  return { state, info };
+}
+
+export function replayToStaging(ctx, into) {
+  const { state, info } = replayState(ctx);
   ensureDir(path.join(into, 'tickets'));
   ensureDir(path.join(into, 'sessions'));
   ensureDir(path.join(into, 'handoffs'));

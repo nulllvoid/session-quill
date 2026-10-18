@@ -224,3 +224,24 @@ test('a row is one button with the state in its label and a plain test-gate chip
   assert.match(html, /Tests failed/);
   assert.doesNotMatch(html, /<details/, 'nothing interactive nests inside the row button');
 });
+
+test('Needs you holds quarantined learnings and memory conflicts as their own item types, counted', () => {
+  const learning = (id, extra = {}) => ({ id, scope: 'repo', repo_id: 'demo', section: 'build', text: `Held ${id}`, trust: 'quarantined', quarantine_reason: 'cited tool output', created_at: '2026-10-09T10:00:00Z', revision: 1, ...extra });
+  const memory = {
+    entries: [learning('q1'), learning('q2', { scope: 'machine', repo_id: null }), { id: 'v1', scope: 'repo', repo_id: 'demo', trust: 'verified', text: 'x', created_at: '2026-10-09T10:00:00Z' }],
+    conflicts: [{ id: 'conflict:repo:demo:test-cmd', scope: 'repo', repo_id: 'demo', key: 'test-cmd', entry_ids: ['a', 'b'], at: '2026-10-09T11:00:00Z' }],
+  };
+  const s = snap([]);
+  const tabs = runTabs(s, EMPTY_FILTERS, NOW, { memory });
+  assert.deepEqual(tabs.needs.map((i) => i.kind).sort(), ['learning', 'learning', 'memory-conflict']);
+  assert.equal(needsYouCount(s, NOW, memory), 3);
+  assert.equal(needsYouCount(s, NOW), 0, 'without memory (an export, or before it loads) nothing is counted');
+  assert.equal(runTabs(s, { ...EMPTY_FILTERS, category: 'bugfix' }, NOW, { memory }).needs.length, 0, 'ticket filters hide memory items');
+  assert.equal(runTabs(s, { ...EMPTY_FILTERS, repo: 'demo' }, NOW, { memory }).needs.length, 2, 'a repo filter keeps that repo\'s items');
+  const html = renderRuns(s, EMPTY_FILTERS, { now: NOW, tab: 'needs', memory });
+  assert.match(html, /id="run-tab-needs"[^>]*>Needs you <span class="count">3<\/span>/);
+  assert.match(html, /<li class="run-row memory-item" data-state="quarantined" data-entry="q1">[\s\S]*?Quarantined learning[\s\S]*?Held q1[\s\S]*?Held: cited tool output[\s\S]*?data-action="open-memory" data-tab="quarantine" data-entry="q1"/);
+  assert.match(html, /<li class="run-row memory-item" data-state="conflict"[\s\S]*?Memory conflict[\s\S]*?test-cmd[\s\S]*?data-action="open-memory" data-tab="repo" data-repo="demo"/);
+  const exported = snap([], { meta: { ...snapshot().meta, exported_at: NOW } });
+  assert.equal(runTabs(exported, EMPTY_FILTERS, NOW, { memory }).needs.length, 0, 'an export has no Needs you');
+});

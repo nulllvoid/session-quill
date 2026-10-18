@@ -65,7 +65,19 @@ function hasFilters(f = {}) {
   return !!(f.project || f.category || f.tag || f.repo || f.stale || f.q);
 }
 
-export function runTabs(snapshot, filters, now) {
+// What of memory needs the owner (spec §6.4): each quarantined learning, and each group of entries
+// that disagree on a key. Memory reaches the page only from the owner endpoint, never an export.
+function memoryNeeds(memory, filters) {
+  if (!memory) return [];
+  const f = filters ?? {};
+  // A memory item has no ticket: only a repo filter can select it, and only its own repo.
+  const keep = (repoId) => !hasFilters(f) || (!!f.repo && repoId === f.repo && !f.project && !f.category && !f.tag && !f.stale && !f.q);
+  const learnings = (memory.entries ?? []).filter((e) => e.trust === 'quarantined' && keep(e.repo_id ?? null)).map((e) => ({ kind: 'learning', id: e.id, at: e.created_at ?? '', entry: e }));
+  const groups = (memory.conflicts ?? []).filter((c) => keep(c.repo_id ?? null)).map((c) => ({ kind: 'memory-conflict', id: c.id, at: c.at ?? '', conflict: c }));
+  return [...learnings, ...groups];
+}
+
+export function runTabs(snapshot, filters, now, { memory = null } = {}) {
   const keep = (ticketId) => {
     const t = ticketById(snapshot, ticketId);
     return t ? matchesFilters(t, filters, snapshot) : !hasFilters(filters);
@@ -74,7 +86,7 @@ export function runTabs(snapshot, filters, now) {
   const proposals = (snapshot.run_proposals ?? []).filter((p) => (p.state === 'proposed' || p.state === 'expired') && keep(p.ticket_id)).map((p) => ({ kind: 'proposal', id: p.id, at: p.proposed_at ?? '', proposal: p }));
   const nowMs = Date.parse(now);
   const tabs = {
-    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed'), ...runs.filter((x) => needsYou(snapshot, x.run, now))],
+    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed'), ...runs.filter((x) => needsYou(snapshot, x.run, now)), ...memoryNeeds(memory, filters)],
     live: runs.filter((x) => LIVE.has(x.run.state)),
     failed: runs.filter((x) => FAILED.has(x.run.state)),
     all: [...proposals, ...runs.filter((x) => !Number.isFinite(Date.parse(x.at)) || nowMs - Date.parse(x.at) <= ALL_WINDOW_MS)],
@@ -136,6 +148,7 @@ export function liveRunCount(snapshot) {
   return (snapshot.handoffs ?? []).filter((h) => LIVE.has(h.state)).length;
 }
 
-export function needsYouCount(snapshot, now) {
-  return runTabs(snapshot, {}, now).needs.length;
+// The global attention count: the unfiltered Needs you list, memory items included (design system §7).
+export function needsYouCount(snapshot, now, memory = null) {
+  return runTabs(snapshot, {}, now, { memory }).needs.length;
 }

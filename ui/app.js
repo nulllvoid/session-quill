@@ -1,6 +1,7 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
 import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER, scopeChoices } from './components.js';
-import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
+import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, OWNER_ONLY_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
+import { renderMemory, MEMORY_TABS } from './views/memory.js';
 import { renderRuns } from './views/runs.js';
 import { renderRunDetail, renderRunNotFound } from './views/run-detail.js';
 import { renderPickNext } from './views/picknext.js';
@@ -19,7 +20,7 @@ import { renderBulkActionBar, bulkBarShape, renderBulkHandoffForm, renderBulkRes
 import { freshProposals, proposalNotice } from './lib/proposals.js';
 import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, mergeUndo, batchDialogUpdate, withoutIds, pruneChecked, activeBatches } from './lib/bulk.js';
 
-const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today', 'runs'];
+const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today', 'runs', 'memory'];
 const POLL_VISIBLE_MS = 2000;
 const POLL_HIDDEN_MS = 30000;
 
@@ -62,7 +63,18 @@ const appState = {
   sending: new Map(),
   // Ids of open proposed runs already seen (ADR 0025); null until the first poll.
   proposalsSeen: null,
+  // Memory (spec §6.4): owner-only, fetched from its own endpoint, never part of a snapshot.
+  memory: null,
+  memoryStatus: null,
+  memoryTab: null,
+  memoryRepo: null,
+  memoryEditing: null,
+  memoryDrafts: {},
 };
+
+// A read-only snapshot (export) has no owner-only views, whatever its address says.
+const staticPage = () => typeof window !== 'undefined' && !!window.__SNAPSHOT__;
+const ownerView = (view) => !(OWNER_ONLY_VIEWS.has(view) && staticPage());
 
 const BULK_VIEWS = new Set(['board', 'picknext']);
 
@@ -98,19 +110,21 @@ function announce(text) { const el = $('#live'); if (el) { el.textContent = ''; 
 function readHash() {
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const view = params.get('view');
-  if (VIEWS.includes(view)) appState.view = view;
+  if (VIEWS.includes(view) && ownerView(view)) appState.view = view;
   appState.filters = filtersFromHash(location.hash, appState.filters, VIEWS);
   appState.selected = params.get('ticket') || null;
   appState.treeRoot = params.get('root') || null;
   appState.runTab = params.get('tab') || null;
   appState.selectedRun = appState.view === 'runs' ? params.get('run') || null : null;
+  appState.memoryTab = appState.view === 'memory' && MEMORY_TABS.includes(params.get('mtab')) ? params.get('mtab') : null;
+  appState.memoryRepo = appState.view === 'memory' ? params.get('mrepo') || null : null;
   const section = params.get('section');
   if (appState.selected && DETAIL_TABS.includes(section)) appState.detailTab = section;
 }
 
 // The drawer belongs to the view it was opened from: switching views closes it.
 function setView(view) {
-  if (view === appState.view) return;
+  if (view === appState.view || !ownerView(view)) return;
   appState.view = view;
   appState.treeRoot = null;
   appState.selected = null;
@@ -120,6 +134,9 @@ function setView(view) {
   appState.detailExpanded = false;
   appState.editingNext = null;
   appState.loadedTicket = null;
+  appState.memoryTab = null;
+  appState.memoryRepo = null;
+  appState.memoryEditing = null;
 }
 
 function writeHash() {
@@ -132,6 +149,8 @@ function writeHash() {
   if (appState.treeRoot) params.set('root', appState.treeRoot);
   if (appState.view === 'runs' && appState.runTab) params.set('tab', appState.runTab);
   if (appState.view === 'runs' && appState.selectedRun) params.set('run', appState.selectedRun);
+  if (appState.view === 'memory' && appState.memoryTab) params.set('mtab', appState.memoryTab);
+  if (appState.view === 'memory' && appState.memoryRepo) params.set('mrepo', appState.memoryRepo);
   const next = `#${params.toString()}`;
   if (location.hash !== next) history.replaceState(null, '', next);
 }
@@ -165,7 +184,7 @@ function render() {
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
   const workspaceOpen = $('#sidebar .workspace-details')?.open;
-  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen }));
+  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen, memory: appState.memory }));
   if (workspaceOpen) $('#sidebar .workspace-details').open = true;
   // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
   const healthOpen = [...document.querySelectorAll('#header .health-pop')].flatMap((p, i) => (p.open ? [i] : []));
@@ -185,10 +204,16 @@ function render() {
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
-  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun });
+  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun, memory: appState.memory });
+  else if (appState.view === 'memory') html = renderMemory(appState.memory, s, { now, pending, tab: appState.memoryTab, repo: appState.memoryRepo, editing: appState.memoryEditing, drafts: appState.memoryDrafts, status: appState.memoryStatus, filters: appState.filters, online: appState.online });
   if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
   renderBulkBar(s);
+  // A focused element of the page with an id (a Memory edit, the repository selector, a tab, an
+  // entry's text) keeps focus, and a text field its caret, across a re-render; typed text is kept in state.
+  const active = document.activeElement;
+  const keep = active && active !== main && main.contains(active) && active.id ? { id: active.id, start: active.tagName === 'TEXTAREA' ? active.selectionStart : null, end: active.tagName === 'TEXTAREA' ? active.selectionEnd : null } : null;
   setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
+  if (keep) { const el = document.getElementById(keep.id); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (keep.start !== null && el.setSelectionRange) el.setSelectionRange(keep.start, keep.end); } }
   main.scrollTop = renderedView === appState.view ? scroll : 0;
   renderedView = appState.view;
   disclosures.forEach((id) => { const el = main.querySelector(`[data-disclosure="${CSS.escape(id)}"]`); if (el) el.open = true; });
@@ -400,6 +425,24 @@ function renderDialog() {
   }
 }
 
+// Memory comes from the owner endpoint when the worker publishes a new generation (and on first
+// load), never every poll; a load that crossed a generation change loads again.
+let memoryLoad = null;
+function loadMemory() {
+  if (!api || api.static) return null;
+  if (memoryLoad) return memoryLoad;
+  const gen = appState.snapshot ? appState.snapshot.generation_id : null;
+  memoryLoad = api.getMemory()
+    .then((m) => { appState.memory = m && Array.isArray(m.entries) ? { entries: m.entries, conflicts: Array.isArray(m.conflicts) ? m.conflicts : [] } : { entries: [], conflicts: [] }; appState.memoryStatus = null; })
+    .catch((err) => { appState.memoryStatus = { error: err.message || 'the request failed' }; })
+    .finally(() => {
+      memoryLoad = null;
+      render();
+      if (!appState.memoryStatus && appState.snapshot && appState.snapshot.generation_id !== gen) loadMemory();
+    });
+  return memoryLoad;
+}
+
 async function poll() {
   clearTimeout(pollTimer);
   try {
@@ -411,6 +454,7 @@ async function poll() {
     syncRequests(snap);
     // Content refs are content-addressed, so loaded text stays valid across generations.
     if (changed) { appState.contentStatus = Object.fromEntries(Object.entries(appState.contentStatus).filter(([, v]) => v === 'loading' || v === 'reloading')); appState.loadedTicket = null; }
+    if (!api.static && (changed || (!appState.memory && !appState.memoryStatus))) loadMemory();
     render();
   } catch (err) {
     if (err.code === 'unauthenticated') { appState.error = err.message; appState.online = false; }
@@ -437,7 +481,8 @@ function syncRequests(snap) {
       appState.requests.set(r.id, { ...local, ...r, original: local ? local.original : null });
       if (prev && prev !== r.state && ['applied', 'conflict', 'failed', 'cancelled'].includes(r.state)) {
         const label = r.kind.replace(/-/g, ' ');
-        const text = `${label} ${r.state}${r.state === 'conflict' ? ': the ticket changed first' : ''}${r.state === 'failed' && r.error ? `: ${r.error.message}` : ''}`;
+        if (r.kind === 'memory-edit' && r.state === 'applied') delete appState.memoryDrafts[r.target_id];
+        const text = `${label} ${r.state}${r.state === 'conflict' ? (r.kind.startsWith('memory-') ? ': the entry changed first' : ': the ticket changed first') : ''}${r.state === 'failed' && r.error ? `: ${r.error.message}` : ''}`;
         announce(text);
         setReceipt(`${text} (request ${r.id.slice(0, 8)}, ${r.updated_at ?? nowIso()})`, r.state === 'applied' ? 'good' : r.state === 'cancelled' ? 'neutral' : 'critical');
       }
@@ -495,8 +540,23 @@ function ticketRevision(id) {
   return t ? t.revision : null;
 }
 
+function memoryRevision(id) {
+  const e = appState.memory ? appState.memory.entries.find((x) => x.id === id) : null;
+  return e ? e.revision : null;
+}
+
+// One memory change (spec §6.4) against the revision the owner saw; ignored while one is in flight
+// for the same entry (the buttons are disabled too).
+function submitMemory(kind, id, revision, payload, announceText) {
+  if ([...appState.requests.values()].some((r) => r.target_id === id && typeof r.kind === 'string' && r.kind.startsWith('memory-') && ['sending', 'pending', 'applying'].includes(r.state))) return;
+  submit({ kind, target_id: id, expected_revision: Number.isInteger(revision) ? revision : memoryRevision(id), payload }, { announceText });
+  // The entry's buttons are disabled while the change is in flight: keep focus on the entry itself.
+  document.getElementById(`memory-text-${id}`)?.focus({ preventScroll: true });
+}
+
 // Inbox requests are checked against the session's unlinked-work revision, not a ticket's.
 function targetRevision(r) {
+  if (typeof r.kind === 'string' && r.kind.startsWith('memory-')) return memoryRevision(r.target_id);
   if (r.kind === 'attach-unbound' || r.kind === 'dismiss-unbound') {
     const sess = (appState.snapshot.sessions ?? []).find((x) => x.id === r.target_id);
     return sess && sess.unbound_work ? sess.unbound_work.revision : null;
@@ -542,6 +602,40 @@ function handleAction(el) {
     case 'run-next': stepRun(1); break;
     case 'open-ticket-from-run': { const id = el.dataset.ticket; setView('board'); openDetail(id, null); break; }
     case 'open-runs': setView('runs'); appState.runTab = el.dataset.tab || null; render(); break;
+    case 'open-memory': {
+      setView('memory');
+      appState.memoryTab = MEMORY_TABS.includes(el.dataset.tab) ? el.dataset.tab : null;
+      appState.memoryRepo = el.dataset.repo || null;
+      render();
+      const target = el.dataset.entry ? $(`#main .memory-entry[data-entry="${CSS.escape(el.dataset.entry)}"]`) : null;
+      if (target) target.scrollIntoView({ block: 'nearest' });
+      $(`#memory-tab-${appState.memoryTab ?? 'repo'}`)?.focus();
+      break;
+    }
+    case 'memory-tab': appState.memoryTab = el.dataset.tab; appState.memoryEditing = null; render(); document.querySelector(`#memory-tab-${CSS.escape(appState.memoryTab)}`)?.focus(); break;
+    case 'memory-reload': appState.memoryStatus = null; render(); loadMemory(); break;
+    case 'memory-approve': submitMemory('memory-approve', el.dataset.entry, Number(el.dataset.revision), {}, 'Approving the learning; later runs receive it as your entry'); break;
+    case 'memory-pin': {
+      const pinned = el.dataset.pinned === 'true';
+      submitMemory('memory-pin', el.dataset.entry, Number(el.dataset.revision), { pinned }, pinned ? 'Pinning the entry; pinned entries are delivered first and never go stale' : 'Unpinning the entry');
+      break;
+    }
+    case 'memory-retire': submitMemory('memory-forget', el.dataset.entry, Number(el.dataset.revision), {}, 'Retiring the entry; undo within 10 seconds'); break;
+    case 'memory-edit': {
+      appState.memoryEditing = el.dataset.entry;
+      render();
+      const ta = $(`#main textarea[data-memory-draft="${CSS.escape(el.dataset.entry)}"]`);
+      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+      break;
+    }
+    case 'memory-edit-cancel': {
+      const id = el.dataset.entry;
+      appState.memoryEditing = null;
+      delete appState.memoryDrafts[id];
+      render();
+      $(`#main [data-action="memory-edit"][data-entry="${CSS.escape(id)}"]`)?.focus();
+      break;
+    }
     case 'toggle-more': appState.moreOpen = !appState.moreOpen; render(); break;
     case 'toggle-sidebar': appState.sidebarCollapsed = !appState.sidebarCollapsed; try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage may be unavailable */ } render(); document.querySelector('[data-action="toggle-sidebar"]')?.focus(); break;
     case 'expand-detail': appState.detailExpanded = !appState.detailExpanded; render(); break;
@@ -805,6 +899,14 @@ function handleSubmit(form) {
     const url = form.dataset.url;
     closeDialog();
     submit({ kind: 'repo-clone', target_id: ticketId, expected_revision: revision, payload: { url } }, { announceText: `Cloning the repository for ${t ? t.key : 'the ticket'}` });
+  } else if (kind === 'memory-edit') {
+    const id = form.dataset.entry;
+    const text = String(fd.get('text') ?? '').trim();
+    if (!text) { announce('The wording cannot be empty'); return; }
+    // The draft stays until the edit applies, so a conflict or failure loses nothing.
+    appState.memoryDrafts[id] = text;
+    appState.memoryEditing = null;
+    submitMemory('memory-edit', id, revision, { text }, 'Saving your wording as an owner entry');
   } else if (kind === 'bulk-handoff') {
     submitBulkHandoff(form);
   } else if (kind === 'bulk-status') {
@@ -825,6 +927,14 @@ function onKey(e) {
     const i = tabs.indexOf(runTab.dataset.tab);
     appState.runTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
     render(); document.querySelector(`#run-tab-${CSS.escape(appState.runTab)}`)?.focus(); return;
+  }
+  const memoryTab = target?.closest('[role="tab"][data-action="memory-tab"]');
+  if (memoryTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault();
+    const i = MEMORY_TABS.indexOf(memoryTab.dataset.tab);
+    appState.memoryTab = MEMORY_TABS[e.key === 'Home' ? 0 : e.key === 'End' ? MEMORY_TABS.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : MEMORY_TABS.length - 1)) % MEMORY_TABS.length];
+    appState.memoryEditing = null;
+    render(); document.querySelector(`#memory-tab-${appState.memoryTab}`)?.focus(); return;
   }
   const detailTab = target?.closest('[role="tab"][data-action="detail-tab"]');
   if (detailTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
@@ -848,6 +958,7 @@ function onKey(e) {
     if (appState.selected && !inInput) { e.preventDefault(); closeDetail(); return; }
     if (appState.selectedRun && !inInput) { e.preventDefault(); closeRun(); return; }
     if (!dialogOpen && selectionKey('Escape', { checkedSize: appState.checked.size }) && (!inInput || target.dataset.check)) { e.preventDefault(); setChecked(new Set(), { anchor: null }); return; }
+    if (inInput && target.form && target.form.dataset.form === 'memory-edit') { e.preventDefault(); const id = target.form.dataset.entry; appState.memoryEditing = null; render(); $(`#main [data-action="memory-edit"][data-entry="${CSS.escape(id)}"]`)?.focus(); return; }
     if (inInput && target.form && target.form.dataset.form === 'next-action') { target.value = ticketById(appState.snapshot, target.form.dataset.ticket).next_action; target.blur(); appState.editingNext = null; render(); return; }
   }
   if (inInput || dialogOpen) {
@@ -855,7 +966,7 @@ function onKey(e) {
     return;
   }
   if (e.key === '/') { e.preventDefault(); const s = $('#search'); if (s) s.focus(); return; }
-  if (SHORTCUT_VIEWS[e.key]) { appState.moreOpen = false; setView(SHORTCUT_VIEWS[e.key]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
+  if (SHORTCUT_VIEWS[e.key] && ownerView(SHORTCUT_VIEWS[e.key])) { appState.moreOpen = false; setView(SHORTCUT_VIEWS[e.key]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
@@ -911,6 +1022,7 @@ function scopeBlockers(form, scoped) {
 
 function onChange(e) {
   const el = e.target;
+  if (el.dataset && el.dataset.memoryRepo !== undefined) { appState.memoryRepo = el.value || null; appState.memoryEditing = null; render(); $('#memory-repo')?.focus(); return; }
   if (el.dataset.filter) {
     appState.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
     appState.boardPages = {};
@@ -995,6 +1107,8 @@ export function startApp() {
     const box = form && [...form.querySelectorAll('input[name="scope"]')].find((b) => b.value === t.dataset.scopeTarget);
     if (box && !box.disabled && !box.checked) { box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); }
   });
+  // A Memory edit's text is kept as it is typed, so a re-render or a failed save never loses it.
+  document.addEventListener('input', (e) => { const t = e.target; if (t instanceof HTMLTextAreaElement && t.dataset.memoryDraft) appState.memoryDrafts[t.dataset.memoryDraft] = t.value; });
   document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { appState.filters.q = e.target.value; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
   document.addEventListener('submit', (e) => { const form = e.target.closest('form[data-form]'); if (form) { e.preventDefault(); handleSubmit(form); } });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

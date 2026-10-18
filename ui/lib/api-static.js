@@ -10,6 +10,8 @@ export function createApi({ staticSnapshot = null } = {}) {
     submit: refuse,
     cancel: refuse,
     getRequest: async () => null,
+    // A snapshot carries no memory (spec §9): there is nothing to load.
+    getMemory: async () => null,
     exportPreview: refuse,
     exportRun: refuse,
   };

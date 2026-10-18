@@ -75,7 +75,9 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
 
 export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [], handoff_limits = null, onboarding = null, autonomy = null }) {
   const dayAgo = addMs(generated_at, -24 * HOUR);
-  const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo);
+  // Memory requests keep their kind and state but not their text: memory never reaches a snapshot (spec §9).
+  const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo)
+    .map((r) => (typeof r.kind === 'string' && r.kind.startsWith('memory-') ? { ...r, payload: r.payload && typeof r.payload.pinned === 'boolean' ? { pinned: r.payload.pinned } : {} } : r));
   const cloning = new Set(requests.filter((r) => r.kind === 'repo-clone' && ['pending', 'applying'].includes(r.state)).map((r) => r.target_id));
   return {
     schema_version: 1,

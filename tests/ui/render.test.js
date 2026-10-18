@@ -633,13 +633,13 @@ test('Sessions links the checkpoint to the ticket it was captured on, not the cu
   assert.doesNotMatch(renderSessions(missing, noFilters, { now: NOW, page: 0 }), /View checkpoints/);
 });
 
-test('the sidebar lists Runs with shortcut 7 and a live count; 1 to 6 keep their views', async () => {
+test('the sidebar lists Runs with shortcut 7 and a live count; 1 to 6 keep their views (8 is Memory)', async () => {
   const { renderSidebar, SHORTCUT_VIEWS } = await import('../../ui/views/header.js');
   const s = snapshot({ handoffs: [{ ...snapshot().handoffs[0], id: 'q1', state: 'queued' }] });
   const side = renderSidebar(s, { view: 'runs' });
   assert.match(side, /data-view="runs"[^>]*aria-selected="true"[^>]*aria-keyshortcuts="7"/);
   assert.match(side, /data-view="runs"[\s\S]*?<span class="badge"[^>]*>1<\/span>/);
-  assert.deepEqual(SHORTCUT_VIEWS, { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs' });
+  assert.deepEqual(SHORTCUT_VIEWS, { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs', 8: 'memory' });
 });
 
 test('ticket detail: a run strip under the title and a Runs tab with runs, proposals and recipes', () => {
@@ -668,7 +668,7 @@ test('ticket detail: a run strip under the title and a Runs tab with runs, propo
 
 test('navigation is grouped, Runs has a live count and an attention dot, phones get More', async () => {
   const { renderSidebar, NAV_ITEMS, PHONE_PRIMARY } = await import('../../ui/views/header.js');
-  assert.deepEqual(NAV_ITEMS.map((n) => n[0]), ['picknext', 'board', 'runs', 'today', 'sessions', 'deployments', 'tree']);
+  assert.deepEqual(NAV_ITEMS.map((n) => n[0]), ['picknext', 'board', 'runs', 'today', 'sessions', 'deployments', 'tree', 'memory']);
   assert.deepEqual([...PHONE_PRIMARY], ['picknext', 'board', 'runs', 'today']);
   const base = snapshot();
   const s = { ...base, handoffs: [{ ...base.handoffs[0], id: 'f', ticket_id: base.tickets[0].id, state: 'failed', finished_at: '2026-10-02T11:00:00Z' }] };

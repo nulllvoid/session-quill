@@ -169,7 +169,8 @@ export function hasUnlinkedWork(session) {
 }
 
 export function requestFeedback(req, { now }) {
-  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run' }[req.kind] ?? req.kind;
+  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run', 'memory-approve': 'approve learning', 'memory-edit': 'memory edit', 'memory-forget': 'retire', 'memory-pin': req.payload && req.payload.pinned === false ? 'unpin' : 'pin', 'memory-note': 'owner note' }[req.kind] ?? req.kind;
+  const memory = typeof req.kind === 'string' && req.kind.startsWith('memory-');
   let body = '';
   if (req.state === 'sending') body = 'Sending to the worker…';
   else if (req.state === 'pending') {
@@ -180,11 +181,13 @@ export function requestFeedback(req, { now }) {
   else if (req.state === 'conflict') {
     const current = req.result && req.result.current ? req.result.current : {};
     const proposed = req.payload ?? {};
-    body = `<strong>Conflict:</strong> the ticket changed to revision ${esc(req.error ? req.error.current_revision : '?')} first. Current: <code>${esc(JSON.stringify(current[req.kind === 'set-status' ? 'status' : 'next_action'] ?? current))}</code>; proposed: <code>${esc(JSON.stringify(proposed.status ?? proposed.next_action ?? proposed))}</code>. <button type="button" class="btn small" data-action="resubmit-request" data-request="${attr(req.id)}">Resubmit against new revision</button> <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Discard</button>`;
+    if (memory) body = `<strong>Conflict:</strong> the entry changed to revision ${esc(req.error ? req.error.current_revision : '?')} first, so nothing was changed. Review it and try again. <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Dismiss</button>`;
+    else body = `<strong>Conflict:</strong> the ticket changed to revision ${esc(req.error ? req.error.current_revision : '?')} first. Current: <code>${esc(JSON.stringify(current[req.kind === 'set-status' ? 'status' : 'next_action'] ?? current))}</code>; proposed: <code>${esc(JSON.stringify(proposed.status ?? proposed.next_action ?? proposed))}</code>. <button type="button" class="btn small" data-action="resubmit-request" data-request="${attr(req.id)}">Resubmit against new revision</button> <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Discard</button>`;
   } else if (req.state === 'failed') body = `<strong>Failed:</strong> ${esc(req.error ? req.error.message : 'unknown error')}${req.error && req.error.retryable ? ` <button type="button" class="btn small" data-action="retry-request" data-request="${attr(req.id)}">Retry</button>` : ''} <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Dismiss</button>`;
   else if (req.state === 'cancelled') body = 'Cancelled.';
+  else if (req.state === 'already-applied' && memory) body = 'Too late to undo: the change was already applied.';
   else if (req.state === 'already-applied') body = 'Cancellation lost the race: the edit was already applied. <button type="button" class="btn small" data-action="reverse-request" data-request="${attr(req.id)}">Revert with a new revision-checked edit</button>';
-  const proposedValue = req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? req.payload.url ?? null);
+  const proposedValue = memory ? null : req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? req.payload.url ?? null);
   return `<div class="request-feedback" data-state="${attr(req.state)}" role="group" aria-label="${attr(`Pending ${label} change`)}">${requestChip(req.state)} <span class="label">${esc(label)}</span>${proposedValue ? ` → <span class="proposed">${esc(proposedValue)}</span>` : ''} <span class="feedback-body">${body}</span></div>`;
 }
 
@@ -538,4 +541,33 @@ export function proposalItem(p, snapshot, { now, pending = [], withTicket = fals
 // Whether the ticket already has a run, which an approval would then report instead of queueing.
 export function hasActiveRun(snapshot, ticketId) {
   return (snapshot.handoffs ?? []).some((h) => h.ticket_id === ticketId && RUNNING.has(h.state));
+}
+
+// Memory trust (spec §6.2, ADR 0027), always in words: the colour only repeats it.
+export const TRUST_LABELS = { owner: 'Owner', verified: 'Verified', sourced: 'Sourced', observed: 'Observed', quarantined: 'Quarantined' };
+const TRUST_TITLES = {
+  owner: 'Written, approved or edited by you',
+  verified: 'Quill saw it: the worker observed it, or the run\'s own command is in the ledger with the claimed result',
+  sourced: 'The cited file and line exist; the claim itself is not proven',
+  observed: 'The run said so; Quill could not match it to a recorded command',
+  quarantined: 'Held for your approval; never delivered to runs',
+};
+
+export function trustChip(trust) {
+  return `<span class="chip trust small" data-trust="${attr(trust)}" title="${attr(TRUST_TITLES[trust] ?? '')}">${esc(TRUST_LABELS[trust] ?? trust)}</span>`;
+}
+
+const cut = (text, max) => { const s = String(text ?? '').replace(/\s+/g, ' ').trim(); return s.length > max ? `${s.slice(0, max - 1)}…` : s; };
+
+// Runs → Needs you (spec §6.4): a quarantined learning waits for the owner on the Memory page.
+export function learningItem(e, snapshot, { now } = {}) {
+  const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
+  const where = e.scope === 'repo' ? `repo ${repoName(snapshot, e.repo_id) ?? e.repo_id}` : e.scope === 'task' ? 'task' : 'machine';
+  return `<li class="run-row memory-item" data-state="quarantined" data-entry="${attr(e.id)}"><span class="chip warning small">Quarantined learning</span> <span class="memory-text">${esc(cut(e.text, 200))}</span> <span class="small muted">Held: ${esc(e.quarantine_reason || 'awaiting approval')} · ${esc(where)} · filed ${timeEl(e.created_at, now, tz)}</span> <button type="button" class="btn small" data-action="open-memory" data-tab="quarantine" data-entry="${attr(e.id)}" aria-label="${attr(`Review the quarantined learning: ${cut(e.text, 60)}`)}">Review in Memory</button></li>`;
+}
+
+// Runs → Needs you: entries with the same key that disagree; runs get only the higher-ranked one.
+export function memoryConflictItem(c, snapshot) {
+  const where = c.scope === 'repo' ? `repo ${repoName(snapshot, c.repo_id) ?? c.repo_id}` : 'machine';
+  return `<li class="run-row memory-item" data-state="conflict" data-conflict="${attr(c.id)}"><span class="chip warning small">Memory conflict</span> <span>Key <code>${esc(c.key)}</code>: ${esc(c.entry_ids.length)} entries disagree (${esc(where)}). Runs get only the higher-ranked one.</span> <button type="button" class="btn small" data-action="open-memory" data-tab="${c.scope === 'repo' ? 'repo' : 'machine'}"${c.repo_id ? ` data-repo="${attr(c.repo_id)}"` : ''} aria-label="${attr(`Resolve the memory conflict on ${c.key}`)}">Resolve in Memory</button></li>`;
 }

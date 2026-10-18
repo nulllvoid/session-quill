@@ -8,7 +8,8 @@ import { TrackerError } from '../lib/errors.js';
 export const CLI_IN_RUN_MESSAGE = 'quill: refused inside an agent run (cli-in-run)';
 
 // Spec §4.2, verbatim: `status`, `ticket show|list|children`, `agent list|show|suggestions`,
-// `handoff list`, `repo list`, `doctor`. '*' means any subcommand.
+// `handoff list`, `repo list`, `doctor`; plus `memory list|show` (spec §6.4, Task 15: memory reads
+// work everywhere, and inside a run they leave quarantined learnings out). '*' means any subcommand.
 export const IN_RUN_READS = Object.freeze({
   status: '*',
   doctor: '*',
@@ -16,6 +17,7 @@ export const IN_RUN_READS = Object.freeze({
   agent: Object.freeze(['list', 'show', 'suggestions']),
   handoff: Object.freeze(['list']),
   repo: Object.freeze(['list']),
+  memory: Object.freeze(['list', 'show']),
 });
 
 /** Whether `quill <command> <sub>` only reads, and so may run inside an agent run. */

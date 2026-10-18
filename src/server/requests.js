@@ -1,6 +1,6 @@
 // Durable, revision-checked mutation requests (DATA-CONTRACT §Mutation request).
 import { createHash } from 'node:crypto';
-import { isUuid, uuid } from '../lib/ids.js';
+import { isUuid, uuid, deterministicId } from '../lib/ids.js';
 import { addMs, isIsoZ } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
 import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
@@ -20,7 +20,14 @@ import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run'];
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run', 'memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note'];
+// Owner review of memory (spec §6.4, ADR 0027). Entry kinds target a memory entry by id and are
+// revision-checked against it; memory-note adds an owner entry. Approve and edit belong to the
+// dashboard alone; forget, pin and note may also come from the owner's CLI; nothing else qualifies.
+export const MEMORY_KINDS = new Set(['memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note']);
+const MEMORY_ENTRY_KINDS = new Set(['memory-approve', 'memory-edit', 'memory-forget', 'memory-pin']);
+const DASHBOARD_ONLY = { 'memory-approve': 'memory-approve-dashboard-only', 'memory-edit': 'memory-edit-dashboard-only' };
+const MEMORY_TEXT_MAX = 2000;
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
 // Long-running requests owned by an extension: the scheduler's, and repo-clone (ADR 0024).
@@ -29,7 +36,7 @@ const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deploymen
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
 const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run']);
-const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'dismiss-run']);
+const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'dismiss-run', 'memory-forget']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
 // Tracker keys are uppercase (PROJ-123). Requests normalize them, and lookups also match legacy
@@ -122,6 +129,36 @@ function approvalRefusal(actor, p, kind) {
   return `${kind === 'approve-run' ? 'approving' : 'dismissing'} a proposed run needs the owner, on the dashboard or with quill approve --run`;
 }
 
+// The owner's wording for an entry: trimmed, non-empty and at most MEMORY_TEXT_MAX characters.
+function memoryText(text) {
+  if (typeof text !== 'string' || !text.trim()) throw new TrackerError('request-invalid', 'memory text must be a non-empty string');
+  if (text.trim().length > MEMORY_TEXT_MAX) throw new TrackerError('request-invalid', `memory text is limited to ${MEMORY_TEXT_MAX} characters`);
+  return text.trim();
+}
+
+const SECTION_RE = /^[a-z][a-z0-9-]{0,39}$/;
+
+// An owner note (quill memory note): machine scope, or repo scope for a configured repository.
+function memoryNotePayload(payload, state) {
+  const scope = payload.scope ?? (payload.repo_id ? 'repo' : 'machine');
+  if (scope !== 'repo' && scope !== 'machine') throw new TrackerError('request-invalid', 'an owner note is repo or machine scope');
+  const out = { scope, section: '', text: memoryText(payload.text) };
+  if (scope === 'repo') {
+    if (typeof payload.repo_id !== 'string' || !payload.repo_id) throw new TrackerError('request-invalid', 'a repo note names its repository');
+    if (!Object.hasOwn(state.meta.repos ?? {}, payload.repo_id)) throw new TrackerError('repo-unknown', `no repository ${payload.repo_id} is configured`);
+    out.repo_id = payload.repo_id;
+  }
+  if (payload.section !== undefined && payload.section !== null && payload.section !== '') {
+    if (typeof payload.section !== 'string' || !SECTION_RE.test(payload.section)) throw new TrackerError('request-invalid', 'section must be a short lower-case name such as build or pitfalls');
+    out.section = payload.section;
+  }
+  if (payload.key !== undefined && payload.key !== null && payload.key !== '') {
+    if (typeof payload.key !== 'string' || !payload.key.trim() || payload.key.length > 100) throw new TrackerError('request-invalid', 'key must be a string of at most 100 characters');
+    out.key = payload.key.trim();
+  }
+  return out;
+}
+
 export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null, scopeCheck = null } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
@@ -141,6 +178,13 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     if (!session) throw new TrackerError('target-unknown', `unknown session ${body.target_id}`);
     if (!hasUnboundWork(session)) throw new TrackerError('unbound-gone', 'this session has no unlinked work to attach or dismiss');
     if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) throw new TrackerError('expected-revision-required', 'unlinked-work actions require expected_revision');
+  }
+  let memoryEntry = null;
+  if (MEMORY_ENTRY_KINDS.has(body.kind)) {
+    if (typeof body.target_id !== 'string' || !body.target_id) throw new TrackerError('target-required', `${body.kind} requires target_id, the memory entry id`);
+    memoryEntry = state.memory ? state.memory.entries.get(body.target_id) ?? null : null;
+    if (!memoryEntry) throw new TrackerError('memory-entry-unknown', `unknown memory entry ${body.target_id}`);
+    if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) throw new TrackerError('expected-revision-required', 'memory changes require expected_revision');
   }
   let normalized = {};
   switch (body.kind) {
@@ -242,6 +286,20 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'dismiss-unbound':
       normalized = {};
       break;
+    case 'memory-approve':
+    case 'memory-forget':
+      normalized = {};
+      break;
+    case 'memory-edit':
+      normalized = { text: memoryText(payload.text) };
+      break;
+    case 'memory-pin':
+      if (typeof payload.pinned !== 'boolean') throw new TrackerError('request-invalid', 'memory-pin needs payload.pinned, true or false');
+      normalized = { pinned: payload.pinned };
+      break;
+    case 'memory-note':
+      normalized = memoryNotePayload(payload, state);
+      break;
     case 'link-external': {
       const key = typeof payload.key === 'string' ? payload.key.trim().toUpperCase() : '';
       if (!EXTERNAL_KEY_RE.test(key)) throw new TrackerError('key-invalid', 'a ticket key like PROJ-123 is required');
@@ -260,8 +318,8 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
   return {
     id: body.id,
     kind: body.kind,
-    target_id: target ? target.id : (session ? session.id : null),
-    expected_revision: session ? body.expected_revision : (target && !REVISION_OPTIONAL.has(body.kind) ? body.expected_revision : (Number.isInteger(body.expected_revision) ? body.expected_revision : null)),
+    target_id: target ? target.id : (session ? session.id : (memoryEntry ? memoryEntry.id : null)),
+    expected_revision: session || memoryEntry ? body.expected_revision : (target && !REVISION_OPTIONAL.has(body.kind) ? body.expected_revision : (Number.isInteger(body.expected_revision) ? body.expected_revision : null)),
     payload: normalized,
     created_at: nowIso,
     not_before: DELAYED_KINDS.has(body.kind) ? addMs(nowIso, EDIT_DELAY_MS) : nowIso,
@@ -379,10 +437,69 @@ function evaluateHandoff(worker, req, ticket, payload) {
   return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
 }
 
+const memorySource = (requestId) => `memory-tx:request:${requestId}`;
+const memoryFailure = (code, message, current_revision = null) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision } });
+
+// Who may make this memory change (spec §6.4): approve and edit only the dashboard owner; forget,
+// pin and note also the owner's CLI. A page edit, a schedule or any other actor never.
+function memoryRefusal(req) {
+  const actor = req.actor_id ?? 'owner';
+  if (DASHBOARD_ONLY[req.kind]) return actor === 'owner' ? null : { code: DASHBOARD_ONLY[req.kind], message: `${req.kind === 'memory-approve' ? 'approving a learning' : 'editing a memory entry'} is a dashboard action: open Memory with quill ui` };
+  if (actor === 'owner' || actor === 'cli') return null;
+  return { code: 'memory-owner-only', message: 'only the owner changes memory, on the dashboard or with quill memory' };
+}
+
+// A memory request becomes one memory-tx event (finish() journals it before the request-tx), so the
+// journal stays the single source of memory. CLI requests arrive without submit validation, so every
+// check is made again here against the entry as it is now.
+function evaluateMemoryRequest(worker, req) {
+  const { state } = worker;
+  const refusal = memoryRefusal(req);
+  if (refusal) return memoryFailure(refusal.code, refusal.message);
+  const payload = req.payload ?? {};
+  const noteId = req.kind === 'memory-note' ? deterministicId(`${req.id}:memory-note`) : null;
+  // After a crash between the two events the memory change already applied: finish the request.
+  if (state.appliedSources.has(memorySource(req.id))) return { outcome: 'applied', result: { entry_id: noteId ?? req.target_id } };
+  if (req.kind === 'memory-note') {
+    let note;
+    try { note = memoryNotePayload(payload, state); } catch (err) { return memoryFailure(err.code ?? 'request-invalid', err.message); }
+    return { outcome: 'applied', memoryTx: { op: 'owner-note', entry: { id: noteId, ...note } }, result: { entry_id: noteId } };
+  }
+  const entry = state.memory.entries.get(req.target_id);
+  if (!entry) return memoryFailure('memory-entry-unknown', 'this memory entry no longer exists');
+  if (!Number.isInteger(req.expected_revision)) return memoryFailure('expected-revision-required', 'memory changes require expected_revision', entry.revision);
+  if (entry.revision !== req.expected_revision) {
+    // The current state without the entry's text: request records reach the owner snapshot.
+    return { outcome: 'conflict', error: { code: 'revision-conflict', message: `this entry changed first (revision ${entry.revision}, request expected ${req.expected_revision})`, retryable: false, current_revision: entry.revision }, result: { current: { revision: entry.revision, trust: entry.trust, pinned: entry.pinned === true, state: entry.state } } };
+  }
+  const guarded = { expected_revision: entry.revision };
+  const result = { entry_id: entry.id };
+  switch (req.kind) {
+    case 'memory-approve':
+      if (entry.trust !== 'quarantined') return memoryFailure('memory-not-quarantined', 'this entry is not waiting for approval', entry.revision);
+      return { outcome: 'applied', memoryTx: { op: 'approved', entry: { id: entry.id }, ...guarded }, result };
+    case 'memory-edit': {
+      let text;
+      try { text = memoryText(payload.text); } catch (err) { return memoryFailure(err.code, err.message, entry.revision); }
+      if (entry.superseded_by) return memoryFailure('memory-entry-retired', 'this entry was superseded; edit its replacement', entry.revision);
+      return { outcome: 'applied', memoryTx: { op: 'edited', entry: { id: entry.id, text }, ...guarded }, result };
+    }
+    case 'memory-forget':
+      if (entry.state === 'retired' || entry.superseded_by) return memoryFailure('memory-entry-retired', 'this entry is already retired', entry.revision);
+      return { outcome: 'applied', memoryTx: { op: 'retired', entry: { id: entry.id }, ...guarded }, result };
+    case 'memory-pin':
+      if (typeof payload.pinned !== 'boolean') return memoryFailure('request-invalid', 'memory-pin needs payload.pinned, true or false', entry.revision);
+      return { outcome: 'applied', memoryTx: { op: payload.pinned ? 'pinned' : 'unpinned', entry: { id: entry.id }, ...guarded }, result };
+    default:
+      return memoryFailure('kind-invalid', 'unsupported memory request kind');
+  }
+}
+
 const REVALIDATED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
 
 export function evaluateRequest(worker, req) {
   if (SESSION_KINDS.has(req.kind)) return evaluateSessionRequest(worker, req);
+  if (MEMORY_KINDS.has(req.kind)) return evaluateMemoryRequest(worker, req);
   const { state } = worker;
   const ticket = req.target_id ? state.tickets.get(req.target_id) : null;
   if (req.kind !== 'refresh' && !ticket) return { outcome: 'failed', error: { code: 'target-unknown', message: 'ticket no longer exists', retryable: false, current_revision: null } };
@@ -487,6 +604,13 @@ export function evaluateRequest(worker, req) {
 }
 
 function finish(worker, req, evaluation) {
+  if (evaluation.memoryTx) {
+    const { memoryTx, ...rest } = evaluation;
+    const { result } = worker.emit('memory-tx', memoryTx, { source_identity: memorySource(req.id) });
+    evaluation = result.rejected
+      ? { outcome: result.rejected === 'revision-conflict' ? 'conflict' : 'failed', error: { code: result.rejected, message: `the memory change was not applied (${result.rejected})`, retryable: false, current_revision: null } }
+      : rest;
+  }
   const payload = { request_id: req.id, outcome: evaluation.outcome, error: evaluation.error ?? null, result: evaluation.result ?? null, mutation: evaluation.mutation ?? null };
   // Session-targeted requests carry the session identity so the worker re-renders that session.
   worker.emit('request-tx', payload, { source_identity: `request-tx:${req.id}:${evaluation.outcome}`, ...(evaluation.session ?? {}) });

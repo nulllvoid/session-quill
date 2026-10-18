@@ -1,12 +1,13 @@
 // Runs (spec §2): every agent run and proposed run, by what needs the owner, grouped by batch. Rows
-// open the run detail; nothing here acts except batch cancel and proposal approve or dismiss.
-import { esc, attr, timeEl, handoffChip, ticketById, normalizeSnapshot, emptyState, proposalItem, shortKey, HANDOFF_LABELS } from '../components.js';
+// open the run detail; nothing here acts except batch cancel and proposal approve or dismiss. Needs
+// you also lists quarantined learnings and memory conflicts, which open the Memory page (spec §6.4).
+import { esc, attr, timeEl, handoffChip, ticketById, normalizeSnapshot, emptyState, proposalItem, shortKey, HANDOFF_LABELS, learningItem, memoryConflictItem } from '../components.js';
 import { batchProgress } from '../lib/bulk.js';
 import { runTabs, visibleRunTabs, defaultRunTab, groupRuns, runFacts, RUN_TAB_LABELS } from '../lib/runs.js';
 import { testGateBadge, accessBadge } from './agents.js';
 
 const EMPTY = {
-  needs: ['Nothing needs you', 'Proposed runs, results with suggestions to decide on, and recent failures appear here.'],
+  needs: ['Nothing needs you', 'Proposed runs, results with suggestions to decide on, recent failures, quarantined learnings and memory conflicts appear here.'],
   live: ['No runs queued or running', 'Start one with Run agent on a ticket, or select tickets on Board for a bulk run.'],
   failed: ['No failed runs', 'Failed, timed-out and cancelled runs appear here with what went wrong.'],
   all: ['No runs in the last 30 days', 'Agent runs and proposed runs appear here as they are requested.'],
@@ -38,17 +39,17 @@ function batchGroup(snapshot, g, { now, tz, caps, selectedRun }) {
   return `<li class="run-batch" data-batch="${attr(g.id)}"><div class="run-batch-head"><span class="eyebrow">Batch ${esc(g.id.slice(0, 8))}</span><span class="small">${esc(names.length === 1 ? names[0] : 'mixed')} · ${esc(parts.join(' · '))}</span><div class="batch-bar" role="progressbar" aria-label="${attr(`Batch ${g.id.slice(0, 8)}: ${finished} of ${p.total} runs finished`)}" aria-valuemin="0" aria-valuenow="${finished}" aria-valuemax="${p.total}"><span style="width:${pct}%"></span></div>${cancel}</div><ul class="run-list">${g.items.map((i) => runRow(snapshot, i.run, { now, tz, selected: selectedRun === i.id })).join('')}</ul></li>`;
 }
 
-export function renderRuns(rawSnapshot, filters, { now, pending = [], tab = null, selectedRun = null } = {}) {
+export function renderRuns(rawSnapshot, filters, { now, pending = [], tab = null, selectedRun = null, memory = null } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const tz = snapshot.meta.timezone;
   const caps = snapshot.capabilities ?? {};
-  const tabs = runTabs(snapshot, filters, now);
+  const tabs = runTabs(snapshot, filters, now, { memory });
   const names = visibleRunTabs(snapshot);
   const current = names.includes(tab) ? tab : defaultRunTab(tabs, names);
   const tablist = `<div class="run-tabs" role="tablist" aria-label="Run filters">${names.map((n) => `<button type="button" role="tab" id="run-tab-${n}" data-action="run-tab" data-tab="${n}" aria-selected="${n === current}" aria-controls="run-panel" tabindex="${n === current ? 0 : -1}">${esc(RUN_TAB_LABELS[n])}${n === 'all' ? '' : ` <span class="count">${esc(tabs[n].length)}</span>`}</button>`).join('')}</div>`;
   const entries = groupRuns(tabs[current]);
   const body = entries.length
-    ? `<ul class="run-list">${entries.map((e) => (e.kind === 'batch' ? batchGroup(snapshot, e, { now, tz, caps, selectedRun }) : e.kind === 'proposal' ? proposalRow(snapshot, e.proposal, { now, pending }) : runRow(snapshot, e.run, { now, tz, selected: selectedRun === e.id }))).join('')}</ul>`
+    ? `<ul class="run-list">${entries.map((e) => (e.kind === 'batch' ? batchGroup(snapshot, e, { now, tz, caps, selectedRun }) : e.kind === 'proposal' ? proposalRow(snapshot, e.proposal, { now, pending }) : e.kind === 'learning' ? learningItem(e.entry, snapshot, { now }) : e.kind === 'memory-conflict' ? memoryConflictItem(e.conflict, snapshot) : runRow(snapshot, e.run, { now, tz, selected: selectedRun === e.id }))).join('')}</ul>`
     : emptyState(EMPTY[current][0], EMPTY[current][1]);
   return `<section class="view view-runs" aria-labelledby="tab-runs">${tablist}<div id="run-panel" role="tabpanel" aria-labelledby="run-tab-${current}">${body}</div></section>`;
 }

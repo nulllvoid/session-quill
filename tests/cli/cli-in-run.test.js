@@ -12,8 +12,8 @@ import { makeHome, cli } from './helpers.js';
 
 const REFUSAL = 'quill: refused inside an agent run (cli-in-run)';
 
-test('the read list is spec §4.2 verbatim', () => {
-  assert.deepEqual(IN_RUN_READS, { status: '*', doctor: '*', ticket: ['show', 'list', 'children'], agent: ['list', 'show', 'suggestions'], handoff: ['list'], repo: ['list'] });
+test('the read list is spec §4.2 verbatim, plus memory list|show (spec §6.4)', () => {
+  assert.deepEqual(IN_RUN_READS, { status: '*', doctor: '*', ticket: ['show', 'list', 'children'], agent: ['list', 'show', 'suggestions'], handoff: ['list'], repo: ['list'], memory: ['list', 'show'] });
   assert.equal(CLI_IN_RUN_MESSAGE, REFUSAL);
 });
 
@@ -70,6 +70,6 @@ test('every registered mutating command refuses inside a run (enumerated from th
 });
 
 test('isReadInRun: the read list and nothing else', () => {
-  for (const [c, s] of [['status', null], ['status', 'x'], ['doctor', null], ['ticket', 'show'], ['ticket', 'list'], ['ticket', 'children'], ['agent', 'list'], ['agent', 'show'], ['agent', 'suggestions'], ['handoff', 'list'], ['repo', 'list']]) assert.equal(isReadInRun(c, s), true, `${c} ${s}`);
-  for (const [c, s] of [['ticket', null], ['ticket', 'set'], ['agent', null], ['agent', 'run'], ['agent', 'accept'], ['handoff', 'result'], ['handoff', 'cancel'], ['handoff', 'PROJ-1'], ['repo', 'add'], ['approve', null], ['dismiss', null], ['hook', 'PreToolUse'], ['worker', 'status'], ['ui', null], ['mirror', 'status'], ['export', null], ['publish', 'list'], ['memory', 'approve']]) assert.equal(isReadInRun(c, s), false, `${c} ${s}`);
+  for (const [c, s] of [['status', null], ['status', 'x'], ['doctor', null], ['ticket', 'show'], ['ticket', 'list'], ['ticket', 'children'], ['agent', 'list'], ['agent', 'show'], ['agent', 'suggestions'], ['handoff', 'list'], ['repo', 'list'], ['memory', 'list'], ['memory', 'show']]) assert.equal(isReadInRun(c, s), true, `${c} ${s}`);
+  for (const [c, s] of [['ticket', null], ['ticket', 'set'], ['agent', null], ['agent', 'run'], ['agent', 'accept'], ['handoff', 'result'], ['handoff', 'cancel'], ['handoff', 'PROJ-1'], ['repo', 'add'], ['approve', null], ['dismiss', null], ['hook', 'PreToolUse'], ['worker', 'status'], ['ui', null], ['mirror', 'status'], ['export', null], ['publish', 'list'], ['memory', 'approve'], ['memory', 'retire'], ['memory', 'pin'], ['memory', 'note'], ['memory', null]]) assert.equal(isReadInRun(c, s), false, `${c} ${s}`);
 });

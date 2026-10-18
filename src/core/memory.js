@@ -91,3 +91,39 @@ export function memoryStaleness(entry, nowMs) {
   if (days >= STALE_AFTER_DAYS || entry.state === 'stale') return 'stale';
   return 'active';
 }
+
+// What the owner's Memory page and `quill memory list` show (spec §6.4): every entry still in force
+// (not retired, superseded or aged out) at machine and repo scope, plus quarantined learnings of any
+// scope; task-scope entries otherwise live in the ticket's Run notes. Each carries its staleness and
+// whether it is in a conflict. Conflict groups name their entries by id. Owner-only data: callers
+// never put it in a snapshot, export or publisher payload (spec §9). `includeQuarantine: false` (the
+// CLI inside a run) leaves quarantined entries out entirely.
+export function memoryListing(state, nowMs, { includeQuarantine = true } = {}) {
+  const groups = conflicts(state);
+  const inConflict = new Map();
+  for (const g of groups) for (const e of g.entries) inConflict.set(e.id, g.key);
+  const entries = [];
+  for (const e of [...state.memory.entries.values()].sort(listOrder)) {
+    if (e.state === 'retired' || e.superseded_by) continue;
+    const held = e.trust === 'quarantined';
+    if (held ? !includeQuarantine : e.scope === 'task') continue;
+    const staleness = held ? (e.state === 'stale' ? 'stale' : 'active') : memoryStaleness(e, nowMs);
+    if (staleness === 'retired') continue;
+    const out = {
+      id: e.id, scope: e.scope, repo_id: e.repo_id ?? null, ticket_id: e.ticket_id ?? null, section: e.section, kind: e.kind, key: e.key ?? null,
+      text: e.text, trust: e.trust, pinned: e.pinned === true, staleness, confirmations: e.confirmations, last_confirmed_at: e.last_confirmed_at,
+      created_at: e.created_at, run_id: e.run_id ?? null, derived_from: e.derived_from, evidence: [...e.evidence], revision: e.revision,
+      conflict_key: inConflict.get(e.id) ?? null,
+    };
+    if (held) out.quarantine_reason = e.quarantine_reason ?? null;
+    entries.push(out);
+  }
+  const shown = new Set(entries.map((e) => e.id));
+  return {
+    entries,
+    conflicts: groups.filter((g) => g.scope !== 'task' && g.entries.some((e) => shown.has(e.id))).map((g) => ({
+      id: `conflict:${g.scope}:${g.repo_id ?? ''}:${g.key}`, scope: g.scope, repo_id: g.repo_id, key: g.key,
+      entry_ids: g.entries.map((e) => e.id), at: g.entries.reduce((m, e) => (e.last_confirmed_at > m ? e.last_confirmed_at : m), ''),
+    })),
+  };
+}
