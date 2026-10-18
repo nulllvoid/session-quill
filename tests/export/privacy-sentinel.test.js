@@ -25,6 +25,8 @@ function fixture() {
     cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S] }, max_turns: 7, max_budget_usd: 1,
     memory_filing: { filed: 1, problems: [{ code: S, count: 1 }] },
     critical_notes: [{ index: 0, reason: S }],
+    // R55: what an interrupted run's ledger shows may have run (prod target, MCP tool, scope name).
+    possible_writes: [`kubectl apply on ${S}-ctx may have run`, `mcp__${S}__editIssue on X-1 may have run`, `a ${S}.write call may have run`],
   });
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
   s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
@@ -170,4 +172,28 @@ test('a run on a local-only ticket gets no vault note, and a note an earlier ver
     assert.equal(writeHandoffNote(ok, normal, { state }), 'written');
     assert.equal(fs.readFileSync(ok, 'utf8').includes(S), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an interrupted scoped run reaches exports, the mirror and the vault note only as a count of possible production writes (R55)', () => {
+  const s = fixture();
+  Object.assign(s.handoffs[0], { state: 'failed', error: { code: 'interrupted', message: 'worker restarted' }, uncertain_effects: ['push may not have completed'] });
+  const out = sanitizeSnapshot(s, ALL).handoffs[0];
+  assert.deepEqual(out.uncertain_effects, ['push may not have completed', '3 production writes may have run']);
+  assert.equal('possible_writes' in out, false);
+  assert.equal(buildStaticHtml(s, ALL).includes(S), false);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quill-sentinel-'));
+  try {
+    writeMirror(s, { dir, projects: null, include_links: true }, { now: ALL.exportedAt });
+    const mirrored = fs.readFileSync(path.join(dir, 'snapshot.json'), 'utf8');
+    assert.equal(mirrored.includes(S), false);
+    assert.match(mirrored, /3 production writes may have run/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  const state = { tickets: new Map(s.tickets.map((t) => [t.id, t])) };
+  const note = renderHandoffNote(s.handoffs[0], { state });
+  assert.equal(note.includes(S), false);
+  assert.match(note, /- 3 production writes may have run/);
+  assert.equal(HANDOFF_EXPORT_FIELDS.includes('possible_writes') || HANDOFF_NOTE_FIELDS.includes('possible_writes'), false);
+  const one = fixture();
+  one.handoffs[0].possible_writes = ['git push on feat may have run'];
+  assert.deepEqual(sanitizeSnapshot(one, ALL).handoffs[0].uncertain_effects, ['1 production write may have run']);
 });

@@ -25,7 +25,7 @@ import { readJsonIfExists } from '../lib/atomic-fs.js';
 import { getBlob } from '../core/blobs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
 import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, prodEffects } from './autonomous.js';
-import { interruptedEffects, batchBudgetUsd, batchBudgetReached, resumePrompt } from './resume.js';
+import { interruptedEffects, batchBudgetUsd, batchBudgetReached, resumePrompt, carrySession, claudeConfigRoot } from './resume.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -312,8 +312,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (reason === 'runtime-too-old') { await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'runtime-too-old', message: entry.runtimeError ?? 'Claude Code is too old for autonomous runs; queue the run again with standard access' }, extra: await fixExtras(worker, current) }); return; }
     if (reason === 'stopped') {
       const extra = await fixExtras(worker, current);
+      // Owner-only (R55): exports, the mirror and vault notes see only how many there are.
       const effects = mayHaveRun(worker, h.id);
-      if (effects.length) extra.uncertain_effects = [...(extra.uncertain_effects ?? current.uncertain_effects ?? []), ...effects];
+      if (effects.length) extra.possible_writes = effects;
       await record(worker, h.id, parseOutcome(outcome, parseOpts), { state: 'failed', error: { code: 'interrupted', message: 'worker stopped while the run was in progress' }, extra });
       return;
     }
@@ -723,6 +724,18 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const onInit = onInitFor(worker, h.id);
     // A run that may edit source always self-checks, whatever its recipe says (ADR 0022).
     const selfCheck = !!(recipe && recipe.self_check) || !!(h.permissions && h.permissions.edit_source);
+    // R54: Claude Code finds a session only under the project folder of the cwd it was started in.
+    // The interrupted run's transcript is copied to this run's cwd under the config root this child
+    // sees; without it the run fails here, before anything is spawned.
+    if (resumeId) {
+      const orig = h.retry_of ? worker.state.handoffs.get(h.retry_of) : null;
+      const fromCwd = orig ? orig.worktree_path || path.join(handoffsDir(worker.env), 'sandbox', orig.id) : null;
+      try {
+        carrySession({ configRoot: claudeConfigRoot(spawnExtras.childEnv ?? childEnvFor(h.permissions ?? {}, process.env, env, { keepCredentials: rt.keepCredentials })), sessionId: resumeId, fromCwd, toCwd: cwd });
+      } catch (err) {
+        return fail(worker, h, err.code ?? 'resume-session-missing', err.message);
+      }
+    }
     // The entry exists before the process does, so the init event always finds it.
     const entry = { child: null, done: null, reason: null, observed: !!observe, fix: isFix(h), deadlineAt, cwd, env, tools, logPath, ledgerPath, onInit, permissions: h.permissions ?? {}, selfCheck, sessionId: resumeId, outputs: recipe ? recipe.outputs : null, budget, timeoutMs, staged, permissionMode: rt.permissionMode, keepCredentials: rt.keepCredentials, access, spawnExtras };
     running.set(h.id, entry);
@@ -788,9 +801,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       for (const h of [...worker.state.handoffs.values()]) {
         if (h.state !== 'running') continue;
         // The recorded session id and the partial ledger stay (spec §5.4): the owner may resume the
-        // run as a new one, and its allowed writes become uncertain effects.
+        // run as a new one, and its allowed writes are listed as possibly run (owner only, R55).
         const effects = mayHaveRun(worker, h.id);
-        recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' }, extra: effects.length ? { uncertain_effects: [...(h.uncertain_effects ?? []), ...effects] } : {} });
+        recordResult(worker, h.id, { summary: null }, { state: 'failed', error: { code: 'interrupted', message: 'worker restarted while the run was in progress; no automatic rerun' }, extra: effects.length ? { possible_writes: effects } : {} });
       }
       try { await refileMissing(worker); } catch (err) { worker.log(`memory refiling failed: ${err.message}`); }
       // A stop between a done run's handoff-tx and its critical-proposal events (spec §7.2, R47 M2).

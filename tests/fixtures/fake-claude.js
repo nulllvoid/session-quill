@@ -12,6 +12,8 @@
 //   FAKE_CLAUDE_RESUME_RESULT — JSON to answer a --resume turn with (default: FAKE_CLAUDE_RESULT
 //                           or the default result); 'malformed' answers it without a JSON block
 //   FAKE_CLAUDE_COST      — total_cost_usd each result event reports (default 0.01)
+//   CLAUDE_CONFIG_DIR     — when set, session transcripts are kept and required as Claude Code
+//                           does (see transcript() below)
 //   FAKE_CLAUDE_SESSION   — session id to report (default 'fake-session'; a --resume turn keeps its id)
 //   FAKE_CLAUDE_CAPTURE   — file to write { prompt, args } to; --resume turns append to
 //                           <capture>.resume as one JSON line each. With --settings <file> the
@@ -66,7 +68,24 @@ function guardCalls(settings) {
   });
 }
 
+// With CLAUDE_CONFIG_DIR set, sessions behave as Claude Code keeps them: a transcript per session
+// under <config>/projects/<cwd, every character outside [A-Za-z0-9] as "-">/<id>.jsonl, written by
+// every turn; a --resume whose transcript is not under the current cwd's folder is not found.
+function transcript() {
+  const config = process.env.CLAUDE_CONFIG_DIR;
+  if (!config) return true;
+  const file = path.join(config, 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'), `${SESSION}.jsonl`);
+  if (resumed && !fs.existsSync(file)) return false;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, line({ type: 'user', session_id: SESSION, cwd: process.cwd() }));
+  return true;
+}
+
 function run() {
+  if (!transcript()) {
+    process.stderr.write(`No conversation found with session ID: ${SESSION}\n`);
+    process.exit(1);
+  }
   const capture = process.env.FAKE_CLAUDE_CAPTURE;
   if (capture && resumed) fs.appendFileSync(`${capture}.resume`, `${JSON.stringify({ prompt, args })}\n`);
   // Whether a provider token reached the agent, for credential tests; never a real value.

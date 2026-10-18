@@ -119,6 +119,13 @@ const HANDOFF_SHAPED_FIELDS = ['test_gate', 'file_effects', 'suggestions', 'pr_u
 const HANDOFF_COUNT_FIELDS = ['attempt_count', 'learning_count', 'critical_count', 'recorded_stage', 'scope_count'];
 export const HANDOFF_EXPORT_FIELDS = [...HANDOFF_PLAIN_FIELDS, ...HANDOFF_SHAPED_FIELDS, ...HANDOFF_COUNT_FIELDS];
 
+// R55: an interrupted run's possible_writes (prod targets, MCP tool and scope names) stay on the
+// owner's dashboard; exports, the mirror and vault notes say only how many there were.
+export function possibleWritesLine(h) {
+  const n = h && Array.isArray(h.possible_writes) ? h.possible_writes.length : 0;
+  return n ? `${n} production write${n === 1 ? '' : 's'} may have run` : null;
+}
+
 // Local-only tickets never leave the machine: not in exports, mirrors, publishers or tracker pushes.
 export function isExportableTicket(ticket) {
   return !(ticket && ticket.local_only === true);
@@ -133,6 +140,8 @@ function sanitizeHandoff(h, o) {
   const { result_ref, pr_url, result_summary, result_confidence, result_sources, changed_files, suggestions, files, file_effects, test_gate } = h;
   const out = {};
   for (const k of HANDOFF_PLAIN_FIELDS) if (k in h) out[k] = h[k];
+  const possible = possibleWritesLine(h);
+  if (possible) out.uncertain_effects = [...(Array.isArray(h.uncertain_effects) ? h.uncertain_effects : []), possible];
   // The test gate's result travels; its command and output (paths, env, secrets) never do.
   if (test_gate) out.test_gate = Object.fromEntries(Object.entries(test_gate).filter(([k]) => ['status', 'exit_code', 'ms', 'attempts', 'repaired'].includes(k)));
   // File runs (ADR 0015) name absolute paths and trash locations: never exported, only counted.

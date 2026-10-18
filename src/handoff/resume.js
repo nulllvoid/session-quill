@@ -13,7 +13,11 @@
 // A bulk batch (ADR 0023) stops starting new members once its recorded spend reaches
 // `[handoff] max_batch_budget_usd` (default 30): members already running carry on, the rest stay
 // queued until the owner cancels them.
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { TrackerError } from '../lib/errors.js';
+import { isUnder } from './worktree.js';
 import { pinAction } from './action-pin.js';
 import { BUDGET_DEFAULTS } from './runner.js';
 
@@ -23,8 +27,13 @@ const WRITE_CLASSES = new Set(['write', 'external.write']);
 // A local commit changes only the run's checkout; every other write reaches something outside it.
 const LOCAL_SCOPES = new Set(['git.commit']);
 const SHELLS = new Set(['Bash', 'PowerShell', 'Monitor']);
-// What `--resume` may be handed: a session id as Claude Code reports it, never anything option-like.
-const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+// What `--resume` may be handed, and what names the session's transcript file: a UUID, as Claude
+// Code reports session ids, and nothing else (no option, no path, no NTFS stream name).
+export const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Claude Code names a project folder after the working directory, every character outside
+// [A-Za-z0-9] as "-"; a name longer than this is cut and given a hash suffix Quill cannot compute.
+export const PROJECT_NAME_MAX = 200;
+export const SESSION_MISSING = 'session not found - retry as a new run';
 const PLAIN_WORD_RE = /^[a-z][a-z0-9-]{0,40}$/;
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -158,4 +167,79 @@ export function resumePrompt({ contextDir = null, checkout = false } = {}) {
     contextDir ? `Your run directory changed. The memory snapshot to read is now ${contextDir}.` : null,
     'The same access, permissions and limits apply as before. Finish the task, then end with the final fenced JSON block exactly as the original instructions ask.',
   ].filter(Boolean).join('\n\n');
+}
+
+/** Claude Code's config root as a child with environment `env` sees it (CLAUDE_CONFIG_DIR, else the home's .claude). */
+export function claudeConfigRoot(env = {}, platform = process.platform) {
+  const get = (name) => {
+    const k = Object.keys(env).find((x) => (platform === 'win32' ? x.toUpperCase() === name : x === name));
+    const v = k === undefined ? undefined : env[k];
+    return typeof v === 'string' && v ? v : null;
+  };
+  const dir = get('CLAUDE_CONFIG_DIR');
+  if (dir) return path.resolve(dir);
+  const home = platform === 'win32' ? get('USERPROFILE') ?? get('HOME') : get('HOME') ?? get('USERPROFILE');
+  return path.join(home ?? os.homedir(), '.claude');
+}
+
+/** The project folder name Claude Code keeps a working directory's sessions under. */
+export function projectDirName(cwd) {
+  return path.resolve(cwd).replace(/[^A-Za-z0-9]/g, '-');
+}
+
+const regularFile = (f) => { try { return fs.lstatSync(f).isFile(); } catch { return false; } };
+
+// The interrupted session's transcript: under the original working directory's project folder,
+// else (a long name Claude Code shortened) the one project folder that holds it.
+function sessionSource(projects, fromCwd, file) {
+  if (fromCwd) {
+    const name = projectDirName(fromCwd);
+    const direct = path.join(projects, name, file);
+    if (name.length <= PROJECT_NAME_MAX && isUnder(projects, direct) && regularFile(direct)) return direct;
+  }
+  let dirs = [];
+  try { dirs = fs.readdirSync(projects, { withFileTypes: true }).filter((d) => d.isDirectory()); } catch { dirs = []; }
+  const found = dirs.map((d) => path.join(projects, d.name, file)).filter((f) => isUnder(projects, f) && regularFile(f));
+  return found.length === 1 ? found[0] : null;
+}
+
+/**
+ * Makes an interrupted run's Claude Code session reachable from the resumed run's working directory
+ * (ruling R54): the transcript `<projects>/<old cwd>/<id>.jsonl` is COPIED, never moved, to the
+ * project folder of the new cwd (and of its real path, when that differs). Never follows a link,
+ * never writes outside `<configRoot>/projects`, never replaces a different transcript.
+ * Throws `no-session` (not a UUID), `resume-session-missing` (SESSION_MISSING),
+ * `resume-session-unreachable` (a folder name Claude Code would shorten) or
+ * `resume-session-conflict`.
+ * @returns {string[]} the transcript paths the resumed run will find
+ */
+export function carrySession({ configRoot, sessionId, fromCwd = null, toCwd }) {
+  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) throw new TrackerError('no-session', 'the recorded session id is not a Claude Code session id, so it cannot be resumed; retry as a new run');
+  const projects = path.join(path.resolve(configRoot), 'projects');
+  const file = `${sessionId}.jsonl`;
+  const source = sessionSource(projects, fromCwd, file);
+  if (!source) throw new TrackerError('resume-session-missing', SESSION_MISSING);
+  let real = null;
+  try { real = fs.realpathSync.native(toCwd); } catch { real = null; }
+  const names = [...new Set([projectDirName(toCwd), ...(real ? [projectDirName(real)] : [])])];
+  const bytes = fs.readFileSync(source);
+  const out = [];
+  for (const name of names) {
+    if (name.length > PROJECT_NAME_MAX) throw new TrackerError('resume-session-unreachable', "the resumed run's working directory has a path too long for Claude Code to find the session under; retry as a new run");
+    const dest = path.join(projects, name, file);
+    if (!isUnder(projects, dest)) throw new TrackerError('resume-session-unreachable', 'the session cannot be placed under the Claude Code projects folder; retry as a new run');
+    const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+    if (same(path.resolve(dest), path.resolve(source))) { out.push(dest); continue; }
+    let exists = true;
+    try { fs.lstatSync(dest); } catch { exists = false; }
+    if (exists) {
+      if (!regularFile(dest) || !fs.readFileSync(dest).equals(bytes)) throw new TrackerError('resume-session-conflict', "a different session transcript with this id already exists for the resumed run's working directory; it was left as it is. Retry as a new run");
+      out.push(dest);
+      continue;
+    }
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, bytes, { flag: 'wx', mode: 0o600 });
+    out.push(dest);
+  }
+  return out;
 }

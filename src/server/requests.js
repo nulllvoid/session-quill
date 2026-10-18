@@ -198,6 +198,11 @@ function evaluateResume(worker, req, ticket) {
     orig = resumeTarget(state, ticket, req.payload ?? {});
     fields = resumeFields(orig);
   } catch (err) { return fail(err.code ?? 'resume-refused', err.message); }
+  // R56: a run with write scopes or action pins gets its production write access again, so it is
+  // resumed exactly as a run-origin proposal is approved: the owner on the dashboard alone.
+  if ((fields.scopes && fields.scopes.length) || fields.action_pins) {
+    if (!(actor === 'owner' && req.producer === 'worker')) return fail('resume-dashboard-only', 'resuming a run with write scopes grants production write access again, so it is a dashboard action by the owner: open the run in Runs with quill ui');
+  }
   const id8 = orig.id.slice(0, 8);
   if (fields.scope_fingerprints) {
     let catalog;

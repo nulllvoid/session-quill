@@ -5,12 +5,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { submitRequest } from '../../src/server/requests.js';
 import { recordResult } from '../../src/handoff/results.js';
 import { parseAgentResult } from '../../src/handoff/runner.js';
-import { interruptedEffects, resumeFields, resumeProblem } from '../../src/handoff/resume.js';
+import { interruptedEffects, resumeFields, resumeProblem, carrySession, claudeConfigRoot, projectDirName, SESSION_MISSING } from '../../src/handoff/resume.js';
+import { sanitizeSnapshot } from '../../src/export/sanitize.js';
+import { renderHandoffNote } from '../../src/worker/notes.js';
 import { deterministicId } from '../../src/lib/ids.js';
 import { writeIngress } from '../../src/core/ingress.js';
 import { renderRunDetail } from '../../ui/views/run-detail.js';
@@ -18,6 +21,14 @@ import { normalizeSnapshot } from '../../ui/components.js';
 import { snapshot as uiSnapshot, TID } from '../ui/fixtures.js';
 import { bootWorker, restartWorker, until, T1, T2 } from './helpers.js';
 
+// Claude Code session ids are UUIDs; nothing else is ever resumed.
+const S1 = '5e551011-0000-4000-8000-000000000001';
+const S2 = '5e551011-0000-4000-8000-000000000002';
+const SC1 = '5e551011-0000-4000-8000-0000000000c1';
+const SA1 = '5e551011-0000-4000-8000-0000000000a1';
+// Each test's own Claude Code config root: the fake runtime keeps session transcripts there by
+// working directory, as Claude Code does, and refuses a --resume it cannot find (ruling R54).
+const configRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), 'st-cc-'));
 const RID = (n) => `19191919-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const NONE = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 const analyse = { mode: 'analyse', note: 'look', permissions: NONE };
@@ -27,11 +38,20 @@ const ledgerOf = (b, hid) => path.join(b.home, 'handoffs', 'runs', hid, 'ledger.
 const guardLine = (extra) => `${JSON.stringify({ kind: 'guard', ts: '2026-10-02T08:00:01Z', decision: 'allow', ...extra })}\n`;
 const resume = (b, h, opts) => submitRequest(b.w, { id: randomUUID(), kind: 'resume-run', target_id: h.ticket_id, expected_revision: null, payload: { handoff_id: h.id } }, opts);
 const applied = (b, request) => { b.w.tick(); return b.w.state.requests.get(request.id); };
+// A resume-run request arriving through ingress (as `quill agent resume` sends it), as `actor`.
+function viaIngress(b, h, actor) {
+  const id = randomUUID();
+  writeIngress(b.mk('request', { id, kind: 'resume-run', target_id: h.ticket_id, expected_revision: null, payload: { handoff_id: h.id }, created_at: b.iso(), not_before: b.iso(), actor_id: actor, body_hash: 'x' }, { source_identity: `request:${id}` }), b.env);
+  b.w.tick();
+  b.w.tick();
+  return b.w.state.requests.get(id);
+}
 
 // A run that is running with a recorded session when the worker dies; the restarted worker
 // (requests applied, the fake runtime capturing what it was started with) finds it interrupted.
-async function interruptedRun({ session = 's1', fakeEnv = {}, ledger = '' } = {}) {
-  const d = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: session } });
+async function interruptedRun({ session = S1, fakeEnv = {}, ledger = '' } = {}) {
+  const config = configRoot();
+  const d = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: session, CLAUDE_CONFIG_DIR: config } });
   const t = d.ticket(T1, 'LOCAL-a-00000001');
   d.request(RID(1), { target_id: T1, expected_revision: t.revision, payload: analyse });
   d.w.tick();
@@ -40,8 +60,8 @@ async function interruptedRun({ session = 's1', fakeEnv = {}, ledger = '' } = {}
   await d.w.stop({ flush: false, abandonRuns: true });
   if (ledger) { fs.mkdirSync(path.dirname(ledgerOf(d, hid)), { recursive: true }); fs.appendFileSync(ledgerOf(d, hid), ledger); }
   const capture = path.join(d.home, 'capture.json');
-  const e = await restartWorker(d, { spawnEnv: { FAKE_CLAUDE_CAPTURE: capture, ...fakeEnv }, withServer: true });
-  return { e, hid, capture };
+  const e = await restartWorker(d, { spawnEnv: { FAKE_CLAUDE_CAPTURE: capture, CLAUDE_CONFIG_DIR: config, ...fakeEnv }, withServer: true });
+  return { e, hid, capture, config };
 }
 
 test('a worker restart leaves a run whose init was recorded failed/interrupted, its session id kept; run detail offers Resume as new run', async () => {
@@ -50,7 +70,7 @@ test('a worker restart leaves a run whose init was recorded failed/interrupted, 
     const h = e.w.state.handoffs.get(hid);
     assert.equal(h.state, 'failed');
     assert.equal(h.error.code, 'interrupted');
-    assert.equal(h.session_id, 's1', 'the recorded session id is kept for the resume');
+    assert.equal(h.session_id, S1, 'the recorded session id is kept for the resume');
     const snap = e.w.liveSnapshot();
     const html = renderRunDetail(snap.handoffs.find((x) => x.id === hid), snap, { now: e.iso() });
     assert.match(html, /data-action="resume-run" data-ticket="[^"]+" data-handoff="[^"]+">Resume as new run<\/button>/);
@@ -58,8 +78,8 @@ test('a worker restart leaves a run whose init was recorded failed/interrupted, 
   } finally { await e.w.stop(); }
 });
 
-test('resume queues a NEW run with retry_of that the worker starts with --resume s1; the original then offers neither action', async () => {
-  const { e, hid, capture } = await interruptedRun();
+test('resume queues a NEW run with retry_of that the worker starts with --resume <session>, its transcript copied to the new working directory; the original then offers neither action', async () => {
+  const { e, hid, capture, config } = await interruptedRun();
   try {
     const orig = e.w.state.handoffs.get(hid);
     const req = applied(e, resume(e, orig).request);
@@ -68,13 +88,17 @@ test('resume queues a NEW run with retry_of that the worker starts with --resume
     assert.notEqual(nid, hid, 'a new run, not the old one restarted');
     const n = e.w.state.handoffs.get(nid);
     assert.equal(n.retry_of, hid);
-    assert.equal(n.resume_session_id, 's1');
+    assert.equal(n.resume_session_id, S1);
     assert.deepEqual([n.mode, n.access, n.recipe.name, n.permissions], [orig.mode, orig.access, orig.recipe.name, orig.permissions], 'the same run, with nothing widened');
     const done = await settle(e, nid);
     assert.equal(done.state, 'done', JSON.stringify(done.error));
     const turns = fs.readFileSync(`${capture}.resume`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const args = turns[0].args;
-    assert.equal(args[args.indexOf('--resume') + 1], 's1');
+    assert.equal(args[args.indexOf('--resume') + 1], S1);
+    // Copied, never moved: the interrupted run's transcript stays where it was.
+    const projects = path.join(config, 'projects');
+    assert.ok(fs.existsSync(path.join(projects, projectDirName(path.join(e.home, 'handoffs', 'sandbox', hid)), `${S1}.jsonl`)), 'the original transcript is still there');
+    assert.ok(fs.existsSync(path.join(projects, projectDirName(path.join(e.home, 'handoffs', 'sandbox', nid)), `${S1}.jsonl`)), 'the resumed run found it under its own working directory');
     assert.match(turns[0].prompt, /interrupted/i);
     assert.match(turns[0].prompt, /check .*before repeating/i, 'the resumed agent is told not to repeat a write blindly');
     assert.equal(fs.existsSync(capture), false, 'no fresh session was started for it');
@@ -85,7 +109,6 @@ test('resume queues a NEW run with retry_of that the worker starts with --resume
     assert.match(html, /Retried as a new run/);
     assert.throws(() => resume(e, orig), (err) => err.code === 'run-superseded', 'resumed once, then superseded');
     // Nothing of the resume leaves the owner's machine (spec §9).
-    const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
     assert.doesNotMatch(JSON.stringify(sanitizeSnapshot(e.w.liveSnapshot(), { exportedAt: e.iso() })), /resume_session_id|"session_id"/);
   } finally { await e.w.stop(); }
 });
@@ -100,26 +123,20 @@ test('resume is refused for runs that cannot be resumed, and for actors other th
       assert.equal(r.state, 'failed', actor);
       assert.equal(r.error.code, 'resume-refused', actor);
     }
-    // Through ingress: any actor but the CLI is refused, and the CLI is accepted.
-    const viaIngress = (actor) => {
-      const id = randomUUID();
-      writeIngress(e.mk('request', { id, kind: 'resume-run', target_id: orig.ticket_id, expected_revision: null, payload: { handoff_id: hid }, created_at: e.iso(), not_before: e.iso(), actor_id: actor, body_hash: 'x' }, { source_identity: `request:${id}` }), e.env);
-      e.w.tick();
-      e.w.tick();
-      return e.w.state.requests.get(id);
-    };
-    assert.equal(viaIngress('page-edit').error.code, 'resume-refused');
+    // Through ingress: any actor but the CLI is refused, and the CLI may resume an unscoped run.
+    assert.equal(viaIngress(e, orig, 'page-edit').error.code, 'resume-refused');
     assert.equal([...e.w.state.handoffs.values()].length, 1, 'nothing was queued');
-    const cli = viaIngress('cli');
+    const cli = viaIngress(e, orig, 'cli');
     assert.equal(cli.state, 'applied', JSON.stringify(cli.error));
     assert.equal(e.w.state.handoffs.get(cli.result.handoff_id).retry_of, hid);
   } finally { await e.w.stop(); }
   // Not interrupted, or interrupted before any session id was recorded: Retry, never Resume.
-  assert.equal(resumeProblem({ state: 'done', session_id: 's1', error: null }).code, 'run-not-resumable');
-  assert.equal(resumeProblem({ state: 'failed', session_id: 's1', error: { code: 'agent-exit' } }).code, 'run-not-resumable');
+  assert.equal(resumeProblem({ state: 'done', session_id: S1, error: null }).code, 'run-not-resumable');
+  assert.equal(resumeProblem({ state: 'failed', session_id: S1, error: { code: 'agent-exit' } }).code, 'run-not-resumable');
   assert.equal(resumeProblem({ state: 'failed', session_id: null, error: { code: 'interrupted' } }).code, 'no-session');
   assert.equal(resumeProblem({ state: 'failed', session_id: '--dangerous', error: { code: 'interrupted' } }).code, 'no-session', 'a session id that reads like an option is never passed on');
-  assert.equal(resumeProblem({ state: 'failed', session_id: 's1', error: { code: 'interrupted' } }), null);
+  for (const bad of ['s1', 'sess:1.x', '../5e551011-0000-4000-8000-000000000001']) assert.equal(resumeProblem({ state: 'failed', session_id: bad, error: { code: 'interrupted' } }).code, 'no-session', `${bad}: only a UUID names a session`);
+  assert.equal(resumeProblem({ state: 'failed', session_id: S1, error: { code: 'interrupted' } }), null);
   const h = { id: 'run-9', ticket_id: TID(1), request_id: 'r9', mode: 'analyse', recipe: { name: 'analyse', source: 'builtin' }, permissions: NONE, access: 'standard', state: 'failed', error: { code: 'interrupted', message: 'worker restarted' }, requested_at: '2026-10-02T09:00:00Z', finished_at: '2026-10-02T09:05:00Z', session_id: null };
   const html = renderRunDetail(h, normalizeSnapshot({ ...uiSnapshot(), handoffs: [h] }), { now: '2026-10-02T12:00:00Z' });
   assert.match(html, /Retry as new run/);
@@ -139,12 +156,21 @@ test('a scoped run interrupted after a ledger write shows the write as an uncert
   try {
     const h = e.w.state.handoffs.get(hid);
     assert.equal(h.error.code, 'interrupted');
-    assert.deepEqual(h.uncertain_effects, ['kubectl apply on stg may have run', 'mcp__atlassian__editJiraIssue on ABC-1 may have run']);
+    // Owner-only (ruling R55): the writes live in possible_writes, never in uncertain_effects.
+    assert.deepEqual(h.possible_writes, ['kubectl apply on stg may have run', 'mcp__atlassian__editJiraIssue on ABC-1 may have run']);
+    assert.deepEqual(h.uncertain_effects, []);
     // The partial ledger is kept for the owner and the resume.
     assert.match(fs.readFileSync(ledgerOf(e, hid), 'utf8'), /kubectl apply/);
     const snap = e.w.liveSnapshot();
     const html = renderRunDetail(snap.handoffs.find((x) => x.id === hid), snap, { now: e.iso() });
     assert.match(html, /class="run-uncertain"[\s\S]*kubectl apply on stg may have run/);
+    // An export, the mirror (the same sanitizer) and the vault note carry only a count.
+    const exported = sanitizeSnapshot(snap, { exportedAt: e.iso(), includeCheckpoints: true, includeLinks: true });
+    const out = exported.handoffs.find((x) => x.id === hid);
+    assert.deepEqual(out.uncertain_effects, ['2 production writes may have run']);
+    const note = renderHandoffNote(e.w.state.handoffs.get(hid), { state: e.w.state });
+    assert.match(note, /- 2 production writes may have run/);
+    for (const text of [JSON.stringify(exported), note]) assert.doesNotMatch(text, /kubectl apply|on stg|ABC-1|mcp__|k8s\.write|jira\.write|possible_writes/);
   } finally { await e.w.stop(); }
 });
 
@@ -170,19 +196,20 @@ test('interruptedEffects: allowed writes only, one line each, never more than th
 });
 
 test('a graceful stop mid-run marks the run interrupted with the same uncertain effects', async () => {
-  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: 's2' } });
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: S2, CLAUDE_CONFIG_DIR: configRoot() } });
   const t = b.ticket(T2, 'LOCAL-b-00000002');
   b.request(RID(2), { target_id: T2, expected_revision: t.revision, payload: analyse });
   b.w.tick();
   const hid = b.w.state.requests.get(RID(2)).result.handoff_id;
-  await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'running' && h.session_id === 's2'; });
+  await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'running' && h.session_id === S2; });
   fs.mkdirSync(path.dirname(ledgerOf(b, hid)), { recursive: true });
   fs.appendFileSync(ledgerOf(b, hid), guardLine({ tool_name: 'Bash', input_summary: 'kubectl apply -f deploy.yaml --context stg', class: 'write', scope: 'k8s.write', target: 'stg' }));
   await b.w.stop();
   const h = b.w.state.handoffs.get(hid);
   assert.equal(h.error.code, 'interrupted');
-  assert.equal(h.session_id, 's2');
-  assert.deepEqual(h.uncertain_effects, ['kubectl apply on stg may have run']);
+  assert.equal(h.session_id, S2);
+  assert.deepEqual(h.possible_writes, ['kubectl apply on stg may have run']);
+  assert.equal((h.uncertain_effects ?? []).some((u) => /kubectl/.test(u)), false);
 });
 
 // Critical changes (ADR 0028): a resumed approved run keeps exactly its pin and scope, or is refused.
@@ -190,7 +217,8 @@ const PINNED = 'argocd app sync pay-stg --prune';
 const CHANGE = { title: 'Sync payments to staging', scope: 'argo.sync', target: 'pay-stg', action: PINNED, why: 'w', evidence: 'e', verify: 'v', rollback: 'r', risk: 'medium' };
 
 test('resuming an approved critical-change run keeps its pin, scope, fingerprints and provenance; a changed scope is refused with scope-changed', async () => {
-  const d = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: 'sc1' } });
+  const config = configRoot();
+  const d = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: SC1, CLAUDE_CONFIG_DIR: config } });
   d.ticket(T1, 'PMO-7');
   d.request(RID(3), { target_id: T1, expected_revision: d.w.state.tickets.get(T1).revision, payload: { mode: 'analyse', note: 'look', permissions: NONE } });
   d.w.tick();
@@ -200,12 +228,21 @@ test('resuming an approved critical-change run keeps its pin, scope, fingerprint
   const req = applied(d, submitRequest(d.w, { id: randomUUID(), kind: 'approve-run', target_id: p.ticket_id, expected_revision: null, payload: { proposal_id: p.id } }).request);
   assert.equal(req.state, 'applied', JSON.stringify(req.error));
   const hid = req.result.handoff_id;
-  await until(() => { d.w.tick(); const h = d.w.state.handoffs.get(hid); return h.state === 'running' && h.session_id === 'sc1'; }, { timeoutMs: 15000 });
+  await until(() => { d.w.tick(); const h = d.w.state.handoffs.get(hid); return h.state === 'running' && h.session_id === SC1; }, { timeoutMs: 15000 });
   await d.w.stop({ flush: false, abandonRuns: true });
-  const e = await restartWorker(d, { spawnEnv: { FAKE_CLAUDE_SESSION: 'sc1' }, withServer: true });
+  const e = await restartWorker(d, { spawnEnv: { FAKE_CLAUDE_SESSION: SC1, CLAUDE_CONFIG_DIR: config }, withServer: true });
   try {
     const orig = e.w.state.handoffs.get(hid);
     assert.equal(orig.error.code, 'interrupted');
+    // Ruling R56: resuming re-grants the pinned production write, so, like approving it, only the
+    // owner on the dashboard may: never the CLI, nor an ingress request claiming the owner.
+    for (const actor of ['cli', 'owner']) {
+      const r = viaIngress(e, orig, actor);
+      assert.equal(r.state, 'failed', actor);
+      assert.equal(r.error.code, 'resume-dashboard-only', actor);
+    }
+    assert.equal(applied(e, resume(e, orig, { actor: 'cli' }).request).error.code, 'resume-dashboard-only', 'a cli actor through the worker is not the dashboard either');
+    assert.equal([...e.w.state.handoffs.values()].filter((x) => x.retry_of === hid).length, 0, 'nothing was queued');
     // The scope changed in config.toml after the change was approved: the resume is refused and
     // nothing is queued. Put back, the resume goes through.
     const before = e.config.scopes;
@@ -271,21 +308,24 @@ test('quill agent resume is refused inside an agent run (cli-in-run) and writes 
 });
 
 test('a scoped autonomous run records the fingerprints its grant was frozen with; its resume keeps them and is refused after a scope edit', async () => {
-  const d = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: 'sa1' } });
+  const config = configRoot();
+  const d = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '5000', FAKE_CLAUDE_SESSION: SA1, CLAUDE_CONFIG_DIR: config } });
   const t = d.ticket(T2, 'LOCAL-b-00000002');
   d.request(RID(4), { target_id: T2, expected_revision: t.revision, payload: { ...analyse, access: 'autonomous', scopes: ['argo.sync:pay-stg'] } });
   d.w.tick();
   const r0 = d.w.state.requests.get(RID(4));
   assert.equal(r0.state, 'applied', JSON.stringify(r0.error));
   const hid = r0.result.handoff_id;
-  const running = await until(() => { d.w.tick(); const h = d.w.state.handoffs.get(hid); return h.state === 'running' && h.session_id === 'sa1' ? h : null; }, { timeoutMs: 15000 });
+  const running = await until(() => { d.w.tick(); const h = d.w.state.handoffs.get(hid); return h.state === 'running' && h.session_id === SA1 ? h : null; }, { timeoutMs: 15000 });
   assert.deepEqual(Object.keys(running.scope_fingerprints), ['argo.sync:pay-stg']);
   assert.match(running.scope_fingerprints['argo.sync:pay-stg'], /\S/);
   assert.equal(running.action_pins, undefined, 'an ordinary scoped run has no pin');
   await d.w.stop({ flush: false, abandonRuns: true });
-  const e = await restartWorker(d, { withServer: true });
+  const e = await restartWorker(d, { spawnEnv: { CLAUDE_CONFIG_DIR: config }, withServer: true });
   try {
     const orig = e.w.state.handoffs.get(hid);
+    // Ruling R56: a scoped run is resumed on the owner's dashboard only.
+    for (const actor of ['cli', 'owner']) assert.equal(viaIngress(e, orig, actor).error.code, 'resume-dashboard-only', actor);
     e.config.scopes = { 'argo.sync': { bash: ['argocd app *'] } };
     const refused = applied(e, resume(e, orig).request);
     assert.equal(refused.error.code, 'scope-changed');
@@ -301,4 +341,65 @@ test('a scoped autonomous run records the fingerprints its grant was frozen with
     assert.equal(failed.error.code, 'scope-changed');
     assert.match(failed.error.message, /resumes/);
   } finally { await e.w.stop(); }
+});
+
+test('a resume whose session transcript is gone fails fast with "session not found - retry as a new run" and spawns nothing', async () => {
+  const { e, hid, capture, config } = await interruptedRun();
+  try {
+    fs.rmSync(path.join(config, 'projects'), { recursive: true, force: true });
+    const r = applied(e, resume(e, e.w.state.handoffs.get(hid)).request);
+    assert.equal(r.state, 'applied', JSON.stringify(r.error));
+    const failed = await settle(e, r.result.handoff_id);
+    assert.equal(failed.state, 'failed');
+    assert.equal(failed.error.code, 'resume-session-missing');
+    assert.equal(failed.error.message, SESSION_MISSING);
+    assert.equal(SESSION_MISSING, 'session not found - retry as a new run');
+    assert.equal(fs.existsSync(`${capture}.resume`), false, 'no runtime was started');
+    assert.equal(fs.existsSync(capture), false);
+  } finally { await e.w.stop(); }
+});
+
+test('carrySession copies (never moves) a UUID session into the new working directory\'s project folder, and refuses everything else', () => {
+  const root = configRoot();
+  const projects = path.join(root, 'projects');
+  const oldCwd = path.join(root, 'work', 'handoffs', 'sandbox', 'old-run');
+  const newCwd = path.join(root, 'work', 'handoffs', 'sandbox', 'new-run');
+  fs.mkdirSync(newCwd, { recursive: true });
+  const src = path.join(projects, projectDirName(oldCwd), `${S1}.jsonl`);
+  fs.mkdirSync(path.dirname(src), { recursive: true });
+  fs.writeFileSync(src, '{"type":"user"}\n');
+  assert.equal(projectDirName('C:\\Users\\shiva\\.claude\\x_y'), 'C--Users-shiva--claude-x-y', 'every character outside [A-Za-z0-9] becomes -');
+  const [dest] = carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: newCwd });
+  assert.equal(dest, path.join(projects, projectDirName(newCwd), `${S1}.jsonl`));
+  assert.equal(fs.readFileSync(dest, 'utf8'), '{"type":"user"}\n');
+  assert.ok(fs.existsSync(src), 'the source stays');
+  // Again with the same content: nothing to do. A different transcript is never replaced.
+  assert.doesNotThrow(() => carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: newCwd }));
+  fs.writeFileSync(dest, 'other');
+  assert.throws(() => carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: newCwd }), (err) => err.code === 'resume-session-conflict');
+  assert.equal(fs.readFileSync(dest, 'utf8'), 'other');
+  // Only a UUID: no option, path or stream name ever reaches a file name.
+  for (const bad of ['s1', '../../evil', `..\\${S1}`, `${S1}:x`, `${S1}/../../x`, '']) {
+    assert.throws(() => carrySession({ configRoot: root, sessionId: bad, fromCwd: oldCwd, toCwd: newCwd }), (err) => err.code === 'no-session', bad);
+  }
+  assert.equal(fs.readdirSync(projects).length, 2, 'nothing was written outside the two project folders');
+  // A missing transcript fails with the owner-facing message.
+  assert.throws(() => carrySession({ configRoot: root, sessionId: S2, fromCwd: oldCwd, toCwd: newCwd }), (err) => err.code === 'resume-session-missing' && err.message === SESSION_MISSING);
+  // A source folder Claude Code shortened (a long path) is found by its one transcript of that id.
+  const long = path.join(projects, `${'x'.repeat(200)}-abc123`);
+  fs.mkdirSync(long, { recursive: true });
+  fs.writeFileSync(path.join(long, `${S2}.jsonl`), 'long');
+  const newer = path.join(root, 'work', 'n2');
+  fs.mkdirSync(newer, { recursive: true });
+  const [d2] = carrySession({ configRoot: root, sessionId: S2, fromCwd: path.join(root, 'y'.repeat(220)), toCwd: newer });
+  assert.equal(fs.readFileSync(d2, 'utf8'), 'long');
+  // A destination name Claude Code would shorten cannot be predicted: refused, not guessed.
+  assert.throws(() => carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: path.join(root, 'z'.repeat(220)) }), (err) => err.code === 'resume-session-unreachable');
+});
+
+test('claudeConfigRoot: CLAUDE_CONFIG_DIR, else the platform home', () => {
+  assert.equal(claudeConfigRoot({ CLAUDE_CONFIG_DIR: path.resolve('/cfg'), HOME: '/h' }), path.resolve('/cfg'));
+  assert.equal(claudeConfigRoot({ USERPROFILE: 'C:\\Users\\me', HOME: '/h' }, 'win32'), path.join('C:\\Users\\me', '.claude'));
+  assert.equal(claudeConfigRoot({ userprofile: 'C:\\Users\\me' }, 'win32'), path.join('C:\\Users\\me', '.claude'), 'names compare case-insensitively on Windows');
+  assert.equal(claudeConfigRoot({ USERPROFILE: '/u', HOME: '/h' }, 'linux'), path.join('/h', '.claude'));
 });

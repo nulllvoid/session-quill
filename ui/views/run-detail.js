@@ -9,8 +9,8 @@ import { testGateChip, accessBadge, runTimings, runQuality, suggestionItem, file
 import { supersededBy } from '../lib/runs.js';
 
 // The worker's own rule (src/handoff/resume.js resumeProblem): interrupted, with a session id that
-// Claude Code reported.
-const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+// Claude Code reported (a UUID).
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const resumable = (h) => h.state === 'failed' && !!h.error && h.error.code === 'interrupted' && typeof h.session_id === 'string' && SESSION_ID_RE.test(h.session_id);
 
 const section = (title, body) => (body ? `<section class="detail-section"><h3>${esc(title)}</h3>${body}</section>` : '');
@@ -252,7 +252,9 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
     fileEffects(h, t ?? { id: h.ticket_id }, { canEdit: !!caps.edit_tickets, pending }),
   ].join('');
 
-  const uncertain = (h.uncertain_effects ?? []).length ? `<div class="run-uncertain" role="note">${icon('alert')}<div><strong>The worker could not confirm:</strong><ul>${h.uncertain_effects.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div></div>` : '';
+  // possible_writes (an interrupted run's allowed writes, R55) reach only the owner's snapshot.
+  const unconfirmed = [...(h.uncertain_effects ?? []), ...(Array.isArray(h.possible_writes) ? h.possible_writes : [])];
+  const uncertain = unconfirmed.length ? `<div class="run-uncertain" role="note">${icon('alert')}<div><strong>The worker could not confirm:</strong><ul>${unconfirmed.map((e) => `<li>${esc(e)}</li>`).join('')}</ul></div></div>` : '';
   const delivery = [
     h.pr_url ? (/^https?:\/\//i.test(h.pr_url) ? `<p><a href="${attr(h.pr_url)}" target="_blank" rel="noopener noreferrer">${esc(h.pr_url)}</a></p>` : `<p class="small"><code>${esc(h.pr_url)}</code></p>`) : '',
     h.branch ? `<p class="small">Branch <code>${esc(h.branch)}</code></p>` : '',

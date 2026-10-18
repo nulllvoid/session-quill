@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { contentHash } from '../lib/ids.js';
 import { writeFileAtomic } from '../lib/atomic-fs.js';
 import { stringifyYaml, parseYaml, safeInline } from './markdown.js';
+import { possibleWritesLine } from '../export/sanitize.js';
 
 export const GENERATED_SECTIONS = ['timeline', 'plans', 'conclusions', 'files', 'prs', 'followups', 'handoffs'];
 const HEADINGS = {
@@ -104,6 +105,10 @@ export function renderSessionNote(session, { state }) {
 // Front matter allow-list: today's record fields minus worktree_path. Fields added later stay out until named here.
 export const HANDOFF_NOTE_FIELDS = ['schema_version', 'store_id', 'id', 'revision', 'created_at', 'updated_at', 'ticket_id', 'request_id', 'mode', 'note', 'permissions', 'access', 'base_ticket_revision', 'base_next_action', 'repo_id', 'base_commit', 'branch', 'state', 'requested_at', 'started_at', 'finished_at', 'deadline_at', 'error', 'result_ref', 'result_summary', 'result_confidence', 'result_sources', 'result_quality', 'children_ids', 'changed_files', 'test_results', 'test_gate', 'commit_sha', 'pr_url', 'uncertain_effects', 'retry_of', 'batch_id', 'recipe', 'legacy', 'outputs', 'deadline_ms', 'suggestions', 'timings', 'cancel_requested', 'proposal_id', 'proposal', 'file_effects', 'files', 'log_path', 'patch_path'];
 
+// What the vault may say about effects the worker could not confirm: the recorded lines, and for
+// an interrupted run only how many writes may have run (R55), never which.
+const uncertainLines = (h) => [...(Array.isArray(h.uncertain_effects) ? h.uncertain_effects : []), ...[possibleWritesLine(h)].filter(Boolean)];
+
 export function renderHandoffNote(handoff, { state }) {
   const ticket = state.tickets.get(handoff.ticket_id);
   const body = [
@@ -117,7 +122,7 @@ export function renderHandoffNote(handoff, { state }) {
     handoff.changed_files && handoff.changed_files.length ? `\n### Changed files\n${handoff.changed_files.map((f) => `- \`${safeInline(f)}\``).join('\n')}` : '',
     handoff.test_results && handoff.test_results.length ? `\n### Tests\n${handoff.test_results.map((t) => `- ${safeInline(typeof t === 'string' ? t : JSON.stringify(t))}`).join('\n')}` : '',
     handoff.children_ids && handoff.children_ids.length ? `\n### Children\n${handoff.children_ids.filter((id) => hasVaultNote(state.tickets.get(id))).map((id) => `- [[${safeInline(state.tickets.get(id)?.key ?? id)}]]`).join('\n')}` : '',
-    handoff.uncertain_effects && handoff.uncertain_effects.length ? `\n### Uncertain effects\n${handoff.uncertain_effects.map((u) => `- ${safeInline(u)}`).join('\n')}` : '',
+    uncertainLines(handoff).length ? `\n### Uncertain effects\n${uncertainLines(handoff).map((u) => `- ${safeInline(u)}`).join('\n')}` : '',
     '',
   ].filter((l) => l !== '').join('\n');
   const fm = Object.fromEntries(HANDOFF_NOTE_FIELDS.filter((k) => k in handoff).map((k) => [k, handoff[k]]));
