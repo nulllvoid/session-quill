@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-19
+
+### Fixed
+
+- The guard's test file was split in two (`tests/gate/run-guard-rows.test.js` and `run-guard-paths.test.js`, with a shared fixture and row tables). An antivirus quarantined the single large file on checkout, which broke `git clone` and plugin installs on that machine.
+
 ## [1.1.0] - 2026-10-19
 
 Autonomous runs: an agent run can use your connected tools and read production like your own Claude Code session would. It still cannot change production unless you grant a write scope or approve an exact change. Runs leave what they learned for the next run. See [ADR 0026](docs/decisions/0026-autonomous-access-and-guard.md), [ADR 0027](docs/decisions/0027-run-memory.md), [ADR 0028](docs/decisions/0028-critical-changes.md) and README "Autonomous runs".
