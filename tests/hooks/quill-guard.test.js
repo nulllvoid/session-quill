@@ -25,7 +25,8 @@ const qh = dir('quill');
 const tmp = dir('tmp');
 const outside = dir('outside');
 file(path.join(outside, 'secret.txt'));
-const NO_COMMIT = 'QUILL_DENIED no-commit-permission: git commits need the commit permission, which this run does not have. Leave the changes uncommitted and describe them in the result.';
+// R58: the refusal also names the other git commands that write the shared repository
+const NO_COMMIT = 'QUILL_DENIED no-commit-permission: git commits, and every git command that writes the shared repository (refs, branches, tags, stash, notes, objects, the index or configuration), need the commit permission, which this run does not have. Use read-only git (status, log, show, diff, blame, grep, ls-files, rev-parse, branch and tag listings, fetch), leave the changes uncommitted and describe them in the result.';
 
 // One run: its run dir under the Quill home, a git checkout on a branch, and a grant on disk.
 let runs = 0;
