@@ -1,7 +1,7 @@
 // Final review C1 / ruling R57: a guarded run never starts Claude Code. A nested session gets no
 // Quill guard yet signs in with the owner's login, connectors and user MCP servers, so every
 // spelling the classifier can see is refused in every tier except `full` (observe only).
-// Kept apart from run-guard.test.js on purpose: the permission flag is assembled from parts, so no
+// Kept apart from the run-guard tests on purpose: the permission flag is assembled from parts, so no
 // literal in the repository spells a Claude Code command line that turns permission checks off.
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
