@@ -126,6 +126,15 @@ export function possibleWritesLine(h) {
   return n ? `${n} production write${n === 1 ? '' : 's'} may have run` : null;
 }
 
+// M1 (R53): an error about write scopes (scope-changed, scope-credentials-missing, unknown-scope …)
+// names the scope and its target; outside the owner's dashboard only a generic line travels.
+const SCOPE_ERROR_RE = /^(scope-|unknown-scope$|invalid-scope-target$)/;
+export const SCOPE_ERROR_MESSAGE = "a write scope this run needed was not available as granted; the owner's dashboard has the details";
+export function exportableError(err) {
+  if (!err || typeof err !== 'object' || typeof err.code !== 'string' || !SCOPE_ERROR_RE.test(err.code)) return err;
+  return { ...err, message: SCOPE_ERROR_MESSAGE };
+}
+
 // Local-only tickets never leave the machine: not in exports, mirrors, publishers or tracker pushes.
 export function isExportableTicket(ticket) {
   return !(ticket && ticket.local_only === true);
@@ -140,6 +149,7 @@ function sanitizeHandoff(h, o) {
   const { result_ref, pr_url, result_summary, result_confidence, result_sources, changed_files, suggestions, files, file_effects, test_gate } = h;
   const out = {};
   for (const k of HANDOFF_PLAIN_FIELDS) if (k in h) out[k] = h[k];
+  if ('error' in h) out.error = exportableError(h.error);
   const possible = possibleWritesLine(h);
   if (possible) out.uncertain_effects = [...(Array.isArray(h.uncertain_effects) ? h.uncertain_effects : []), possible];
   // The test gate's result travels; its command and output (paths, env, secrets) never do.

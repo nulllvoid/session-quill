@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { contentHash } from '../lib/ids.js';
 import { writeFileAtomic } from '../lib/atomic-fs.js';
 import { stringifyYaml, parseYaml, safeInline } from './markdown.js';
-import { possibleWritesLine } from '../export/sanitize.js';
+import { possibleWritesLine, exportableError } from '../export/sanitize.js';
 
 export const GENERATED_SECTIONS = ['timeline', 'plans', 'conclusions', 'files', 'prs', 'followups', 'handoffs'];
 const HEADINGS = {
@@ -123,7 +123,9 @@ export const HANDOFF_NOTE_FIELDS = ['schema_version', 'store_id', 'id', 'revisio
 // an interrupted run only how many writes may have run (R55), never which.
 const uncertainLines = (h) => [...(Array.isArray(h.uncertain_effects) ? h.uncertain_effects : []), ...[possibleWritesLine(h)].filter(Boolean)];
 
-export function renderHandoffNote(handoff, { state }) {
+export function renderHandoffNote(run, { state }) {
+  // M1: a scope error names the scope and target; the note keeps only a generic line
+  const handoff = run && run.error ? { ...run, error: exportableError(run.error) } : run;
   const ticket = state.tickets.get(handoff.ticket_id);
   const body = [
     `## Handoff ${handoff.id.slice(0, 8)} — ${handoff.mode} — ${handoff.state}`,

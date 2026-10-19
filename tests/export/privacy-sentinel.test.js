@@ -254,3 +254,27 @@ test('R60: nothing about a local-only ticket, its sessions or its runs reaches t
     assert.ok(files.some((f) => f.includes(`${path.sep}sessions${path.sep}`)), 'the session note itself is still written');
   } finally { await b.w.stop(); }
 });
+
+// M1 (R53): a run error about write scopes names the scope and its target; exports, the mirror and
+// vault notes carry only a generic line for it. Other errors keep their message.
+test('M1: scope errors reach exports, the mirror and vault notes without scope names or targets', () => {
+  for (const code of ['scope-changed', 'scope-credentials-missing', 'scope-conflict', 'unknown-scope', 'invalid-scope-target']) {
+    const s = fixture();
+    s.handoffs[0].error = { code, message: `scope k8s.write:${S}-ctx changed in config.toml since run 1234 started` };
+    const out = sanitizeSnapshot(s, ALL).handoffs[0];
+    assert.equal(out.error.code, code);
+    assert.equal(JSON.stringify(out).includes(S), false, code);
+    assert.match(out.error.message, /write scope/);
+    assert.equal(buildStaticHtml(s, ALL).includes(S), false, code);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quill-sentinel-'));
+    try {
+      writeMirror(s, { dir, projects: null, include_links: true }, { now: ALL.exportedAt });
+      assert.equal(fs.readFileSync(path.join(dir, 'snapshot.json'), 'utf8').includes(S), false, code);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    const state = { tickets: new Map(s.tickets.map((t) => [t.id, t])) };
+    assert.equal(renderHandoffNote(s.handoffs[0], { state }).includes(S), false, code);
+  }
+  const other = fixture();
+  other.handoffs[0].error = { code: 'agent-exit', message: 'agent exited with exit code 1' };
+  assert.equal(sanitizeSnapshot(other, ALL).handoffs[0].error.message, 'agent exited with exit code 1');
+});
