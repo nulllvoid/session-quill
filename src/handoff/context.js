@@ -5,6 +5,11 @@
 import { execFile } from 'node:child_process';
 import { getBlob } from '../core/blobs.js';
 
+// The run's memory (spec §6.3) is gathered beside this context and passed to buildPrompt as
+// `context.memory` (and `context.guide` for a run without a checkout).
+export { gatherMemory, inlineBudget, writeContext } from '../memory/deliver.js';
+import { deliverableRunNotes } from '../memory/deliver.js';
+
 export const CONTEXT_LIMITS = {
   user_notes: 6000,
   plan: 8000,
@@ -63,15 +68,20 @@ function suggestionText(s) {
   return `${s.type.replace('-', ' ')} "${String(s.text ?? '').slice(0, 200)}"`;
 }
 
-// Earlier finished runs on the ticket, newest first, with each suggestion's fate.
+// Earlier finished runs on the ticket, newest first, with each suggestion's fate. Run notes (the
+// Memory section, src/memory/deliver.js) are the main prior-run carrier (spec §6.1): a run that left
+// a Run note is listed for its suggestion outcomes only; its result summary is shown only for a run
+// without one (runs from before Run notes existed).
 export function runHistory(state, ticket, currentId, limit = CONTEXT_LIMITS.history) {
+  const current = currentId && state.handoffs ? state.handoffs.get(currentId) ?? null : null;
+  const noted = new Set(deliverableRunNotes(state, ticket, current).map((n) => n.run_id));
   const runs = [...state.handoffs.values()]
     .filter((h) => h.ticket_id === ticket.id && h.id !== currentId && ['done', 'failed', 'timed-out', 'cancelled'].includes(h.state))
     .sort((a, b) => String(b.finished_at ?? b.requested_at ?? '').localeCompare(String(a.finished_at ?? a.requested_at ?? '')))
     .slice(0, limit);
   return runs.map((h) => {
     const name = h.recipe ? h.recipe.name : h.mode;
-    const summary = h.result_summary ? ` ${String(h.result_summary).replace(/\s+/g, ' ').slice(0, CONTEXT_LIMITS.history_summary)}` : '';
+    const summary = noted.has(h.id) ? ' (attempts and lessons in its Run note)' : h.result_summary ? ` ${String(h.result_summary).replace(/\s+/g, ' ').slice(0, CONTEXT_LIMITS.history_summary)}` : '';
     const decided = (h.suggestions ?? []).map((s) => `${suggestionText(s)}: ${s.state === 'proposed' ? 'not decided yet' : s.state}`);
     const applied = h.legacy !== false && h.state === 'done' ? ' (results applied directly)' : '';
     return `- ${h.finished_at ?? h.requested_at} ${name} (${h.state})${applied}:${summary || ' no summary'}${decided.length ? `\n  Suggestions: ${decided.join('; ')}` : ''}`;

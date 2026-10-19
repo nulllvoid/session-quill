@@ -32,7 +32,7 @@ export function ticketSummary(ticket, { environmentsFor = null, cloning = null }
   return out;
 }
 
-export function buildMeta(state, { now, capture, worker_seen_at, active_sync_request_id = null, key_example = 'PROJ-123', next_sync_due, handoff_limits = null, onboarding = null }) {
+export function buildMeta(state, { now, capture, worker_seen_at, active_sync_request_id = null, key_example = 'PROJ-123', next_sync_due, handoff_limits = null, onboarding = null, autonomy = null }) {
   const counts = { todo: 0, active: 0, blocked: 0, review: 0, 'deploy-pending': 0, done: 0 };
   let stale = 0;
   for (const t of state.tickets.values()) {
@@ -67,12 +67,17 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
     handoff_limits,
     // Clone hosts and folder (ADR 0024), shown by the clone dialog before the owner confirms.
     onboarding,
+    // What the Run dialog says about autonomous runs on this machine (ADR 0026): the latest init
+    // inventory and credential report, configured read-only systems. Never exported.
+    autonomy,
   };
 }
 
-export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [], handoff_limits = null, onboarding = null }) {
+export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [], handoff_limits = null, onboarding = null, autonomy = null }) {
   const dayAgo = addMs(generated_at, -24 * HOUR);
-  const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo);
+  // Memory requests keep their kind and state but not their text: memory never reaches a snapshot (spec §9).
+  const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo)
+    .map((r) => (typeof r.kind === 'string' && r.kind.startsWith('memory-') ? { ...r, payload: r.payload && typeof r.payload.pinned === 'boolean' ? { pinned: r.payload.pinned } : {} } : r));
   const cloning = new Set(requests.filter((r) => r.kind === 'repo-clone' && ['pending', 'applying'].includes(r.state)).map((r) => r.target_id));
   return {
     schema_version: 1,
@@ -82,7 +87,9 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     tickets: [...state.tickets.values()].map((t) => ticketSummary(t, { environmentsFor, cloning })),
     sessions: [...state.sessions.values()],
     checkpoints: [...state.checkpoints.values()],
-    handoffs: [...state.handoffs.values()],
+    // A run's init inventory and credential report stay on its record; the dashboard reads only the
+    // latest of each (meta.autonomy), so the snapshot does not grow with them per run (ADR 0026).
+    handoffs: [...state.handoffs.values()].map(({ inventory, cred_report, ...h }) => h),
     requests,
     schedules,
     recipes,
@@ -93,7 +100,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     blocked: derived.blocked ?? [],
     deployments_outstanding: derived.deployments_outstanding ?? [],
     today: derived.today ?? null,
-    meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id, key_example, next_sync_due, handoff_limits, onboarding }),
+    meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id, key_example, next_sync_due, handoff_limits, onboarding, autonomy }),
     repos: Object.entries(state.meta.repos).map(([id, r]) => ({ id, project_id: r.project_id ?? null, display_name: r.display_name ?? id, default_branch: r.default_branch ?? 'main', deployment_environments: r.deployment_environments ?? ['production'], test_command: typeof r.test_command === 'string' && r.test_command.trim() ? r.test_command.trim() : null })),
     unresolved: state.unresolved.slice(-200),
   };

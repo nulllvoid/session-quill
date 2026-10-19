@@ -40,7 +40,11 @@ test('recipes: invalid frontmatter becomes a listed error, never a runnable reci
     [recipe('x', 'mode: deploy\n'), 'r', /mode must be one of/],
     [recipe('x', 'tools: [Edit]\n'), 'r', /tool "Edit" needs more than this recipe's permissions/],
     [recipe('x', 'permissions: { read_source: true }\ntools: ["Bash(rm -rf:*)"]\n'), 'r', /tool "Bash\(rm -rf:\*\)"/],
-    [recipe('x', 'timeout_min: 45\n'), 'r', /timeout_min must be a whole number from 1 to 20/],
+    [recipe('x', 'timeout_min: 61\n'), 'r', /timeout_min must be a whole number from 1 to 60/],
+    [recipe('x', 'max_turns: 120\n'), 'r', /"max_turns" needs quill_min_version/],
+    [recipe('x', 'max_budget_usd: 5\n'), 'r', /"max_budget_usd" needs quill_min_version/],
+    [recipe('x', 'quill_min_version: "1.1.0"\nmax_turns: 0\n'), 'r', /max_turns must be a whole number/],
+    [recipe('x', 'quill_min_version: soon\n'), 'r', /quill_min_version must look like 1\.1\.0/],
     [recipe('x', 'outputs: [poem]\n'), 'r', /unknown output "poem"/],
     [recipe('For {{ticket.secret}}'), 'r', /unknown placeholder \{\{ticket\.secret\}\}/],
     [recipe('   '), 'r', /prompt body is empty/],
@@ -64,7 +68,7 @@ test('recipes: a read-only recipe may narrow its tools; git log is accepted in e
 
 test('recipes: built-ins ship the three handoff modes plus deploy-check and standup, all valid', () => {
   const { effective } = loadRecipes({ env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-rec-')) } });
-  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check', 'file-task', 'standup', 'workspace-setup']);
+  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'critical-change', 'deploy-check', 'file-task', 'standup', 'verify-deploy', 'workspace-setup']);
   assert.deepEqual([effective.get('file-task').mode, effective.get('file-task').schedulable], ['files', false], 'a files run is never scheduled');
   for (const r of effective.values()) assert.equal(r.error, null, r.name);
   assert.deepEqual(['analyse', 'analyse-followups', 'attempt-fix'].map((n) => effective.get(n).legacy), [true, true, true]);
@@ -141,4 +145,54 @@ test('the built-in workspace-setup recipe only suggests: no source access, no ed
   assert.deepEqual(Object.entries(r.permissions).filter(([, v]) => v), [], 'no permission at all');
   assert.deepEqual(r.outputs, ['summary', 'next_action']);
   assert.match(r.body, /You only suggest\. Do not clone, register, configure or run anything/);
+});
+
+test('recipes: budgets and a minimum version are accepted together, x- keys are ignored, 60 minutes is the ceiling', () => {
+  const ok = normalizeRecipe({ name: 'r', text: recipe('x', 'quill_min_version: "1.1.0"\nmax_turns: 120\nmax_budget_usd: 2.5\ntimeout_min: 60\nx-note: hi\n'), source: 'repo' });
+  assert.equal(ok.error, null);
+  assert.deepEqual([ok.max_turns, ok.max_budget_usd, ok.quill_min_version, ok.timeout_min, ok.timeout_set], [120, 2.5, '1.1.0', 60, true]);
+  const plain = normalizeRecipe({ name: 'r', text: recipe('x'), source: 'repo' });
+  assert.deepEqual([plain.error, plain.max_turns, plain.max_budget_usd, plain.timeout_min, plain.timeout_set], [null, null, null, 20, false]);
+  assert.equal(normalizeRecipe({ name: 'r', text: recipe('x', 'x-anything: [[1]]\n'), source: 'repo' }).error === null, false, 'x- values still have to parse as the frontmatter subset');
+});
+
+test('recipes: the built-ins state a definition of done; attempt-fix no longer stops at an unclear target', () => {
+  for (const name of ['analyse', 'analyse-followups', 'attempt-fix', 'deploy-check']) {
+    const text = fs.readFileSync(path.join(BUILTIN_DIR, `${name}.md`), 'utf8');
+    assert.match(text, /^## Definition of done$/m, name);
+    assert.equal(normalizeRecipe({ name, text, source: 'builtin' }).error, null, name);
+  }
+  const fix = fs.readFileSync(path.join(BUILTIN_DIR, 'attempt-fix.md'), 'utf8');
+  assert.doesNotMatch(fix, /stop and report that as the blocker/);
+  assert.match(fix, /pick the most defensible reading, proceed, and report the assumption/);
+  const dc = fs.readFileSync(path.join(BUILTIN_DIR, 'deploy-check.md'), 'utf8');
+  assert.match(dc, /Argo CD \(MCP `argocd` tools or `argocd app get\|history`\)/);
+  assert.match(dc, /Kibana\/Elastic \(MCP search tools or the Kibana API with a read-only key\)/);
+});
+
+// Spec §5.1, §7 (ADR 0028): critical-change performs one approved, pinned change; verify-deploy
+// checks a deployment's health read-only.
+test('recipes: critical-change needs an action pin and scopes and is never offered or scheduled; verify-deploy is read-only', () => {
+  const load = (name) => normalizeRecipe({ name, text: fs.readFileSync(path.join(BUILTIN_DIR, `${name}.md`), 'utf8'), source: 'builtin' });
+  const cc = load('critical-change');
+  assert.equal(cc.error, null);
+  assert.deepEqual(cc.requires, ['action_pin', 'scopes']);
+  assert.equal(cc.schedulable, false, 'a pin only comes from an approval');
+  assert.equal(cc.legacy, false, 'its results are suggestions');
+  assert.deepEqual(Object.entries(cc.permissions).filter(([, v]) => v), [], 'no source, commit, push or PR');
+  assert.ok(cc.outputs.includes('verification') && cc.outputs.includes('critical_changes'));
+  assert.match(cc.body, /^## Definition of done$/m);
+  const vd = load('verify-deploy');
+  assert.equal(vd.error, null);
+  assert.deepEqual(vd.requires, []);
+  assert.equal(vd.mode, 'analyse');
+  assert.deepEqual(Object.entries(vd.permissions).filter(([, v]) => v).map(([k]) => k), ['read_source']);
+  assert.match(vd.body, /^## Definition of done$/m);
+  assert.match(vd.body, /Argo CD/);
+  assert.match(vd.body, /Kibana/);
+  // `requires` is versioned (ADR 0020) and takes only known values.
+  const recipe = (fm) => `---\nname: r\ndescription: d\n${fm}---\nGo.`;
+  assert.match(normalizeRecipe({ name: 'r', text: recipe('requires: [action_pin]\n'), source: 'repo' }).error, /needs quill_min_version/);
+  assert.match(normalizeRecipe({ name: 'r', text: recipe('requires: [root]\nquill_min_version: 1.1.0\n'), source: 'repo' }).error, /unknown requirement "root"/);
+  assert.equal(normalizeRecipe({ name: 'r', text: recipe('requires: [scopes]\nquill_min_version: 1.1.0\n'), source: 'repo' }).error, null);
 });

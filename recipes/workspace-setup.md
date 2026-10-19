@@ -18,3 +18,6 @@ Summary, in at most five lines:
 - If the ticket clearly needs no code (a document, a meeting, a decision), say so instead.
 
 Next action: the one command the owner should run, for example `quill repo clone {{ticket.key}} --url <remote>` (it previews before anything is cloned), `quill ticket set {{ticket.key}} --repo <id>`, or `quill ticket set {{ticket.key}} --no-code yes`. Suggest none when the evidence is too weak, and say what is missing in the summary.
+
+## Definition of done
+- The summary names a repository with its evidence, or says the ticket needs no code, with how sure you are.

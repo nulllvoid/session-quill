@@ -3,7 +3,6 @@ name: analyse
 description: Summarise where the ticket stands from its notes and work, and recommend what to do next
 mode: analyse
 permissions: { read_source: true }
-timeout_min: 20
 inputs: [ticket, notes, prs, deployments, work, related, history]
 outputs: [summary, next_action, blocker, description]
 ---
@@ -19,3 +18,9 @@ When the work spans several modules or more files than you can read closely, spl
 If the Description status is not valid, also write the ticket's description from what you found: the goal, the context that matters, and checkable done-when conditions.
 
 Summary: what is done, what is left, and the main risk, each with its source. Set a blocker only for something that actually stops progress now, not for a risk.
+
+## Definition of done
+- The goal, what is done and what is left are each stated with a source.
+- Every claim was checked against the code, git history or ticket data, or is marked unverified.
+- One concrete next action is given, or a blocker that really stops progress, after at least two routes to settle it were tried.
+- Routes tried, including failed or refused ones, are in `attempts`.

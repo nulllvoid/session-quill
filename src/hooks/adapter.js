@@ -142,8 +142,12 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
   }
   const identity = readRuntimeIdentity(env);
   const { session_id, agent_id } = identityOf(input);
+  // An autonomous run's own guard (bin/quill-guard.js, wired in by the run's settings) decides
+  // every tool call when QUILL_HANDOFF_GUARD is set; this hook then only captures, so a run pays
+  // for one decision per call (spec §4.1).
+  const runGuard = !!env.QUILL_HANDOFF_GUARD;
   // Every tool outside the dedicated read set is "covered".
-  const toolCovered = eventName === 'PreToolUse' && !!input.tool_name && !READ_TOOLS.has(input.tool_name) && !(identity && Array.isArray(identity.allow_tools) && identity.allow_tools.includes(input.tool_name));
+  const toolCovered = !runGuard && eventName === 'PreToolUse' && !!input.tool_name && !READ_TOOLS.has(input.tool_name) && !(identity && Array.isArray(identity.allow_tools) && identity.allow_tools.includes(input.tool_name));
 
   if (!identity) {
     if (eventName === 'SessionStart') result.stdout = contextOutput('SessionStart', `Session Quill session: ${session_id ?? 'unknown'}. Quill is not enabled yet. If the user wants tracking, run /session-quill:start. Do not interrupt normal work or claim activity is being captured.`);
@@ -230,7 +234,6 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
     case 'PreToolUse': {
       const tool_name = input.tool_name;
       const tool_call_id = typeof input.tool_use_id === 'string' ? input.tool_use_id : null;
-      const hb = readHeartbeat(env, occurred_at);
       let planPath = null;
       const planDir = hostPlansDir(env);
       if (WRITE_TOOLS.has(tool_name) && input.permission_mode === 'plan') {
@@ -244,7 +247,7 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
           try { writePlanClaim(key, target, env); } catch { /* best effort */ }
         }
       }
-      const gate = decideGate({ tool_name, tool_input: input.tool_input ?? {}, binding: snapshot ?? { ticket_id: null, binding_revision: 0 }, workerHealthy: hb.healthy, gateEnabled, planPath, hostPlanDir: planDir, allowTools: identity.allow_tools ?? [], mode });
+      const gate = runGuard ? { decision: 'allow', reason: 'run-guard' } : decideGate({ tool_name, tool_input: input.tool_input ?? {}, binding: snapshot ?? { ticket_id: null, binding_revision: 0 }, workerHealthy: readHeartbeat(env, occurred_at).healthy, gateEnabled, planPath, hostPlanDir: planDir, allowTools: identity.allow_tools ?? [], mode });
       const denied = gate.decision === 'deny';
       const reason = denied && scope.tracker ? `${gate.reason} Mentioning a ticket key such as ${keyExample(scope.tracker)} in a prompt also links the session.` : gate.reason;
       const ev = makeEvent({

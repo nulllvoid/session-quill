@@ -6,6 +6,10 @@ export const SOURCE_LABELS = { builtin: 'built-in', personal: 'personal', repo: 
 const ACTIVE = new Set(['pending', 'applying']);
 
 // Repository recipes replace global ones of the same name for that repository only.
+// A recipe that runs only as an approved critical change (ADR 0028: it requires an action pin) is
+// never offered to pick: its runs come from Runs → Needs you.
+export const offeredRecipe = (r) => !(Array.isArray(r.requires) && r.requires.includes('action_pin'));
+
 export function effectiveRecipes(rawSnapshot, repoId) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const byName = new Map();
@@ -30,7 +34,7 @@ function recipeRow(r, ticket, canRun) {
   const head = `<strong>${esc(r.name)}</strong> <span class="chip small" data-source="${attr(r.source)}">${esc(SOURCE_LABELS[r.source] ?? r.source)}</span>`;
   if (r.error) return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small critical">${icon('alert')}Invalid: ${esc(r.error)}</span></li>`;
   const run = canRun ? ` <button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(ticket.id)}" data-recipe="${attr(r.name)}">${icon('play')}Run…</button>` : '';
-  return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small">${esc(r.description)}</span><div class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(r.timeout_min)} min${r.legacy ? '' : ' · results are suggestions'}</div>${run}</li>`;
+  return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small">${esc(r.description)}</span><div class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(recipeCap(r))} min${r.legacy ? '' : ' · results are suggestions'}</div>${run}</li>`;
 }
 
 function suggestionText(s) {
@@ -91,11 +95,43 @@ export function testGateBadge(g) {
   return `<span class="chip critical small">${g.status === 'timeout' ? 'Tests timed out' : 'Tests failed'}</span>`;
 }
 
-// Whether a run reads or edits, and Full access as a warning.
+// A recipe's time cap for an access level, as the worker computes it (recipe `caps`, the same
+// budget the CLI and the queued run use); the recipe's own timeout_min only for an older snapshot.
+export const defaultAccess = (recipe) => (recipe && recipe.mode === 'files' ? 'standard' : 'autonomous');
+export function recipeCap(recipe, access = defaultAccess(recipe)) {
+  const caps = recipe && recipe.caps && typeof recipe.caps === 'object' ? recipe.caps : null;
+  return caps && Object.hasOwn(caps, access) && Number.isFinite(caps[access]) ? caps[access] : recipe.timeout_min;
+}
+
+// Whether a run reads or edits, and the access it ran with (spec §8): Autonomous, Autonomous with
+// write scopes (a warning: it may write where they allow), or Full access (a warning). Standard and
+// "my settings" runs show the kind only. Words first; the colour only repeats them.
+const runKind = (h) => { const p = h.permissions ?? {}; return p.edit_source ? 'Edits source' : p.edit_files || p.delete_files ? 'Changes files' : 'Read-only'; };
+function accessTier(h) {
+  if (h.access === 'full') return { id: 'full', text: 'Full access', warn: true };
+  if (h.access !== 'autonomous') return null;
+  // An export carries only scope_count (R53), never the scope names.
+  const named = Array.isArray(h.scopes) ? h.scopes : null;
+  const n = named ? named.length : Number.isInteger(h.scope_count) && h.scope_count > 0 ? h.scope_count : 0;
+  return n ? { id: 'autonomous-scopes', text: `Autonomous + scopes (${n})`, warn: true, title: named ? named.map(String).join(', ') : null } : { id: 'autonomous', text: 'Autonomous', warn: false };
+}
+
+// The badge words, for labels that must say what the chips show (run row buttons).
+export function accessWords(h) {
+  const tier = accessTier(h);
+  return [runKind(h), ...(tier ? [tier.text] : [])];
+}
+
+export function accessTierBadge(h) {
+  const tier = accessTier(h);
+  return tier ? `<span class="chip${tier.warn ? ' warning' : ''} small" data-access="${tier.id}"${tier.title ? ` title="${attr(`Write scopes: ${tier.title}`)}"` : ''}>${esc(tier.text)}</span>` : '';
+}
+
 export function accessBadge(h) {
-  const p = h.permissions ?? {};
-  const kind = p.edit_source ? '<span class="chip warning small">Edits source</span>' : p.edit_files || p.delete_files ? '<span class="chip warning small">Changes files</span>' : '<span class="chip small">Read-only</span>';
-  return h.access === 'full' ? `${kind} <span class="chip warning small">Full access</span>` : kind;
+  const kind = runKind(h);
+  const chip = `<span class="chip${kind === 'Read-only' ? '' : ' warning'} small">${kind}</span>`;
+  const tier = accessTierBadge(h);
+  return tier ? `${chip} ${tier}` : chip;
 }
 
 // What a files run changed (ADR 0015), each with an Undo while it still applies.
@@ -126,7 +162,7 @@ export function renderAgentsSection(ticket, rawSnapshot, { busy = false } = {}) 
   const caps = snapshot.capabilities ?? {};
   // A files recipe is offered only where there are attached files for it to work on.
   const hasFiles = attachedFilePaths(ticket).length > 0;
-  const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => r.mode !== 'files' || hasFiles);
+  const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => offeredRecipe(r) && (r.mode !== 'files' || hasFiles));
   const canRun = !!caps.handoff && ticket.status !== 'done';
   return `<section class="detail-section agents"><h3>Recipes</h3>
 ${recipes.length ? `<ul class="recipes">${recipes.map((r) => recipeRow(r, ticket, canRun && !busy)).join('')}</ul>${canRun && busy ? '<p class="muted small">One run per ticket: wait for the current run or cancel it.</p>' : ''}` : '<p class="muted small">No recipes found. Add one in <code>.quill/agents/</code> or <code>~/.claude/quill/agents/</code>.</p>'}</section>`;
@@ -144,6 +180,11 @@ export function runSummary(recipe, c = {}, repo = null) {
   return cap(parts.join(' · '));
 }
 
+// Spec §7.6: a critical change's child can also be run by hand with write scopes; that is the
+// owner's explicit choice and is named for what it is.
+export const SCOPE_GRANT_NOTE = 'This ticket holds a critical change. Write scopes you tick here are a scope grant without a pinned action: the guard allows every write they cover, not only the proposed action. To make only the proposed change, approve it in Runs → Needs you.';
+const isCriticalChild = (t) => !!(t && (t.critical_spec || (t.local_only === true && Array.isArray(t.tags) && t.tags.includes('critical'))));
+
 // What stops a run (blocker) or limits it (warning), from facts the snapshot has.
 export function runBlockers(ticket, rawSnapshot, recipe) {
   const snapshot = normalizeSnapshot(rawSnapshot);
@@ -157,6 +198,7 @@ export function runBlockers(ticket, rawSnapshot, recipe) {
     out.push(p.edit_source || recipe.mode === 'attempt-fix' ? { level: 'blocker', text: `${why}: this recipe edits source.` } : { level: 'warning', text: `${why}: the run works from the ticket notes only.` });
   }
   if (repo && (p.edit_source || recipe.mode === 'attempt-fix') && !repo.test_command) out.push({ level: 'warning', text: 'No test command: fixes will be marked Not test-verified.' });
+  if (recipe.mode !== 'files' && isCriticalChild(ticket)) out.push({ level: 'warning', text: SCOPE_GRANT_NOTE });
   return out;
 }
 
@@ -189,12 +231,12 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
 <h2 id="dialog-title">${icon('play')}Run ${esc(recipe.name)} on ${keyEl(ticket.key)}</h2>
 <p class="small">${esc(recipe.description)} <span class="muted">(${esc(SOURCE_LABELS[recipe.source] ?? recipe.source)} recipe, mode ${esc(recipe.mode)})</span></p>
 ${boxes.length || advanced.length ? `<fieldset><legend>Permissions for this run</legend>${boxes.join('\n')}${advanced.length ? `<details class="advanced"><summary>Advanced: commit, push, PR</summary>${advanced.join('\n')}</details>` : ''}<p class="muted small">The recipe allows at most what is listed here. Anything with a side effect stays off unless you tick it.</p></fieldset>` : '<p class="small">This run works from the ticket notes only: no source access and no side effects.</p>'}
-${recipe.mode === 'files' ? '' : accessFieldset()}
+${recipe.mode === 'files' ? '' : accessFieldset(snapshot, { scopes: true })}
 <label class="label" for="recipe-note">Note <span class="muted">(max 280)</span></label>
 <textarea id="recipe-note" name="note" maxlength="280" rows="2" placeholder="Anything the agent should focus on?"></textarea>
-<p class="muted small">Capped at ${esc(recipe.timeout_min)} minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>
+<p class="muted small">Capped at <span class="run-cap"${['standard', 'settings', 'autonomous', 'full'].map((a) => ` data-cap-${a}="${attr(recipeCap(recipe, a))}"`).join('')}>${esc(recipeCap(recipe))}</span> minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>
 ${blockers.length ? `<ul class="issues">${blockers.map((b) => `<li data-level="${b.level}">${icon('alert')}${esc(b.text)}</li>`).join('')}</ul>` : ''}
 <p class="run-summary" aria-live="polite">${esc(runSummary(recipe, defaults, repo))}</p>
-<div class="dialog-actions"><button type="submit" class="btn primary"${blocked ? ` disabled title="${attr(blockers.find((b) => b.level === 'blocker').text)}"` : ''}>Queue run</button><button type="button" class="btn ghost" data-action="run-agent-back" data-ticket="${attr(ticket.id)}">Back</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
+<div class="dialog-actions"><button type="submit" class="btn primary"${blocked ? ` disabled data-blocked="true" title="${attr(blockers.find((b) => b.level === 'blocker').text)}"` : ''}>Queue run</button><button type="button" class="btn ghost" data-action="run-agent-back" data-ticket="${attr(ticket.id)}">Back</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;
 }

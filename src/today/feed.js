@@ -18,7 +18,10 @@ export function localDate(iso, timeZone) {
   return dateFormatter(timeZone)(iso);
 }
 
-export function buildToday(state, { nowIso, days = TODAY_DAYS, timezone = null } = {}) {
+// `vault` (ruling R60): the feed written into the vault (the daily digest) leaves local-only tickets
+// out entirely, and does not count a session bound only to them.
+export function buildToday(state, { nowIso, days = TODAY_DAYS, timezone = null, vault = false } = {}) {
+  const shown = (t) => !(vault && t && t.local_only === true);
   const tz = timezone ?? state.meta.timezone ?? 'UTC';
   const dateOf = dateFormatter(tz);
   // One extra day of margin so the oldest local day is complete in any time zone.
@@ -33,6 +36,7 @@ export function buildToday(state, { nowIso, days = TODAY_DAYS, timezone = null }
     return byDay.get(date);
   };
   for (const t of state.tickets.values()) {
+    if (!shown(t)) continue;
     for (const e of t.timeline ?? []) {
       if (!e.at || e.at < cutoff || e.at > nowIso || !TODAY_KINDS.includes(e.kind)) continue;
       const date = dateOf(e.at);
@@ -47,6 +51,7 @@ export function buildToday(state, { nowIso, days = TODAY_DAYS, timezone = null }
   }
   for (const s of state.sessions.values()) {
     if (!s.started_at || s.started_at < cutoff || s.started_at > nowIso) continue;
+    if (vault && (s.ticket_ids ?? []).length && (s.ticket_ids ?? []).every((id) => !shown(state.tickets.get(id)))) continue;
     const date = dateOf(s.started_at);
     if (date >= firstDate && date <= lastDate) dayFor(date).sessions += 1;
   }

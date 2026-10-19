@@ -244,12 +244,13 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
     async digest(worker, { settings, due_at = null }) {
       // The day comes from the slot the run is for, so a run caught up the next morning still
       // writes the evening it missed.
-      const feed = buildToday(worker.state, { nowIso: worker.now(), days: 9 });
+      // R60: the digest is vault output, so local-only tickets (and sessions only on them) are left out
+      const feed = buildToday(worker.state, { nowIso: worker.now(), days: 9, vault: true });
       const slotDay = localDate(due_at ?? worker.now(), worker.state.meta.timezone || 'UTC');
       const date = settings.day === 'yesterday' ? previousDate(slotDay) : slotDay;
       const day = feed.days.find((d) => d.date === date) ?? { date, tickets: [], sessions: 0 };
       const pendingDeployments = [];
-      for (const t of worker.state.tickets.values()) for (const d of t.deployments ?? []) if (d.state === 'pending') pendingDeployments.push({ ticket_key: t.key, environment: d.environment });
+      for (const t of worker.state.tickets.values()) for (const d of t.local_only === true ? [] : t.deployments ?? []) if (d.state === 'pending') pendingDeployments.push({ ticket_key: t.key, environment: d.environment });
       pendingDeployments.sort((a, b) => (a.ticket_key < b.ticket_key ? -1 : a.ticket_key > b.ticket_key ? 1 : a.environment < b.environment ? -1 : a.environment > b.environment ? 1 : 0));
       const markdown = renderDigest(day, { pendingDeployments });
       const indexPath = path.join(stateDir(worker.env), 'digest-index.json');

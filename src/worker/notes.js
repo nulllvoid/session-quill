@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { contentHash } from '../lib/ids.js';
 import { writeFileAtomic } from '../lib/atomic-fs.js';
 import { stringifyYaml, parseYaml, safeInline } from './markdown.js';
+import { possibleWritesLine, exportableError } from '../export/sanitize.js';
 
 export const GENERATED_SECTIONS = ['timeline', 'plans', 'conclusions', 'files', 'prs', 'followups', 'handoffs'];
 const HEADINGS = {
@@ -19,8 +20,19 @@ function block(section, body) {
   return `<!-- quill:generated:${section} start hash=${contentHash(text)} -->\n${text}<!-- quill:generated:${section} end -->\n`;
 }
 
-function frontmatterFor(ticket) {
+// Local-only tickets (spec §9.2, R46) have no vault note at all, and other notes never name them.
+export function hasVaultNote(ticket) {
+  return !(ticket && ticket.local_only === true);
+}
+
+const LOCAL_TICKET = 'a local-only ticket';
+
+function frontmatterFor(ticket, state) {
   const fm = { ...ticket };
+  if (state && state.tickets) fm.children_ids = (ticket.children_ids ?? []).filter((id) => hasVaultNote(state.tickets.get(id)));
+  // Owner-only run data never goes into a note, even in the owner's vault.
+  delete fm.run_notes;
+  delete fm.critical_spec;
   fm.plans = ticket.plans.map(({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }));
   fm.conclusions = ticket.conclusions.map(({ id, session_id, checkpoint_id, content_ref, recorded_at, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, recorded_at, approved_at, provenance }));
   return fm;
@@ -43,7 +55,7 @@ function sectionBodies(ticket, state) {
   const prLines = ticket.prs.map((pr) => `- PR ${safeInline(pr.url)} — ${pr.state}${pr.merged_at ? `, merged ${pr.merged_at}` : ''}${pr.error ? ` _(provider error: ${safeInline(pr.error)})_` : ''}`);
   const depLines = ticket.deployments.map((d) => `- Deployment ${safeInline(d.environment)} for PR ${d.pr_id.slice(0, 8)} — ${d.state}${d.deployed_at ? ` at ${d.deployed_at}` : ''}${d.waiver_reason ? ` (waived: ${safeInline(d.waiver_reason)})` : ''}`);
   b.prs = [...prLines, ...depLines].join('\n') || '_No PR or deployment evidence._';
-  const children = ticket.children_ids.map((id) => state.tickets.get(id)).filter(Boolean);
+  const children = ticket.children_ids.map((id) => state.tickets.get(id)).filter((c) => c && hasVaultNote(c));
   b.followups = [
     ticket.next_action ? `**Next action:** ${safeInline(ticket.next_action)}` : '_No next action._',
     ticket.blocker ? `**Blocker:** ${safeInline(ticket.blocker)}` : '',
@@ -61,12 +73,28 @@ export function renderTicketNote(ticket, { state, authored = {} } = {}) {
   const notes = authored.notes ?? '\n';
   const bodies = sectionBodies(ticket, state);
   const blocks = GENERATED_SECTIONS.map((s) => block(s, `## ${HEADINGS[s]}\n${bodies[s]}\n`)).join('');
-  return `---\n${stringifyYaml(frontmatterFor(ticket))}---\n## Summary\n${summary}${blocks}## Notes\n${notes}`;
+  return `---\n${stringifyYaml(frontmatterFor(ticket, state))}---\n## Summary\n${summary}${blocks}## Notes\n${notes}`;
 }
 
+// R60: a session that was bound to a local-only ticket (an approved critical change's run) carries
+// that ticket's work in its prompt title and final message, so its note keeps neither; ids of
+// local-only tickets are left out of the front matter, as the export drops them (sanitizeSnapshot).
+const SESSION_TEXT_FIELDS = ['title', 'last_checkpoint_preview', 'last_checkpoint_id', 'unbound_work'];
+const WITHHELD = '_withheld: this session worked on a local-only ticket_';
+
 export function renderSessionNote(session, { state }) {
-  const tickets = session.ticket_ids.map((id) => state.tickets.get(id)).filter(Boolean);
+  const tickets = session.ticket_ids.map((id) => state.tickets.get(id)).filter((t) => t && hasVaultNote(t));
+  const local = (id) => !!id && !hasVaultNote(state.tickets.get(id));
+  const touchesLocal = (session.ticket_ids ?? []).some(local) || local(session.current_ticket_id) || (session.bindings ?? []).some((b) => local(b.ticket_id));
   const fm = { ...session };
+  delete fm.run_notes;
+  delete fm.critical_spec;
+  if (touchesLocal) {
+    for (const k of SESSION_TEXT_FIELDS) delete fm[k];
+    fm.ticket_ids = (session.ticket_ids ?? []).filter((id) => !local(id));
+    if (local(session.current_ticket_id)) fm.current_ticket_id = null;
+    fm.bindings = (session.bindings ?? []).map((b) => (local(b.ticket_id) ? { ...b, ticket_id: null } : b));
+  }
   const body = [
     `## Session ${session.host_session_id}${session.agent_id ? ` / agent ${session.agent_id}` : ''}`,
     `- State: ${session.state}${session.ended_at ? ` (ended ${session.ended_at})` : ''}`,
@@ -76,23 +104,32 @@ export function renderSessionNote(session, { state }) {
     `- Gate: ${session.gate_enabled ? 'on' : 'OFF'}; unpromoted checkpoints: ${session.unpromoted ? 'yes' : 'no'}`,
     '',
     '### Bindings',
-    ...(session.bindings.length ? session.bindings.map((b) => `- rev ${b.revision}: ${b.ticket_id ? safeInline(state.tickets.get(b.ticket_id)?.key ?? b.ticket_id) : 'unbound'} from ${b.bound_at}${b.unbound_at ? ` to ${b.unbound_at}` : ''}`) : ['- none']),
+    ...(session.bindings.length ? session.bindings.map((b) => `- rev ${b.revision}: ${b.ticket_id ? (hasVaultNote(state.tickets.get(b.ticket_id)) ? safeInline(state.tickets.get(b.ticket_id)?.key ?? b.ticket_id) : LOCAL_TICKET) : 'unbound'} from ${b.bound_at}${b.unbound_at ? ` to ${b.unbound_at}` : ''}`) : ['- none']),
     '',
     '### Tickets',
     ...(tickets.length ? tickets.map((t) => `- [[${safeInline(t.key)}]] ${safeInline(t.title)} — ${t.status}`) : ['- none']),
     '',
     '### Last checkpoint',
-    session.last_checkpoint_preview ? safeInline(session.last_checkpoint_preview) : '_none_',
+    touchesLocal ? WITHHELD : session.last_checkpoint_preview ? safeInline(session.last_checkpoint_preview) : '_none_',
     '',
   ].join('\n');
   return `---\n${stringifyYaml(fm)}---\n${block('session', body)}## Notes\n\n`;
 }
 
-export function renderHandoffNote(handoff, { state }) {
+// Front matter allow-list: today's record fields minus worktree_path. Fields added later stay out until named here.
+export const HANDOFF_NOTE_FIELDS = ['schema_version', 'store_id', 'id', 'revision', 'created_at', 'updated_at', 'ticket_id', 'request_id', 'mode', 'note', 'permissions', 'access', 'base_ticket_revision', 'base_next_action', 'repo_id', 'base_commit', 'branch', 'state', 'requested_at', 'started_at', 'finished_at', 'deadline_at', 'error', 'result_ref', 'result_summary', 'result_confidence', 'result_sources', 'result_quality', 'children_ids', 'changed_files', 'test_results', 'test_gate', 'commit_sha', 'pr_url', 'uncertain_effects', 'retry_of', 'batch_id', 'recipe', 'legacy', 'outputs', 'deadline_ms', 'suggestions', 'timings', 'cancel_requested', 'proposal_id', 'proposal', 'file_effects', 'files', 'log_path', 'patch_path'];
+
+// What the vault may say about effects the worker could not confirm: the recorded lines, and for
+// an interrupted run only how many writes may have run (R55), never which.
+const uncertainLines = (h) => [...(Array.isArray(h.uncertain_effects) ? h.uncertain_effects : []), ...[possibleWritesLine(h)].filter(Boolean)];
+
+export function renderHandoffNote(run, { state }) {
+  // M1: a scope error names the scope and target; the note keeps only a generic line
+  const handoff = run && run.error ? { ...run, error: exportableError(run.error) } : run;
   const ticket = state.tickets.get(handoff.ticket_id);
   const body = [
     `## Handoff ${handoff.id.slice(0, 8)} — ${handoff.mode} — ${handoff.state}`,
-    `- Ticket: ${ticket ? `[[${safeInline(ticket.key)}]] ${safeInline(ticket.title)}` : handoff.ticket_id}`,
+    `- Ticket: ${ticket ? (hasVaultNote(ticket) ? `[[${safeInline(ticket.key)}]] ${safeInline(ticket.title)}` : LOCAL_TICKET) : handoff.ticket_id}`,
     `- Requested: ${handoff.requested_at}; started: ${handoff.started_at ?? '—'}; finished: ${handoff.finished_at ?? '—'}`,
     `- Permissions: ${Object.entries(handoff.permissions ?? {}).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'}`,
     handoff.note ? `- Note: ${safeInline(handoff.note)}` : '',
@@ -100,13 +137,29 @@ export function renderHandoffNote(handoff, { state }) {
     handoff.result_summary ? `\n### Result\n${safeInline(handoff.result_summary).replace(/\\n/g, '\n')}` : '',
     handoff.changed_files && handoff.changed_files.length ? `\n### Changed files\n${handoff.changed_files.map((f) => `- \`${safeInline(f)}\``).join('\n')}` : '',
     handoff.test_results && handoff.test_results.length ? `\n### Tests\n${handoff.test_results.map((t) => `- ${safeInline(typeof t === 'string' ? t : JSON.stringify(t))}`).join('\n')}` : '',
-    handoff.children_ids && handoff.children_ids.length ? `\n### Children\n${handoff.children_ids.map((id) => `- [[${safeInline(state.tickets.get(id)?.key ?? id)}]]`).join('\n')}` : '',
-    handoff.uncertain_effects && handoff.uncertain_effects.length ? `\n### Uncertain effects\n${handoff.uncertain_effects.map((u) => `- ${safeInline(u)}`).join('\n')}` : '',
+    handoff.children_ids && handoff.children_ids.length ? `\n### Children\n${handoff.children_ids.filter((id) => hasVaultNote(state.tickets.get(id))).map((id) => `- [[${safeInline(state.tickets.get(id)?.key ?? id)}]]`).join('\n')}` : '',
+    uncertainLines(handoff).length ? `\n### Uncertain effects\n${uncertainLines(handoff).map((u) => `- ${safeInline(u)}`).join('\n')}` : '',
     '',
   ].filter((l) => l !== '').join('\n');
-  const fm = { ...handoff };
-  delete fm.worktree_path;
+  const fm = Object.fromEntries(HANDOFF_NOTE_FIELDS.filter((k) => k in handoff).map((k) => [k, handoff[k]]));
   return `---\n${stringifyYaml(fm)}---\n${block('handoff', body)}## Notes\n\n`;
+}
+
+// R49 (extends R46): a run whose ticket is local-only (every approved critical-change run) has no
+// vault note either: its summary, suggestions, error and proposal are the critical change itself.
+export function handoffHasVaultNote(handoff, state) {
+  const ticket = handoff && state && state.tickets ? state.tickets.get(handoff.ticket_id) : null;
+  return hasVaultNote(ticket);
+}
+
+// The one decision point for run notes, shared by the worker and quill sync's staging: write the
+// note, or, for a run with no vault note, write nothing and remove one an earlier version wrote.
+// Returns 'written' | 'unchanged' | 'skipped' | 'removed'.
+export function writeHandoffNote(file, handoff, { state, write = writeGeneratedNote } = {}) {
+  if (!handoffHasVaultNote(handoff, state)) {
+    try { fs.unlinkSync(file); return 'removed'; } catch (err) { if (err.code === 'ENOENT') return 'skipped'; throw err; }
+  }
+  return write(file, renderHandoffNote(handoff, { state })) ?? 'written';
 }
 
 export function parseNote(text) {
@@ -153,6 +206,7 @@ function clearIssues(ticket, prefix) {
 // Returns 'written' | 'unchanged' | 'conflict'. `index` persists the hash of the frontmatter we last
 // wrote per ticket so manual frontmatter edits are detected as conflicts, never absorbed.
 export function writeNote(file, ticket, { state, index = {}, force = false }) {
+  if (!hasVaultNote(ticket)) return 'skipped';
   let existing = null;
   try { existing = fs.readFileSync(file, 'utf8'); } catch (err) { if (err.code !== 'ENOENT') throw err; }
   let authored = {};

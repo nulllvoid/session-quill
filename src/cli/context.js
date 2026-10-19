@@ -13,18 +13,25 @@ import { nowIso } from '../lib/time.js';
 
 export const COMMAND_NAMESPACE = 'session-quill';
 
+// Flags that may be given more than once; their values are collected into a list.
+const REPEATABLE = new Set(['scope']);
+
 export function parseArgs(argv) {
   const positional = [];
   const flags = {};
+  const set = (key, value) => {
+    if (!REPEATABLE.has(key)) { flags[key] = value; return; }
+    flags[key] = [...(Array.isArray(flags[key]) ? flags[key] : []), value];
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--') { positional.push(...argv.slice(i + 1)); break; }
     if (a.startsWith('--')) {
       const eq = a.indexOf('=');
-      if (eq !== -1) { flags[a.slice(2, eq)] = a.slice(eq + 1); continue; }
+      if (eq !== -1) { set(a.slice(2, eq), a.slice(eq + 1)); continue; }
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('--')) { flags[key] = next; i += 1; } else flags[key] = true;
+      if (next !== undefined && !next.startsWith('--')) { set(key, next); i += 1; } else set(key, true);
     } else {
       positional.push(a);
     }

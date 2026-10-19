@@ -65,7 +65,19 @@ function hasFilters(f = {}) {
   return !!(f.project || f.category || f.tag || f.repo || f.stale || f.q);
 }
 
-export function runTabs(snapshot, filters, now) {
+// What of memory needs the owner (spec §6.4): each quarantined learning, and each group of entries
+// that disagree on a key. Memory reaches the page only from the owner endpoint, never an export.
+function memoryNeeds(memory, filters) {
+  if (!memory) return [];
+  const f = filters ?? {};
+  // A memory item has no ticket: only a repo filter can select it, and only its own repo.
+  const keep = (repoId) => !hasFilters(f) || (!!f.repo && repoId === f.repo && !f.project && !f.category && !f.tag && !f.stale && !f.q);
+  const learnings = (memory.entries ?? []).filter((e) => e.trust === 'quarantined' && keep(e.repo_id ?? null)).map((e) => ({ kind: 'learning', id: e.id, at: e.created_at ?? '', entry: e }));
+  const groups = (memory.conflicts ?? []).filter((c) => keep(c.repo_id ?? null)).map((c) => ({ kind: 'memory-conflict', id: c.id, at: c.at ?? '', conflict: c }));
+  return [...learnings, ...groups];
+}
+
+export function runTabs(snapshot, filters, now, { memory = null } = {}) {
   const keep = (ticketId) => {
     const t = ticketById(snapshot, ticketId);
     return t ? matchesFilters(t, filters, snapshot) : !hasFilters(filters);
@@ -74,7 +86,7 @@ export function runTabs(snapshot, filters, now) {
   const proposals = (snapshot.run_proposals ?? []).filter((p) => (p.state === 'proposed' || p.state === 'expired') && keep(p.ticket_id)).map((p) => ({ kind: 'proposal', id: p.id, at: p.proposed_at ?? '', proposal: p }));
   const nowMs = Date.parse(now);
   const tabs = {
-    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed'), ...runs.filter((x) => needsYou(snapshot, x.run, now))],
+    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed'), ...runs.filter((x) => needsYou(snapshot, x.run, now)), ...memoryNeeds(memory, filters)],
     live: runs.filter((x) => LIVE.has(x.run.state)),
     failed: runs.filter((x) => FAILED.has(x.run.state)),
     all: [...proposals, ...runs.filter((x) => !Number.isFinite(Date.parse(x.at)) || nowMs - Date.parse(x.at) <= ALL_WINDOW_MS)],
@@ -102,6 +114,23 @@ export function groupRuns(items) {
   return out;
 }
 
+const FINISHED = new Set(['done', 'failed', 'timed-out', 'cancelled']);
+
+// A batch's recorded spend against its budget (spec §5.2), as the worker counts it
+// (src/handoff/resume.js): the cost each finished member recorded, estimates included. Null when
+// the snapshot carries no budget (an export, an older worker) or the run is in no batch.
+export function batchBudgetState(snapshot, batchId) {
+  const limits = snapshot.meta && snapshot.meta.handoff_limits;
+  const budget = limits ? limits.batch_budget_usd : null;
+  if (typeof batchId !== 'string' || !batchId || typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0) return null;
+  let spent = 0;
+  for (const x of snapshot.handoffs ?? []) {
+    if (x.batch_id === batchId && FINISHED.has(x.state) && typeof x.cost_usd === 'number' && Number.isFinite(x.cost_usd) && x.cost_usd > 0) spent += x.cost_usd;
+  }
+  spent = Math.round(spent * 10000) / 10000;
+  return { spent, budget, reached: spent >= budget };
+}
+
 // What a row may say about a run: occupancy facts while queued, elapsed time while running, and
 // outcomes once finished. Plain text; the caller escapes.
 export function runFacts(snapshot, h, now) {
@@ -114,6 +143,9 @@ export function runFacts(snapshot, h, now) {
     const cap = limits ? limits[fix ? 'fix' : 'readonly'] : null;
     if (Number.isInteger(cap) && running.length >= cap) facts.push(`${fix ? 'fix' : 'read-only'} slots ${running.length}/${cap} in use`);
     if (fix && h.repo_id && running.some((x) => x.repo_id === h.repo_id)) facts.push('repository busy');
+    // The worker starts no further member of a batch whose recorded spend reached its budget.
+    const spend = h.batch_id ? batchBudgetState(snapshot, h.batch_id) : null;
+    if (spend && spend.reached) facts.push('Batch budget reached');
   } else if (h.state === 'running') {
     facts.push(Number.isFinite(Date.parse(h.started_at)) ? runningFor(Math.max(0, Date.parse(now) - Date.parse(h.started_at))) : 'Running');
     if (h.timings && Number.isFinite(h.timings.worktree_ms)) facts.push(`setup ${formatDuration(h.timings.worktree_ms)}`);
@@ -136,6 +168,7 @@ export function liveRunCount(snapshot) {
   return (snapshot.handoffs ?? []).filter((h) => LIVE.has(h.state)).length;
 }
 
-export function needsYouCount(snapshot, now) {
-  return runTabs(snapshot, {}, now).needs.length;
+// The global attention count: the unfiltered Needs you list, memory items included (design system §7).
+export function needsYouCount(snapshot, now, memory = null) {
+  return runTabs(snapshot, {}, now, { memory }).needs.length;
 }

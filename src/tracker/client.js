@@ -49,7 +49,7 @@ export function targetStatus(system, quillStatus, settings) {
 // tracker and whose link, if any, is on its host. A GitHub key is only a number, so its link must
 // name the configured repository and that number; otherwise another repository's issue would be read.
 export function syncable(ticket, tracker) {
-  return !!ticket && ticket.status !== 'done' && linkedTo(ticket, tracker);
+  return !!ticket && ticket.local_only !== true && ticket.status !== 'done' && linkedTo(ticket, tracker);
 }
 
 // Whether the ticket's external key is an issue on this tracker (any status).

@@ -10,16 +10,16 @@ import { ensureDir } from '../lib/atomic-fs.js';
 import { TrackerError } from '../lib/errors.js';
 
 // Unix socket paths are capped at 104 bytes on macOS and 108 on Linux. A deep Quill home would
-// overflow that and fail with EINVAL, so a long path falls back to the per-user temp folder; the
-// name still derives from store and machine, so every worker and client agrees on it.
+// overflow that and fail with EINVAL, so a long path falls back to the per-user temp folder, and
+// when that is deep too (a long TMPDIR on macOS) to /tmp, which Linux already uses as its temp
+// folder; the name still derives from store and machine, so every worker and client agrees on it.
 export const MAX_SOCKET_PATH = 100;
 
 export function lockEndpoint(storeId, machineId, env = process.env) {
   const digest = createHash('sha256').update(`${storeId}:${machineId}`).digest('hex').slice(0, 24);
   if (process.platform === 'win32') return `\\\\.\\pipe\\session-quill-${digest}`;
-  const preferred = path.join(runDir(env), `${digest}.sock`);
-  if (Buffer.byteLength(preferred) <= MAX_SOCKET_PATH) return preferred;
-  return path.join(os.tmpdir(), `session-quill-${digest}.sock`);
+  const candidates = [path.join(runDir(env), `${digest}.sock`), path.join(os.tmpdir(), `session-quill-${digest}.sock`)];
+  return candidates.find((p) => Buffer.byteLength(p) <= MAX_SOCKET_PATH) ?? `/tmp/session-quill-${digest}.sock`;
 }
 
 function tryConnect(endpoint) {

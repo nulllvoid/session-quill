@@ -5,8 +5,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { gatherContext, gatherDiff, dataBlock, ticketCommits } from '../../src/handoff/context.js';
 import { buildPrompt, parseAgentResult, spawnAgent, repairPrompt, METHOD } from '../../src/handoff/runner.js';
+import { resultFromStream } from '../../src/handoff/stream.js';
 import { normalizeRecipe } from '../../src/agents/recipes.js';
-import { makeRepo, git, FAKE_CLAUDE } from './helpers.js';
+import { makeRepo, git, FAKE_CLAUDE, bootWorker, until, T1 } from './helpers.js';
+import { handoffRunDir } from '../../src/lib/paths.js';
 
 const PLAN_HASH = 'a'.repeat(64);
 const CP_HASH = 'b'.repeat(64);
@@ -78,7 +80,7 @@ test('the prompt carries the context, the method and the confidence and sources 
 });
 
 test('parseAgentResult reports contract problems and reads confidence, sources and the session', () => {
-  const wrap = (text) => JSON.stringify({ type: 'result', result: text, session_id: 'sess-1', is_error: false });
+  const wrap = (text) => ({ text, session_id: 'sess-1', is_error: false });
   const good = parseAgentResult(wrap('```json\n{"summary":"s","confidence":"medium","sources":["src/a.js:3"," "]}\n```'));
   assert.deepEqual([good.problems, good.confidence, good.sources, good.session_id], [[], 'medium', ['src/a.js:3'], 'sess-1']);
   assert.match(parseAgentResult(wrap('no block')).problems[0], /no fenced/);
@@ -119,5 +121,61 @@ test('the prompt reaches the runtime on stdin, so it may exceed the Windows comm
   const seen = JSON.parse(fs.readFileSync(capture, 'utf8'));
   assert.equal(seen.prompt, prompt);
   assert.ok(!seen.args.some((a) => a.length > 1000), 'nothing large on the command line');
-  assert.equal(parseAgentResult(outcome.stdout).session_id, 'fake-session');
+  assert.equal(parseAgentResult(resultFromStream(outcome.collected)).session_id, 'fake-session');
+});
+
+// Memory delivery through the worker (spec §6.3).
+const READ_ONLY = { mode: 'analyse', note: 'look', permissions: { read_source: true, edit_source: false, commit: false, push_branch: false, open_draft_pr: false }, branch: null };
+const MEMORY_RESULT = {
+  summary: 'Looked at the module.', next_action: 'Read src.js', blocker: null, children: [],
+  attempts: [{ route: 'FIRST RUN ROUTE', tool: 'Read', target: 'src.js', outcome: 'worked', reason: 'found the constant', evidence: 'src.js:1' }],
+  learnings: [
+    { scope: 'repo', section: 'Build & test', key: null, kind: 'fact', text: 'Constants live in src.js', evidence: ['src.js:1'], derived_from: 'repo-file' },
+    { scope: 'repo', section: 'Environments', key: null, kind: 'fact', text: 'QUARANTINED kibana index logs-demo', evidence: ['kibana query'], derived_from: 'tool-output' },
+  ],
+};
+
+test('every run gets its memory: Memory inside the fence, the projections and Run notes through --add-dir, auto-memory off, nothing quarantined; the next run waits for the previous Run note', async () => {
+  const repo = makeRepo();
+  const capture = path.join(repo.dir, '..', `capture-mem-${path.basename(repo.dir)}.json`);
+  const b = await bootWorker({ repo, runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_CAPTURE: capture, FAKE_CLAUDE_RESULT: JSON.stringify(MEMORY_RESULT), FAKE_CLAUDE_ENV_PROBE: 'CLAUDE_CODE_DISABLE_AUTO_MEMORY' } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    const queue = (n, payload = READ_ONLY) => {
+      const rid = `88888888-0000-4000-8000-00000000000${n}`;
+      b.request(rid, { target_id: T1, expected_revision: b.w.state.tickets.get(T1).revision ?? t.revision, payload });
+      b.w.tick();
+      return b.w.state.requests.get(rid).result.handoff_id;
+    };
+    const terminal = (hid) => until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return ['done', 'failed', 'cancelled', 'timed-out'].includes(x.state) ? x : null; }, { timeoutMs: 20_000 });
+    const first = await terminal(queue(1));
+    assert.equal(first.state, 'done', JSON.stringify(first.error));
+    // Queued at once: the first run's filing and Run note may still be in flight.
+    const hid = queue(2, { ...READ_ONLY, permissions: { ...READ_ONLY.permissions, read_source: false } }); // a sandbox run dispatches at once
+    const second = await terminal(hid);
+    assert.equal(second.state, 'done', JSON.stringify(second.error));
+    const seen = JSON.parse(fs.readFileSync(capture, 'utf8'));
+    const contextDir = path.join(handoffRunDir(b.env, hid), 'context');
+    assert.equal(seen.args[seen.args.indexOf('--add-dir') + 1], contextDir, 'a standard run reads its context dir too');
+    assert.equal(seen.env_probe.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+    const files = seen.add_dir_files[contextDir];
+    assert.deepEqual(Object.keys(files).sort(), ['_machine.md', 'repos/demo.docs.md', 'repos/demo.md', 'repos/demo.owner.md', 'run-notes.md']);
+    assert.match(files['run-notes.md'], /FIRST RUN ROUTE/);
+    assert.match(files['repos/demo.md'], /Constants live in src\.js/);
+    for (const [name, text] of Object.entries(files)) assert.doesNotMatch(text, /QUARANTINED/, name);
+    const p = seen.prompt;
+    const begin = p.indexOf('----- BEGIN TICKET NOTES (data) -----');
+    const end = p.indexOf('----- END TICKET NOTES -----');
+    const mem = p.indexOf('Memory (recorded by Quill');
+    assert.ok(mem > begin && mem < end, 'the Memory section is inside the data fence');
+    assert.ok(p.indexOf('FIRST RUN ROUTE') > mem && p.indexOf('FIRST RUN ROUTE') < end, "the first run's Run note reached the second run");
+    assert.match(p, /\[sourced · Repository · Build & test\] Constants live in src\.js/);
+    assert.match(p, /Docs map \(path - title \(headings\)\):\n- README\.md - demo/);
+    assert.doesNotMatch(p, /QUARANTINED/);
+    assert.match(p, /attempts and lessons in its Run note/, 'the history keeps the run for its suggestions, not its summary');
+    await until(() => { b.w.tick(); return !fs.existsSync(contextDir); }, { timeoutMs: 10_000 }); // removed with the run
+  } finally {
+    await b.w.stop();
+    for (const d of [repo.dir, b.home, capture]) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch { /* temp root */ } }
+  }
 });

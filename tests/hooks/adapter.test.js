@@ -210,3 +210,48 @@ test('hook path stays within budget: 200 bound Edit decisions p95 < 200 ms', () 
   const p95 = durations[Math.floor(durations.length * 0.95)];
   assert.ok(p95 < 200, `p95 was ${p95.toFixed(1)} ms`);
 });
+
+// Autonomous runs (spec §4.1): with QUILL_HANDOFF_GUARD set, the per-run guard decides every tool
+// call, so the plugin's PreToolUse hook only captures and never returns a permission decision.
+const HANDOFF = { QUILL_HANDOFF_ID: 'run-1', QUILL_HANDOFF_TICKET_ID: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', QUILL_HANDOFF_TICKET_KEY: 'LOCAL-x-00000002' };
+
+test('with QUILL_HANDOFF_GUARD set, PreToolUse returns no decision and still captures the call', () => {
+  for (const guard of ['enforce', 'observe']) {
+    const env = { ...setup({ heartbeat: false }), ...HANDOFF, QUILL_HANDOFF_GUARD: guard };
+    for (const name of ['pre-tool-use-edit', 'pre-tool-use-bash-npm', 'pre-tool-use-read']) {
+      const r = run(name, env);
+      assert.equal(r.exitCode, 0);
+      assert.equal(r.stdout, '', `${guard} ${name}: no permission decision`);
+      assert.equal(r.persisted, true);
+    }
+    const evs = events(env);
+    assert.deepEqual(evs.map((e) => e.kind), ['pre-tool', 'pre-tool', 'pre-tool']);
+    assert.ok(evs.every((e) => e.payload.denied === false && e.ticket_id === HANDOFF.QUILL_HANDOFF_TICKET_ID));
+    assert.equal(evs[0].payload.tool_name, 'Edit');
+    assert.equal(evs[0].payload.write_target, 'C:/repo/src/a.js');
+  }
+});
+
+test('with QUILL_HANDOFF_GUARD set, a capture failure or a missing session id does not deny either', () => {
+  const env = { ...setup({ bound: true }), ...HANDOFF, QUILL_HANDOFF_GUARD: 'enforce' };
+  const noSession = { ...fixture('pre-tool-use-edit') };
+  delete noSession.session_id;
+  const r1 = runHook('PreToolUse', noSession, { env, now: NOW });
+  assert.equal(r1.stdout, '');
+  fs.rmSync(path.join(env.QUILL_HOME, 'ingress'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(env.QUILL_HOME, 'ingress'), 'blocker');
+  const r2 = run('pre-tool-use-edit', env);
+  assert.equal(r2.stdout, '');
+  assert.equal(r2.persisted, false);
+  assert.match(r2.stderr, /capture gap/i);
+});
+
+test('without QUILL_HANDOFF_GUARD (or with it empty) the handoff PreToolUse output is unchanged', () => {
+  for (const extra of [{}, { QUILL_HANDOFF_GUARD: '' }]) {
+    const env = { ...setup({ heartbeat: false }), ...HANDOFF, ...extra };
+    const r = run('pre-tool-use-edit', env);
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'deny', 'stale heartbeat still gates a handoff session');
+    assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /worker unavailable/);
+    assert.equal(events(env)[0].payload.denied, true);
+  }
+});

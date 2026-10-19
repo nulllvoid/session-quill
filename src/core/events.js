@@ -8,10 +8,17 @@ export const EVENT_KINDS = [
   'session-start', 'prompt', 'pre-tool', 'post-tool', 'tool-failure', 'stop', 'pre-compact',
   'subagent-start', 'subagent-stop', 'session-end',
   'bind', 'gate-off', 'gate-on', 'ticket-create', 'ticket-update', 'relink', 'approve', 'dismiss',
-  'request', 'request-tx', 'handoff-tx', 'migration', 'import', 'notify', 'reconcile', 'schedule-run', 'publish-run', 'tracker-sync', 'artifact-comment', 'tracker-push', 'run-proposal',
+  'request', 'request-tx', 'handoff-tx', 'migration', 'import', 'notify', 'reconcile', 'schedule-run', 'publish-run', 'tracker-sync', 'artifact-comment', 'tracker-push', 'run-proposal', 'memory-tx', 'critical-proposal',
 ];
 
 const KIND_SET = new Set(EVENT_KINDS);
+
+// Ruling R59 (final review I3): kinds only the worker journals itself (Worker.emit). Ingress (the
+// capture hooks, the CLI, and anything else that can write the ingress folder, an autonomous run
+// included) never delivers them: one arriving there is quarantined, never journaled.
+export const WORKER_ONLY_KINDS = new Set(['request-tx', 'handoff-tx', 'reconcile', 'notify', 'schedule-run', 'tracker-sync', 'memory-tx', 'critical-proposal']);
+// What the hook and CLI producers legitimately write to ingress: every other kind.
+export const INGRESS_KINDS = new Set(EVENT_KINDS.filter((k) => !WORKER_ONLY_KINDS.has(k)));
 
 export function makeEvent({
   kind, payload = {}, store_id, machine_id, producer = 'cli', session_id = null, agent_id = null,

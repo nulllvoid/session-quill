@@ -169,7 +169,8 @@ export function hasUnlinkedWork(session) {
 }
 
 export function requestFeedback(req, { now }) {
-  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run' }[req.kind] ?? req.kind;
+  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run', 'memory-approve': 'approve learning', 'memory-edit': 'memory edit', 'memory-forget': 'retire', 'memory-pin': req.payload && req.payload.pinned === false ? 'unpin' : 'pin', 'memory-note': 'owner note' }[req.kind] ?? req.kind;
+  const memory = typeof req.kind === 'string' && req.kind.startsWith('memory-');
   let body = '';
   if (req.state === 'sending') body = 'Sending to the worker…';
   else if (req.state === 'pending') {
@@ -180,11 +181,13 @@ export function requestFeedback(req, { now }) {
   else if (req.state === 'conflict') {
     const current = req.result && req.result.current ? req.result.current : {};
     const proposed = req.payload ?? {};
-    body = `<strong>Conflict:</strong> the ticket changed to revision ${esc(req.error ? req.error.current_revision : '?')} first. Current: <code>${esc(JSON.stringify(current[req.kind === 'set-status' ? 'status' : 'next_action'] ?? current))}</code>; proposed: <code>${esc(JSON.stringify(proposed.status ?? proposed.next_action ?? proposed))}</code>. <button type="button" class="btn small" data-action="resubmit-request" data-request="${attr(req.id)}">Resubmit against new revision</button> <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Discard</button>`;
+    if (memory) body = `<strong>Conflict:</strong> the entry changed to revision ${esc(req.error ? req.error.current_revision : '?')} first, so nothing was changed. Review it and try again. <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Dismiss</button>`;
+    else body = `<strong>Conflict:</strong> the ticket changed to revision ${esc(req.error ? req.error.current_revision : '?')} first. Current: <code>${esc(JSON.stringify(current[req.kind === 'set-status' ? 'status' : 'next_action'] ?? current))}</code>; proposed: <code>${esc(JSON.stringify(proposed.status ?? proposed.next_action ?? proposed))}</code>. <button type="button" class="btn small" data-action="resubmit-request" data-request="${attr(req.id)}">Resubmit against new revision</button> <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Discard</button>`;
   } else if (req.state === 'failed') body = `<strong>Failed:</strong> ${esc(req.error ? req.error.message : 'unknown error')}${req.error && req.error.retryable ? ` <button type="button" class="btn small" data-action="retry-request" data-request="${attr(req.id)}">Retry</button>` : ''} <button type="button" class="btn small ghost" data-action="discard-request" data-request="${attr(req.id)}">Dismiss</button>`;
   else if (req.state === 'cancelled') body = 'Cancelled.';
+  else if (req.state === 'already-applied' && memory) body = 'Too late to undo: the change was already applied.';
   else if (req.state === 'already-applied') body = 'Cancellation lost the race: the edit was already applied. <button type="button" class="btn small" data-action="reverse-request" data-request="${attr(req.id)}">Revert with a new revision-checked edit</button>';
-  const proposedValue = req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? req.payload.url ?? null);
+  const proposedValue = memory ? null : req.payload && (req.payload.next_action ?? (req.payload.status ? STATUS_LABELS[req.payload.status] : null) ?? req.payload.key ?? req.payload.url ?? null);
   return `<div class="request-feedback" data-state="${attr(req.state)}" role="group" aria-label="${attr(`Pending ${label} change`)}">${requestChip(req.state)} <span class="label">${esc(label)}</span>${proposedValue ? ` → <span class="proposed">${esc(proposedValue)}</span>` : ''} <span class="feedback-body">${body}</span></div>`;
 }
 
@@ -391,14 +394,123 @@ export function contentViewer(ref, { content = {}, status = {}, generation = '',
   return `<button type="button" class="link small" data-action="load-content" data-hash="${attr(ref)}" data-generation="${attr(generation)}">${esc(label)}</button>`;
 }
 
-// How much of Claude Code a run may use (ADR 0017). The owner's settings are the default; Full
-// access skips every permission check and says so where it is chosen.
-export function accessFieldset() {
+// How much of Claude Code a run may use (ADR 0017, ADR 0026). Autonomous is the default: every
+// tool and connector, with Quill's guard checking each call and credentials redirected. The owner's
+// own settings sit under Advanced; Full access is marked as a warning and says what it lifts.
+export const FULL_ACCESS_NOTE = 'No Quill guard; prod writes allowed; your Claude Code deny rules still apply.';
+// `access` is the level to show checked. When it is the one under Advanced, the details element
+// renders open, so the group's checked member stays visible and focusable (design system §8);
+// app.js keeps it open while it holds the checked radio. `scopes: true` (the single-run dialog)
+// adds the Write scopes checklist under Advanced, after "Use my Claude Code settings".
+export function accessFieldset(snapshot = null, { access = 'autonomous', scopes = false } = {}) {
+  const level = ['autonomous', 'standard', 'full', 'settings'].includes(access) ? access : 'autonomous';
+  const on = (v) => (v === level ? ' checked' : '');
   return `<fieldset class="access"><legend>Access</legend>
-  <label><input type="radio" name="access" value="settings" checked> My Claude Code settings <span class="muted small">(your permission rules and connectors; anything that would need your approval is refused)</span></label>
-  <label><input type="radio" name="access" value="standard"> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
-  <label class="danger"><input type="radio" name="access" value="full"> Full access <span class="small">(no permission checks: any command, any file on this computer, network, connectors, and pushing with your credentials)</span></label>
+  <label><input type="radio" name="access" value="autonomous"${on('autonomous')}> Autonomous <span class="muted small">(your connected tools and local commands; production stays read-only; Quill's guard checks every call)</span></label>
+  <label><input type="radio" name="access" value="standard"${on('standard')}> Standard <span class="muted small">(Quill's narrow profile: read, edit in the checkout, run tests; no connectors)</span></label>
+  <label class="danger"><input type="radio" name="access" value="full"${on('full')}> Full access <span class="small access-note">${esc(FULL_ACCESS_NOTE)}</span></label>
+  <details class="advanced access-advanced"${level === 'settings' ? ' open' : ''}><summary>Advanced: other access${scopes ? ' and write scopes' : ''}</summary>
+  <label><input type="radio" name="access" value="settings"${on('settings')}> Use my Claude Code settings <span class="muted small">(your permission rules and connectors; anything that would need your approval is refused)</span></label>
+  ${scopes ? writeScopes(snapshot, level) : ''}</details>${autonomyNotes(snapshot)}
 </fieldset>`;
+}
+
+export const SCOPE_OFF_REASON = 'Write scopes need Autonomous access: only its guard holds a run to them.';
+
+// Write scopes (spec §4.3, §8): one checkbox per catalog entry the worker reported (snapshot
+// meta.autonomy.scopes), with what it permits and which credentials it switches to, and a target
+// field where the scope takes one. Off, with the reason, unless the access is Autonomous; app.js
+// switches them as the access changes, checks a box when its target is typed, and blocks Queue
+// while a checked scope has no credentials configured (design system §5: blockers say why). Every word here comes from config, so all of it is escaped.
+function writeScopes(snapshot, level) {
+  const a = snapshot && snapshot.meta && snapshot.meta.autonomy && typeof snapshot.meta.autonomy === 'object' ? snapshot.meta.autonomy : null;
+  const list = a && Array.isArray(a.scopes) ? a.scopes.filter((x) => x && typeof x.name === 'string') : [];
+  if (!list.length) return '';
+  const off = level !== 'autonomous';
+  const dis = off ? ' disabled' : '';
+  const rows = list.map((x, i) => {
+    const targets = Array.isArray(x.targets) ? x.targets.filter((t) => typeof t === 'string') : [];
+    const kind = typeof x.target_label === 'string' && x.target_label ? x.target_label : 'Target';
+    const target = x.takes_target ? `<label class="indent small">${esc(kind)} <input type="text" name="scope_target:${attr(x.name)}" data-scope-target="${attr(x.name)}" aria-label="${attr(`${kind} for ${x.label ?? x.name}`)}" autocomplete="off" spellcheck="false" maxlength="128"${targets.length ? ` placeholder="${attr(targets[0])}"` : ''}${dis}></label>${targets.length ? ` <span class="muted small">credentials configured for ${esc(targets.join(', '))}</span>` : ''}` : '';
+    const blocker = x.ready === false ? ` data-scope-blocker="${attr(`${x.label ?? x.name}: no credentials are configured for this scope, so a run that asks for it is refused. Set them in config.toml first, or untick it.`)}"` : '';
+    return `<div class="scope-option"><label><input type="checkbox" name="scope" value="${attr(x.name)}" aria-describedby="scope-desc-${i}"${blocker}${dis}> ${esc(x.label ?? x.name)} <code>${esc(x.name)}</code></label>
+  <p class="muted small" id="scope-desc-${i}">${esc(x.permits ?? '')} ${esc(x.switches ?? '')}</p>${target}</div>`;
+  });
+  return `<fieldset class="write-scopes"><legend>Write scopes</legend>
+  <p class="muted small">Production and external writes this run may make, each only where its patterns in config.toml match. Everything else stays read-only; a write outside them is refused and recorded as a critical change.</p>
+  <p class="small scope-reason" id="scope-reason" data-scope-reason${off ? '' : ' hidden'}>${esc(SCOPE_OFF_REASON)}</p>
+  ${rows.join('\n  ')}
+  <p class="small critical" role="alert" data-scope-blocked hidden></p>
+  </fieldset>`;
+}
+
+// The scopes the Run dialog's form asks for: each checked one, as `name:target` when its target
+// field holds one, in the order shown and without repeats. Disabled boxes are not in the form data.
+export function scopeChoices(fd) {
+  const out = [];
+  for (const raw of fd.getAll('scope')) {
+    const name = String(raw);
+    const target = String(fd.get(`scope_target:${name}`) ?? '').trim();
+    const spec = target ? `${name}:${target}` : name;
+    if (name && !out.includes(spec)) out.push(spec);
+  }
+  return out;
+}
+
+// MCP sources an autonomous run trusts by origin; anything else only when the owner names the
+// server in [handoff] trusted_mcp_servers (spec §4.2).
+const TRUSTED_MCP_SOURCES = new Set(['claudeai', 'user', 'plugin']);
+const MCP_SOURCE_TEXT = { claudeai: 'claude.ai connector', user: 'your Claude Code settings', plugin: 'plugin', project: "this repository's .mcp.json", local: 'local project settings' };
+// The production CLIs whose credentials a run redirects (Task 9 report systems).
+const CRED_SYSTEM_TEXT = [['kubernetes', 'Kubernetes (kubectl)'], ['aws', 'AWS (aws)'], ['gcp', 'Google Cloud (gcloud)'], ['azure', 'Azure (az)'], ['databases', 'Databases (psql, mysql)'], ['argo', 'Argo CD (argocd)']];
+const CRED_VALUE_TEXT = { readonly: 'read-only profile', stub: 'no read-only profile; its reads are refused in autonomous runs', scope: 'write scope credentials', owner: 'your own credentials (shared with Claude Code\'s cloud sign-in)' };
+
+// What the worker last recorded about autonomous runs on this machine (snapshot meta.autonomy):
+// the connectors the latest run's Claude Code reported and the credential report of the latest
+// autonomous run. Each line says what it rests on; with no meta.autonomy nothing is claimed.
+function autonomyNotes(snapshot) {
+  const a = snapshot && snapshot.meta && snapshot.meta.autonomy && typeof snapshot.meta.autonomy === 'object' ? snapshot.meta.autonomy : null;
+  if (!a) return '';
+  const short = (id) => esc(String(id ?? '').slice(0, 8));
+  const out = ['<div class="autonomy-notes small">'];
+  const inv = a.inventory && Array.isArray(a.inventory.mcpServers) ? a.inventory : null;
+  if (!inv) out.push('<p class="muted">Connected tools: not known yet. The first run records what Claude Code reports.</p>');
+  else {
+    const trusted = new Set(Array.isArray(a.trusted_mcp_servers) ? a.trusted_mcp_servers : []);
+    const rows = inv.mcpServers.map((s) => {
+      const source = typeof s.source === 'string' && Object.hasOwn(MCP_SOURCE_TEXT, s.source) ? MCP_SOURCE_TEXT[s.source] : s.source ? `${s.source} configuration` : 'unknown source';
+      const state = s.status === 'pending'
+        ? '<span class="chip small">Not connected yet when the run started (pending)</span>'
+        : s.status && s.status !== 'connected' ? `<span class="chip small">Unavailable (${esc(s.status === 'needs-auth' ? 'needs auth' : s.status)})</span>`
+        : !TRUSTED_MCP_SOURCES.has(s.source) && !trusted.has(s.name) ? '<span class="chip small warning">Not trusted for autonomous runs</span>' : '<span class="chip small good">Connected</span>';
+      return `<li><strong>${esc(s.name)}</strong> <span class="muted">${esc(source)}</span> ${state}</li>`;
+    });
+    out.push(`<p>Connected tools this run can use <span class="muted">(as Claude Code reported them when run ${short(inv.run_id)} started)</span></p>`);
+    out.push(rows.length ? `<ul class="connected-tools">${rows.join('')}</ul>` : '<p class="muted">No MCP servers or connectors were reported.</p>');
+  }
+  const cred = a.credentials && a.credentials.report && typeof a.credentials.report === 'object' ? a.credentials : null;
+  const report = cred ? cred.report : {};
+  const configured = new Set(Array.isArray(a.readonly_configured) ? a.readonly_configured : []);
+  const lines = CRED_SYSTEM_TEXT.map(([sys, label]) => {
+    let text;
+    if (report[sys] === 'readonly') text = CRED_VALUE_TEXT.readonly;
+    else if (configured.has(sys)) text = cred ? `read-only profile configured; run ${short(cred.run_id)} could not use it` : 'read-only profile configured; checked when a run starts';
+    else text = cred && typeof report[sys] === 'string' && Object.hasOwn(CRED_VALUE_TEXT, report[sys]) ? CRED_VALUE_TEXT[report[sys]] : 'no read-only profile';
+    return `<li>${esc(label)}: ${esc(text)}</li>`;
+  });
+  out.push(`<p>Production command-line tools <span class="muted">(${cred ? `credentials as run ${short(cred.run_id)} got them` : 'from your config; no autonomous run yet'})</span></p><ul class="cred-systems">${lines.join('')}</ul>`);
+  const issues = [];
+  const anyReadonly = CRED_SYSTEM_TEXT.some(([sys]) => report[sys] === 'readonly' || configured.has(sys));
+  if (!anyReadonly) issues.push('No read-only credentials configured: reads through production commands (kubectl, aws, gcloud, az, psql, argocd) are refused in autonomous runs; connectors and local tools still work. Add profiles under [prod.readonly] in config.toml.');
+  // A profile the config names but the latest run could not use is as actionable as none (review M-4).
+  const unusable = cred ? CRED_SYSTEM_TEXT.filter(([sys]) => configured.has(sys) && report[sys] !== 'readonly') : [];
+  if (unusable.length) issues.push(`Read-only profile configured but not used by run ${String(cred.run_id ?? '').slice(0, 8)}: ${unusable.map(([, label]) => label).join(', ')}. Its reads were refused; check the path or profile name under [prod.readonly] in config.toml.`);
+  if (report.provider === 'shared') issues.push('Claude Code signs in through Bedrock or Vertex, so the agent can use those provider credentials too.');
+  for (const r of Array.isArray(report.residual) ? report.residual : []) issues.push(`Not redirected (the guard refuses reading these files, but a script could still reach them): ${r}`);
+  for (const e of Array.isArray(report.scope_errors) ? report.scope_errors : []) issues.push(`Scope setting ignored: ${e}`);
+  if (issues.length) out.push(`<ul class="issues">${issues.map((t) => `<li data-level="warning">${icon('alert')}${esc(t)}</li>`).join('')}</ul>`);
+  out.push('</div>');
+  return out.join('');
 }
 
 // Runs proposed from a shared page (ADR 0025), still waiting for the owner, oldest first.
@@ -414,9 +526,10 @@ const IN_FLIGHT = new Set(['sending', 'pending', 'applying']);
 export function proposalItem(p, snapshot, { now, pending = [], withTicket = false } = {}) {
   const caps = snapshot.capabilities ?? {};
   const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
-  const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
   const sent = pending.find((r) => (r.kind === 'approve-run' || r.kind === 'dismiss-run') && r.payload && r.payload.proposal_id === p.id && IN_FLIGHT.has(r.state));
-  const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : '<span class="chip small">Standard access</span>';
+  if (p.origin === 'run') return criticalItem(p, snapshot, { now, tz, caps, sent });
+  const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
+  const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : p.access === 'autonomous' ? '<span class="chip small">Autonomous</span>' : '<span class="chip small">Standard access</span>';
   const perms = p.permissions ?? {};
   const kind = p.read_only ? '<span class="chip small">Read-only</span>' : perms.edit_source ? '<span class="chip warning small">Edits source</span>' : perms.edit_files || perms.delete_files ? '<span class="chip warning small">Changes files</span>' : '';
   const key = p.ticket_key ?? (t ? t.key : '');
@@ -426,7 +539,69 @@ export function proposalItem(p, snapshot, { now, pending = [], withTicket = fals
   return `<li class="proposal" data-proposal="${attr(p.id)}">${t ? `<button type="button" class="link" data-open="${attr(t.id)}">${keyEl(t.key)} ${esc(t.title)}</button> ` : ''}<strong>${esc(p.recipe.name)}</strong> ${access}${kind ? ` ${kind}` : ''} <span class="muted small">proposed on the ${esc(p.publisher)} page by ${p.editor ? `<code>${esc(p.editor)}</code>` : 'an unknown editor'} ${timeEl(p.proposed_at, now, tz)}</span>${actions}</li>`;
 }
 
+// A critical change a run proposed (spec §7.4, ADR 0028), on its local-only child ticket: what it
+// is and which run of which ticket proposed it, the write scopes it needs as warning chips (in
+// words), the exact action the guard would allow as code, the proposal's verify and rollback, and
+// Approve and queue (scopes: …) / Dismiss. Every word came from an agent or config: all escaped.
+// Verify, rollback and risk are omitted when the record has none.
+function criticalItem(p, snapshot, { now, tz, caps, sent }) {
+  const child = ticketById(snapshot, p.ticket_id);
+  const spec = child && child.critical_spec && typeof child.critical_spec === 'object' ? child.critical_spec : {};
+  const run = (snapshot.handoffs ?? []).find((h) => h.id === p.from_handoff_id) ?? null;
+  const parent = (run && ticketById(snapshot, run.ticket_id)) || (child && child.parent_id ? ticketById(snapshot, child.parent_id) : null);
+  const id8 = String(p.from_handoff_id ?? '').slice(0, 8);
+  const key = child ? child.key : p.ticket_key ?? '';
+  const scopes = (Array.isArray(p.scopes) ? p.scopes : []).filter((s) => s && typeof s.name === 'string').map((s) => (s.target ? `${s.name}:${s.target}` : s.name));
+  const chips = scopes.map((s) => `<span class="chip warning small" title="${attr(`The approved run may write in ${s}, and only the pinned action`)}">${icon('alert')}Write scope ${esc(s)}</span>`).join(' ');
+  const action = p.action_pin && typeof p.action_pin.guard === 'string' ? p.action_pin.guard : '';
+  const line = (label, v) => (typeof v === 'string' && v.trim() ? `<p class="small">${label}: ${esc(v)}</p>` : '');
+  const what = child ? `<button type="button" class="link" data-open="${attr(child.id)}">${keyEl(child.key)} ${esc(child.title)}</button>` : keyEl(key);
+  const scopeText = scopes.join(', ');
+  const actions = !caps.handoff ? '' : sent
+    ? ` <span class="muted small">${sent.kind === 'approve-run' ? 'Approval sent' : 'Dismissal queued'}${sent.kind === 'dismiss-run' && sent.state === 'pending' ? ` <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(sent.id)}" aria-label="${attr(`Undo dismissing the critical change on ${key}`)}">${icon('undo')}Undo</button>` : ''}</span>`
+    : ` <span class="proposal-actions"><button type="button" class="btn small" data-action="approve-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Approve and queue (scopes: ${scopeText}): the critical change on ${key}`)}">Approve and queue (scopes: ${esc(scopeText)})</button> <button type="button" class="btn small ghost" data-action="dismiss-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Dismiss the critical change on ${key}`)}">Dismiss</button></span>`;
+  return `<li class="proposal" data-kind="critical" data-proposal="${attr(p.id)}"><span class="critical-head"><strong>Critical change</strong> · ${what} · <span class="muted small">proposed by run <code>${esc(id8)}</code>${parent ? ` of ${esc(parent.key)}` : ''} ${timeEl(p.proposed_at, now, tz)}</span></span>${chips ? ` <span class="critical-scopes">${chips}</span>` : ''}<div class="critical-body"><p class="small">Action: <code class="critical-action">${esc(action)}</code></p>${line('Verify', spec.verify)}${line('Rollback', spec.rollback)}${line('Risk', spec.risk)}</div>${actions}</li>`;
+}
+
 // Whether the ticket already has a run, which an approval would then report instead of queueing.
 export function hasActiveRun(snapshot, ticketId) {
   return (snapshot.handoffs ?? []).some((h) => h.ticket_id === ticketId && RUNNING.has(h.state));
+}
+
+// Memory trust (spec §6.2, ADR 0027), always in words: the colour only repeats it.
+export const TRUST_LABELS = { owner: 'Owner', verified: 'Verified', sourced: 'Sourced', observed: 'Observed', quarantined: 'Quarantined' };
+const TRUST_TITLES = {
+  owner: 'Written, approved or edited by you',
+  verified: 'Quill saw it: the worker observed it, or the run\'s own command is in the ledger with the claimed result',
+  sourced: 'The cited file and line exist; the claim itself is not proven',
+  observed: 'The run said so; Quill could not match it to a recorded command',
+  quarantined: 'Held for your approval; never delivered to runs',
+};
+
+export function trustChip(trust) {
+  return `<span class="chip trust small" data-trust="${attr(trust)}" title="${attr(TRUST_TITLES[trust] ?? '')}">${esc(TRUST_LABELS[trust] ?? trust)}</span>`;
+}
+
+const cut = (text, max) => { const s = String(text ?? '').replace(/\s+/g, ' ').trim(); return s.length > max ? `${s.slice(0, max - 1)}…` : s; };
+
+// Runs → Needs you (spec §6.4): a quarantined learning waits for the owner on the Memory page.
+export function learningItem(e, snapshot, { now } = {}) {
+  const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
+  const where = e.scope === 'repo' ? `repo ${repoName(snapshot, e.repo_id) ?? e.repo_id}` : e.scope === 'task' ? 'task' : 'machine';
+  return `<li class="run-row memory-item" data-state="quarantined" data-entry="${attr(e.id)}"><span class="chip warning small">Quarantined learning</span> <span class="memory-text">${esc(cut(e.text, 200))}</span> <span class="small muted">Held: ${esc(e.quarantine_reason || 'awaiting approval')} · ${esc(where)} · filed ${timeEl(e.created_at, now, tz)}</span> <button type="button" class="btn small" data-action="open-memory" data-tab="quarantine" data-entry="${attr(e.id)}" aria-label="${attr(`Review the quarantined learning: ${cut(e.text, 60)}`)}">Review in Memory</button></li>`;
+}
+
+// Runs → Needs you: entries with the same key that disagree; runs get only the higher-ranked one.
+export function memoryConflictItem(c, snapshot) {
+  const where = c.scope === 'repo' ? `repo ${repoName(snapshot, c.repo_id) ?? c.repo_id}` : 'machine';
+  return `<li class="run-row memory-item" data-state="conflict" data-conflict="${attr(c.id)}"><span class="chip warning small">Memory conflict</span> <span>Key <code>${esc(c.key)}</code>: ${esc(c.entry_ids.length)} entries disagree (${esc(where)}). Runs get only the higher-ranked one.</span> <button type="button" class="btn small" data-action="open-memory" data-tab="${c.scope === 'repo' ? 'repo' : 'machine'}"${c.repo_id ? ` data-repo="${attr(c.repo_id)}"` : ''} aria-label="${attr(`Resolve the memory conflict on ${c.key}`)}">Resolve in Memory</button></li>`;
+}
+
+// Whether a request record from the snapshot is tracked on this page (shown as feedback): one sent
+// from here, or any still pending, applying, in conflict or failed. A request the owner dismissed
+// stays dismissed when later polls bring it back, and a lost cancel race keeps its local state.
+export function tracksSnapshotRequest(r, local, dismissed) {
+  if (dismissed && dismissed.has(r.id)) return false;
+  if (local && local.state === 'already-applied') return false;
+  return !!local || ['pending', 'applying', 'conflict', 'failed'].includes(r.state);
 }

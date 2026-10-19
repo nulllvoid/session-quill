@@ -68,3 +68,31 @@ test('handoff permission rules', () => {
   assert.equal(def.permissions.read_source, false);
   assert.throws(() => validateHandoffRequest({ mode: 'attempt-fix', permissions: { read_source: true, edit_source: true } }, { repo: null }), (e) => e.code === 'repo-required');
 });
+
+// Write scopes (spec §4.3, Task 11): validated against the scope catalog when the request is made
+// and again when it applies; the queued record copies them.
+test('handoff scopes: refused with standard access, unknown scopes refused, the record copies the scopes', async () => {
+  const fs = await import('node:fs');
+  const { scopeValidator } = await import('../../src/handoff/scopes.js');
+  const { bootWorker, makeRepo, until } = await import('../handoff/helpers.js');
+  const { state, t } = stateWithTicket();
+  const scopeCheck = scopeValidator({ scopes: { 'k8s.write': { targets: { stg: { env: { KUBECONFIG: '/rw/stg' } } } } } });
+  const body = (payload) => ({ id, kind: 'handoff', target_id: T1, expected_revision: t.revision, payload: { mode: 'analyse', note: '', permissions: {}, ...payload } });
+  assert.throws(() => validateRequestBody(body({ access: 'standard', scopes: ['jira.write'] }), state, NOW, { scopeCheck }), (e) => e.code === 'scope-needs-autonomous');
+  assert.throws(() => validateRequestBody(body({ access: 'autonomous', scopes: ['k8s.nope'] }), state, NOW, { scopeCheck }), (e) => e.code === 'unknown-scope');
+  assert.deepEqual(validateRequestBody(body({ access: 'autonomous', scopes: ['k8s.write:stg'] }), state, NOW, { scopeCheck }).payload.scopes, ['k8s.write:stg']);
+
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: false, configExtra: { scopes: { 'k8s.write': { targets: { stg: { env: { KUBECONFIG: '/rw/stg' } } } } } } });
+  try {
+    b.ticket(T1, 'PROJ-31');
+    const rid = '88888888-0000-4000-8000-000000000001';
+    b.request(rid, { target_id: T1, expected_revision: b.w.state.tickets.get(T1).revision, payload: { recipe: 'analyse', note: '', permissions: {}, access: 'autonomous', scopes: ['k8s.write:stg', 'jira.write'] } });
+    const req = await until(() => { b.w.tick(); const r = b.w.state.requests.get(rid); return r && r.state !== 'pending' ? r : null; });
+    assert.equal(req.state, 'applied', JSON.stringify(req.error));
+    assert.deepEqual(b.w.state.handoffs.get(req.result.handoff_id).scopes, ['k8s.write:stg', 'jira.write']);
+  } finally {
+    await b.w.stop();
+    for (const d of [b.home, repo.dir]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});

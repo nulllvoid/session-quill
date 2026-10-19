@@ -1,5 +1,6 @@
-import { esc, attr, keyEl, statusChip, categoryChip, priorityMark, timeEl, handoffChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip, openProposals, proposalItem, hasActiveRun, contentViewer } from '../components.js';
-import { renderAgentsSection, testGateBadge } from './agents.js';
+import { esc, attr, keyEl, trustChip, statusChip, categoryChip, priorityMark, timeEl, handoffChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip, openProposals, proposalItem, hasActiveRun, contentViewer } from '../components.js';
+import { renderAgentsSection, testGateBadge, accessTierBadge, accessWords } from './agents.js';
+import { attemptItem } from './run-detail.js';
 import { ticketRuns, openSuggestions } from '../lib/runs.js';
 import { runRow } from './runs.js';
 import { environmentLine } from './deployments.js';
@@ -55,6 +56,32 @@ function proposalsBlock(t, snapshot, { now, pending }) {
 `;
 }
 
+// The ticket's Run notes (spec §6.1): what each run attempted, reconciled with its tool ledger, and
+// the task lessons it filed. Owner only (exports drop run_notes). The worker already replaced
+// instruction-like text with a withheld marker; it is shown as recorded, escaped. A page-proposed
+// run's note is never given to other runs (src/memory/deliver.js), and says so.
+function runNoteItem(n, snapshot, { now, tz }) {
+  const run = (snapshot.handoffs ?? []).find((h) => h.id === n.run_id) ?? null;
+  const id8 = String(n.run_id ?? '').slice(0, 8);
+  const name = run ? (run.recipe ? run.recipe.name : run.mode) : null;
+  const head = `${run ? `<button type="button" class="link" data-action="open-run" data-run="${attr(run.id)}">Run ${esc(id8)}</button>` : `Run <code>${esc(id8)}</code>`}${name ? ` <span class="muted small">${esc(name)}</span>` : ''}${typeof n.at === 'string' && n.at ? ` <span class="small">${timeEl(n.at, now, tz)}</span>` : ''}`;
+  const page = n.origin === 'page' || (run && run.proposal) ? '<p class="small muted">From a run proposed on a shared page: never given to other runs.</p>' : '';
+  const withheld = Number.isInteger(n.withheld) && n.withheld > 0 ? `<p class="small muted">${esc(`${n.withheld} field${n.withheld === 1 ? '' : 's'} withheld: instruction-like text`)}</p>` : '';
+  const attempts = (Array.isArray(n.attempts) ? n.attempts : []).filter((a) => a && typeof a === 'object');
+  const lessons = (Array.isArray(n.lessons) ? n.lessons : []).filter((l) => l && typeof l.text === 'string' && l.text);
+  return `<li class="run-note"><div class="run-note-head">${head}</div>${page}${withheld}${attempts.length ? `<ul class="run-attempts">${attempts.map(attemptItem).join('')}</ul>` : ''}${lessons.length ? `<ul class="run-lessons">${lessons.map((l) => `<li>${trustChip(typeof l.trust === 'string' && l.trust ? l.trust : 'unknown')} ${esc(l.text)}</li>`).join('')}</ul>` : ''}</li>`;
+}
+
+function runNotesBlock(t, snapshot, { now, tz }) {
+  const caps = snapshot.capabilities ?? {};
+  const notes = caps.handoff && Array.isArray(t.run_notes) ? t.run_notes.filter((n) => n && typeof n === 'object') : [];
+  if (!notes.length) return '';
+  // Newest first; the journal appends, so order of arrival breaks ties.
+  const ordered = notes.map((n, i) => ({ n, i })).sort((a, b) => (String(b.n.at ?? '') > String(a.n.at ?? '') ? 1 : String(b.n.at ?? '') < String(a.n.at ?? '') ? -1 : b.i - a.i)).map((x) => x.n);
+  return `<section class="detail-section run-notes"><h3>Run notes <span class="count">${esc(notes.length)}</span></h3><p class="small muted">What earlier runs on this ticket tried and learned. Later runs on this ticket start from these notes.</p><ul class="run-note-list">${ordered.map((n) => runNoteItem(n, snapshot, { now, tz })).join('')}</ul></section>
+`;
+}
+
 export const DETAIL_TABS = ['overview', 'runs', 'activity', 'delivery'];
 const TAB_LABELS = { overview: 'Overview', runs: 'Runs', activity: 'Activity', delivery: 'Delivery' };
 
@@ -66,7 +93,7 @@ function runStrip(t, snapshot, { now, tz }) {
   if (!current) return caps.handoff && t.status !== 'done' ? `<div class="run-strip" data-empty="true"><span class="muted small">No agent runs yet</span></div>` : '';
   const name = current.recipe ? current.recipe.name : current.mode;
   const open = openSuggestions(current).length;
-  return `<button type="button" class="run-strip" data-action="open-run" data-run="${attr(current.id)}" aria-label="${attr(`Open run: ${name}, ${current.state}`)}">${handoffChip({ ...current, error: null })} <strong>${esc(name)}</strong> ${testGateBadge(current.test_gate)}${open ? ` <span class="chip small">${esc(open)} suggestion${open === 1 ? '' : 's'} to review</span>` : ''} <span class="muted small">${timeEl(current.requested_at, now, tz)}</span></button>`;
+  return `<button type="button" class="run-strip" data-action="open-run" data-run="${attr(current.id)}" aria-label="${attr(`Open run: ${[name, current.state, ...accessWords(current).slice(1)].join(', ')}`)}">${handoffChip({ ...current, error: null })} <strong>${esc(name)}</strong> ${accessTierBadge(current)} ${testGateBadge(current.test_gate)}${open ? ` <span class="chip small">${esc(open)} suggestion${open === 1 ? '' : 's'} to review</span>` : ''} <span class="muted small">${timeEl(current.requested_at, now, tz)}</span></button>`;
 }
 
 export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, loadedTicket = null, editingNext = false, tab = 'overview', expanded = false }) {
@@ -122,7 +149,7 @@ ${checkpoints.length ? `<section class="latest-checkpoint"><h3>Latest checkpoint
 </div>
 <div class="detail-page" id="detail-page-runs" role="tabpanel" aria-labelledby="detail-tab-runs" ${tab !== 'runs' ? 'hidden' : ''}>
 <section class="detail-section"><h3>Runs <span class="count">${esc(ticketRuns(snapshot, t.id).length)}</span></h3>${ticketRuns(snapshot, t.id).length ? `<ul class="run-list">${ticketRuns(snapshot, t.id).map((h) => runRow(snapshot, h, { now, tz })).join('')}</ul>` : '<p class="muted small">No runs yet.</p>'}${caps.handoff && t.status !== 'done' ? `<p><button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}">${icon('play')}Run agent</button></p>` : ''}</section>
-${proposalsBlock(t, snapshot, { now, pending })}${renderAgentsSection(t, snapshot, { busy: hasActiveRun(snapshot, t.id) })}
+${runNotesBlock(t, snapshot, { now, tz })}${proposalsBlock(t, snapshot, { now, pending })}${renderAgentsSection(t, snapshot, { busy: hasActiveRun(snapshot, t.id) })}
 </div>
 <div class="detail-page" id="detail-page-activity" role="tabpanel" aria-labelledby="detail-tab-activity" ${tab !== 'activity' ? 'hidden' : ''}>
 <section class="detail-section"><h3>Timeline <span class="count">${esc(total)}</span></h3>${timeline.length ? `<ul class="timeline">${timeline.map((e) => timelineItem(e, { now, tz, generation: snapshot.generation_id, content, contentStatus })).join('')}</ul>${total > timeline.length ? `<button type="button" class="btn small" data-action="load-ticket" data-ticket="${attr(t.id)}" data-generation="${attr(snapshot.generation_id)}">Load all ${esc(total)} entries</button>` : ''}` : '<p class="muted small">No events yet.</p>'}</section>

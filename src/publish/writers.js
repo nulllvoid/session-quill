@@ -3,6 +3,7 @@
 import path from 'node:path';
 import { writeMarkedSection } from '../lib/marked-section.js';
 import { writeStaticHtml } from '../export/static.js';
+import { isExportableTicket } from '../export/sanitize.js';
 import { renderRollup } from './content.js';
 import { PUBLISH_FIELDS } from './config.js';
 
@@ -17,6 +18,7 @@ export function publishMarkdown(publisher, rows, { indexPath, now }) {
 export function publishHtml(publisher, snapshot, { now }) {
   const fields = [...new Set(publisher.fields.map((f) => PUBLISH_FIELDS[f]))];
   const r = writeStaticHtml(snapshot, publisher.path, { fields, projects: publisher.projects, includeLinks: publisher.include_links, exportedAt: now });
-  const count = publisher.projects ? snapshot.tickets.filter((t) => publisher.projects.includes(t.project_id)).length : r.ticket_count;
+  // M10: local-only tickets never leave the machine, not even as a number in the summary
+  const count = publisher.projects ? snapshot.tickets.filter((t) => isExportableTicket(t) && publisher.projects.includes(t.project_id)).length : r.ticket_count;
   return { summary: `${plural(count, 'ticket')} copied to ${path.basename(publisher.path)}` };
 }

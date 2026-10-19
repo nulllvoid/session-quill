@@ -84,3 +84,18 @@ test('the html publisher writes the read-only standalone export to its path', ()
   assert.match(html, /<!doctype html>/i);
   assert.doesNotMatch(html, /pull\/6/);
 });
+
+// M10: the publish summary counts only exportable tickets; a local-only ticket is not even a number there.
+test('M10: the html publisher count leaves local-only tickets out, with and without a project filter', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-pub-'));
+  try {
+    const out = path.join(dir, 'copy.html');
+    const snap = snapshot();
+    const local = { ...snap.tickets[0], id: 'local-only-ticket', key: 'LOCAL-x-00000099.1', local_only: true };
+    snap.tickets.push(local);
+    const exportable = snap.tickets.length - 1;
+    assert.equal(publishHtml({ name: 'copy', path: out, fields: ['key'], projects: null, include_links: false }, snap, { now: '2026-10-03T10:00:00Z' }).summary, `${exportable} tickets copied to copy.html`);
+    const inProject = snap.tickets.filter((t) => t.project_id === local.project_id && !t.local_only).length;
+    assert.equal(publishHtml({ name: 'copy', path: out, fields: ['key'], projects: [local.project_id], include_links: false }, snap, { now: '2026-10-03T10:00:00Z' }).summary, `${inProject} ticket${inProject === 1 ? '' : 's'} copied to copy.html`);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

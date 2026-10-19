@@ -1,8 +1,9 @@
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
-import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER } from './components.js';
-import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
+import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER, scopeChoices, tracksSnapshotRequest } from './components.js';
+import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, OWNER_ONLY_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
+import { renderMemory, MEMORY_TABS, memoryEntryBusy, openMemoryEdit, MEMORY_BUSY_MESSAGE } from './views/memory.js';
 import { renderRuns } from './views/runs.js';
-import { renderRunDetail, renderRunNotFound } from './views/run-detail.js';
+import { renderRunDetail, renderRunNotFound, parseRunRecord } from './views/run-detail.js';
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
 import { renderTree } from './views/tree.js';
@@ -19,7 +20,7 @@ import { renderBulkActionBar, bulkBarShape, renderBulkHandoffForm, renderBulkRes
 import { freshProposals, proposalNotice } from './lib/proposals.js';
 import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, mergeUndo, batchDialogUpdate, withoutIds, pruneChecked, activeBatches } from './lib/bulk.js';
 
-const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today', 'runs'];
+const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today', 'runs', 'memory'];
 const POLL_VISIBLE_MS = 2000;
 const POLL_HIDDEN_MS = 30000;
 
@@ -47,6 +48,8 @@ const appState = {
   treeRoot: null,
   content: {},
   contentStatus: {},
+  // Result blobs read as run records (run detail sections), by content hash: { status: 'loading' } | { data } | { error }.
+  runRecords: {},
   loadedTicket: null,
   lastFocus: null,
   error: null,
@@ -62,7 +65,20 @@ const appState = {
   sending: new Map(),
   // Ids of open proposed runs already seen (ADR 0025); null until the first poll.
   proposalsSeen: null,
+  // Memory (spec §6.4): owner-only, fetched from its own endpoint, never part of a snapshot.
+  memory: null,
+  memoryStatus: null,
+  memoryTab: null,
+  memoryRepo: null,
+  memoryEditing: null,
+  memoryDrafts: {},
+  // Request ids whose conflict or failure the owner dismissed; syncRequests leaves them out.
+  dismissedRequests: new Set(),
 };
+
+// A read-only snapshot (export) has no owner-only views, whatever its address says.
+const staticPage = () => typeof window !== 'undefined' && !!window.__SNAPSHOT__;
+const ownerView = (view) => !(OWNER_ONLY_VIEWS.has(view) && staticPage());
 
 const BULK_VIEWS = new Set(['board', 'picknext']);
 
@@ -98,19 +114,21 @@ function announce(text) { const el = $('#live'); if (el) { el.textContent = ''; 
 function readHash() {
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const view = params.get('view');
-  if (VIEWS.includes(view)) appState.view = view;
+  if (VIEWS.includes(view) && ownerView(view)) appState.view = view;
   appState.filters = filtersFromHash(location.hash, appState.filters, VIEWS);
   appState.selected = params.get('ticket') || null;
   appState.treeRoot = params.get('root') || null;
   appState.runTab = params.get('tab') || null;
   appState.selectedRun = appState.view === 'runs' ? params.get('run') || null : null;
+  appState.memoryTab = appState.view === 'memory' && MEMORY_TABS.includes(params.get('mtab')) ? params.get('mtab') : null;
+  appState.memoryRepo = appState.view === 'memory' ? params.get('mrepo') || null : null;
   const section = params.get('section');
   if (appState.selected && DETAIL_TABS.includes(section)) appState.detailTab = section;
 }
 
 // The drawer belongs to the view it was opened from: switching views closes it.
 function setView(view) {
-  if (view === appState.view) return;
+  if (view === appState.view || !ownerView(view)) return;
   appState.view = view;
   appState.treeRoot = null;
   appState.selected = null;
@@ -120,6 +138,9 @@ function setView(view) {
   appState.detailExpanded = false;
   appState.editingNext = null;
   appState.loadedTicket = null;
+  appState.memoryTab = null;
+  appState.memoryRepo = null;
+  appState.memoryEditing = null;
 }
 
 function writeHash() {
@@ -132,6 +153,8 @@ function writeHash() {
   if (appState.treeRoot) params.set('root', appState.treeRoot);
   if (appState.view === 'runs' && appState.runTab) params.set('tab', appState.runTab);
   if (appState.view === 'runs' && appState.selectedRun) params.set('run', appState.selectedRun);
+  if (appState.view === 'memory' && appState.memoryTab) params.set('mtab', appState.memoryTab);
+  if (appState.view === 'memory' && appState.memoryRepo) params.set('mrepo', appState.memoryRepo);
   const next = `#${params.toString()}`;
   if (location.hash !== next) history.replaceState(null, '', next);
 }
@@ -165,7 +188,7 @@ function render() {
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
   const workspaceOpen = $('#sidebar .workspace-details')?.open;
-  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen }));
+  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen, memory: appState.memory }));
   if (workspaceOpen) $('#sidebar .workspace-details').open = true;
   // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
   const healthOpen = [...document.querySelectorAll('#header .health-pop')].flatMap((p, i) => (p.open ? [i] : []));
@@ -185,10 +208,23 @@ function render() {
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
-  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun });
+  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun, memory: appState.memory });
+  else if (appState.view === 'memory') html = renderMemory(appState.memory, s, { now, pending, tab: appState.memoryTab, repo: appState.memoryRepo, editing: appState.memoryEditing, status: appState.memoryStatus, filters: appState.filters, online: appState.online });
   if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
   renderBulkBar(s);
-  setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
+  const active = document.activeElement;
+  // While the owner types in a Memory edit, the page is not rebuilt at all (like the detail panel's
+  // editing guard): the field keeps IME composition, undo history, caret and scroll.
+  const typing = appState.view === 'memory' && appState.memoryEditing && active instanceof HTMLTextAreaElement && main.contains(active) && active.dataset.memoryDraft === appState.memoryEditing.id;
+  // A focused element of the page with an id (the repository selector, a tab, an entry's text) keeps
+  // focus, and a text field its caret, across a re-render.
+  const keep = !typing && active && active !== main && main.contains(active) && active.id ? { id: active.id, start: active.tagName === 'TEXTAREA' ? active.selectionStart : null, end: active.tagName === 'TEXTAREA' ? active.selectionEnd : null } : null;
+  if (!typing) setMarkup(main, (appState.error ? `<div class="banner critical" role="alert">${icon('alert')}${esc(appState.error)}</div>` : '') + renderPageHeading(appState.view, s) + html);
+  // A rebuilt edit form opens with the text Edit was pressed on; put back what has been typed since.
+  const field = appState.view === 'memory' && appState.memoryEditing ? main.querySelector(`textarea[data-memory-draft="${CSS.escape(appState.memoryEditing.id)}"]`) : null;
+  const draft = field ? appState.memoryDrafts[appState.memoryEditing.id] : undefined;
+  if (field && typeof draft === 'string' && field.value !== draft) field.value = draft;
+  if (keep) { const el = document.getElementById(keep.id); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (keep.start !== null && el.setSelectionRange) el.setSelectionRange(keep.start, keep.end); } }
   main.scrollTop = renderedView === appState.view ? scroll : 0;
   renderedView = appState.view;
   disclosures.forEach((id) => { const el = main.querySelector(`[data-disclosure="${CSS.escape(id)}"]`); if (el) el.open = true; });
@@ -252,7 +288,7 @@ async function submitBulkHandoff(form) {
   if (mode === 'attempt-fix' && fd.get('confirm_edit') !== 'on') { appState.dialog = { ...appState.dialog, error: 'Confirm that these runs may edit source.' }; render(); return; }
   const entries = bulkEntries(appState.snapshot, ids, { mode });
   const batchId = uuidv4();
-  const bodies = bulkRequests(entries, { mode, access: String(fd.get('access') || 'settings'), note: String(fd.get('note') ?? '').trim(), batchId });
+  const bodies = bulkRequests(entries, { mode, access: String(fd.get('access') || 'autonomous'), note: String(fd.get('note') ?? '').trim(), batchId });
   const rows = entries.map((e) => ({ ticketId: e.ticket.id, requestId: null, reason: e.state === 'running' ? 'Already running' : e.state === 'no-repo' ? 'No repo' : e.state === 'not-eligible' ? 'Not eligible' : null }));
   appState.batches = [...appState.batches, batchId];
   appState.dialog = { type: 'bulk-results', batchId, rows };
@@ -315,6 +351,30 @@ async function loadContent(hash, generation, retried = false) {
   render();
 }
 
+// A run's record (its result blob) for the run detail's plan, attempts and checks: owner dashboard
+// only, fetched once per content hash (content-addressed, so it never goes stale). Called while
+// rendering, so it never renders synchronously itself.
+function loadRunRecord(hash, generation, retried = false) {
+  appState.runRecords[hash] = { status: 'loading' };
+  api.getContent(hash, generation).then((text) => {
+    const data = parseRunRecord(text);
+    appState.runRecords[hash] = data ? { data } : { error: text === null ? 'the record is no longer stored' : 'the record could not be read' };
+    render();
+  }).catch(async (err) => {
+    if (err.code === 'generation-expired' && !retried) { await poll(); return loadRunRecord(hash, appState.snapshot.generation_id, true); }
+    appState.runRecords[hash] = { error: err.message || 'the request failed' };
+    render();
+  });
+}
+
+function runRecordFor(run, s) {
+  const ref = run && run.result_ref;
+  if (!ref || api.static || !(s.capabilities ?? {}).handoff) return {};
+  if (!Object.hasOwn(appState.runRecords, ref)) loadRunRecord(ref, s.generation_id);
+  const r = appState.runRecords[ref];
+  return { record: r.data ?? null, recordStatus: r.status === 'loading' ? 'loading' : r.error ? { error: r.error } : null };
+}
+
 function renderDetailPanel(now, pending) {
   const panel = $('#detail');
   const s = appState.snapshot;
@@ -341,7 +401,7 @@ function renderDetailPanel(now, pending) {
   const key = ticket ? ticket.id : `run:${runId}`;
   const html = ticket
     ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded })
-    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus }) : renderRunNotFound(runId);
+    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, memory: appState.memory, ...runRecordFor(run, s) }) : renderRunNotFound(runId);
   setMarkup(panel, html);
   // A different ticket or run starts at its title, not at the previous one's scroll offset.
   if (renderedDetail !== key) { panel.scrollTop = 0; renderedDetail = key; }
@@ -400,6 +460,24 @@ function renderDialog() {
   }
 }
 
+// Memory comes from the owner endpoint when the worker publishes a new generation (and on first
+// load), never every poll; a load that crossed a generation change loads again.
+let memoryLoad = null;
+function loadMemory() {
+  if (!api || api.static) return null;
+  if (memoryLoad) return memoryLoad;
+  const gen = appState.snapshot ? appState.snapshot.generation_id : null;
+  memoryLoad = api.getMemory()
+    .then((m) => { appState.memory = m && Array.isArray(m.entries) ? { entries: m.entries, conflicts: Array.isArray(m.conflicts) ? m.conflicts : [] } : { entries: [], conflicts: [] }; appState.memoryStatus = null; })
+    .catch((err) => { appState.memoryStatus = { error: err.message || 'the request failed' }; })
+    .finally(() => {
+      memoryLoad = null;
+      render();
+      if (!appState.memoryStatus && appState.snapshot && appState.snapshot.generation_id !== gen) loadMemory();
+    });
+  return memoryLoad;
+}
+
 async function poll() {
   clearTimeout(pollTimer);
   try {
@@ -411,6 +489,7 @@ async function poll() {
     syncRequests(snap);
     // Content refs are content-addressed, so loaded text stays valid across generations.
     if (changed) { appState.contentStatus = Object.fromEntries(Object.entries(appState.contentStatus).filter(([, v]) => v === 'loading' || v === 'reloading')); appState.loadedTicket = null; }
+    if (!api.static && (changed || (!appState.memory && !appState.memoryStatus))) loadMemory();
     render();
   } catch (err) {
     if (err.code === 'unauthenticated') { appState.error = err.message; appState.online = false; }
@@ -431,13 +510,13 @@ function syncRequests(snap) {
   }
   for (const r of snap.requests ?? []) {
     const local = appState.requests.get(r.id);
-    if (local && local.state === 'already-applied') continue;
-    if (local || ['pending', 'applying', 'conflict', 'failed'].includes(r.state)) {
+    if (tracksSnapshotRequest(r, local, appState.dismissedRequests)) {
       const prev = local ? local.state : null;
       appState.requests.set(r.id, { ...local, ...r, original: local ? local.original : null });
       if (prev && prev !== r.state && ['applied', 'conflict', 'failed', 'cancelled'].includes(r.state)) {
         const label = r.kind.replace(/-/g, ' ');
-        const text = `${label} ${r.state}${r.state === 'conflict' ? ': the ticket changed first' : ''}${r.state === 'failed' && r.error ? `: ${r.error.message}` : ''}`;
+        if (r.kind === 'memory-edit' && r.state === 'applied') delete appState.memoryDrafts[r.target_id];
+        const text = `${label} ${r.state}${r.state === 'conflict' ? (r.kind.startsWith('memory-') ? ': the entry changed first' : ': the ticket changed first') : ''}${r.state === 'failed' && r.error ? `: ${r.error.message}` : ''}`;
         announce(text);
         setReceipt(`${text} (request ${r.id.slice(0, 8)}, ${r.updated_at ?? nowIso()})`, r.state === 'applied' ? 'good' : r.state === 'cancelled' ? 'neutral' : 'critical');
       }
@@ -495,8 +574,25 @@ function ticketRevision(id) {
   return t ? t.revision : null;
 }
 
+function memoryRevision(id) {
+  const e = appState.memory ? appState.memory.entries.find((x) => x.id === id) : null;
+  return e ? e.revision : null;
+}
+
+// One memory change (spec §6.4) against the revision the owner saw. While another change to the
+// same entry is in flight it is refused, said out loud, and false is returned (the caller keeps an
+// open edit form and its draft).
+function submitMemory(kind, id, revision, payload, announceText) {
+  if (memoryEntryBusy(id, [...appState.requests.values()])) { announce(MEMORY_BUSY_MESSAGE); setReceipt(MEMORY_BUSY_MESSAGE, 'neutral'); return false; }
+  submit({ kind, target_id: id, expected_revision: Number.isInteger(revision) ? revision : memoryRevision(id), payload }, { announceText });
+  // The entry's buttons are disabled while the change is in flight: keep focus on the entry itself.
+  document.getElementById(`memory-text-${id}`)?.focus({ preventScroll: true });
+  return true;
+}
+
 // Inbox requests are checked against the session's unlinked-work revision, not a ticket's.
 function targetRevision(r) {
+  if (typeof r.kind === 'string' && r.kind.startsWith('memory-')) return memoryRevision(r.target_id);
   if (r.kind === 'attach-unbound' || r.kind === 'dismiss-unbound') {
     const sess = (appState.snapshot.sessions ?? []).find((x) => x.id === r.target_id);
     return sess && sess.unbound_work ? sess.unbound_work.revision : null;
@@ -542,6 +638,44 @@ function handleAction(el) {
     case 'run-next': stepRun(1); break;
     case 'open-ticket-from-run': { const id = el.dataset.ticket; setView('board'); openDetail(id, null); break; }
     case 'open-runs': setView('runs'); appState.runTab = el.dataset.tab || null; render(); break;
+    // From a run's critical change to where it is approved: the run closes, Needs you opens.
+    case 'open-needs-you': setView('runs'); appState.selectedRun = null; appState.runTab = 'needs'; render(); $('#run-tab-needs')?.focus(); break;
+    case 'open-memory': {
+      setView('memory');
+      appState.memoryTab = MEMORY_TABS.includes(el.dataset.tab) ? el.dataset.tab : null;
+      appState.memoryRepo = el.dataset.repo || null;
+      render();
+      const target = el.dataset.entry ? $(`#main .memory-entry[data-entry="${CSS.escape(el.dataset.entry)}"]`) : null;
+      if (target) target.scrollIntoView({ block: 'nearest' });
+      $(`#memory-tab-${appState.memoryTab ?? 'repo'}`)?.focus();
+      break;
+    }
+    case 'memory-tab': appState.memoryTab = el.dataset.tab; appState.memoryEditing = null; render(); document.querySelector(`#memory-tab-${CSS.escape(appState.memoryTab)}`)?.focus(); break;
+    case 'memory-reload': appState.memoryStatus = null; render(); loadMemory(); break;
+    case 'memory-approve': submitMemory('memory-approve', el.dataset.entry, Number(el.dataset.revision), {}, 'Approving the learning; later runs receive it as your entry'); break;
+    case 'memory-pin': {
+      const pinned = el.dataset.pinned === 'true';
+      submitMemory('memory-pin', el.dataset.entry, Number(el.dataset.revision), { pinned }, pinned ? 'Pinning the entry; pinned entries are delivered first and never go stale' : 'Unpinning the entry');
+      break;
+    }
+    case 'memory-retire': submitMemory('memory-forget', el.dataset.entry, Number(el.dataset.revision), {}, 'Retiring the entry; undo within 10 seconds'); break;
+    case 'memory-edit': {
+      const entry = appState.memory ? appState.memory.entries.find((x) => x.id === el.dataset.entry) : null;
+      if (!entry) break;
+      appState.memoryEditing = openMemoryEdit(entry, appState.memoryDrafts);
+      render();
+      const ta = $(`#main textarea[data-memory-draft="${CSS.escape(el.dataset.entry)}"]`);
+      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+      break;
+    }
+    case 'memory-edit-cancel': {
+      const id = el.dataset.entry;
+      appState.memoryEditing = null;
+      delete appState.memoryDrafts[id];
+      render();
+      $(`#main [data-action="memory-edit"][data-entry="${CSS.escape(id)}"]`)?.focus();
+      break;
+    }
     case 'toggle-more': appState.moreOpen = !appState.moreOpen; render(); break;
     case 'toggle-sidebar': appState.sidebarCollapsed = !appState.sidebarCollapsed; try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage may be unavailable */ } render(); document.querySelector('[data-action="toggle-sidebar"]')?.focus(); break;
     case 'expand-detail': appState.detailExpanded = !appState.detailExpanded; render(); break;
@@ -579,7 +713,8 @@ function handleAction(el) {
     case 'clear-filter': appState.filters[el.dataset.filter] = el.dataset.filter === 'stale' ? false : ''; render(); break;
     case 'clear-filters': appState.filters = { ...appState.filters, category: '', tag: '', repo: '', machine: '', stale: false, q: '' }; render(); break;
     case 'cancel-request': cancelRequest(el.dataset.request); break;
-    case 'discard-request': appState.requests.delete(el.dataset.request); render(); break;
+    // Dismissed stays dismissed: later polls do not bring the request's feedback back.
+    case 'discard-request': appState.dismissedRequests.add(el.dataset.request); appState.requests.delete(el.dataset.request); render(); break;
     case 'retry-request':
     case 'resubmit-request': {
       const r = appState.requests.get(el.dataset.request);
@@ -604,6 +739,8 @@ function handleAction(el) {
     }
     case 'approve-run': submit({ kind: 'approve-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Approving the proposed run; it is queued as an ordinary run' }); break;
     case 'dismiss-run': submit({ kind: 'dismiss-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Dismissing the proposed run; undo within 10 seconds' }); break;
+    // Spec §5.4: a new run that continues the interrupted run's session, with the same access.
+    case 'resume-run': submit({ kind: 'resume-run', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff } }, { announceText: 'Resume requested; it is queued as a new run, not finished' }); break;
     case 'cancel-handoff': {
       const h = s.handoffs.find((x) => x.id === el.dataset.handoff);
       if (h) submit({ kind: 'handoff-cancel', target_id: h.ticket_id, expected_revision: ticketRevision(h.ticket_id), payload: { handoff_id: h.id } }, { announceText: 'Handoff cancellation requested' });
@@ -629,6 +766,7 @@ function handleAction(el) {
     case 'dismiss-batch': appState.batches = appState.batches.filter((b) => b !== el.dataset.batch); render(); break;
     case 'load-content': loadContent(el.dataset.hash, el.dataset.generation); break;
     case 'hide-content': delete appState.content[el.dataset.hash]; render(); break;
+    case 'load-run-record': loadRunRecord(el.dataset.hash, appState.snapshot.generation_id); render(); break;
     case 'load-ticket': {
       api.getTicket(el.dataset.ticket, el.dataset.generation).then((t) => { appState.loadedTicket = t; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
       break;
@@ -781,7 +919,12 @@ function handleSubmit(form) {
     const permissions = {};
     for (const k of ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files']) permissions[k] = fd.get(k) === 'on';
     if (required) { permissions.read_source = true; permissions.edit_source = true; }
+    // A files run has no access choice and is always standard (ADR 0015); every other form sends
+    // its checked level, Autonomous unless the owner picked another.
     const payload = { recipe: form.dataset.recipe, note: String(fd.get('note') ?? '').trim(), permissions, access: fd.get('access') || 'standard', branch: String(fd.get('branch') ?? '').trim() || null };
+    // Write scopes go only with Autonomous access (their boxes are disabled otherwise, spec §4.3).
+    const scopes = payload.access === 'autonomous' ? scopeChoices(fd) : [];
+    if (scopes.length) payload.scopes = scopes;
     closeDialog();
     submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: form.dataset.retryOf || null }, { announceText: `${form.dataset.recipe} run requested; its results arrive as suggestions on the ticket` });
   } else if (kind === 'attach') {
@@ -800,6 +943,16 @@ function handleSubmit(form) {
     const url = form.dataset.url;
     closeDialog();
     submit({ kind: 'repo-clone', target_id: ticketId, expected_revision: revision, payload: { url } }, { announceText: `Cloning the repository for ${t ? t.key : 'the ticket'}` });
+  } else if (kind === 'memory-edit') {
+    const id = form.dataset.entry;
+    const text = String(fd.get('text') ?? '').trim();
+    if (!text) { announce('The wording cannot be empty'); return; }
+    // The draft stays until the edit applies, so a conflict or failure loses nothing.
+    appState.memoryDrafts[id] = text;
+    // Refused while another change to the entry is in flight: the form stays open with the draft.
+    if (memoryEntryBusy(id, [...appState.requests.values()])) { submitMemory('memory-edit', id, revision, { text }, ''); return; }
+    appState.memoryEditing = null;
+    submitMemory('memory-edit', id, revision, { text }, 'Saving your wording as an owner entry');
   } else if (kind === 'bulk-handoff') {
     submitBulkHandoff(form);
   } else if (kind === 'bulk-status') {
@@ -820,6 +973,14 @@ function onKey(e) {
     const i = tabs.indexOf(runTab.dataset.tab);
     appState.runTab = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
     render(); document.querySelector(`#run-tab-${CSS.escape(appState.runTab)}`)?.focus(); return;
+  }
+  const memoryTab = target?.closest('[role="tab"][data-action="memory-tab"]');
+  if (memoryTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
+    e.preventDefault();
+    const i = MEMORY_TABS.indexOf(memoryTab.dataset.tab);
+    appState.memoryTab = MEMORY_TABS[e.key === 'Home' ? 0 : e.key === 'End' ? MEMORY_TABS.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : MEMORY_TABS.length - 1)) % MEMORY_TABS.length];
+    appState.memoryEditing = null;
+    render(); document.querySelector(`#memory-tab-${appState.memoryTab}`)?.focus(); return;
   }
   const detailTab = target?.closest('[role="tab"][data-action="detail-tab"]');
   if (detailTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
@@ -843,6 +1004,7 @@ function onKey(e) {
     if (appState.selected && !inInput) { e.preventDefault(); closeDetail(); return; }
     if (appState.selectedRun && !inInput) { e.preventDefault(); closeRun(); return; }
     if (!dialogOpen && selectionKey('Escape', { checkedSize: appState.checked.size }) && (!inInput || target.dataset.check)) { e.preventDefault(); setChecked(new Set(), { anchor: null }); return; }
+    if (inInput && target.form && target.form.dataset.form === 'memory-edit') { e.preventDefault(); const id = target.form.dataset.entry; appState.memoryEditing = null; render(); $(`#main [data-action="memory-edit"][data-entry="${CSS.escape(id)}"]`)?.focus(); return; }
     if (inInput && target.form && target.form.dataset.form === 'next-action') { target.value = ticketById(appState.snapshot, target.form.dataset.ticket).next_action; target.blur(); appState.editingNext = null; render(); return; }
   }
   if (inInput || dialogOpen) {
@@ -850,7 +1012,7 @@ function onKey(e) {
     return;
   }
   if (e.key === '/') { e.preventDefault(); const s = $('#search'); if (s) s.focus(); return; }
-  if (SHORTCUT_VIEWS[e.key]) { appState.moreOpen = false; setView(SHORTCUT_VIEWS[e.key]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
+  if (SHORTCUT_VIEWS[e.key] && ownerView(SHORTCUT_VIEWS[e.key])) { appState.moreOpen = false; setView(SHORTCUT_VIEWS[e.key]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
   if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
@@ -891,8 +1053,22 @@ function onClick(e) {
   if (card && !e.target.closest('button, a, [data-copy]')) openDetail(card.dataset.ticket, card);
 }
 
+// A checked scope with no credentials configured blocks Queue and says why (review M4); other
+// blockers rendered with the form (data-blocked) keep it disabled whatever the scopes are.
+function scopeBlockers(form, scoped) {
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const note = form.querySelector('[data-scope-blocked]');
+  const blocking = scoped ? [...form.querySelectorAll('input[name="scope"][data-scope-blocker]')].filter((b) => b.checked).map((b) => b.dataset.scopeBlocker) : [];
+  if (note) { note.textContent = blocking.join(' '); note.hidden = !blocking.length; }
+  if (submitBtn && submitBtn.dataset.blocked !== 'true') {
+    submitBtn.disabled = blocking.length > 0;
+    if (blocking.length) submitBtn.title = blocking[0]; else submitBtn.removeAttribute('title');
+  }
+}
+
 function onChange(e) {
   const el = e.target;
+  if (el.dataset && el.dataset.memoryRepo !== undefined) { appState.memoryRepo = el.value || null; appState.memoryEditing = null; render(); $('#memory-repo')?.focus(); return; }
   if (el.dataset.filter) {
     appState.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
     appState.boardPages = {};
@@ -916,6 +1092,20 @@ function onChange(e) {
     const choices = Object.fromEntries(['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'].map((k) => [k, fd.get(k) === 'on' || !!runForm.querySelector(`[name="${k}"][disabled][checked]`)]));
     const out = runForm.querySelector('.run-summary');
     if (recipe && out) out.textContent = runSummary(recipe, choices, repo);
+    // The time cap follows the checked access level (budgetFor, via the recipe's caps).
+    const cap = runForm.querySelector('.run-cap');
+    const access = fd.get('access');
+    if (cap && typeof access === 'string' && cap.dataset[`cap${access.charAt(0).toUpperCase()}${access.slice(1)}`]) cap.textContent = cap.dataset[`cap${access.charAt(0).toUpperCase()}${access.slice(1)}`];
+    // Write scopes only with Autonomous access; a checked scope that takes a target needs one.
+    const scoped = access === 'autonomous';
+    for (const input of runForm.querySelectorAll('input[name="scope"], input[data-scope-target]')) input.disabled = !scoped;
+    const reason = runForm.querySelector('[data-scope-reason]');
+    if (reason) reason.hidden = scoped;
+    for (const t of runForm.querySelectorAll('input[data-scope-target]')) {
+      const box = [...runForm.querySelectorAll('input[name="scope"]')].find((b) => b.value === t.dataset.scopeTarget);
+      t.required = !!(box && box.checked && scoped);
+    }
+    scopeBlockers(runForm, scoped);
   }
   if (el.dataset.action === 'status-select') {
     const status = el.value;
@@ -949,6 +1139,22 @@ export function startApp() {
   document.addEventListener('click', onClick);
   document.addEventListener('keydown', onKey);
   document.addEventListener('change', onChange);
+  // The Advanced access details stays open while it holds the checked access level, so that
+  // radio is never hidden or unfocusable (design system §8). 'toggle' does not bubble.
+  document.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (d instanceof HTMLDetailsElement && d.classList.contains('access-advanced') && !d.open && d.querySelector('input[name="access"]:checked')) d.open = true;
+  }, true);
+  // Typing a scope's target ticks its box (review M5), so a typed target is never silently dropped.
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!(t instanceof HTMLInputElement) || !t.dataset.scopeTarget || !t.value.trim()) return;
+    const form = t.closest('form[data-form="recipe-run"]');
+    const box = form && [...form.querySelectorAll('input[name="scope"]')].find((b) => b.value === t.dataset.scopeTarget);
+    if (box && !box.disabled && !box.checked) { box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); }
+  });
+  // A Memory edit's text is kept as it is typed, so a re-render or a failed save never loses it.
+  document.addEventListener('input', (e) => { const t = e.target; if (t instanceof HTMLTextAreaElement && t.dataset.memoryDraft) appState.memoryDrafts[t.dataset.memoryDraft] = t.value; });
   document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { appState.filters.q = e.target.value; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
   document.addEventListener('submit', (e) => { const form = e.target.closest('form[data-form]'); if (form) { e.preventDefault(); handleSubmit(form); } });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });

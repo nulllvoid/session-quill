@@ -5,6 +5,9 @@ import { createTrackerClient, writeSettings, targetStatus } from '../../src/trac
 import { push } from '../../src/cli/commands/tracker.js';
 import { loadContext } from '../../src/cli/context.js';
 import { saveUserConfig, resolveTracker } from '../../src/config/config.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { projectionsDir } from '../../src/lib/paths.js';
 import { makeHome, startWorker, cli, DESC } from '../cli/helpers.js';
 
 const JIRA = { system: 'jira', domain: 'https://example.atlassian.net', url_template: '{domain}/browse/{key}', repo: '' };
@@ -132,6 +135,35 @@ test('tracker push is refused, before any request, while config.toml leaves writ
     const f = fake(jiraRoute);
     await assert.rejects(push(ctx, io().io, ['PROJ-7'], { confirm: true }, { fetchImpl: f.fetchImpl }), (e) => e.code === 'write-back-off');
     assert.equal(f.calls.length, 0);
+  } finally {
+    await w.stop();
+  }
+});
+
+test('tracker push refuses a local-only ticket before any request, and never sends run notes or the critical spec', async () => {
+  const fx = makeHome();
+  const w = await linkedTicket(fx);
+  const SENT = 'SENTINEL-7f3a';
+  try {
+    const ctx = loadContext({ ...fx.env, JIRA_TOKEN: 'tok' });
+    const t = [...w.worker.state.tickets.values()].find((x) => x.key === 'PROJ-7');
+    t.run_notes = [SENT];
+    t.critical_spec = { rule: SENT };
+    const ok = fake((u, init) => (u.endsWith('/comment') ? { status: 201, body: {} } : jiraRoute(u, init)));
+    assert.equal(await push(ctx, io().io, ['PROJ-7'], { confirm: true, comment: 'Shipped' }, { fetchImpl: ok.fetchImpl }), 0);
+    assert.ok(writes(ok.calls).length >= 1);
+    assert.equal(JSON.stringify(ok.calls).includes(SENT), false, 'no request carries run notes or the critical spec');
+    // The CLI reads the projections, so mark the ticket local-only where it looks.
+    const dir = projectionsDir(fx.env);
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'MANIFEST.json'), 'utf8'));
+    for (const f of [path.join(dir, manifest.path, 'snapshot.json'), path.join(dir, 'tickets', `${t.id}.json`)]) {
+      const j = JSON.parse(fs.readFileSync(f, 'utf8'));
+      for (const x of j.tickets ?? [j]) if (x.id === t.id) x.local_only = true;
+      fs.writeFileSync(f, JSON.stringify(j));
+    }
+    const blocked = fake((u, init) => (u.endsWith('/comment') ? { status: 201, body: {} } : jiraRoute(u, init)));
+    await assert.rejects(push(ctx, io().io, ['PROJ-7'], { confirm: true, comment: 'Shipped' }, { fetchImpl: blocked.fetchImpl }), (e) => e.code === 'local-only' && /local-only/.test(e.message));
+    assert.equal(blocked.calls.length, 0, 'refused before any request');
   } finally {
     await w.stop();
   }

@@ -17,6 +17,8 @@ export const APPROVAL_PHRASES = ['approved', 'lgtm', 'go ahead', 'ship it'];
 const USER_ONLY_FIELDS = new Set([
   'store_path', 'store_name', 'owner_machine_id', 'machine_name', 'gate_enabled',
   'approval_phrases_enabled', 'handoff_permissions', 'repos', 'projects', 'key_prefix',
+  // Run credentials and limits (spec §4.4): a repository must never widen what a run can reach.
+  'handoff', 'prod', 'mcp_policy', 'scopes', 'memory',
 ]);
 
 export function defaultUserConfig() {

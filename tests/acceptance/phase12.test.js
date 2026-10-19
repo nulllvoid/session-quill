@@ -37,7 +37,7 @@ test('A69 a Run agent pick on a two-way page appears as one proposal after two p
   try {
     await publish();
     const page = remote();
-    assert.match(page.page, /const RUN_RECIPES = \["analyse","analyse-followups","deploy-check","standup","workspace-setup"\]/, 'read-only recipes only');
+    assert.match(page.page, /const RUN_RECIPES = \["analyse","analyse-followups","deploy-check","standup","verify-deploy","workspace-setup"\]/, 'read-only recipes only; critical-change is never offered');
     assert.equal(page.docs['tickets/PROJ-1'].data.run, '');
     pick('analyse', 'u_editor', '2026-10-02T08:30:00Z');
     await publish();

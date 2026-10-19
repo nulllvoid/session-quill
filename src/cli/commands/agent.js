@@ -3,14 +3,35 @@ import { loadContext, findTicketByKey, latestSnapshot } from '../context.js';
 import { createRecipeCatalog, PERMISSION_KEYS, personalRecipesDir } from '../../agents/recipes.js';
 import { fetchSource, discoverRecipes, planInstall, applyInstall, describeRecipe, uninstall, readInstalled } from '../../agents/install.js';
 import { nowIso } from '../../lib/time.js';
-import { validateHandoffRequest } from '../../handoff/permissions.js';
+import { validateHandoffRequest, ACCESS } from '../../handoff/permissions.js';
+import { scopeValidator } from '../../handoff/scopes.js';
 import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
-import { submitCliRequest } from './handoff.js';
+import { submitCliRequest, runOptions, accessNotice } from './handoff.js';
+import { capMinutes, recipeCaps } from '../../handoff/runner.js';
 
-const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full] [--retry-of <id>] | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
+const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent resume <run-id> | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
+
+// The access a CLI run of this recipe gets unless --access says otherwise (see `run` below).
+const defaultAccess = (r) => (r.mode === 'files' ? 'standard' : 'autonomous');
+
+// The wall clock a run actually gets (budgetFor), not the recipe's raw timeout_min: a recipe that
+// sets none gets the configured default, which is longer for autonomous runs.
+function capFor(r, config) {
+  return recipeCaps(r, config)[defaultAccess(r)];
+}
+
+function capText(r, config) {
+  const caps = recipeCaps(r, config);
+  const first = defaultAccess(r);
+  const others = new Map();
+  for (const a of ACCESS) if (a !== first && caps[a] !== caps[first]) others.set(caps[a], [...(others.get(caps[a]) ?? []), a]);
+  if (!others.size) return `${caps[first]} min`;
+  const names = (xs) => (xs.length > 1 ? `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}` : xs[0]);
+  return [`${caps[first]} min ${first} (the default)`, ...[...others].map(([m, xs]) => `${m} min ${names(xs)}`)].join('; ');
+}
 
 function repoIdFor(ctx, flags) {
   if (!flags.ticket) return null;
@@ -27,10 +48,10 @@ function list(ctx, io, flags) {
   const recipes = [...catalog(ctx).forRepo(repoIdFor(ctx, flags)).effective.values()];
   const installed = readInstalled(ctx.env);
   const label = (r) => (r.source === 'personal' && installed[r.name] ? 'installed' : r.source);
-  if (flags.json) { io.json(recipes.map(({ path, body, ...r }) => ({ ...r, installed_from: r.source === 'personal' && installed[r.name] ? installed[r.name].source : null }))); return 0; }
+  if (flags.json) { io.json(recipes.map(({ path, body, ...r }) => ({ ...r, ...(r.error ? {} : { caps: recipeCaps(r, ctx.config) }), installed_from: r.source === 'personal' && installed[r.name] ? installed[r.name].source : null }))); return 0; }
   for (const r of recipes) {
     if (r.error) { io.println(`${r.name.padEnd(20)} ${label(r).padEnd(9)} invalid: ${r.error}`); continue; }
-    io.println(`${r.name.padEnd(20)} ${label(r).padEnd(9)} ${r.mode.padEnd(18)} ${grants(r.permissions).padEnd(24)} ${String(r.timeout_min).padStart(2)} min  ${r.description}`);
+    io.println(`${r.name.padEnd(20)} ${label(r).padEnd(9)} ${r.mode.padEnd(18)} ${grants(r.permissions).padEnd(24)} ${String(capFor(r, ctx.config)).padStart(2)} min  ${r.description}`);
   }
   return 0;
 }
@@ -46,7 +67,7 @@ function show(ctx, io, args, flags) {
   io.println(`mode: ${r.mode}`);
   io.println(`permissions (at most): ${grants(r.permissions)}`);
   io.println(`tools: ${r.tools ? r.tools.join(', ') : 'default for its permissions'}`);
-  io.println(`timeout: ${r.timeout_min} min`);
+  io.println(`timeout: ${capText(r, ctx.config)}`);
   io.println(`inputs: ${r.inputs.join(', ')}`);
   io.println(`outputs: ${r.outputs.join(', ')}`);
   io.println('');
@@ -76,15 +97,19 @@ async function run(ctx, io, args, flags) {
     edit_files: flags['edit-files'] === true,
     delete_files: flags['delete-files'] === true,
   };
-  const access = typeof flags.access === 'string' ? flags.access : (recipe.mode === 'files' ? 'standard' : 'settings');
-  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length });
-  if (access === 'full') io.println('! Full access: this run skips every permission check and can run any command, use connectors and push with your credentials.');
+  // Autonomous unless --access says otherwise (ADR 0026); a files run is always standard (ADR 0015).
+  const access = typeof flags.access === 'string' ? flags.access : (recipe.mode === 'files' ? 'standard' : 'autonomous');
+  // --scope is checked against the same catalog the dashboard and the worker use (spec §4.3).
+  const payload = validateHandoffRequest({ recipe: name, note: flags.note ?? '', permissions, access, branch: typeof flags['push-branch'] === 'string' ? flags['push-branch'] : null, ...runOptions(flags) }, { repo, recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(ctx.config, { env: ctx.env }) });
+  const notice = accessNotice(access);
+  if (notice) io.println(notice);
   const terminal = await submitCliRequest(ctx, io, { kind: 'handoff', target_id: ticket.id, expected_revision: ticket.revision, payload, retry_of: flags['retry-of'] ?? null }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};
     throw new TrackerError(err.code ?? terminal.state, `run request ${terminal.state}: ${err.message ?? ''}`);
   }
-  io.println(`${name} queued for ${ticket.key} (permissions: ${grants(payload.permissions)}; capped at ${recipe.timeout_min} min). Run ${terminal.result.handoff_id}.`);
+  const minutes = capMinutes(recipe, ctx.config, access);
+  io.println(`${name} queued for ${ticket.key} (permissions: ${grants(payload.permissions)}; capped at ${minutes} min). Run ${terminal.result.handoff_id}.`);
   io.println('Queued is not finished: follow it with `quill handoff list` or on the ticket in the dashboard.');
   if (flags.json) io.json(terminal);
   return 0;
@@ -126,6 +151,27 @@ async function resolve(ctx, io, verb, args, flags) {
   return 0;
 }
 
+// Resume as new run (spec §5.4): a run interrupted by a worker restart or stop continues its
+// session in a new run with exactly the same access. The worker checks everything again.
+async function resumeRun(ctx, io, args, flags) {
+  const [runId] = args;
+  if (!runId) throw new TrackerError('usage', USAGE);
+  const snap = latestSnapshot(ctx);
+  const matches = snap ? snap.handoffs.filter((x) => x.id === runId || x.id.startsWith(runId)) : [];
+  if (matches.length > 1) throw new TrackerError('handoff-ambiguous', `${runId} matches ${matches.length} runs; give more of the id`);
+  const h = matches[0];
+  if (!h) throw new TrackerError('handoff-unknown', `unknown run ${runId}`);
+  const terminal = await submitCliRequest(ctx, io, { kind: 'resume-run', target_id: h.ticket_id, expected_revision: null, payload: { handoff_id: h.id } }, flags);
+  if (terminal.state !== 'applied') {
+    const err = terminal.error ?? {};
+    throw new TrackerError(err.code ?? terminal.state, `resume ${terminal.state}: ${err.message ?? ''}`);
+  }
+  io.println(`Run ${h.id.slice(0, 8)} resumed as run ${terminal.result.handoff_id} with the same access, scopes and limits.`);
+  io.println('Queued is not finished: follow it with `quill handoff list` or on the ticket in the dashboard.');
+  if (flags.json) io.json(terminal);
+  return 0;
+}
+
 // Shared recipes (ADR 0020): preview by default; --confirm installs.
 export async function install(ctx, io, args, flags, { clone } = {}) {
   const [source] = args;
@@ -136,13 +182,13 @@ export async function install(ctx, io, args, flags, { clone } = {}) {
   try {
     const plan = planInstall(discoverRecipes(fetched.root), { env: ctx.env, only, replace: flags.replace === true });
     if (!plan.length) throw new TrackerError('no-recipes', `no recipe files found in ${source}${only ? ` named ${only.join(', ')}` : ''} (looked in .quill/agents, recipes, agents and the top folder)`);
-    const rows = plan.map((p) => ({ name: p.name, file: p.file, action: p.action, reason: p.reason ?? null, ...(p.recipe && !p.error ? describeRecipe(p.recipe) : {}) }));
+    const rows = plan.map((p) => ({ name: p.name, file: p.file, action: p.action, reason: p.reason ?? null, ...(p.recipe && !p.error ? { ...describeRecipe(p.recipe), cap_min: capFor(p.recipe, ctx.config), caps: recipeCaps(p.recipe, ctx.config) } : {}) }));
     if (!flags.confirm) {
       if (flags.json) { io.json({ preview: true, source, ref, commit: fetched.commit, recipes: rows }); return 0; }
       io.println(`Preview of ${source}${ref ? ` at ${ref}` : ''}${fetched.commit ? ` (commit ${fetched.commit.slice(0, 12)})` : ''}; nothing is installed yet.`);
       for (const r of rows) {
         if (r.action === 'skip') { io.println(`  skip     ${r.name}: ${r.reason}`); continue; }
-        io.println(`  ${r.action.padEnd(8)} ${r.name} (${r.mode}, ${r.timeout_min} min): ${r.description}`);
+        io.println(`  ${r.action.padEnd(8)} ${r.name} (${r.mode}, ${r.cap_min} min): ${r.description}`);
         io.println(`           permissions: ${r.permissions.join(', ') || 'none'}${r.tools ? `; tools: ${r.tools.join(', ')}` : ''}`);
         if (r.changes.length) io.println(`           can change things: ${r.changes.join(', ')}. Each run still asks for these, and they are never scheduled.`);
       }
@@ -175,6 +221,7 @@ export async function run_({ args, flags, io, env }) {
   if (verb === 'list' || !verb) return list(ctx, io, flags);
   if (verb === 'show') return show(ctx, io, rest, flags);
   if (verb === 'run') return run(ctx, io, rest, flags);
+  if (verb === 'resume') return resumeRun(ctx, io, rest, flags);
   if (verb === 'suggestions') return suggestions(ctx, io, rest, flags);
   if (verb === 'accept' || verb === 'dismiss') return resolve(ctx, io, verb, rest, flags);
   throw new TrackerError('usage', USAGE);

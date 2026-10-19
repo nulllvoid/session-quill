@@ -14,6 +14,10 @@ export function handleRequest(state, ev, result) {
     actor_id: r.actor_id ?? 'owner', kind: r.kind, target_id: r.target_id ?? null, expected_revision: r.expected_revision ?? null, payload: r.payload ?? {},
     not_before: r.not_before ?? ev.occurred_at, state: 'pending', applied_revision: null, error: null, result: null, retry_of: r.retry_of ?? null, sequence: ev.sequence ?? 0,
     body_hash: r.body_hash ?? null,
+    // Who journaled it: 'worker' for requests submitted through the worker (the dashboard, schedules,
+    // publishers), else the ingress producer (the CLI). Approving a critical change needs both the
+    // owner and the worker (ADR 0028); ingress cannot claim the worker.
+    producer: typeof ev.producer === 'string' ? ev.producer.slice(0, 40) : null,
   });
   result.requestsChanged.add(r.id);
   return {};
@@ -133,6 +137,25 @@ export function applySuggestion(state, ev, m, req, result) {
   req.applied_revision = ticket.revision;
 }
 
+// The last this-many Run notes are kept per ticket; an older note is dropped when a new one arrives.
+export const RUN_NOTES_MAX = 20;
+
+function appendRunNote(ticket, note, runId) {
+  const entry = {
+    run_id: runId,
+    at: typeof note.at === 'string' ? note.at : null,
+    attempts: Array.isArray(note.attempts) ? note.attempts.slice(0, 40) : [],
+    lessons: Array.isArray(note.lessons) ? note.lessons.slice(0, 15) : [],
+    // How many free-text fields the instruction filter withheld, and a page-proposed run's mark
+    // (Task 14 must not deliver an origin 'page' note to other runs).
+    ...(Number.isInteger(note.withheld) && note.withheld > 0 ? { withheld: note.withheld } : {}),
+    ...(note.origin === 'page' ? { origin: 'page' } : {}),
+  };
+  const list = (Array.isArray(ticket.run_notes) ? ticket.run_notes : []).filter((n) => n && n.run_id !== runId);
+  list.push(entry);
+  ticket.run_notes = list.slice(-RUN_NOTES_MAX);
+}
+
 export function handleHandoffTx(state, ev, result) {
   const p = ev.payload;
   const h = state.handoffs.get(p.handoff_id);
@@ -184,6 +207,11 @@ export function handleHandoffTx(state, ev, result) {
     }
     if (['todo', 'active'].includes(ticket.status)) applyTicketFields(state, ticket, { status: 'review' }, ev, 'evidence', result);
     else touch(state, ticket, ev, result);
+  }
+  // A finished run's Run note (src/memory/file.js appendRunNotes): local to the ticket, never exported.
+  if (ticket && p.run_notes && typeof p.run_notes === 'object' && !Array.isArray(p.run_notes) && (p.run_notes.ticket_id ?? h.ticket_id) === h.ticket_id) {
+    appendRunNote(ticket, p.run_notes, h.id);
+    result.changed.add(ticket.id);
   }
   if (ticket && p.update && p.update.state && terminal.includes(p.update.state)) {
     ticket.timeline.push(timelineEntry(ev, 'handoff', `Handoff ${p.update.state}${h.error && h.error.code ? ` (${h.error.code})` : ''}`, { content_ref: h.result_ref ?? null }));

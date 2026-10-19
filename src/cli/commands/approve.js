@@ -30,8 +30,10 @@ async function proposedRun(ctx, command, flags, io) {
   if (flags.run === true) {
     if (flags.json) { io.json(open); return 0; }
     if (!open.length) { io.println('No proposed runs. A Run agent pick on a two-way page appears here after its next publish.'); return 0; }
-    for (const p of open) io.println(`${p.id.slice(0, 8)}  ${String(p.ticket_key ?? '?').padEnd(12)} ${p.recipe.name.padEnd(18)} ${p.access.padEnd(9)} ${String(p.editor ?? 'unknown editor').padEnd(16)} ${p.publisher}  ${p.proposed_at}`);
-    io.println('Approve with `quill approve --run <id>`, or dismiss with `quill dismiss --run <id>`.');
+    for (const p of open) io.println(p.origin === 'run'
+      ? `${p.id.slice(0, 8)}  ${String(p.ticket_key ?? '?').padEnd(12)} ${p.recipe.name.padEnd(18)} ${p.access.padEnd(9)} critical change proposed by run ${String(p.from_handoff_id ?? '').slice(0, 8)}; approve it on the dashboard  ${p.proposed_at}`
+      : `${p.id.slice(0, 8)}  ${String(p.ticket_key ?? '?').padEnd(12)} ${p.recipe.name.padEnd(18)} ${p.access.padEnd(9)} ${String(p.editor ?? 'unknown editor').padEnd(16)} ${p.publisher}  ${p.proposed_at}`);
+    io.println('Approve with `quill approve --run <id>`, or dismiss with `quill dismiss --run <id>`. A critical change is approved only on the dashboard (Runs → Needs you).');
     return 0;
   }
   const prefix = String(flags.run).toLowerCase();

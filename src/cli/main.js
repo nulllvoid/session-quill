@@ -1,5 +1,6 @@
 import { parseArgs, Io } from './context.js';
 import { TrackerError } from '../lib/errors.js';
+import { isReadInRun, refuseInRun } from './in-run.js';
 
 const COMMANDS = {
   start: () => import('./commands/start.js'),
@@ -24,9 +25,13 @@ const COMMANDS = {
   repo: () => import('./commands/repo.js'),
   tracker: () => import('./commands/tracker.js'),
   mirror: () => import('./commands/mirror.js'),
+  memory: () => import('./commands/memory.js'),
 };
 
-const HELP = `quill — Session Quill CLI
+// Every command the dispatcher knows; tests enumerate it to check the in-run refusal.
+export const COMMAND_NAMES = Object.freeze(Object.keys(COMMANDS));
+
+export const HELP = `quill — Session Quill CLI
 
 Usage: quill <command> [options]
 
@@ -52,17 +57,22 @@ Usage: quill <command> [options]
   ui [--no-open] | ui --static <out.html> [--open] | ui --revoke  (sign every browser out)
                                             export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
   mirror status|open [--dir <folder>] [--json] | mirror write   (read-only copy for other machines)
-  handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access standard|settings|full]
+  handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd]
   handoff list                              handoff cancel <run-id> | handoff cancel --batch <batch-id>  (queued runs of a batch)
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
-  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access standard|settings|full]
+  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
+  agent resume <run-id>                     (a run interrupted by a worker restart, as a new run)
+  memory list [--repo <id>] [--machine] [--quarantine] [--json]   memory show <id> [--json]
+  memory retire <id>                        memory pin <id> [--unpin]   memory note "<text>" (--repo <id> | --machine) [--section s] [--key k]
   agent install <https git URL|folder> [--ref r] [--only a,b] [--replace] [--confirm]   agent uninstall <recipe> [--force]
   publish list [--json]                     publish [<name>] [--confirm]
   tracker import [--json]                   (open issues assigned to you become tickets)
   tracker push <KEY> [--to "<status>"] [--comment text] [--confirm]   (needs [tracker] write_back = true)
   migrate --source <dir> [--profile <name|path.json>] [--dry-run] [--backup <dir>] | migrate rollback --manifest <file>
   hook <EventName>                          (reads host JSON on stdin)
+
+Inside an agent run (QUILL_HANDOFF_ID set) only status, doctor, ticket show|list|children, agent list|show|suggestions, handoff list, repo list and memory list|show (without quarantined learnings) run; everything else exits 2 (cli-in-run).
 `;
 
 export async function main(argv, { env = process.env, stdout, stderr, stdin } = {}) {
@@ -74,6 +84,15 @@ export async function main(argv, { env = process.env, stdout, stderr, stdin } = 
     return command ? 0 : 1;
   }
   const loader = COMMANDS[command];
+  // ADR 0026: a run's agent cannot change anything through Quill, so only reads pass, and before
+  // any command module or configuration is loaded.
+  if (!isReadInRun(command, rest[0])) {
+    try { refuseInRun(env); } catch (err) {
+      io.error(err.message);
+      if (flags.json) io.json({ error: { code: err.code, message: err.message } });
+      return 2;
+    }
+  }
   if (!loader) {
     io.error(`unknown command: ${command}`);
     io.out(HELP);

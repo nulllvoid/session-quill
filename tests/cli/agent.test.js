@@ -4,6 +4,7 @@ import { Worker } from '../../src/worker/worker.js';
 import { createExtension as serverExt } from '../../src/server/extension.js';
 import { createExtension as handoffExt } from '../../src/handoff/extension.js';
 import { recordResult } from '../../src/handoff/results.js';
+import { saveUserConfig } from '../../src/config/config.js';
 import { makeHome, cli } from './helpers.js';
 
 const T1 = 'cccccccc-0000-4000-8000-000000000001';
@@ -30,11 +31,19 @@ test('quill agent list, show and run: recipes with their permissions; a run is q
     assert.equal(list.code, 0, list.err);
     assert.match(list.out, /deploy-check\s+builtin\s+analyse\s+read_source\s+10 min/);
     assert.match(list.out, /standup\s+builtin\s+analyse\s+none\s+5 min/);
+    // A recipe without its own timeout_min shows the cap of the access a run gets by default
+    // (autonomous: 30 min), not the raw 20 min recipe default.
+    assert.match(list.out, /^analyse\s+builtin\s+analyse\s+read_source\s+30 min/m);
     const json = JSON.parse((await cli(['agent', 'list', '--json'], fx.env)).out);
     assert.ok(json.some((r) => r.name === 'attempt-fix' && r.permissions.edit_source === true));
+    assert.deepEqual(json.find((r) => r.name === 'analyse').caps, { standard: 20, settings: 20, autonomous: 30, full: 20 });
+    assert.deepEqual(json.find((r) => r.name === 'standup').caps, { standard: 5, settings: 5, autonomous: 5, full: 5 });
+    const showDefault = await cli(['agent', 'show', 'analyse'], fx.env);
+    assert.match(showDefault.out, /^timeout: 30 min autonomous \(the default\); 20 min standard, settings or full$/m);
     const show = await cli(['agent', 'show', 'deploy-check'], fx.env);
     assert.match(show.out, /Check the deployment state of \{\{ticket\.key\}\}/);
     assert.match(show.out, /outputs: summary, deploy_evidence, next_action/);
+    assert.match(show.out, /^timeout: 10 min$/m);
     const beyond = await cli(['agent', 'run', 'deploy-check', 'PROJ-1', '--commit'], fx.env);
     assert.notEqual(beyond.code, 0);
     assert.match(beyond.err, /does not allow commit/);
@@ -67,5 +76,46 @@ test('quill agent suggestions, accept and dismiss resolve a recipe run\'s output
     assert.equal(no.code, 0, no.err);
     assert.equal(w.state.tickets.get(T1).status, 'todo');
     assert.deepEqual(w.state.handoffs.get(h.id).suggestions.map((s) => s.state), ['accepted', 'dismissed']);
+  } finally { await stop(); }
+});
+
+const T2 = 'cccccccc-0000-4000-8000-000000000002';
+const T3 = 'cccccccc-0000-4000-8000-000000000003';
+const T4 = 'cccccccc-0000-4000-8000-000000000004';
+
+test('quill agent run and quill handoff default to autonomous access; --access, --scope, --max-turns and --budget reach the run', async () => {
+  const fx = makeHome();
+  // The scope catalog comes from the saved config.toml, as for the worker (spec §4.3).
+  fx.config.scopes = { 'k8s.write': { targets: { stg: { env: { KUBECONFIG: '/fake/rw-stg' } } } } };
+  saveUserConfig(fx.config, fx.env);
+  const { w, stop } = await start(fx);
+  try {
+    for (const [id, key] of [[T2, 'PROJ-2'], [T3, 'PROJ-3'], [T4, 'PROJ-4']]) w.emit('ticket-create', { ticket: { id, key, title: `Ticket ${key}`, project_id: 'demo', project_name: 'Demo', category: 'feature', priority: 'P2', parent_id: null, repo_id: 'demo', due: null, jira: null } });
+    w.publishGeneration();
+    const byTicket = (id) => [...w.state.handoffs.values()].find((h) => h.ticket_id === id);
+    const first = await cli(['agent', 'run', 'standup', 'PROJ-1', '--max-turns', '12', '--budget', '1.5', '--scope', 'k8s.write:stg', '--scope', 'jira.write'], fx.env);
+    assert.equal(first.code, 0, first.err);
+    const h1 = byTicket(T1);
+    assert.equal(h1.access, 'autonomous');
+    assert.deepEqual(h1.scopes, ['k8s.write:stg', 'jira.write']);
+    assert.deepEqual([h1.max_turns, h1.max_budget_usd], [12, 1.5]);
+    const std = await cli(['agent', 'run', 'standup', 'PROJ-2', '--access', 'standard'], fx.env);
+    assert.equal(std.code, 0, std.err);
+    assert.equal(byTicket(T2).access, 'standard');
+    const scoped = await cli(['agent', 'run', 'standup', 'PROJ-3', '--access', 'full', '--scope', 'jira.write'], fx.env);
+    assert.notEqual(scoped.code, 0);
+    assert.match(scoped.err, /write scopes need autonomous access/);
+    const unknown = await cli(['agent', 'run', 'standup', 'PROJ-3', '--scope', 'k8s.nope'], fx.env);
+    assert.notEqual(unknown.code, 0);
+    assert.match(unknown.err, /unknown-scope:k8s\.nope/);
+    const noCreds = await cli(['handoff', 'PROJ-3', '--mode', 'analyse', '--scope', 'k8s.write:prod'], fx.env);
+    assert.notEqual(noCreds.code, 0);
+    assert.match(noCreds.err, /scope-credentials-missing:k8s\.write:prod/);
+    const badTurns = await cli(['agent', 'run', 'standup', 'PROJ-3', '--max-turns', 'lots'], fx.env);
+    assert.notEqual(badTurns.code, 0);
+    assert.match(badTurns.err, /max-turns/);
+    const ho = await cli(['handoff', 'PROJ-4', '--mode', 'analyse'], fx.env);
+    assert.equal(ho.code, 0, ho.err);
+    assert.equal(byTicket(T4).access, 'autonomous');
   } finally { await stop(); }
 });

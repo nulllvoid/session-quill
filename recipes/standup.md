@@ -15,3 +15,6 @@ Put exactly three short lines in the summary:
 - Blocked: anything stopping progress, or "nothing".
 
 Use only facts in the ticket data; write "unknown" rather than guessing. Suggest a next action only if the ticket has no current one or the data shows it is already done.
+
+## Definition of done
+- The summary has exactly the Done, Next and Blocked lines, using only facts from the ticket data.

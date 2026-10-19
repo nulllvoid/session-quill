@@ -33,7 +33,7 @@ test('install previews what each recipe may do and installs nothing without --co
   const c = capture();
   assert.equal(await install(ctx, c.io, [shared()], {}), 0);
   assert.match(c.out, /nothing is installed yet/);
-  assert.match(c.out, /install  triage \(analyse, 20 min\)/);
+  assert.match(c.out, /install  triage \(analyse, 30 min\)/);
   assert.match(c.out, /can change things: edit_source, commit/);
   assert.match(c.out, /skip     broken: name "other" must match the file name "broken"/);
   assert.doesNotMatch(c.out, /README/);

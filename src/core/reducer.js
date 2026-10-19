@@ -12,6 +12,8 @@ import { applyTicketFields, createTicket, bindExternal, relinkTicket } from './r
 import { applyTrackerSync, applyTrackerPush, applyArtifactComment, applyPublishRun, applyScheduleRun, applyRunProposal, lapseProposals } from './reduce/integrations.js';
 import { resolveAttribution, sweepDeferred, handlePostTool, handleStop } from './reduce/capture.js';
 import { handleRequest, handleRequestTx, handleHandoffTx } from './reduce/requests.js';
+import { applyMemoryTx } from './reduce/memory.js';
+import { applyCriticalProposal } from './reduce/critical.js';
 
 export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 
@@ -40,7 +42,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     if (ev.source_identity) state.appliedSources.add(ev.source_identity);
   }
   if (Number.isInteger(ev.sequence) && ev.sequence > state.lastSequence) state.lastSequence = ev.sequence;
-  if (!['reconcile', 'notify', 'request', 'request-tx'].includes(ev.kind) && ev.producer !== 'worker') {
+  if (!['reconcile', 'notify', 'request', 'request-tx', 'memory-tx'].includes(ev.kind) && ev.producer !== 'worker') {
     if (!state.lastCaptureAt || ev.occurred_at > state.lastCaptureAt) state.lastCaptureAt = ev.occurred_at;
   }
 
@@ -235,6 +237,8 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'tracker-push': Object.assign(result, applyTrackerPush(state, ev, result)); break;
     case 'artifact-comment': Object.assign(result, applyArtifactComment(state, ev, result)); break;
     case 'run-proposal': Object.assign(result, applyRunProposal(state, ev, result)); break;
+    case 'memory-tx': Object.assign(result, applyMemoryTx(state, ev)); break;
+    case 'critical-proposal': Object.assign(result, applyCriticalProposal(state, ev, result)); break;
     case 'schedule-run':
       Object.assign(result, applyScheduleRun(state, ev));
       break;

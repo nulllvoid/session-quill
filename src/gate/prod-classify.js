@@ -1,0 +1,2814 @@
+// Prod classifier for the per-run guard (spec §4.2, research 01 §R-2). Pure and synchronous:
+// no fs, no processes, no network. Defence in depth only — credentials are the boundary (§4.4) —
+// but fail-safe: whatever might touch prod and cannot be understood is `unparseable` or
+// `unknown-prod`, never `local`.
+//
+// classifyCall({ tool_name, tool_input }, ctx) → { class, scope?, target?, host?, path?, paths?,
+//   readPaths?, readSpecs?, writeSpecs?, calls?: [{ class, scope?, target?, host?, reason, argv }],
+//   reason }. readSpecs/writeSpecs describe the same shell paths as the call supplied them:
+//   [{ path, root, segs, dialect }] (see rawPath).
+// ctx: { cwd, home?, env?, currentBranch?, defaultBranch?, isProtectedBranch?(name),
+//        kubeContext?, awsProfile?, mcpPolicy: { read: string[], write: Record<string,string> },
+//        trackerHosts?: string[] }
+// Git returns internal pseudo-scopes (ruling R2): git.commit, git.push, git.pr, git.protected.
+import path from 'node:path';
+import { parseShell, binName, MAX_COMMAND, hasBraceExpansion } from './shell-tokens.js';
+
+const RANK = { local: 0, read: 1, 'external.write': 2, write: 3, 'unknown-prod': 4, unparseable: 5, privileged: 6 };
+
+const r = (cls, reason, extra = {}) => ({ class: cls, ...extra, reason });
+const local = (reason = 'local work') => r('local', reason);
+const read = (reason, extra) => r('read', reason, extra);
+const write = (scope, target, reason) => r('write', reason, { scope, ...(target ? { target } : {}) });
+const xwrite = (scope, host, reason, extra = {}) => r('external.write', reason, { ...(scope ? { scope } : {}), ...(host ? { host } : {}), ...extra });
+const unknownProd = (reason) => r('unknown-prod', reason);
+const unparseable = (reason) => r('unparseable', reason);
+const privileged = (reason) => r('privileged', reason);
+
+// R57 (final review C1): a guarded run never starts Claude Code. A nested session has no Quill
+// guard (it does not get the run's --settings, and QUILL_HANDOFF_GUARD makes the plugin's gate
+// stand down) yet signs in with the owner's login, connectors and user MCP servers. Refused in
+// every tier except `full` (observe), whatever the spelling or wrapper; `rule` lets the guard name it.
+export const NESTED_CLAUDE_RULE = 'nested-claude-code';
+const nestedClaude = (why) => r('privileged', why, { rule: NESTED_CLAUDE_RULE });
+const CLAUDE_PROGRAMS = new Set(['claude', 'claude-code']);
+// The npm package (by any path or spec), the native installer's versioned binaries, and the flags
+// that turn permission checks off: in the command text, any word, or any input a command reads.
+const CLAUDE_PACKAGE_RE = /@anthropic-ai[\\/]+claude-code|[\\/]claude[\\/]+versions[\\/]/i;
+const SKIP_PERMISSIONS_RE = /--dangerously-skip-permissions|--permission-mode(?:\s*=\s*|\s+)["'`]?bypassPermissions/i;
+function claudeTextProblem(text) {
+  if (typeof text !== 'string' || !text) return null;
+  if (CLAUDE_PACKAGE_RE.test(text)) return 'it names the Claude Code package or binary';
+  if (SKIP_PERMISSIONS_RE.test(text)) return 'it turns Claude Code permission checks off';
+  return null;
+}
+// The same check over a command's words after quotes are removed (`--dangerous"ly-skip-…"`), with
+// `--permission-mode` and its value as two words.
+function claudeWordsProblem(words) {
+  for (let i = 0; i < words.length; i += 1) {
+    const w = String(words[i]);
+    const why = claudeTextProblem(w);
+    if (why) return why;
+    if (/^--permission-mode$/i.test(w) && /^bypassPermissions$/i.test(String(words[i + 1] ?? ''))) return 'it turns Claude Code permission checks off';
+  }
+  return null;
+}
+
+// R59 part 3 (final review I3): the Quill home (store, ingress, config, journal, memory) is
+// protected. Paths a command names as files are checked against the guard's roots; a program whose
+// arguments the classifier does not follow (an interpreter's inline code, an unknown tool) is refused
+// when its text names the Quill home's own files or QUILL_HOME. Run directories and checkouts under
+// handoffs/ are the run's own and are not matched here.
+const QUILL_HOME_PARTS = '(?:ingress|config\\.toml|events\\.jsonl|memory|state|projections|blobs|machine\\.json|logs|run|bin)';
+const QUILL_HOME_RE = new RegExp(`[\\\\/]\\.claude[\\\\/]+quill[\\\\/]+${QUILL_HOME_PARTS}(?![\\w.-])|\\bQUILL_HOME\\b`, 'i');
+const QUILL_HOME_PART_RE = new RegExp(`^${QUILL_HOME_PARTS}(?![\\w.-])`, 'i');
+function quillHomeProblem(text, ctx) {
+  if (typeof text !== 'string' || !text) return null;
+  const why = 'it names the Quill home (its ingress, config, journal or memory), which a run never touches';
+  if (QUILL_HOME_RE.test(text)) return why;
+  const custom = ctx && ctx.env && typeof ctx.env === 'object' ? envLookup(ctx, 'QUILL_HOME') : null;
+  if (typeof custom === 'string' && custom.length > 3) {
+    const norm = (s) => s.replace(/\\+/g, '/').replace(/\/+$/, '').toLowerCase();
+    const root = norm(custom);
+    const t = norm(text);
+    for (let at = t.indexOf(`${root}/`); at >= 0; at = t.indexOf(`${root}/`, at + 1)) {
+      if (QUILL_HOME_PART_RE.test(t.slice(at + root.length + 1))) return why;
+    }
+  }
+  return null;
+}
+
+export function classifyCall(call, ctx) {
+  try {
+    return classifyInner(call && typeof call === 'object' ? call : {}, ctx && typeof ctx === 'object' ? ctx : {});
+  } catch (e) {
+    return unparseable(`classifier error: ${e && e.message ? e.message : String(e)}`);
+  }
+}
+
+const SHELL_TOOLS = { Bash: 'bash', PowerShell: 'powershell', Monitor: 'bash' };
+const PATH_TOOLS = { Edit: 'file_path', Write: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path', Read: 'file_path', NotebookRead: 'notebook_path' };
+const DIR_TOOLS = new Set(['Glob', 'Grep', 'LS']);
+const LOCAL_TOOLS = new Set(['TodoWrite', 'TodoRead', 'Task', 'Agent', 'ExitPlanMode', 'EnterPlanMode', 'AskUserQuestion', 'ListAgents', 'Skill', 'ToolSearch',
+  'BashOutput', 'KillShell', 'KillBash', 'TaskOutput', 'TaskStop', 'SlashCommand', 'SendMessage', 'EnterWorktree', 'ExitWorktree']);
+
+function classifyInner(call, ctx) {
+  const tool = call.tool_name;
+  const input = call.tool_input;
+  if (typeof tool !== 'string' || !tool) return unparseable('tool name missing');
+  if (Object.hasOwn(SHELL_TOOLS, tool)) return classifyShell(input && typeof input === 'object' ? input.command : undefined, SHELL_TOOLS[tool], ctx);
+  if (tool.startsWith('mcp__')) return classifyMcp(tool, input && typeof input === 'object' ? input : {}, ctx);
+  if (Object.hasOwn(PATH_TOOLS, tool)) {
+    const p = input && typeof input === 'object' ? input[PATH_TOOLS[tool]] ?? input.path : undefined;
+    if (typeof p !== 'string' || !p) return unparseable(`${tool} without a file path`);
+    const climb = climbProblem(p, ctx, 'lit');
+    if (climb) return unparseable(climb);
+    const resolved = resolveLiteral(p, ctx, ctx.cwd);
+    if (!resolved) return unparseable(`${tool} path cannot be resolved`);
+    return r('local', `${tool} on a file`, { path: resolved });
+  }
+  if (DIR_TOOLS.has(tool)) {
+    const p = input && typeof input === 'object' ? input.path : undefined;
+    if (p !== undefined && typeof p !== 'string') return unparseable(`${tool} path is not a string`);
+    const climb = p ? climbProblem(p, ctx, 'lit') : null;
+    if (climb) return unparseable(climb);
+    const resolved = p ? resolveLiteral(p, ctx, ctx.cwd) : ctx.cwd ? normalizeAbs(ctx.cwd, ctx) : undefined;
+    if (p && !resolved) return unparseable(`${tool} path cannot be resolved`);
+    return r('local', `${tool} search`, resolved ? { path: resolved } : {});
+  }
+  if (tool === 'WebFetch') {
+    const host = input && typeof input === 'object' ? hostOf(input.url) : undefined;
+    return read('web fetch (GET)', host ? { host } : {});
+  }
+  if (tool === 'WebSearch') return read('web search');
+  if (LOCAL_TOOLS.has(tool)) return local(`${tool} is a local tool`);
+  return unparseable(`unknown tool ${tool}`);
+}
+
+// ---------------------------------------------------------------- paths
+
+function isWin(ctx) {
+  return /^[A-Za-z]:[\\/]|^\\\\/.test(ctx.cwd ?? '') || /^[A-Za-z]:[\\/]/.test(ctx.home ?? '');
+}
+
+function envLookup(ctx, name) {
+  const up = name.toUpperCase();
+  if ((up === 'HOME' || up === 'USERPROFILE') && ctx.home) return ctx.home;
+  const env = ctx.env && typeof ctx.env === 'object' ? ctx.env : {};
+  if (Object.hasOwn(env, name)) return env[name];
+  if (isWin(ctx)) for (const k of Object.keys(env)) if (k.toUpperCase() === up) return env[k];
+  if ((up === 'TMPDIR' || up === 'TMP' || up === 'TEMP') && isWin(ctx)) for (const k of Object.keys(env)) if (['TMP', 'TEMP', 'TMPDIR'].includes(k.toUpperCase())) return env[k];
+  return undefined;
+}
+
+function normalizeAbs(p, ctx) {
+  return isWin(ctx) ? path.win32.resolve(p) : path.posix.resolve(p);
+}
+
+// Resolves a literal path word (with ~ and well-known variables) against `cwd`; null when it is
+// not literal enough to apply roots to.
+function resolveLiteral(word, ctx, cwd, kind = 'dyn') {
+  const p = expandLiteral(word, ctx, kind);
+  if (p === null) return null;
+  if (isWin(ctx)) {
+    const base = cwd ?? 'C:\\';
+    let r = path.win32.resolve(base, p);
+    // Windows ignores trailing dots and spaces and treats name:stream as the same file; a wildcard
+    // word with a colon is a pattern such as [[:alpha:]], not a stream name, so it is not literal
+    const colon = r.indexOf(':', 2);
+    if (colon >= 0 && /[*?[\]{}]/.test(r)) return null;
+    if (colon >= 0) r = r.slice(0, colon);
+    r = r.split('\\').map((c, i) => (i === 0 ? c : c.replace(/[. ]+$/, ''))).join('\\');
+    return r;
+  }
+  return path.posix.resolve(cwd ?? '/', p);
+}
+
+// The text a path word supplies, after ~, variables and Windows prefixes: the guard reads it to
+// tell supplied wildcards from the cwd's own characters and to apply `..` physically (rulings R15
+// and P1). Null when the word is not literal.
+function expandLiteral(word, ctx, kind) {
+  if (typeof word !== 'string' || !word) return null;
+  let p = word;
+  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+    if (!ctx.home) return null;
+    p = ctx.home + p.slice(1);
+  }
+  if (p.startsWith('~')) return null; // ~user, ~+ and ~- are not resolvable here
+  // PowerShell provider-qualified paths: only the FileSystem provider names a file (stripped
+  // first, so FileSystem::\\.\GLOBALROOT\… gets the device checks below)
+  p = p.replace(/^(Microsoft\.PowerShell\.Core\\)?FileSystem::/i, '');
+  if (/^[A-Za-z][\w.\\]*::/.test(p) || /^[A-Za-z][A-Za-z0-9_]+:/.test(p)) return null;
+  // Windows accepts / for \ in device and UNC prefixes (//./C:/x, //?/Volume{…}), and passes the
+  // NT prefix \??\ through: normalise them before deciding what they name
+  if (isWin(ctx)) {
+    if (/^[\\/]{2}/.test(p)) p = p.replace(/\//g, '\\');
+    else if (/^[\\/]\?\?[\\/]/.test(p)) p = `\\\\?\\${p.slice(4).replace(/\//g, '\\')}`;
+  }
+  // Win32 device and long-path prefixes, and the local admin share, name the same files
+  p = p.replace(/^\\\\[?.]\\UNC\\/i, '\\\\');
+  if (/^\\\\[?.]\\/.test(p)) {
+    // \\?\C:\… and \\.\C:\… name a normal file; volumes, GLOBALROOT and raw devices do not
+    if (!/^\\\\[?.]\\[A-Za-z]:[\\/]/.test(p)) return null;
+    p = p.slice(4);
+  }
+  p = p.replace(/^\\\\(localhost|127\.0\.0\.1|\[::1\]|\.)\\([A-Za-z])\$(?=\\|$)/i, (m, h2, d) => `${d.toUpperCase()}:`);
+  let unresolved = false;
+  // a literal word (quoted or plain text) has no expansions; only expand words the shell expands
+  if (kind !== 'lit') {
+    p = p.replace(/\$\{env:([A-Za-z_][\w]*)\}|\$env:([A-Za-z_][\w]*)|\$\{([A-Za-z_][\w]*)\}|\$([A-Za-z_][\w]*)|%([A-Za-z_][\w]*)%/gi, (m, a, b, c, d, e) => {
+      const v = envLookup(ctx, a || b || c || d || e);
+      if (typeof v !== 'string' || !v) { unresolved = true; return m; }
+      return v;
+    });
+  }
+  if (unresolved || (kind !== 'lit' && /[$`]|\$\(|%[A-Za-z_]/.test(p))) return null;
+  if (isWin(ctx)) {
+    const msys = /^\/([A-Za-z])(\/|$)(.*)$/.exec(p);
+    if (msys) p = `${msys[1].toUpperCase()}:\\${msys[3]}`;
+    else if (/^\/tmp(\/|$)/.test(p)) {
+      const t = envLookup(ctx, 'TEMP') ?? envLookup(ctx, 'TMP');
+      if (!t) return null;
+      p = t + p.slice(4);
+    }
+  }
+  // PowerShell on macOS and Linux also takes \ as a path separator, so a PowerShell word's
+  // backslashes separate names there too (fail-safe: `esc\..\x` climbs; it is not one odd name)
+  if (ctx.psBackslash) p = p.replace(/\\/g, '/');
+  return p;
+}
+
+// Where a path word leads, as the guard needs it: { root, segs }. `root` is a literal absolute
+// directory: the hook's cwd for a relative word (what `cd` added since is part of `segs`), or the
+// file-system root for an absolute one. `segs` is the text after it as supplied, with `..` kept.
+// `baseRaw` is the same shape for the directory a relative word resolves against; without it, or
+// for a word that cannot be read this way, the resolved path is scanned from its root.
+function rawPath(word, ctx, kind, baseRaw, resolved) {
+  const win = isWin(ctx);
+  const P = win ? path.win32 : path.posix;
+  const split = (text) => text.split(win ? /[\\/]+/ : /\/+/).filter((s) => s && s !== '.').map((s) => {
+    if (!win || s === '..') return s;
+    const colon = s.indexOf(':');
+    return (colon >= 0 ? s.slice(0, colon) : s).replace(/[. ]+$/, '');
+  }).filter(Boolean);
+  const fromRoot = () => { const root = P.parse(resolved).root; return { root, segs: split(resolved.slice(root.length)) }; };
+  const p = expandLiteral(word, ctx, kind);
+  if (p === null) return fromRoot();
+  if (P.isAbsolute(p)) return { root: P.parse(resolved).root, segs: split(p.slice(P.parse(p).root.length)) };
+  let rel = p;
+  if (win && /^[A-Za-z]:/.test(p)) {
+    // drive-relative (C:x) is relative to the base only on the base's own drive
+    if (!baseRaw || baseRaw.root.slice(0, 2).toLowerCase() !== p.slice(0, 2).toLowerCase()) return fromRoot();
+    rel = p.slice(2);
+  }
+  if (!baseRaw) return fromRoot();
+  return { root: baseRaw.root, segs: [...baseRaw.segs, ...split(rel)], relative: true };
+}
+
+// Ruling R17.1: a `..` after a directory name (`a/..`, `esc/../x`, `*/../x`) is resolved
+// physically by Git Bash and POSIX shells and lexically by PowerShell, cmd and git.exe, so the
+// guard refuses it instead of modelling either. Leading `..` segments (`../x`) stay allowed; the
+// guard applies them to the real directory. On Windows a name of only dots and spaces (`...`,
+// `.. `) may be trimmed to `..`, so it is refused anywhere. The guard words its deny reason from
+// CLIMB_REASON_RE.
+export const CLIMB_REASON_RE = /^path (.*) has '\.\.' after a directory name$/s;
+function climbProblem(word, ctx, kind) {
+  if (typeof word !== 'string' || !word.includes('.')) return null;
+  const win = isWin(ctx);
+  const full = expandLiteral(word, ctx, kind) ?? (ctx.psBackslash ? word.replace(/\\/g, '/') : word);
+  // the root (`/`, `C:\`, `\\server\share\`, or the drive of a drive-relative `C:..\x`) is not a
+  // name: `..` right after it is a leading one
+  const text = full.slice((win ? path.win32 : path.posix).parse(full).root.length);
+  let named = false;
+  for (const s of text.split(win ? /[\\/]+/ : /\/+/)) {
+    if (s === '' || s === '.') continue;
+    const up = s === '..';
+    if ((up && named) || (win && !up && /^[. ]+$/.test(s))) return `path ${word.slice(0, 120)} has '..' after a directory name`;
+    if (!up) named = true;
+  }
+  return null;
+}
+
+// Commands that change this shell's directory.
+const CD_NAMES = new Set(['cd', 'chdir', 'pushd', 'popd', 'set-location', 'sl', 'push-location', 'pop-location']);
+
+const NULL_TARGETS = new Set(['/dev/null', 'nul', '$null', '/dev/stdout', '/dev/stderr', '/dev/tty', 'con']);
+
+// ---------------------------------------------------------------- shell
+
+function classifyShell(command, dialect, ctx) {
+  if (typeof command !== 'string') return unparseable('command is not a string');
+  if (!command.trim()) return unparseable('empty command');
+  if (command.length > MAX_COMMAND) return unparseable('command too long to classify');
+  if (command.includes('\u0000')) return unparseable('command contains a NUL byte');
+  const claude = claudeTextProblem(command);
+  if (claude) return nestedClaude(`this command may start Claude Code: ${claude}`);
+  return classifyScript(command, dialect, ctx, 0);
+}
+
+// `cwd` is where the script starts (a nested script starts where its caller is; null = unknown).
+// `cwdRaw` is the same directory as rawPath() describes it; by default the cwd itself, literal.
+function classifyScript(command, dialect, ctx, depth, cwd = ctx.cwd ?? null, cwdRaw = undefined) {
+  const parsed = parseShell(command, dialect, depth);
+  if (parsed.error) return unparseable(parsed.error);
+  const raw0 = cwdRaw !== undefined ? cwdRaw : cwd ? [{ root: normalizeAbs(cwd, ctx), segs: [] }] : null;
+  const st = { cwd, cwdRaw: raw0, paths: [], readPaths: [], readSpecs: [], writeSpecs: [], cdChecks: [], depth };
+  const results = [];
+  const argvs = [];
+  // R18: a directory change may fail; when every command after it is joined by && the failure
+  // stops them, otherwise a later command runs in the old directory (`chainSafe` is false)
+  let later = null; // chainSafe of the next command, null when none follows
+  for (let i = parsed.segments.length - 1; i >= 0; i -= 1) {
+    const seg = parsed.segments[i];
+    if (seg.cwdMark) { seg.chainSafe = later ?? true; continue; }
+    seg.chainSafe = later === null ? true : seg.sep === '&&' && later;
+    later = seg.chainSafe;
+  }
+  for (const seg of parsed.segments) {
+    // a function body's directory changes run whenever the function is called (R19)
+    if (seg.funcDef) st.funcSeen = true;
+    results.push(classifySegment(seg, ctx, st));
+    argvs.push(Array.isArray(seg.argv) ? seg.argv.slice() : []);
+  }
+  return aggregate(results, st, argvs);
+}
+
+// Each `calls` entry carries the words of its own command (after unwrapping) as `argv`, so the
+// guard can match a scope's command patterns against that part alone.
+function aggregate(results, st, argvs) {
+  let best = local('no command reaches prod');
+  const calls = [];
+  results.forEach((res, i) => {
+    if (res.class !== 'local') calls.push({ ...strip(res), argv: argvs[i] });
+    if (RANK[res.class] > RANK[best.class]) best = res;
+  });
+  const out = strip(best);
+  if (st.paths.length) out.paths = [...new Set(st.paths)];
+  if (st.readPaths.length) out.readPaths = [...new Set(st.readPaths)];
+  // the same paths as the text supplied them (see rawPath), for the guard
+  if (st.readSpecs.length) out.readSpecs = uniqueSpecs(st.readSpecs);
+  if (st.writeSpecs.length) out.writeSpecs = uniqueSpecs(st.writeSpecs);
+  // directories a cd moves to that must exist when the decision is made (R18)
+  if (st.cdChecks.length) out.cdChecks = [...new Set(st.cdChecks)];
+  if (calls.length) out.calls = calls;
+  return out;
+}
+
+function uniqueSpecs(specs) {
+  const seen = new Map();
+  for (const s of specs) seen.set(JSON.stringify(s), s);
+  return [...seen.values()];
+}
+
+function strip(res) {
+  const o = { class: res.class };
+  for (const k of ['scope', 'target', 'host', 'rule']) if (res[k] !== undefined) o[k] = res[k];
+  o.reason = res.reason;
+  return o;
+}
+
+// Directory scopes from shell-tokens.js: a wrapper's script (`bash -c …`) and `env -C dir cmd` /
+// `sudo -D dir cmd` run in a child process, so a directory change inside ends with them (push and
+// pop); `cd` is the child's own change (R17.2).
+function directoryMark(seg, ctx, st) {
+  if (seg.cwdMark === 'push') { (st.cwdStack ??= []).push({ cwd: st.cwd, cwdRaw: st.cwdRaw }); return local('directory scope'); }
+  if (seg.cwdMark === 'pop') {
+    const top = (st.cwdStack ?? []).pop();
+    if (top) { st.cwd = top.cwd; st.cwdRaw = top.cwdRaw; }
+    return local('directory scope');
+  }
+  const h = helpers(seg, ctx, st);
+  const dir = seg.chdir ?? {};
+  if (typeof dir.v !== 'string' || !dir.v) return unparseable('a directory change without a directory');
+  h.dir(dir.v, dir.kind);
+  h.chdir(dir.v, dir.kind, { program: true });
+  return h.bad ? unparseable(h.bad) : local('change directory');
+}
+
+function classifySegment(seg, ctx, st) {
+  if (seg.cwdMark) return directoryMark(seg, ctx, st);
+  if (seg.unparseable) return unparseable(seg.unparseable);
+  const claude = claudeWordsProblem(Array.isArray(seg.argv) ? seg.argv : []) ?? claudeTextProblem(seg.stdin ?? '');
+  if (claude) return nestedClaude(`this command may start Claude Code: ${claude}`);
+  // Prefix assignments (VAR=x git …) apply to that command only; an assignment on its own, or
+  // environment handed to a nested script, lasts for whatever runs later.
+  const envBad = gitEnvProblem(seg.env, seg.argv.length > 0 && seg.kinds[0] === 'lit' && binName(seg.argv[0]) === 'git');
+  if (envBad) return unparseable(envBad);
+  if (seg.dialect !== 'powershell') {
+    // ${NAME:=value} and ${NAME=value} assign NAME as a side effect of the expansion
+    const assigned = {};
+    seg.argv.forEach((word, i) => { if (seg.kinds[i] !== 'lit') for (const m of word.matchAll(/\$\{([A-Za-z_]\w*):?=/g)) assigned[m[1]] = null; });
+    const why = gitEnvProblem(assigned);
+    if (why) return unparseable(why);
+    // ${!NAME:=value} assigns whichever variable NAME names
+    if (seg.argv.some((word, i) => seg.kinds[i] !== 'lit' && /\$\{![A-Za-z_]\w*:?=/.test(word))) return unparseable('an indirect ${!name:=…} expansion assigns a variable whose name is not literal');
+  }
+  const h = helpers(seg, ctx, st);
+  for (const red of seg.redirects) {
+    const op = red.op.replace(/^\d+|^\*/, '');
+    if (red.target.startsWith('&') && /^&(\d+|-)$/.test(red.target)) continue;
+    if (NULL_TARGETS.has(red.target.toLowerCase())) continue;
+    if (op === '<') { if (!h.read(red.target, red.kind)) return unparseable(h.bad ?? 'input file is not a literal path'); continue; }
+    if (op === '<<' || op === '<<<' || op === '<<-') continue;
+    if (!h.write(red.target, red.kind)) return unparseable(h.bad ?? 'redirect target is not a literal path');
+  }
+  // PowerShell ${C:\path} variable notation reads or writes the file's content
+  for (const p of seg.psWrites ?? []) if (!h.write(p, 'lit')) return unparseable(h.bad);
+  for (const p of seg.psReads ?? []) if (!h.read(p, 'lit')) return unparseable(h.bad);
+  if (!seg.argv.length) return local('redirect or assignment only');
+  const name = binName(seg.argv[0]);
+  const res = classifyCommand(name, seg, ctx, h);
+  // a PowerShell script (any program named by a path, or .ps1) may Set-Location this session (R19)
+  if (seg.dialect === 'powershell' && (seg.script !== undefined || /[\\/]|\.ps1$/i.test(String(seg.argv[0])))) h.lostCwd();
+  if (h.bad) return unparseable(h.bad);
+  // R59: a program whose words the classifier does not follow may not name the Quill home
+  if (!DATA_COMMANDS.has(name) && RANK[res.class] < RANK.privileged) {
+    const qh = seg.argv.map((w) => quillHomeProblem(String(w), ctx)).find(Boolean) ?? quillHomeProblem(seg.stdin ?? '', ctx);
+    if (qh) return privileged(`${name}: ${qh}`);
+  }
+  if (res.class === 'local' && (!DATA_COMMANDS.has(name) || (name === 'sed' && SED_EXEC_RE.test(seg.argv.slice(1).join(' '))))) {
+    const b = backstop(name, seg, ctx);
+    if (b) return b;
+  }
+  return res;
+}
+
+// Words that are only data for these programs; anything else that mentions a prod binary with a
+// changing verb in its arguments (or its input) may well run it.
+const DATA_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'findstr', 'select-string', 'sls', 'write-output', 'write-host', 'write-information',
+  'write-verbose', 'write-warning', 'write-error', 'write-debug', 'which', 'where', 'whereis', 'type', 'get-command', 'gcm', 'command', 'man', 'help', 'get-help', 'jq', 'yq', 'sed', 'test', '[', '[[',
+  'cat', 'head', 'tail', 'wc', 'sort', 'uniq', 'tr', 'cut', 'column', 'less', 'more', 'base64', 'nl', 'od', 'xxd', 'hexdump', 'strings', 'diff', 'cmp', 'comm', 'tee', 'rem', 'true', 'false', ':',
+  'get-content', 'gc', 'out-file', 'set-content', 'add-content', 'touch', 'mkdir', 'rm', 'mv', 'cp', 'ls', 'dir', 'find', 'stat', 'file', 'basename', 'dirname', 'realpath', 'readlink',
+  'export', 'declare', 'typeset', 'local', 'readonly', 'unset', 'set', 'cd', 'pushd', 'popd', 'set-location', 'sl', 'git', 'gh', 'source']);
+// GNU sed's `e` command and the s///e flag run shell commands.
+const SED_EXEC_RE = /(^|[\s;{}0-9$\/,'"])e(\s|$)|\/[gpiImMw0-9]*e[gpiImMw0-9]*(\s|;|$|'|")/;
+let backstopReCache = null;
+const backstopRe = () => (backstopReCache ??= new RegExp(`(^|[^A-Za-z0-9_-])(${[...PROD_BINS, 'quill', 'session-quill', ...CLAUDE_PROGRAMS].map((b) => b.replace(/-/g, '\\-')).join('|')})(\\.exe|\\.cmd|\\.ps1)?($|[^A-Za-z0-9_.-])`, 'i'));
+const NOOP_H = { bad: null, write: () => true, read: () => true, chdir: () => {}, cwd: () => null, script: () => local('nested script') };
+
+function backstop(name, seg, ctx) {
+  const text = [seg.argv.slice(1).join(' '), seg.stdin ?? ''].join(' ');
+  if (!backstopRe().test(text)) return null;
+  const tokens = text.split(/[\s'"`;&|(){}!,=<>]+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const nm = binName(tokens[i]).replace(/\.ps1$/, '');
+    // Claude Code needs no arguments to start (`start claude`); the others are judged by their verb
+    if (i === tokens.length - 1 && !CLAUDE_PROGRAMS.has(nm)) continue;
+    if (!PROD_BINS.includes(nm) && nm !== 'quill' && nm !== 'session-quill' && !CLAUDE_PROGRAMS.has(nm)) continue;
+    const argv = tokens.slice(i);
+    const fake = { argv, kinds: argv.map(() => 'lit'), redirects: [], stdin: null, stdinDyn: false, piped: false, env: {}, dialect: 'bash', nested: true };
+    const inner = classifyCommand(nm, fake, ctx, NOOP_H);
+    if (inner.class === 'privileged') return r('privileged', `${name} arguments run ${nm}: ${inner.reason}`, inner.rule ? { rule: inner.rule } : {});
+    if (inner.class !== 'local' && inner.class !== 'read') return unknownProd(`${name} arguments mention ${nm} ${argv[1] ?? ''}, which may run it (${inner.reason})`);
+  }
+  return null;
+}
+
+function helpers(seg, shellCtx, st) {
+  // a PowerShell word's paths take \ as a separator on every platform (see expandLiteral)
+  const ctx = seg.dialect === 'powershell' && !isWin(shellCtx) ? { ...shellCtx, psBackslash: true } : shellCtx;
+  // `base` resolves relative paths somewhere other than the current directory (git -C, a link's
+  // directory); null = unknown. `baseRaw` is the same directory as rawPath() describes it; by
+  // default the tracked cwd's when `base` is the cwd, else unknown (the resolved path is scanned).
+  // Raw bases are lists of readings (see chdir); null = unknown.
+  const rawOf = (base, baseRaw) => (baseRaw !== undefined ? baseRaw : base === st.cwd ? st.cwdRaw : null);
+  const h = {
+    bad: null,
+    write(word, kind = 'lit', base = st.cwd, baseRaw = undefined, ifDir = undefined) {
+      if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'write target is not literal'; return false; }
+      if (/[*?[]/.test(String(word).replace(/^\\\\[?.]\\/, '')) || hasBraceExpansion(word)) { h.bad = `write target has wildcards: ${String(word).slice(0, 80)}`; return false; }
+      if (NULL_TARGETS.has(String(word).toLowerCase())) return true;
+      const climb = climbProblem(word, ctx, kind);
+      if (climb) { h.bad = climb; return false; }
+      const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
+      if (!p) { h.bad = `write target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
+      st.paths.push(p);
+      st.writeSpecs.push(...h.spec(word, kind, rawOf(base, baseRaw), p, ifDir));
+      return true;
+    },
+    read(word, kind = 'lit', base = st.cwd, baseRaw = undefined) {
+      if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'read target is not literal'; return false; }
+      if (NULL_TARGETS.has(String(word).toLowerCase()) || word === '-') return true;
+      const climb = climbProblem(word, ctx, kind);
+      if (climb) { h.bad = climb; return false; }
+      const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
+      if (!p) { h.bad = `read target is not a literal path: ${String(word).slice(0, 80)}`; return false; }
+      st.readPaths.push(p);
+      st.readSpecs.push(...h.spec(word, kind, rawOf(base, baseRaw), p));
+      return true;
+    },
+    // { path, root, segs, dialect } for the guard. `ifDir` (a symbolic link's target read as if
+    // the link's own name were an existing directory): the spec only applies when its first
+    // `ifDir` segments name an existing directory.
+    // One spec per reading of the base directory (a list, or null when unknown).
+    spec(word, kind, baseRaws, resolved, ifDir) {
+      return (baseRaws && baseRaws.length ? baseRaws : [null]).map((baseRaw) => {
+        const raw = rawPath(word, ctx, kind, baseRaw, resolved);
+        const out = { path: resolved, root: raw.root, segs: raw.segs, dialect: seg.dialect };
+        if (ifDir !== undefined && raw.relative && baseRaw) out.ifDir = baseRaw.segs.length;
+        return out;
+      });
+    },
+    // A directory a command runs in or works below (git -C, make -C, npm --prefix, tar -C,
+    // env -C …): `..` after a name is refused (R17.2) and the directory itself must be readable.
+    // Returns the resolved directory and its raw form, or null when it is not literal.
+    dir(word, kind = 'lit', base = st.cwd, baseRaw = undefined) {
+      if (word === undefined || word === true) return null;
+      const before = st.readSpecs.length;
+      if (!h.read(String(word), kind, base, baseRaw)) return null;
+      const specs = st.readSpecs.slice(before);
+      return specs.length ? { cwd: specs[0].path, raw: specs.map((x) => ({ root: x.root, segs: x.segs })) } : null;
+    },
+    // Where a path word leads, without reporting it: { cwd, raw } or null (h.bad set).
+    place(word, kind = 'lit', base = st.cwd, baseRaw = undefined) {
+      if (kind === 'group' || (kind !== 'lit' && !/[$%~]/.test(String(word)))) { h.bad = 'path is not literal'; return null; }
+      const climb = climbProblem(word, ctx, kind);
+      if (climb) { h.bad = climb; return null; }
+      const p = base === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, base ?? undefined, kind);
+      if (!p) { h.bad = `path is not literal: ${String(word).slice(0, 80)}`; return null; }
+      const bases = rawOf(base, baseRaw);
+      return { cwd: p, raw: (bases && bases.length ? bases : [null]).map((b) => rawPath(word, ctx, kind, b, p)) };
+    },
+    cwd: () => st.cwd,
+    cwdRaw: () => st.cwdRaw,
+    trapSet: () => { st.trapSet = true; },
+    lostCwd: () => { st.cwd = null; st.cwdRaw = null; },
+    // A directory change (R19.1). The tracked directory has two readings, and every path is
+    // checked under both:
+    //  - physical: each change is applied to the real directory the previous one reached (raw
+    //    text appended, so the guard walks it), as `cd -P` and programs' own chdir do;
+    //  - logical: a shell's `cd` (bash's default, PowerShell, cmd) moves to the lexical path, and
+    //    later relative paths and leading `..` are resolved from that directory's real path, so
+    //    this reading restarts there; a program chdir (`program`: env -C, sudo -D, start /D …) is
+    //    appended to it.
+    // A shell cd that may fail while later commands still run is checked to exist (R18).
+    chdir(word, kind, { program = false } = {}) {
+      st.cds = (st.cds ?? 0) + 1;
+      if (st.cds > 256) { h.bad = 'too many directory changes to follow'; st.cwd = null; st.cwdRaw = null; return; }
+      if (seg.nested) { st.cwd = null; st.cwdRaw = null; return; }
+      if (st.funcSeen && !program) { h.bad = 'a directory change in a command that defines a shell function, whose body runs when it is called'; st.cwd = null; st.cwdRaw = null; return; }
+      if (st.trapSet && !program) { h.bad = 'a directory change after a trap, whose command runs where the shell then is'; st.cwd = null; st.cwdRaw = null; return; }
+      if (kind !== 'lit' || word === '-') { h.bad = 'a directory change to a variable or the previous directory'; st.cwd = null; st.cwdRaw = null; return; }
+      if (word !== undefined && /[*?[\]{}<>`]/.test(word)) { h.bad = `a directory change with wildcards: ${String(word).slice(0, 80)}`; st.cwd = null; st.cwdRaw = null; return; }
+      const climb = word === undefined ? null : climbProblem(word, ctx, 'dyn');
+      if (climb) { h.bad = climb; st.cwd = null; st.cwdRaw = null; return; }
+      // CDPATH (R17.3) sends a relative `cd` to a directory the call does not name
+      const cdpath = envLookup(ctx, 'CDPATH');
+      if (seg.dialect !== 'powershell' && typeof cdpath === 'string' && cdpath && word !== undefined && !isAbsLike(word) && !/^\.\.?([\\/]|$)/.test(word)) { st.cwd = null; st.cwdRaw = null; return; }
+      const p = word === undefined ? ctx.home ?? null : st.cwd === null && !isAbsLike(word) ? null : resolveLiteral(word, ctx, st.cwd ?? undefined);
+      // `cd` with no word goes home, which the call did not spell; any other target is supplied text
+      if (p === null) st.cwdRaw = null;
+      else {
+        const [physical, logical] = st.cwdRaw ?? [];
+        const here = { root: p, segs: [] };
+        const phys = word === undefined || !physical ? here : rawPath(word, ctx, 'dyn', physical, p);
+        const logi = word === undefined || !program || !(logical ?? physical) ? here : rawPath(word, ctx, 'dyn', logical ?? physical, p);
+        st.cwdRaw = JSON.stringify(phys) === JSON.stringify(logi) ? [phys] : [phys, logi];
+      }
+      st.cwd = p ?? null;
+      if (!program && p !== null && !seg.chainSafe) st.cdChecks.push(p);
+    },
+    // A nested script starts in the caller's directory, and the files it reads or writes are
+    // reported with the caller's.
+    script(text, dialect, base = st.cwd, baseRaw = undefined) {
+      const res = classifyScript(text, dialect, shellCtx, st.depth + 1, base, rawOf(base, baseRaw));
+      if (res.paths) st.paths.push(...res.paths);
+      if (res.readPaths) st.readPaths.push(...res.readPaths);
+      if (res.readSpecs) st.readSpecs.push(...res.readSpecs);
+      if (res.writeSpecs) st.writeSpecs.push(...res.writeSpecs);
+      if (res.cdChecks) st.cdChecks.push(...res.cdChecks);
+      return res;
+    },
+  };
+  return h;
+}
+
+function isAbsLike(word) {
+  return /^([A-Za-z]:[\\/]|\\\\|\/|~)/.test(String(word));
+}
+
+// Option scanner: returns positionals (with their kinds) and a map of option → value(s).
+function scan(args, kinds, { values = new Set(), booleans = new Set(), longDefault = 'flag', shortValues = '' } = {}) {
+  const pos = [];
+  const posKinds = [];
+  const opts = new Map();
+  const set = (k, v, kind) => { if (!opts.has(k)) opts.set(k, []); opts.get(k).push({ v, kind }); };
+  for (let i = 0; i < args.length; i += 1) {
+    const t = args[i];
+    if (t === '--') { for (let j = i + 1; j < args.length; j += 1) { pos.push(args[j]); posKinds.push(kinds[j]); } break; }
+    if (t.startsWith('--') && t.length > 2) {
+      const eq = t.indexOf('=');
+      if (eq > 0) { set(t.slice(0, eq), t.slice(eq + 1), kinds[i]); continue; }
+      if (values.has(t) || (longDefault === 'value' && !booleans.has(t) && !t.startsWith('--no-') && i + 1 < args.length && !args[i + 1].startsWith('-'))) { set(t, args[i + 1], kinds[i + 1]); i += 1; continue; }
+      set(t, true, 'lit');
+      continue;
+    }
+    if (t.startsWith('-') && t.length > 1 && !/^-\d/.test(t)) {
+      if (values.has(t)) { set(t, args[i + 1], kinds[i + 1]); i += 1; continue; }
+      // combined short flags (-fsSL, -XPOST, -nprod)
+      let consumed = false;
+      for (let c = 1; c < t.length; c += 1) {
+        const f = `-${t[c]}`;
+        if (values.has(f) || shortValues.includes(t[c])) {
+          if (c + 1 < t.length) set(f, t.slice(c + 1), kinds[i]);
+          else { set(f, args[i + 1], kinds[i + 1]); i += 1; }
+          consumed = true;
+          break;
+        }
+        set(f, true, 'lit');
+      }
+      if (!consumed && t.length === 2) continue;
+      continue;
+    }
+    pos.push(t);
+    posKinds.push(kinds[i]);
+  }
+  const first = (...names) => { for (const n of names) if (opts.has(n)) return opts.get(n)[0].v; return undefined; };
+  const all = (...names) => names.flatMap((n) => (opts.get(n) ?? []));
+  const has = (...names) => names.some((n) => opts.has(n));
+  return { pos, posKinds, opts, first, all, has };
+}
+
+// ---------------------------------------------------------------- dispatch
+
+const SCRIPT_NAME_RE = /deploy|release|publish|apply|migrate|rollout|provision|destroy|\bprod(uction)?\b/i;
+const SCRIPT_EXT_RE = /\.(sh|bash|zsh|ps1|psm1|bat|cmd|py|js|mjs|cjs|ts|mts|rb|pl|php)$/i;
+const PROD_BINS = ['kubectl', 'helm', 'k9s', 'aws', 'gcloud', 'gsutil', 'bq', 'az', 'argocd', 'psql', 'mysql', 'mongosh', 'mongo', 'redis-cli', 'terraform', 'tofu', 'pulumi', 'cdk', 'serverless', 'sls', 'eksctl', 'sqlcmd'];
+const PROD_BIN_RE = new RegExp(`(^|[^A-Za-z0-9_-])(${PROD_BINS.map((b) => b.replace(/-/g, '\\-')).join('|')})(\\.exe)?([^A-Za-z0-9_-]|$)`, 'i');
+const SDK_RE = /@aws-sdk|aws-sdk|\bboto3\b|\bbotocore\b|@kubernetes\/client-node|\bkubernetes\b|@google-cloud|google\.cloud|\bgoogleapis\b|@azure\/|\bazure\.(identity|mgmt|storage|cosmos)|\bmysql2?\b|\bpsycopg2?\b|\bpg8000\b|\bsqlalchemy\b|\bmongodb\b|\bpymongo\b|\bioredis\b|\bredis\b|\bsequelize\b|\bknex\b|@prisma\/client|\btypeorm\b|\bpyodbc\b|\bmssql\b|\btedious\b|\bpymysql\b|mysql\.connector|\bcx_Oracle\b|\boracledb\b|\bsnowflake\b|\bclickhouse|\bcassandra\b|\belasticsearch\b|@elastic\/|\bkafka|\bhvac\b|node-vault|\bstripe\b/i;
+// Inline code that starts processes or evaluates strings can run anything, however it spells it.
+const PROCESS_IN_CODE_RE = /child_process|\bsubprocess\b|\bos\.(system|popen|exec\w*|spawn\w*)|\bspawn(Sync)?\s*\(|\bexec(Sync|File|FileSync)?\s*\(|\bPopen\b|\bsystem\s*\(|\beval\s*\(|\b__import__\b|\bimportlib\b|Deno\.(run|Command)|Bun\.(spawn|\$)|\bshell_exec\b|\bpassthru\b|\bproc_open\b|\bpopen\s*\(|IO\.popen|%x[({[]|Runtime\.getRuntime|\bnew Function\s*\(/;
+const BACKTICK_LANGS = new Set(['perl', 'ruby', 'php', 'awk']);
+const PG_RE = /require\(\s*['"]pg['"]\s*\)|from\s+['"]pg['"]|import\s+pg\b|import\(\s*['"]pg['"]\s*\)/;
+const QUILL_IN_CODE_RE = /session-quill|[\\/]bin[\\/]quill\.js|quill-(hook|guard)(\.[cm]?js)?\b|src[\\/]cli[\\/]|['"`]quill(\.cmd|\.ps1)?['"`\s]/i;
+const HTTP_LIB_RE = /\b(requests|httpx|axios|aiohttp|urllib\w*|got|superagent|ky|needle|node-fetch|undici|fetch|http\.client|https?|XMLHttpRequest|WebClient|HttpClient|Net::HTTP|Faraday|curl_init)\b/i;
+const HTTP_WRITE_IN_CODE_RE = /\b(requests|httpx|session|client|aiohttp|axios|got|superagent|ky|needle|urllib3|http)\s*\.\s*(post|put|patch|delete|request)\s*\(|method\s*[:=]\s*['"`]?(post|put|patch|delete)\b|\bbody\s*:|\bdata\s*=\s*b?['"{]|urlopen\s*\([^)]*data\s*=|Request\s*\([^)]*data\s*=|\bsmtplib\b|\bnodemailer\b|\bnet\.(connect|createConnection)\b|\bsocket\.(socket|create_connection)\b|\bftplib\b|\bparamiko\b/i;
+
+function inlineCode(code, kind, lang) {
+  if (kind !== 'lit') return unknownProd(`${lang} inline code is not literal`);
+  if (QUILL_IN_CODE_RE.test(code)) return privileged(`${lang} inline code invokes the Quill CLI`);
+  if (PROD_BIN_RE.test(code) || SDK_RE.test(code) || PG_RE.test(code)) return unknownProd(`${lang} inline code names a prod binary or SDK client`);
+  if (/\b(symlink|symlinkSync|link|linkSync|hardlink_to|symlink_to|CreateSymbolicLink|CreateHardLink)\s*\(/i.test(code)) return unparseable(`${lang} inline code creates links the guard cannot follow`);
+  if (PROCESS_IN_CODE_RE.test(code) || (BACKTICK_LANGS.has(lang) && /`[^`]+`/.test(code)) || (lang === 'awk' && /getline|\|\s*"|print[^;]*\|/.test(code))) return unknownProd(`${lang} inline code starts processes or evaluates code the guard cannot follow`);
+  if (HTTP_WRITE_IN_CODE_RE.test(code) || (HTTP_LIB_RE.test(code) && /\.\s*(post|put|patch|delete|request|send|upload)\w*\s*\(/i.test(code))) return xwrite('http.write', undefined, `${lang} inline code sends data over the network`);
+  return local(`${lang} inline code`);
+}
+
+function scriptByName(file, args = [], what = 'script') {
+  const base = String(file).replace(/^.*[\\/]/, '');
+  // Quill's own entry points, from any checkout (ADR 0026, review M-1): the capture hook and the
+  // guard are never a run's to start, and the CLI by path gets the same read-only list as `quill`.
+  if (isQuillEntry(file)) return privileged(`${base} is a Quill entry point (capture hook or guard); a run never starts it`);
+  if (/^quill(\.[cm]?js)?$/i.test(String(file).replace(/[\\/]+$/, '').replace(/^.*[\\/]/, ''))) return quill(args);
+  if (SCRIPT_NAME_RE.test(base)) return unknownProd(`${what} ${base} looks like a deploy/release step`);
+  const firstArg = args.find((x) => !x.startsWith('-'));
+  if (firstArg && SCRIPT_NAME_RE.test(firstArg)) return unknownProd(`${what} ${base} ${firstArg} looks like a deploy/release step`);
+  return local(`${what} ${base}`);
+}
+
+function classifyCommand(name, seg, ctx, h) {
+  const argv = seg.argv;
+  const kinds = seg.kinds;
+  const args = argv.slice(1);
+  const ak = kinds.slice(1);
+  const ps = seg.dialect === 'powershell';
+  const cmdD = seg.dialect === 'cmd';
+
+  // a script run directly (./deploy.sh, .\provision.ps1, scripts/x.py)
+  if (seg.script !== undefined) {
+    if (seg.scriptKind !== 'lit') return unparseable('script path is not literal');
+    return scriptByName(seg.script, seg.scriptArgs ?? []);
+  }
+
+  switch (name) {
+    case 'kubectl': return kubectl(args, ak, seg, ctx);
+    case 'helm': return helm(args, ak, ctx);
+    case 'k9s': {
+      const s = scan(args, ak, { values: new Set(['--context', '-n', '--namespace', '--kubeconfig', '-c', '--command', '-l', '--logLevel']) });
+      if (['version', 'info', 'help'].includes(s.pos[0]) || s.has('-h', '--help')) return read('k9s info');
+      return write('k8s.write', s.first('--context') ?? ctx.kubeContext, 'k9s can change any resource');
+    }
+    case 'aws': return aws(args, ak, seg, ctx, h);
+    case 'gcloud': return gcloud(args, ak, ctx);
+    case 'gsutil': return gsutil(args, ak, h);
+    case 'bq': return bq(args, ak, ctx);
+    case 'az': return az(args, ak, ctx);
+    case 'argocd': return argocd(args, ak);
+    case 'psql': return psql(args, ak, seg, ctx, h);
+    case 'mysql': case 'mariadb': return mysql(args, ak, seg, h);
+    case 'mongosh': case 'mongo': return mongosh(args, ak, seg);
+    case 'redis-cli': return redis(args, ak);
+    case 'sqlcmd': return sqlcmd(args, ak, h);
+    case 'terraform': case 'tofu': return terraform(args, ak);
+    case 'pulumi': return pulumi(args, ak);
+    case 'cdk': return cdk(args, ak);
+    case 'serverless': case 'sls': return serverless(args, ak);
+    case 'eksctl': {
+      const s = scan(args, ak, { longDefault: 'value', booleans: new Set(['--approve', '--wait', '--all']) });
+      if (['get', 'version', 'info', 'help', 'completion'].includes(s.pos[0]) || (s.pos[0] === 'utils' && /^(describe-|schema)/.test(s.pos[1] ?? ''))) return read('eksctl read');
+      return write('cloud.write', s.first('--profile') ?? ctx.awsProfile, `eksctl ${s.pos[0] ?? ''} changes clusters`.trim());
+    }
+    case 'git': return git(args, ak, seg, ctx, h);
+    case 'gh': return gh(args, ak, seg, ctx);
+    case 'quill': case 'session-quill': return quill(args);
+    case 'quill-hook': case 'quill-guard': return privileged(`${name} is a Quill entry point (capture hook or guard); a run never starts it`);
+    case 'claude': case 'claude-code': return nestedClaude(`${name} starts Claude Code`);
+    case 'node': case 'deno': case 'bun': case 'tsx': case 'ts-node':
+      return nodeLike(name, args, ak, seg, ctx, h);
+    case 'python': case 'python3': case 'py': case 'pythonw': case 'python2':
+      return python(args, ak, seg, ctx, h);
+    case 'ruby': case 'perl': case 'php': {
+      if ((name === 'perl' || name === 'ruby') && args.some((t) => /^-[a-zA-Z]*i/.test(t) && !t.startsWith('--'))) {
+        let codeGiven = false;
+        const files = [];
+        for (let i = 0; i < args.length; i += 1) {
+          if (/^-[a-zA-Z]*[eE]$/.test(args[i])) { codeGiven = true; i += 1; continue; }
+          if (args[i].startsWith('-')) continue;
+          files.push(i);
+        }
+        for (const i of codeGiven ? files : files.slice(1)) h.write(args[i], ak[i]);
+      }
+      const flag = name === 'php' ? '-r' : name === 'perl' ? /^-[a-zA-Z]*[eE]$/ : /^-[a-zA-Z]*e$/;
+      for (let i = 0; i < args.length; i += 1) {
+        if ((typeof flag === 'string' && args[i] === flag) || (flag instanceof RegExp && flag.test(args[i]))) return inlineCode(args[i + 1] ?? '', ak[i + 1], name);
+        if (!args[i].startsWith('-')) return scriptByName(args[i], args.slice(i + 1));
+      }
+      if (seg.stdin !== null) return seg.stdinDyn ? unknownProd(`${name} input has expansions`) : inlineCode(seg.stdin, 'lit', name);
+      if (seg.piped) return unparseable(`code is piped into ${name}`);
+      return local(name);
+    }
+    case 'source': {
+      if (!args.length) return local('source');
+      if (ak[0] !== 'lit') return unparseable('sourced file is not literal');
+      // R19: the file runs in this shell and may change its directory unseen; it is read
+      h.read(args[0], ak[0]);
+      h.lostCwd();
+      return scriptByName(args[0], args.slice(1));
+    }
+    case 'cd': case 'chdir': case 'pushd': case 'set-location': case 'sl': case 'push-location': {
+      // R19: only plain forms move the tracked directory; one in a pipeline element or a
+      // background job runs in another process and does not move this shell
+      if (seg.piped || seg.sep === '|' || seg.sep === '&') return unparseable(`${name} in a pipeline or background job`);
+      const plain = (why) => unparseable(`${name} ${why}: only cd [--] <path>, cd, pushd <path>, Set-Location [-Path|-LiteralPath] <path> and chdir are followed`);
+      if (ps) {
+        const s = psParams(args, ak, { values: ['path', 'literalpath'], switches: ['passthru'] });
+        if ([...s.named.keys()].some((k) => !['path', 'literalpath', 'passthru'].includes(k))) return plain('with other parameters');
+        const named = s.get('path') ?? s.get('literalpath');
+        const v = named ?? s.pos[0];
+        if (s.pos.length > (named ? 0 : 1)) return plain('with more than one directory');
+        if (v && (v.v === true || /^[-+]$/.test(String(v.v)))) return plain('to the location history');
+        if (!v && name.includes('push')) return plain('without a directory');
+        h.chdir(v?.v, v?.kind ?? 'lit');
+      } else if (cmdD) {
+        const t = args.map((x, i) => ({ v: x, kind: ak[i] })).filter((x) => !/^\/d$/i.test(x.v));
+        if (t.length > 1 || t.some((x) => x.v.startsWith('/'))) return plain('with more than one word');
+        if (!t.length) return local(name === 'pushd' ? 'pushd lists the stack' : 'cd prints the directory');
+        h.chdir(t[0].v, t[0].kind);
+      } else {
+        let i = 0;
+        if (args[0] === '--') i = 1;
+        else if (args.length && /^[-+]./.test(args[0])) return plain(`with the option ${args[0]}`);
+        const rest = args.slice(i);
+        if (rest.length > 1) return plain('with more than one word');
+        if (!rest.length && name === 'pushd') return plain('without a directory');
+        if (rest.length && /^[-+]\d*$/.test(rest[0]) && (name === 'pushd' || rest[0] === '-')) return plain('to the directory stack');
+        h.chdir(rest[0], rest.length ? ak[i] : 'lit');
+      }
+      return local('change directory');
+    }
+    case 'popd': case 'pop-location': return unparseable(`${name} returns to a directory the guard does not follow`);
+    case 'npm': return npm(args, ak, h);
+    case 'yarn': return yarn(args, ak, h);
+    case 'pnpm': return pnpm(args, ak, h);
+    case 'make': case 'gmake': case 'nmake': case 'mingw32-make': case 'just': case 'task': case 'rake': case 'mage': case 'invoke': case 'nx': case 'turbo':
+    case 'gradle': case 'gradlew': case 'mvn': case 'mvnw': case 'ant': case 'cake': case 'psake': case 'invoke-build':
+      return taskRunner(name, args, ak, h);
+    case 'flyway': case 'liquibase': case 'alembic': case 'sqitch': case 'dbmate': case 'goose': case 'atlas':
+      return unknownProd(`${name} runs database migrations`);
+    case 'prisma': return args.includes('migrate') || (args[0] === 'db' && args[1] === 'push') ? unknownProd('prisma migration') : local('prisma');
+    case 'rails': case 'knex': case 'sequelize': case 'typeorm':
+      return args.some((x) => /migrat|db:(push|seed|setup|reset|drop)/.test(x)) ? unknownProd(`${name} database migration`) : local(name);
+    case 'docker': case 'podman': case 'nerdctl': return docker(name, args, ak, seg);
+    case 'twine': return args.includes('upload') ? xwrite('package.publish', undefined, 'twine upload publishes a package') : local('twine');
+    case 'gem': return args[0] === 'push' || args[0] === 'yank' || args[0] === 'owner' ? xwrite('package.publish', 'rubygems.org', `gem ${args[0]} publishes`) : local('gem');
+    case 'cargo': return ['publish', 'yank', 'owner'].includes(args[0]) ? xwrite('package.publish', 'crates.io', `cargo ${args[0]} publishes`) : args[0] === 'run' && args.some((x) => SCRIPT_NAME_RE.test(x)) ? unknownProd('cargo run of a deploy/release binary') : local('cargo');
+    case 'go': return args[0] === 'run' && args.some((x) => SCRIPT_NAME_RE.test(x)) ? unknownProd('go run of a deploy/release program') : local('go');
+    case 'oc': return kubectl(args, ak, seg, ctx);
+    case 'ansible': case 'ansible-playbook': case 'skaffold': case 'velero': case 'istioctl': case 'linkerd': case 'flux': case 'vault': case 'consul': case 'nomad': case 'doctl':
+    case 'oci': case 'ibmcloud': case 'heroku': case 'supabase': case 'wrangler': case 'drizzle-kit': case 'fly': case 'flyctl': case 'vercel': case 'netlify': case 'railway': case 'glab': case 'hub':
+    case 'mysqladmin': case 'dropdb': case 'createdb': case 'pg_restore': case 'pg_ctl': case 'clickhouse-client': case 'clickhouse': case 'cqlsh': case 'mongorestore': case 'mongoimport': case 'cf': case 'kn': case 'rosa':
+      return otherProd(name, args);
+    case 'poetry': return args.includes('publish') ? xwrite('package.publish', undefined, 'poetry publish') : local('poetry');
+    case 'dotnet': return args[0] === 'nuget' && args[1] === 'push' ? xwrite('package.publish', undefined, 'dotnet nuget push') : args[0] === 'ef' && args[1] === 'database' ? unknownProd('dotnet ef database update') : local('dotnet');
+    case 'nuget': return args[0]?.toLowerCase() === 'push' ? xwrite('package.publish', undefined, 'nuget push') : local('nuget');
+    case 'vsce': case 'ovsx': return args[0] === 'publish' ? xwrite('package.publish', undefined, `${name} publish`) : local(name);
+    case 'curl': return ps && !/curl\.exe$/i.test(argv[0]) ? strictest(curl(args, ak, seg, h), iwr(args, ak, h)) : curl(args, ak, seg, h);
+    case 'wget': return ps && !/wget\.exe$/i.test(argv[0]) ? strictest(wget(args, ak, h), iwr(args, ak, h)) : wget(args, ak, h);
+    case 'http': case 'https': case 'xh': case 'xhs': case 'httpie': return httpie(args, ak, seg, h);
+    case 'invoke-restmethod': case 'irm': case 'invoke-webrequest': case 'iwr': return iwr(args, ak, h);
+    case 'scp': case 'pscp': return scp(args, ak, h);
+    case 'rsync': return rsync(args, ak, h);
+    case 'ssh': case 'plink': case 'mosh': {
+      if (args.length === 1 && /^-[VG]$/.test(args[0])) return local('ssh info');
+      return unknownProd(`${name} runs commands on a remote host`);
+    }
+    case 'sftp': case 'ftp': case 'lftp': return unknownProd(`${name} transfers files to a remote host`);
+    case 'smbclient': return xwrite('http.write', remoteHost(String(args.find((x) => x.startsWith('//')) ?? '').replace(/^\/\/([^/]+).*$/, '$1:')), 'smbclient can upload files');
+    case 'openssl': {
+      if (['s_client', 's_server'].includes(args[0])) {
+        const i = args.indexOf('-connect');
+        return xwrite('http.write', i >= 0 ? hostOf(args[i + 1]) : undefined, 'openssl s_client sends its input to a host');
+      }
+      return local('openssl');
+    }
+    case 'mshta': case 'rundll32': case 'regsvr32': case 'msbuild': case 'installutil': case 'regasm': case 'regsvcs': case 'add-type':
+      return unparseable(`${name} loads or runs code the guard cannot follow`);
+    case 'cscript': case 'wscript': {
+      const f = args.find((x) => !x.startsWith('//') && !x.startsWith('/'));
+      return f ? scriptByName(f) : unparseable(`${name} without a script`);
+    }
+    case 'invoke-item': case 'ii': {
+      const s = psParams(args, ak, { values: ['path', 'literalpath', 'filter', 'include', 'exclude', 'credential'], switches: [] });
+      const t = s.get('path') ?? s.get('literalpath') ?? s.pos[0];
+      if (!t || t.kind !== 'lit') return unparseable('Invoke-Item target is not literal');
+      return /\.(lnk|url|exe|bat|cmd|com|ps1|vbs|vbe|js|jse|wsf|wsh|hta|msi|scr|pif)$/i.test(String(t.v)) ? strictest(scriptByName(t.v), unknownProd('Invoke-Item runs a program or shortcut')) : local('open a file');
+    }
+    case 'register-scheduledtask': case 'new-scheduledtask': case 'set-scheduledtask': case 'start-scheduledtask': case 'schtasks': case 'new-service':
+      if (name === 'schtasks' && args.some((x) => /^\/query$/i.test(x))) return local('schtasks /query');
+      return unknownProd(`${name} schedules or installs something that runs later`);
+    case 'stop-computer': case 'restart-computer': return unknownProd(`${name} shuts down or restarts a machine`);
+    case 'stop-process': case 'spps': case 'kill': case 'stop-service': case 'restart-service': case 'start-service': case 'set-service': case 'suspend-service': {
+      if (args.some((x) => /^-(computername|cn)$/i.test(x))) return unknownProd(`${name} on a remote computer`);
+      return local(name);
+    }
+    case 'nc': case 'ncat': case 'netcat': case 'socat': case 'telnet': {
+      const addr = name === 'socat' ? args.map((x) => /^(?:tcp|udp|ssl|openssl|sctp)[46]?(?:-connect)?:([^:,]+)/i.exec(x)).find(Boolean) : null;
+      const host = addr ? addr[1] : args.find((x) => !x.startsWith('-'));
+      return xwrite('http.write', host, `${name} can send data to any host`);
+    }
+    case 'sendmail': case 'mail': case 'mailx': case 'mutt': case 'send-mailmessage':
+      return xwrite('http.write', undefined, `${name} sends mail`);
+    case 'invoke-command': case 'icm': case 'enter-pssession': case 'etsn': case 'new-pssession': case 'nsn': case 'invoke-wmimethod': case 'invoke-cimmethod': {
+      const s = psParams(args, ak, { values: ['computername', 'cn', 'session', 'hostname', 'vmname', 'containerid', 'uri', 'connectionuri', 'credential', 'filepath', 'argumentlist', 'scriptblock', 'name', 'class', 'methodname', 'path'], switches: ['asjob', 'enablenetworkaccess'] });
+      if (name.startsWith('invoke-command') || name === 'icm') {
+        if (['computername', 'cn', 'session', 'hostname', 'vmname', 'containerid', 'uri', 'connectionuri'].some((p) => s.get(p))) return unknownProd('Invoke-Command on a remote computer');
+        const fp = s.get('filepath');
+        if (fp) return fp.kind === 'lit' ? scriptByName(fp.v) : unparseable('Invoke-Command -FilePath is not literal');
+        return local('Invoke-Command script block (classified separately)');
+      }
+      return unknownProd(`${name} reaches a remote or management interface`);
+    }
+    case 'invoke-sqlcmd': return invokeSqlcmd(args, ak, h);
+    case 'shopt': return unparseable('shopt changes how the shell expands words (extglob, globstar, nocaseglob …)');
+    case 'trap': {
+      // R19.6: the text runs later in this shell (on EXIT, DEBUG, ERR …) and is classified like
+      // eval; it may not change directory, and no directory change may follow it, since its
+      // paths are resolved where the shell is when it fires
+      if (ps || cmdD) return args.length ? unparseable('PowerShell trap runs a script block the guard does not follow') : local('trap');
+      let i = 0;
+      if (args[0] === '--') i = 1;
+      if (!args.length || /^-[lp]+$/.test(args[0])) return local('trap listing');
+      if (args[i] === undefined || args[i] === '-' || (args[i] === '' && ak[i] === 'lit')) return local('trap reset');
+      if (ak[i] !== 'lit') return unparseable('trap command text is not literal');
+      const parsed = parseShell(args[i], 'bash');
+      if (parsed.error || parsed.segments.some((x) => x.unparseable)) return unparseable(`trap command text: ${parsed.error ?? 'not readable'}`);
+      if (parsed.segments.some((x) => x.argv.length && CD_NAMES.has(binName(x.argv[0])))) return unparseable('trap command text changes directory');
+      h.trapSet();
+      return h.script(args[i], 'bash');
+    }
+    case 'coproc': return unparseable('coproc runs a command in the background the guard does not follow');
+    case 'export': case 'declare': case 'typeset': case 'local': case 'readonly': case 'set': {
+      // NAME=value sets NAME; a bare NAME exports (or declares) a value assigned elsewhere
+      const env = {};
+      // bash `set` words are positional parameters, not variables (cmd's `set NAME=value` is one)
+      const names = name !== 'set' || cmdD;
+      // fail safe: any non-literal word (an option, a bare name, or NAME= whose NAME is not a
+      // literal identifier) could set or export any variable, whatever -p/-n/+x appear to say
+      if (names && args.some((t, i) => ak[i] !== 'lit' && !(t.indexOf('=') > 0 && /^[A-Za-z_]\w*(\[[^\]]*\])?\+?$/.test(t.slice(0, t.indexOf('=')))))) return unparseable(`${name} sets a variable whose name is not literal`);
+      // declare -n / typeset -n / local -n make a name refer to another variable (a nameref)
+      if (['declare', 'typeset', 'local'].includes(name) && args.some((t) => /^[-+][a-zA-Z]*n/.test(t))) return unparseable(`${name} -n makes a name refer to another variable`);
+      // options end at the first word that is not one, or at `--` (bash builtins stop there)
+      let optEnd = args.findIndex((t) => t === '--' || !/^[-+]/.test(t));
+      if (optEnd < 0) optEnd = args.length;
+      const opts = args.slice(0, optEnd);
+      const unexport = (name === 'export' && opts.some((t) => /^-[a-zA-Z]*n/.test(t))) || opts.some((t) => /^\+[a-zA-Z]*x/.test(t));
+      for (let i = optEnd + (args[optEnd] === '--' ? 1 : 0); i < args.length; i += 1) {
+        const t = args[i];
+        const eq = t.indexOf('=');
+        if (eq > 0) env[t.slice(0, eq).replace(/\[.*$/, '').replace(/\+$/, '')] = ak[i] === 'lit' ? t.slice(eq + 1) : null;
+        else if (name !== 'set' && !unexport && /^[A-Za-z_]\w*$/.test(t)) env[t] = null;
+      }
+      const bad = gitEnvProblem(env);
+      if (bad) return unparseable(bad);
+      return local(`${name}`);
+    }
+    case 'setx': {
+      // setx NAME VALUE writes the user environment for later processes; /K and /F read the value elsewhere
+      const pos = [];
+      let fromElsewhere = false;
+      for (let i = 0; i < args.length; i += 1) {
+        if (/^\/[sudpkfar]$/i.test(args[i])) { if (/^\/[kf]$/i.test(args[i])) fromElsewhere = true; i += 1; continue; }
+        if (args[i].startsWith('/')) continue;
+        pos.push(i);
+      }
+      const env = {};
+      if (pos.length && ak[pos[0]] !== 'lit') return unparseable('setx sets a variable whose name is not literal');
+      if (pos.length) env[args[pos[0]]] = !fromElsewhere && pos.length > 1 && ak[pos[1]] === 'lit' ? args[pos[1]] : null;
+      const bad = gitEnvProblem(env);
+      if (bad) return unparseable(bad);
+      return local('setx');
+    }
+    case 'set-item': case 'si': {
+      // Set-Item on env: sets a variable; on function: or alias: it defines a command
+      if (!ps) return local(name);
+      const s = psParams(args, ak, { values: ['path', 'literalpath', 'value', 'filter', 'include', 'exclude', 'credential'], switches: ['force', 'passthru', 'whatif', 'confirm'] });
+      const target = s.get('path') ?? s.get('literalpath') ?? s.pos[0];
+      const named = !!(s.get('path') ?? s.get('literalpath'));
+      const value = s.get('value') ?? s.pos[named ? 0 : 1];
+      if (!target || target.v === true || target.kind !== 'lit') return unparseable('Set-Item target is not a literal path');
+      // -Path and a positional target expand wildcards (env:GIT_CONFIG_KEY_?, env:*); -LiteralPath does not
+      if (target !== s.get('literalpath') && /[*?[]/.test(String(target.v))) return unparseable('Set-Item target has wildcards and may set any matching variable');
+      const env = {};
+      for (const one of splitPs(target.v)) {
+        const m = /^(?:Microsoft\.PowerShell\.Core\\)?(env|environment|variable|function|alias)(?:::?)[\\/]?(.*)$/i.exec(one);
+        if (!m) return unparseable(`Set-Item on ${one.slice(0, 60)} changes state the guard cannot follow`);
+        const drive = m[1].toLowerCase();
+        if (drive === 'function' || drive === 'alias') return unparseable('Set-Item defines a PowerShell function or alias');
+        if (drive === 'variable') continue;
+        env[m[2]] = value && value.v !== true && value.kind === 'lit' ? value.v : null;
+      }
+      const bad = gitEnvProblem(env);
+      if (bad) return unparseable(bad);
+      return local('Set-Item');
+    }
+    case 'read': case 'mapfile': case 'readarray': case 'getopts': case 'for': case 'select': case 'printf': {
+      // builtins that assign shell variables from input: the values are unknown (in PowerShell
+      // these are external programs, which cannot change the session's variables)
+      // a non-literal first printf word may be -v, which assigns a variable
+      if (!ps && name === 'printf' && args.length && ak[0] !== 'lit') return unparseable('printf with a non-literal first word may set any variable (-v)');
+      if (ps || (name === 'printf' && !args.some((t) => t.startsWith('-v')))) return local(name);
+      if (name === 'mapfile' || name === 'readarray') {
+        // -C runs a callback every few lines
+        for (let i = 0; i < args.length; i += 1) {
+          if (args[i] !== '-C' && !args[i].startsWith('-C')) continue;
+          const cb = args[i] === '-C' ? args[i + 1] : args[i].slice(2);
+          const kind = args[i] === '-C' ? ak[i + 1] : ak[i];
+          if (cb === undefined || kind !== 'lit') return unparseable(`${name} -C callback is not literal`);
+          const res = h.script(cb, 'bash');
+          if (res.class !== 'local') return res;
+        }
+      }
+      const env = {};
+      const vi = args.findIndex((t) => t.startsWith('-v'));
+      const names = name === 'for' || name === 'select' ? args.slice(0, 1) : name === 'printf' ? [args[vi] === '-v' ? args[vi + 1] ?? '' : args[vi]] : args;
+      // a variable name that is not literal ("$n") could be any variable; option values may be dynamic
+      const valueOpt = name === 'read' ? /^-[a-zA-Z]*[dinNptu]$/ : /^-[a-zA-Z]*[dnOsuCc]$/;
+      const nameAt = name === 'for' || name === 'select' ? [0] : name === 'printf' ? [args[vi] === '-v' ? vi + 1 : vi] : name === 'getopts' ? [1]
+        : args.map((_, i) => i).filter((i) => !valueOpt.test(args[i - 1] ?? ''));
+      if (nameAt.some((i) => i < args.length && ak[i] !== 'lit')) return unparseable(`${name} sets a variable whose name is not literal`);
+      // option clusters (`read -pt "$n"`, `read -p -p "$n"`) hide which word is a name:
+      // read, mapfile and readarray with any non-literal word fail safe
+      if (['read', 'mapfile', 'readarray'].includes(name) && args.some((_, i) => ak[i] !== 'lit')) return unparseable(`${name} has a non-literal word and may set any variable`);
+      for (const t of names) {
+        const m = /^(?:-v)?([A-Za-z_]\w*)(\[[^\]]*\])?$/.exec(t);
+        if (m) env[m[1]] = null;
+      }
+      const bad = gitEnvProblem(env);
+      if (bad) return unparseable(bad);
+      return local(name);
+    }
+    case 'at': case 'batch': case 'crontab': {
+      if (name === 'crontab') {
+        const files = args.filter((t, i) => (!t.startsWith('-') || t === '-') && args[i - 1] !== '-u');
+        if (!files.length && args.some((t) => /^-[lre]$/.test(t))) return local('crontab inspection');
+        if (files.length && files[0] !== '-') return unknownProd('crontab installs a schedule from a file');
+      }
+      if (name === 'at' && args.includes('-f')) return unknownProd('at runs a script file later');
+      if (seg.stdin !== null) { if (seg.stdinDyn) return unparseable(`${name} input has expansions`); return strictest(unknownProd(`${name} schedules commands`), h.script(seg.stdin, 'bash')); }
+      return unparseable(`${name} schedules commands the guard cannot see`);
+    }
+    case 'patch': {
+      const s = scan(args, ak, { values: new Set(['-p', '-i', '--input', '-o', '--output', '-d', '--directory', '-r', '--reject-file', '-B', '-D', '-F', '-V', '-z', '-Y', '-g']) });
+      const out = s.all('-o', '--output')[0];
+      const dir = s.all('-d', '--directory')[0];
+      if (out) h.write(out.v, out.kind);
+      else if (s.pos[0]) h.write(s.pos[0], s.posKinds[0]);
+      else h.write(dir ? dir.v : '.', dir ? dir.kind : 'lit');
+      for (const x of s.all('-i', '--input')) h.read(x.v, x.kind);
+      return local('patch');
+    }
+    case 'robocopy': case 'xcopy': {
+      const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/') && !x.v.startsWith('-'));
+      if (pos[0]) h.read(pos[0].v, pos[0].kind);
+      // without a destination the copy lands in the current directory (R17.6)
+      if (pos[1]) h.write(pos[1].v, pos[1].kind);
+      else { h.write('.', 'lit'); if (pos[0]) h.write(wordBase(pos[0].v), pos[0].kind); }
+      return local(`${name} files`);
+    }
+    case 'icacls': case 'takeown': case 'attrib': case 'cacls': {
+      const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/') && !/^[+-][rahsi]$/i.test(x.v));
+      if (!pos.length) return local(name);
+      h.write(pos[0].v, pos[0].kind);
+      return local(`${name} changes file attributes`);
+    }
+    case 'fsutil': {
+      const sub = args.map((x) => x.toLowerCase());
+      if (sub[0] === 'hardlink' && sub[1] === 'create') {
+        if (args.length < 4) h.bad = 'fsutil hardlink create without both paths';
+        for (const i of [2, 3]) if (args[i] !== undefined) h.write(args[i], ak[i]);
+        return local('fsutil hardlink create');
+      }
+      if (sub[0] === 'fsinfo' || (sub[1] !== undefined && (sub[1].startsWith('query') || sub[1] === 'list'))) return local('fsutil query');
+      return unparseable('fsutil changes file-system state the guard cannot follow');
+    }
+    // only `mountvol` and `mountvol <dir> /L` list; every other form changes mount points
+    case 'mountvol': return args.length === 0 || (args.length === 2 && /^\/l$/i.test(args[1]) && !args[0].startsWith('/')) ? local('mountvol listing') : unparseable('mountvol changes volume mount points');
+    case 'link': {
+      if ((ps || cmdD) && args.some((x) => /^\/[A-Za-z]+(:|$)/.test(x))) {
+        // MSVC link.exe (/nologo, /OUT:x): it writes only its /OUT: file
+        for (const x of args) if (/^\/out:/i.test(x)) h.write(x.slice(5), 'lit');
+        return local('MSVC link');
+      }
+      // coreutils link FILE1 FILE2 makes a hard link; Git Bash paths such as /c/Users/… are files
+      const pos = [];
+      let end = false;
+      args.forEach((t, i) => { if (!end && t === '--') end = true; else if (end || !t.startsWith('-') || t === '-') pos.push({ v: t, kind: ak[i] }); });
+      if (pos.length !== 2) { h.bad = 'link needs a target and a name'; return local('link'); }
+      for (const x of pos) h.write(x.v, x.kind);
+      return local('link');
+    }
+    case 'mklink': {
+      const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/'));
+      for (const x of pos) h.write(x.v, x.kind);
+      if (pos.length < 2) h.bad = 'mklink without link and target';
+      else linkTargets(h, [pos[1]], { link: pos[0] }); // a symbolic link's target is resolved where it is (R17.4)
+      return local('mklink');
+    }
+    case 'start-transcript': {
+      const s = psParams(args, ak, { values: ['path', 'literalpath', 'outputdirectory'], switches: ['append', 'force', 'noclobber', 'includeinvocationheader', 'useminimalheader'] });
+      const t = s.get('path') ?? s.get('literalpath') ?? s.get('outputdirectory') ?? s.pos[0];
+      if (!t || t.v === true) { h.bad = 'Start-Transcript writes to a default location'; return local('transcript'); }
+      h.write(t.v, t.kind);
+      return local('transcript');
+    }
+    case 'alias': {
+      let worst = local('alias');
+      for (let i = 0; i < args.length; i += 1) {
+        const eq = args[i].indexOf('=');
+        if (eq <= 0) continue;
+        if (ak[i] !== 'lit') return unparseable('alias value is not literal');
+        worst = strictest(worst, h.script(args[i].slice(eq + 1), 'bash'));
+      }
+      return worst;
+    }
+    case 'set-alias': case 'sal': case 'new-alias': case 'nal': {
+      const s = psParams(args, ak, { values: ['name', 'value', 'description', 'option', 'scope'], switches: ['passthru', 'force'] });
+      const value = s.get('value') ?? s.pos[s.get('name') ? 0 : 1];
+      if (!value) return local('alias');
+      if (value.kind !== 'lit') return unparseable('alias value is not literal');
+      return h.script(value.v, 'powershell');
+    }
+    case 'awk': case 'gawk': case 'mawk': case 'nawk': {
+      const s = scan(args, ak, { values: new Set(['-F', '-v', '-f', '--file', '--assign', '--field-separator', '-i', '--include', '-l', '--load', '-E', '--exec']) });
+      const file = s.first('-f', '--file', '-E', '--exec');
+      if (s.all('-i', '--include').some((x) => x.v === 'inplace')) for (let i = file !== undefined ? 0 : 1; i < s.pos.length; i += 1) h.write(s.pos[i], s.posKinds[i]);
+      if (file !== undefined) return typeof file === 'string' ? scriptByName(file) : unparseable('awk program file is not literal');
+      if (!s.pos.length) return local('awk');
+      return inlineCode(s.pos[0], s.posKinds[0], 'awk');
+    }
+  }
+
+  if (ps || cmdD) {
+    const fileRes = psFileCmdlet(name, args, ak, h, cmdD);
+    if (fileRes) return fileRes;
+  }
+  if (!ps) {
+    const fileRes = posixFileCommand(name, args, ak, h);
+    if (fileRes) return fileRes;
+  }
+  if (ps && ['get-childitem', 'gci', 'ls', 'dir'].includes(name)) {
+    const s = psParams(args, ak, { values: ['path', 'literalpath', 'filter', 'include', 'exclude', 'depth', 'attributes'], switches: ['recurse', 'force', 'name', 'directory', 'file', 'hidden', 'readonly', 'system', 'followsymlink'] });
+    const t = s.get('path') ?? s.get('literalpath') ?? s.pos[0];
+    if (t && t.v !== true) for (const one of splitPs(t.v)) h.read(one, t.kind);
+    return local('list a directory');
+  }
+  if (ps && ['select-string', 'sls'].includes(name)) {
+    const s = psParams(args, ak, { values: ['path', 'literalpath', 'pattern', 'include', 'exclude', 'context', 'encoding', 'culture'], switches: ['simplematch', 'casesensitive', 'quiet', 'list', 'notmatch', 'allmatches', 'raw', 'noemphasis'] });
+    const t = s.get('path') ?? s.get('literalpath') ?? s.pos[s.get('pattern') ? 0 : 1];
+    if (t && t.v !== true) for (const one of splitPs(t.v)) h.read(one, t.kind);
+    return local('search files');
+  }
+  if (ps && ['get-content', 'gc', 'type', 'cat', 'import-csv', 'ipcsv', 'import-clixml'].includes(name)) {
+    const s = psParams(args, ak, { values: ['path', 'literalpath', 'totalcount', 'head', 'tail', 'first', 'encoding', 'delimiter', 'readcount', 'filter', 'include', 'exclude', 'stream', 'header'], switches: ['raw', 'wait', 'force', 'asbytestream'] });
+    for (const p of [s.get('path'), s.get('literalpath'), s.pos[0]].filter(Boolean)) for (const one of splitPs(p.v)) h.read(one, p.kind);
+    return local('read a file');
+  }
+
+  // repo scripts run by path or with a script extension
+  if (/[\\/]/.test(argv[0]) || SCRIPT_EXT_RE.test(argv[0])) return scriptByName(argv[0], args);
+  return local(`${name} is not a prod binary`);
+}
+
+const OTHER_READ = new Set(['get', 'list', 'ls', 'show', 'describe', 'status', 'version', 'help', 'info', 'logs', 'read', 'whoami', 'diff', 'template', 'lint', 'validate', 'check', 'view', 'inspect', 'search', 'render', 'history', 'tail']);
+
+// Prod-capable CLIs outside the spec's list: a recognised read verb is a read, anything else is
+// unknown-prod (there is no scope for them yet).
+function otherProd(name, args) {
+  if (['mysqladmin', 'dropdb', 'createdb', 'pg_restore', 'pg_ctl', 'mongorestore', 'mongoimport'].includes(name)) {
+    if (name === 'mysqladmin' && args.length && args.every((x) => x.startsWith('-') || ['status', 'version', 'ping', 'processlist', 'variables', 'extended-status'].includes(x))) return read(`${name} status`);
+    return unknownProd(`${name} changes a database`);
+  }
+  if (['clickhouse-client', 'clickhouse', 'cqlsh'].includes(name)) {
+    const i = args.findIndex((x) => x === '-q' || x === '--query' || x === '-e' || x === '--execute');
+    if (i >= 0) return sqlReadOnly(args[i + 1] ?? '') ? read(`${name} read-only query`) : write('db.write', undefined, `${name} runs a query that is not read-only`);
+    return unknownProd(`${name} input is not visible`);
+  }
+  const words = args.filter((x) => !x.startsWith('-'));
+  if (!words.length && args.some((x) => /^--?(version|help|h)$/.test(x))) return read(`${name} info`);
+  if (name === 'vault' && words.some((x) => ['get', 'read', 'login', 'token'].includes(x))) return unknownProd('vault reads secrets or credentials');
+  const hit = words.slice(0, 4).find((x) => OTHER_READ.has(x.toLowerCase()) || /^(list|get|describe|show)-/.test(x));
+  const writey = words.slice(0, 4).find((x) => GC_WRITE.has(x.toLowerCase()) || MCP_MUTATING.has(x.toLowerCase()) || MCP_WRITE_VERBS.has(x.toLowerCase()) || /^(set|add|remove|delete|put)/.test(x));
+  if (hit && (!writey || words.indexOf(hit) < words.indexOf(writey)) && name !== 'ansible' && name !== 'ansible-playbook') return read(`${name} ${hit}`);
+  return unknownProd(`${name} ${words[0] ?? ''} is a prod-capable command without a scope`.trim());
+}
+
+function strictest(a, b) {
+  return RANK[b.class] > RANK[a.class] ? b : a;
+}
+
+// ---------------------------------------------------------------- kubernetes
+
+const KUBECTL_VALUES = new Set(['-n', '--namespace', '--context', '--kubeconfig', '-s', '--server', '--cluster', '--user', '--token', '-l', '--selector', '-o', '--output', '--as', '--as-group', '--as-uid',
+  '-f', '--filename', '-c', '--container', '--field-selector', '--sort-by', '--tail', '--since', '--since-time', '--request-timeout', '-L', '--label-columns', '--template', '-p', '--patch', '--type',
+  '--image', '--replicas', '--for', '--timeout', '-k', '--kustomize', '--chunk-size', '--certificate-authority', '--client-certificate', '--client-key', '--tls-server-name', '--cache-dir', '-v', '--v',
+  '--profile', '--subresource', '--max-log-requests', '--limit-bytes', '--grace-period', '--field-manager', '--overrides', '--port', '--address', '--revision', '--to-revision', '--namespace-selector']);
+const KUBECTL_READ = new Set(['get', 'describe', 'logs', 'top', 'explain', 'api-resources', 'api-versions', 'version', 'cluster-info', 'events', 'diff', 'wait', 'kustomize', 'completion', 'options', 'help']);
+
+function kubectl(args, ak, seg, ctx) {
+  const s = scan(args, ak, { values: KUBECTL_VALUES });
+  const target = s.first('--context') ?? ctx.kubeContext;
+  const [verb, sub] = s.pos;
+  const w = (why) => write('k8s.write', target, why);
+  if (!verb) return s.has('--version', '-h', '--help') ? read('kubectl info') : w('kubectl without a verb');
+  if (s.posKinds[0] !== 'lit') return w('kubectl verb is not literal');
+  const dryAll = s.all('--dry-run');
+  const dry = dryAll.length ? dryAll[dryAll.length - 1].v : undefined; // kubectl uses the last one
+  const dryRun = dry === true || dry === 'client' || dry === 'server';
+  if (s.has('--raw')) return w('raw API request (may read secrets or change state)');
+  if (verb === 'get') {
+    const resources = s.pos.slice(1);
+    if (resources.some((x, i) => s.posKinds[i + 1] !== 'lit' && i === 0)) return w('kubectl get of a dynamic resource');
+    if (resources.some((x) => x.split(',').some((part) => /^secrets?($|\/|\.)/i.test(part)))) return w('reading secrets');
+    return read('kubectl get');
+  }
+  if (KUBECTL_READ.has(verb)) return read(`kubectl ${verb}`);
+  if (verb === 'auth' && (sub === 'can-i' || sub === 'whoami')) return read('kubectl auth check');
+  if (verb === 'config' && ['view', 'get-contexts', 'current-context', 'get-clusters', 'get-users'].includes(sub)) return read('kubectl config read');
+  if (verb === 'rollout' && (sub === 'status' || sub === 'history')) return read(`kubectl rollout ${sub}`);
+  if (verb === 'plugin' && sub === 'list') return read('kubectl plugin list');
+  if (dryRun && ['apply', 'create', 'run', 'expose', 'set', 'label', 'annotate', 'patch', 'replace', 'scale', 'autoscale', 'delete'].includes(verb)) return read(`kubectl ${verb} --dry-run`);
+  return w(`kubectl ${verb} ${['exec', 'cp', 'port-forward', 'debug', 'proxy', 'attach'].includes(verb) ? 'reaches into the cluster' : 'changes the cluster'}`);
+}
+
+const HELM_VALUES = new Set(['--kube-context', '-n', '--namespace', '--kubeconfig', '-f', '--values', '--set', '--set-string', '--set-file', '--set-json', '--version', '--repo', '-o', '--output', '--timeout',
+  '--post-renderer', '--description', '--registry-config', '--repository-config', '--repository-cache', '--username', '--password', '--ca-file', '--cert-file', '--key-file', '--max', '--revision', '--kube-apiserver', '--kube-token', '--kube-as-user']);
+const HELM_READ = new Set(['list', 'ls', 'status', 'get', 'history', 'hist', 'show', 'inspect', 'template', 'lint', 'search', 'version', 'env', 'help', 'completion', 'verify', 'package', 'pull', 'fetch', 'create']);
+
+function helm(args, ak, ctx) {
+  const s = scan(args, ak, { values: HELM_VALUES });
+  const [verb, sub] = s.pos;
+  const target = s.first('--kube-context') ?? ctx.kubeContext;
+  if (!verb) return read('helm info');
+  if (verb === 'push') return xwrite('package.publish', undefined, 'helm push publishes a chart');
+  if (verb === 'get' && !['notes', 'metadata'].includes(sub)) return write('k8s.write', target, `helm get ${sub ?? ''} can reveal secret values`.trim());
+  if (HELM_READ.has(verb)) return read(`helm ${verb}`);
+  if (verb === 'repo' && ['list', 'ls', 'add', 'update', 'up', 'index'].includes(sub)) return read(`helm repo ${sub}`);
+  if ((verb === 'dependency' || verb === 'dep') && ['list', 'ls', 'build', 'update', 'up'].includes(sub)) return read(`helm dependency ${sub}`);
+  if (verb === 'plugin' && ['list', 'ls'].includes(sub)) return read('helm plugin list');
+  if (verb === 'registry' && sub === 'login') return local('helm registry login');
+  return write('k8s.write', target, `helm ${verb} changes the cluster`);
+}
+
+// ---------------------------------------------------------------- clouds
+
+const AWS_BOOLEANS = new Set(['--recursive', '--dryrun', '--dry-run', '--quiet', '--delete', '--no-progress', '--follow-symlinks', '--only-show-errors', '--exact-timestamps', '--size-only', '--force',
+  '--human-readable', '--summarize', '--debug', '--no-paginate', '--no-verify-ssl', '--no-sign-request', '--no-cli-pager', '--with-decryption', '--follow', '--version', '--help', '--request-payer', '--cli-auto-prompt']);
+const AWS_SECRET_GETS = new Set(['get-secret-value', 'get-password-data', 'get-login-password', 'get-login', 'get-authorization-token', 'get-session-token', 'get-federation-token', 'get-credentials-for-identity',
+  'get-open-id-token', 'get-open-id-token-for-developer-identity', 'get-cluster-credentials', 'get-cluster-credentials-with-iam', 'get-role-credentials', 'get-access-key-info', 'get-temporary-credentials']);
+
+function aws(args, ak, seg, ctx, h) {
+  const s = scan(args, ak, { longDefault: 'value', booleans: AWS_BOOLEANS });
+  const target = s.first('--profile') ?? (seg.env.AWS_PROFILE || undefined) ?? ctx.awsProfile;
+  const [service, op] = s.pos;
+  const w = (why) => write('cloud.write', target, why);
+  if (!service || service === 'help' || op === 'help' || s.has('--version')) return read('aws info');
+  if (s.posKinds[0] !== 'lit' || (op !== undefined && s.posKinds[1] !== 'lit')) return w('aws command is not literal');
+  if (service === 's3') {
+    if (op === 'ls' || op === 'presign') return read(`aws s3 ${op}`);
+    if (op === 'cp' || op === 'mv' || op === 'sync') {
+      const [src, dst] = s.pos.slice(2);
+      if (typeof dst === 'string' && /^s3:\/\//i.test(dst)) return xwrite('cloud.write', `s3://${bucketOf(dst)}`, `aws s3 ${op} uploads to a bucket`, target ? { target } : {});
+      if (op === 'mv' && typeof src === 'string' && /^s3:\/\//i.test(src)) return w('aws s3 mv deletes the source object');
+      if (typeof dst === 'string') h.write(dst, s.posKinds[3]);
+      return read(`aws s3 ${op} download`);
+    }
+    return w(`aws s3 ${op ?? ''} changes buckets`.trim());
+  }
+  if (service === 'configure') return ['list', 'get', 'list-profiles'].includes(op) || op === undefined ? read('aws configure read') : w('aws configure changes credentials');
+  if (!op) return w('aws service without an operation');
+  if (AWS_SECRET_GETS.has(op)) return w(`aws ${service} ${op} reads credentials or secrets`);
+  if (/^get-parameters?(-by-path)?$/.test(op) && s.has('--with-decryption')) return w('aws ssm parameter read with decryption');
+  if (/^(describe-|list-|get-|head-|batch-get-)/.test(op) || op === 'wait') return read(`aws ${service} ${op}`);
+  if (service === 'logs' && ['tail', 'filter-log-events', 'start-query', 'get-query-results', 'stop-query'].includes(op)) return read(`aws logs ${op}`);
+  if (service === 'dynamodb' && ['scan', 'query'].includes(op)) return read(`aws dynamodb ${op}`);
+  if (service === 'cloudtrail' && op === 'lookup-events') return read('aws cloudtrail lookup-events');
+  return w(`aws ${service} ${op} is not a read operation`);
+}
+
+function bucketOf(url) {
+  return String(url).replace(/^s3:\/\//i, '').split('/')[0];
+}
+
+const GC_BOOLEANS = new Set(['--quiet', '-q', '--verbose', '--log-http', '--no-user-output-enabled', '--async', '--all', '--recursive', '--help', '-h', '--dry-run', '--force', '--version']);
+const GC_READ = new Set(['list', 'describe', 'read', 'tail', 'version', 'info', 'help', 'get-iam-policy', 'get-value', 'get-server-config', 'ls', 'cat', 'du', 'search-all-resources', 'search-all-iam-policies', 'list-tags', 'list-grantable-roles']);
+const GC_WRITE = new Set(['create', 'delete', 'update', 'deploy', 'ssh', 'scp', 'reset', 'start', 'stop', 'resize', 'patch', 'apply', 'import', 'export', 'login', 'activate-service-account', 'cp', 'mv', 'rm', 'rsync',
+  'execute', 'submit', 'cancel', 'rollback', 'restart', 'enable', 'disable', 'call', 'publish', 'attach', 'detach', 'invoke', 'connect', 'migrate', 'failover', 'promote', 'restore', 'backup', 'clone', 'upgrade', 'scale', 'suspend', 'resume', 'undelete', 'run-command']);
+
+function gcloud(args, ak, ctx) {
+  const s = scan(args, ak, { longDefault: 'value', booleans: GC_BOOLEANS });
+  const target = s.first('--project') ?? ctx.gcpProject;
+  const w = (why) => write('cloud.write', target, why);
+  if (!s.pos.length) return s.has('--version', '--help', '-h') ? read('gcloud info') : w('gcloud without a command');
+  for (let i = 0; i < s.pos.length; i += 1) {
+    const p = s.pos[i];
+    if (s.posKinds[i] !== 'lit') return w('gcloud command is not literal');
+    if (GC_READ.has(p) || /^(list|describe)-/.test(p)) return read(`gcloud ${s.pos.slice(0, i + 1).join(' ')}`);
+    if (GC_WRITE.has(p) || /^(set|add|remove|print|get)-/.test(p) || p === 'set') return w(`gcloud ${s.pos.slice(0, i + 1).join(' ')} changes resources or reads credentials`);
+  }
+  return w('gcloud command has no recognised read verb');
+}
+
+function gsutil(args, ak, h) {
+  const s = scan(args, ak, { values: new Set(['-o', '-h', '-u', '-p']) });
+  const [op, sub] = s.pos;
+  if (!op) return read('gsutil info');
+  if (['ls', 'cat', 'stat', 'du', 'hash', 'version', 'help', 'signurl'].includes(op)) return read(`gsutil ${op}`);
+  if (['acl', 'defacl', 'iam', 'label', 'lifecycle', 'logging', 'versioning', 'cors', 'web', 'retention', 'requesterpays', 'ubla', 'autoclass', 'rpo', 'pap', 'kms', 'defstorageclass', 'bucketpolicyonly'].includes(op) && sub === 'get') return read(`gsutil ${op} get`);
+  if (op === 'notification' && sub === 'list') return read('gsutil notification list');
+  if (op === 'cp' || op === 'rsync' || op === 'mv') {
+    const files = s.pos.slice(1);
+    const dst = files[files.length - 1];
+    if (typeof dst === 'string' && /^gs:\/\//i.test(dst)) return xwrite('cloud.write', dst.replace(/^gs:\/\//i, 'gs://').split('/').slice(0, 3).join('/'), `gsutil ${op} uploads to a bucket`);
+    if (op === 'mv' && files.slice(0, -1).some((x) => /^gs:\/\//i.test(x))) return write('cloud.write', undefined, 'gsutil mv deletes the source object');
+    if (dst) h.write(dst, s.posKinds[s.pos.length - 1]);
+    return read(`gsutil ${op} download`);
+  }
+  return write('cloud.write', undefined, `gsutil ${op} changes storage`);
+}
+
+function bq(args, ak, ctx) {
+  const s = scan(args, ak, { values: new Set(['--project_id', '--location', '--format', '--dataset_id', '--max_rows', '-n', '--parameter', '--destination_table', '--job_id', '--api']) });
+  const target = s.first('--project_id') ?? ctx.gcpProject;
+  const [op] = s.pos;
+  if (!op) return read('bq info');
+  if (['ls', 'show', 'head', 'version', 'help', 'wait', 'info'].includes(op)) return read(`bq ${op}`);
+  if (op === 'query') {
+    if (s.has('--destination_table', '--replace', '--append_table')) return write('cloud.write', target, 'bq query writes to a table');
+    if (s.has('--dry_run')) return read('bq query --dry_run');
+    const sql = s.pos.slice(1).join(' ');
+    if (!sql) return unknownProd('bq query SQL is not visible');
+    if (s.posKinds.slice(1).some((x) => x !== 'lit')) return unknownProd('bq query SQL is not literal');
+    return sqlReadOnly(sql) ? read('bq SELECT') : write('db.write', target, 'bq query is not read-only SQL');
+  }
+  return write('cloud.write', target, `bq ${op} changes datasets`);
+}
+
+const AZ_READ = new Set(['list', 'show', 'query', 'version', 'find', 'wait', 'exists', 'tail', 'download', 'help', 'get-versions', 'get-upgrades', 'browse', 'check-name', 'list-locations']);
+const AZ_WRITE_RE = /^(create|delete|update|set|start|stop|restart|deallocate|redeploy|reimage|run-command|invoke|ssh|deploy|add|remove|purge|scale|swap|reset|get-access-token|get-credentials|import|upload|sync|login|logout|rotate|renew|assign|grant|revoke|enable|disable|approve|reject|restore|failover|regenerate-key|keys|upgrade|move|copy|generate-sas|execute|apply|patch|attach|detach|cancel|abort|exec|connect|tunnel)$/;
+
+function az(args, ak, ctx) {
+  const s = scan(args, ak, { longDefault: 'value', booleans: new Set(['--only-show-errors', '--debug', '--verbose', '--yes', '-y', '--no-wait', '--help', '-h', '--all', '--version']) });
+  const target = s.first('--subscription') ?? ctx.azureSubscription;
+  const w = (why) => write('cloud.write', target, why);
+  if (!s.pos.length) return s.has('--version', '--help', '-h') ? read('az info') : w('az without a command');
+  for (let i = 0; i < s.pos.length; i += 1) {
+    const p = s.pos[i];
+    if (s.posKinds[i] !== 'lit') return w('az command is not literal');
+    if (AZ_READ.has(p) || /^(list|show)-/.test(p)) return read(`az ${s.pos.slice(0, i + 1).join(' ')}`);
+    if (AZ_WRITE_RE.test(p)) return w(`az ${s.pos.slice(0, i + 1).join(' ')} changes resources or reads credentials`);
+  }
+  return w('az command has no recognised read verb');
+}
+
+const ARGO_BOOLEANS = new Set(['--grpc-web', '--insecure', '--plaintext', '--core', '--prune', '--force', '--dry-run', '--async', '--refresh', '--hard-refresh', '--watch', '--cascade', '--yes', '-y', '--local', '--apply-out-of-sync-only', '--help', '-h', '--upsert']);
+const ARGO_APP_READ = new Set(['get', 'list', 'diff', 'history', 'logs', 'manifests', 'resources', 'wait', 'man']);
+
+function argocd(args, ak) {
+  const s = scan(args, ak, { longDefault: 'value', booleans: ARGO_BOOLEANS, values: new Set(['-o', '-p', '-N']) });
+  const [group, verb, a1, a2] = s.pos;
+  const w = (target, why) => write('argo.sync', target, why);
+  if (!group || ['version', 'context', 'login', 'logout', 'relogin', 'completion', 'help'].includes(group)) return read(`argocd ${group ?? 'info'}`);
+  if (s.posKinds.slice(0, 2).some((x) => x !== 'lit')) return w(undefined, 'argocd command is not literal');
+  if (group === 'app') {
+    if (ARGO_APP_READ.has(verb)) return read(`argocd app ${verb}`);
+    if (verb === 'actions') return a1 === 'list' ? read('argocd app actions list') : w(a2, `argocd app actions ${a1 ?? ''} changes the application`.trim());
+    return w(a1, `argocd app ${verb ?? ''} changes the application`.trim());
+  }
+  if (['proj', 'cluster', 'repo', 'repocreds', 'appset', 'cert', 'gpg', 'account'].includes(group) && ['list', 'get', 'get-user-info', 'can-i', 'windows'].includes(verb)) {
+    if (verb === 'windows' && a1 !== 'list') return w(undefined, 'argocd proj windows change');
+    return read(`argocd ${group} ${verb}`);
+  }
+  return w(undefined, `argocd ${group} ${verb ?? ''} changes Argo CD`.trim());
+}
+
+// ---------------------------------------------------------------- databases
+
+function stripSql(sql) {
+  // drop comments and string literals so keywords inside them do not count
+  let out = '';
+  for (let i = 0; i < sql.length; i += 1) {
+    const c = sql[i];
+    if (c === '-' && sql[i + 1] === '-') { while (i < sql.length && sql[i] !== '\n') i += 1; out += ' '; continue; }
+    if (c === '#' ) { while (i < sql.length && sql[i] !== '\n') i += 1; out += ' '; continue; }
+    if (c === '/' && sql[i + 1] === '*') { const j = sql.indexOf('*/', i + 2); i = j < 0 ? sql.length : j + 1; out += ' '; continue; }
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < sql.length) {
+        if (sql[j] === '\\' && c === "'") return null; // E'' and MySQL escapes vs standard strings disagree; not read-only
+        if (sql[j] === c) { if (sql[j + 1] === c) { j += 2; continue; } break; }
+        j += 1;
+      }
+      out += c === "'" ? "''" : ' x ';
+      i = j;
+      continue;
+    }
+    if (c === '$') {
+      const m = /^\$([A-Za-z_]\w*)?\$/.exec(sql.slice(i, i + 64));
+      if (m) return null; // dollar-quoted bodies (functions, DO blocks) are never read-only
+    }
+    out += c;
+  }
+  return out;
+}
+
+const SQL_DML_RE = /\b(insert|update|delete|merge|upsert|replace|truncate|drop|alter|create|grant|revoke|copy|call|do|lock|vacuum|reindex|cluster|refresh|comment|security|set|reset|listen|notify|unlisten|prepare|execute|exec|import|load|handler|rename|attach|detach|checkpoint|discard|reassign|kill|shutdown|flush|install|uninstall|purge|optimize|repair|analyze|into)\b/i;
+// A user function whose name says it changes something is not trusted to be read-only.
+const SQL_WRITEY_FN_RE = /\b\w*(delete|drop|insert|update|truncate|purge|kill|exec|reset|create|alter|grant|revoke|write|modify|remove|terminate|clean|wipe|apply|migrate|refresh|import|load|send|notify)\w*\s*\(/i;
+const SQL_FN_RE = /\b(pg_terminate_backend|pg_cancel_backend|pg_reload_conf|pg_rotate_logfile|set_config|lo_import|lo_export|lo_unlink|lo_create|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_file_write|dblink\w*|nextval|setval|pg_switch_wal|pg_create_restore_point|pg_\w*replication_slot\w*|pg_logical_\w+|pg_promote|pg_wal_replay_\w+|pg_advisory_\w*lock\w*|load_file|sys_exec|sys_eval|xp_\w+|sp_\w+|sleep|benchmark|get_lock|release_lock)\s*\(/i;
+
+// True only when every statement is SELECT / SHOW / EXPLAIN (no ANALYZE) / DESCRIBE / WITH … SELECT.
+export function sqlReadOnly(sql) {
+  if (typeof sql !== 'string') return false;
+  const meta = [];
+  const lines = sql.split('\n').filter((line) => {
+    const t = line.trim();
+    if (t.startsWith('\\')) { meta.push(t); return false; }
+    return true;
+  });
+  for (const m of meta) if (!/^\\(d[A-Za-z+]*|l\+?|conninfo|x|timing|\?|z|encoding)(\s|$)/.test(m)) return false;
+  const cleaned = stripSql(lines.join('\n'));
+  if (cleaned === null) return false;
+  if (cleaned.includes('\\')) return false; // \gexec, \g |cmd, \o, \! … mid-line
+  const stmts = cleaned.split(';').map((x) => x.trim()).filter(Boolean);
+  if (!stmts.length) return meta.length > 0;
+  for (const st of stmts) {
+    const first = (/^\(*\s*([A-Za-z]+)/.exec(st) ?? [])[1]?.toLowerCase();
+    if (first === 'show' || first === 'describe' || first === 'desc') { if (/\b(into|set)\b/i.test(st)) return false; continue; }
+    if (first === 'explain') { if (/\banalyze\b/i.test(st)) return false; continue; }
+    if (first !== 'select' && first !== 'with' && first !== 'values' && first !== 'table') return false;
+    if (SQL_DML_RE.test(st) || SQL_FN_RE.test(st) || SQL_WRITEY_FN_RE.test(st)) return false;
+  }
+  return true;
+}
+
+function sqlVerdict(sqls, kinds, target, tool) {
+  if (kinds.some((x) => x !== 'lit')) return unknownProd(`${tool} SQL is not literal`);
+  return sqls.every((x) => sqlReadOnly(x)) ? read(`${tool} read-only SQL`) : write('db.write', target, `${tool} runs SQL that is not read-only`);
+}
+
+const PSQL_VALUES = new Set(['-c', '--command', '-f', '--file', '-d', '--dbname', '-h', '--host', '-p', '--port', '-U', '--username', '-v', '--set', '--variable', '-o', '--output', '-L', '--log-file', '-P', '--pset', '-F', '--field-separator', '-R', '--record-separator', '-T', '--table-attr']);
+
+function psql(args, ak, seg, ctx, h) {
+  const s = scan(args, ak, { values: PSQL_VALUES });
+  const target = s.first('-h', '--host') ?? s.first('-d', '--dbname') ?? ctx.dbEnv;
+  for (const o of s.all('-o', '--output', '-L', '--log-file')) {
+    if (String(o.v ?? '').trim().startsWith('|')) return unknownProd('psql output is piped into a command');
+    h.write(o.v, o.kind);
+  }
+  if (s.has('-f', '--file')) return unknownProd('psql -f runs a SQL file the guard cannot see');
+  const cmds = s.all('-c', '--command');
+  if (cmds.length) return sqlVerdict(cmds.map((c) => c.v ?? ''), cmds.map((c) => c.kind), target, 'psql');
+  if (s.has('-l', '--list', '-V', '--version', '--help', '-?')) return read('psql info');
+  return stdinSql(seg, target, 'psql');
+}
+
+function stdinSql(seg, target, tool) {
+  if (seg.stdin !== null && !seg.stdinDyn) return sqlVerdict([seg.stdin], ['lit'], target, tool);
+  if (seg.redirects.some((x) => x.op.replace(/^\d+/, '') === '<')) return unknownProd(`${tool} reads SQL from a file`);
+  return unknownProd(`${tool} SQL is not visible (interactive or piped)`);
+}
+
+function mysql(args, ak, seg, h) {
+  const s = scan(args, ak, { values: new Set(['-e', '--execute', '-h', '--host', '-u', '--user', '-P', '--port', '-D', '--database', '--defaults-file', '--defaults-extra-file', '-S', '--socket', '--init-command', '--tee']) });
+  const target = s.first('-h', '--host') ?? s.first('-D', '--database');
+  if (s.has('--init-command')) return unknownProd('mysql --init-command');
+  if (s.has('--pager') || args.some((t) => t.startsWith('--pager'))) return unknownProd('mysql --pager runs a command');
+  for (const o of s.all('--tee')) h.write(o.v, o.kind);
+  const cmds = s.all('-e', '--execute');
+  if (cmds.length) return sqlVerdict(cmds.map((c) => c.v ?? ''), cmds.map((c) => c.kind), target, 'mysql');
+  if (s.has('-V', '--version', '--help', '-?')) return read('mysql info');
+  return stdinSql(seg, target, 'mysql');
+}
+
+const MONGO_WRITE_RE = /\b(insert\w*|update\w*|delete\w*|remove|drop\w*|replace\w*|create\w*|rename\w*|bulkWrite|findOneAnd\w+|findAndModify|save|runCommand|adminCommand|eval|shutdownServer|grant\w*|revoke\w*|mapReduce|copyTo|setProfilingLevel|fsyncLock|fsyncUnlock|killOp|load|cloneCollection|compact|reIndex|hideIndex|unhideIndex|enableSharding|shardCollection|moveChunk|stepDown|reconfig)\b|\$out\b|\$merge\b/;
+const MONGO_READ_RE = /\b(find|findOne|count|countDocuments|estimatedDocumentCount|aggregate|distinct|getCollectionNames|getCollectionInfos|stats|explain|show|getIndexes|listCollections|hostInfo|serverStatus|version|printjson|getName|isMaster|hello|rs\.status|ping)\b/;
+
+function mongoVerdict(js, kind) {
+  if (kind !== 'lit') return unknownProd('mongosh script is not literal');
+  if (MONGO_WRITE_RE.test(js)) return write('db.write', undefined, 'mongosh script changes data');
+  if (MONGO_READ_RE.test(js)) return read('mongosh read');
+  return unknownProd('mongosh script has no recognised read operation');
+}
+
+function mongosh(args, ak, seg) {
+  const s = scan(args, ak, { values: new Set(['--eval', '--file', '-f', '--host', '--port', '-u', '--username', '-p', '--password', '--authenticationDatabase', '--authenticationMechanism', '--tlsCAFile']) });
+  const evals = s.all('--eval');
+  if (s.has('--file', '-f') || s.pos.some((x) => /\.js$/i.test(x))) return unknownProd('mongosh runs a script file');
+  if (evals.length) {
+    let worst = read('mongosh read');
+    for (const e of evals) worst = strictest(worst, mongoVerdict(e.v ?? '', e.kind));
+    return worst;
+  }
+  if (s.has('--version', '--help', '-h')) return read('mongosh info');
+  if (seg.stdin !== null && !seg.stdinDyn) return mongoVerdict(seg.stdin, 'lit');
+  return unknownProd('mongosh input is not visible');
+}
+
+const REDIS_READ = new Set(['GET', 'MGET', 'KEYS', 'SCAN', 'EXISTS', 'TTL', 'PTTL', 'TYPE', 'STRLEN', 'GETRANGE', 'HGET', 'HGETALL', 'HMGET', 'HKEYS', 'HVALS', 'HLEN', 'HEXISTS', 'HSCAN', 'HSTRLEN', 'HRANDFIELD',
+  'LRANGE', 'LLEN', 'LINDEX', 'LPOS', 'SMEMBERS', 'SISMEMBER', 'SMISMEMBER', 'SCARD', 'SSCAN', 'SRANDMEMBER', 'SINTER', 'SUNION', 'SDIFF', 'ZRANGE', 'ZRANGEBYSCORE', 'ZRANGEBYLEX', 'ZREVRANGE',
+  'ZREVRANGEBYSCORE', 'ZSCORE', 'ZMSCORE', 'ZCARD', 'ZCOUNT', 'ZLEXCOUNT', 'ZRANK', 'ZREVRANK', 'ZSCAN', 'INFO', 'PING', 'DBSIZE', 'TIME', 'ECHO', 'XRANGE', 'XREVRANGE', 'XLEN', 'XINFO', 'XPENDING',
+  'PFCOUNT', 'GEOPOS', 'GEODIST', 'GEOHASH', 'GEOSEARCH', 'BITCOUNT', 'BITPOS', 'GETBIT', 'OBJECT', 'DUMP', 'LASTSAVE', 'ROLE', 'LOLWUT', 'COMMAND', 'PUBSUB', 'RANDOMKEY', 'TOUCH', 'SUBSCRIBE', 'PSUBSCRIBE']);
+const REDIS_SUB_READ = { CONFIG: ['GET'], CLIENT: ['LIST', 'INFO', 'GETNAME', 'ID'], SLOWLOG: ['GET', 'LEN'], MEMORY: ['USAGE', 'STATS', 'DOCTOR'], CLUSTER: ['INFO', 'NODES', 'SLOTS', 'SHARDS', 'MYID'], LATENCY: ['LATEST', 'HISTORY', 'DOCTOR'], ACL: ['WHOAMI', 'CAT'], MODULE: ['LIST'], FUNCTION: ['LIST'] };
+
+function redis(args, ak) {
+  const s = scan(args, ak, { values: new Set(['-h', '-p', '-a', '-n', '-u', '--user', '--pass', '-s', '-r', '-i', '--cacert', '--cert', '--key', '--sni', '--pattern', '--eval', '--rdb', '--intrinsic-latency', '--count', '-d']) });
+  if (s.has('--eval', '--pipe', '--functions-rdb')) return unknownProd('redis-cli runs a script or raw protocol');
+  const [cmd, sub] = s.pos.map((x) => String(x).toUpperCase());
+  if (!cmd) {
+    if (s.has('--scan', '--bigkeys', '--memkeys', '--hotkeys', '--stat', '--latency', '--latency-history', '--latency-dist', '--intrinsic-latency', '--rdb', '--version', '-v', '--help')) return read('redis-cli inspection');
+    return unknownProd('redis-cli interactive input is not visible');
+  }
+  if (s.posKinds[0] !== 'lit') return write('db.write', undefined, 'redis command is not literal');
+  if (REDIS_READ.has(cmd)) return read(`redis ${cmd}`);
+  if (REDIS_SUB_READ[cmd]?.includes(sub)) return read(`redis ${cmd} ${sub}`);
+  return write('db.write', s.first('-h'), `redis ${cmd} changes data or server state`);
+}
+
+function sqlcmd(args, ak, h) {
+  const s = scan(args, ak, { values: new Set(['-Q', '-q', '-i', '-S', '-d', '-U', '-P', '-o', '-v', '-s', '-w', '-h', '-l', '-t', '-H', '-W', '-f', '-c', '-k', '-a', '-x']) });
+  if (s.has('-i')) return unknownProd('sqlcmd -i runs a SQL file');
+  for (const o of s.all('-o')) h.write(o.v, o.kind);
+  const qs = s.all('-Q', '-q');
+  if (qs.length) return sqlVerdict(qs.map((x) => x.v ?? ''), qs.map((x) => x.kind), s.first('-S'), 'sqlcmd');
+  if (s.has('-?')) return read('sqlcmd help');
+  return unknownProd('sqlcmd input is not visible');
+}
+
+function invokeSqlcmd(args, ak, h) {
+  const s = psParams(args, ak, { values: ['query', 'inputfile', 'serverinstance', 'database', 'username', 'password', 'credential', 'querytimeout', 'connectionstring', 'variable', 'outputas', 'hostname', 'accesstoken'], switches: ['trustservercertificate', 'encrypt', 'includesqlusererrors', 'abortonerror'] });
+  if (s.get('inputfile')) return unknownProd('Invoke-Sqlcmd -InputFile runs a SQL file');
+  const q = s.get('query') ?? s.pos[0];
+  if (!q) return unknownProd('Invoke-Sqlcmd query is not visible');
+  return sqlVerdict([q.v], [q.kind], s.get('serverinstance')?.v, 'Invoke-Sqlcmd');
+}
+
+// ---------------------------------------------------------------- infrastructure as code
+
+function terraform(args, ak) {
+  const s = scan(args, ak, {});
+  const [verb, sub] = s.pos;
+  if (!verb) return read('terraform info');
+  if (['plan', 'show', 'output', 'validate', 'fmt', 'version', 'providers', 'graph', 'init', 'get', 'console', 'help', 'metadata', 'modules'].includes(verb)) return read(`terraform ${verb}`);
+  if (verb === 'state' && ['list', 'show', 'pull'].includes(sub)) return read(`terraform state ${sub}`);
+  if (verb === 'workspace' && ['list', 'show', 'select'].includes(sub)) return read(`terraform workspace ${sub}`);
+  return write('deploy', undefined, `terraform ${verb} changes infrastructure`);
+}
+
+function pulumi(args, ak) {
+  const s = scan(args, ak, { values: new Set(['-s', '--stack', '-C', '--cwd']) });
+  const [verb, sub] = s.pos;
+  const target = s.first('-s', '--stack');
+  if (!verb) return read('pulumi info');
+  if (['preview', 'pre', 'whoami', 'version', 'about', 'logs', 'help'].includes(verb)) return read(`pulumi ${verb}`);
+  if (verb === 'stack' && (sub === undefined || ['ls', 'output', 'select', 'history', 'export', 'graph'].includes(sub))) return read(`pulumi stack ${sub ?? ''}`.trim());
+  if (verb === 'config' && (sub === undefined || ['get', 'ls'].includes(sub))) return read('pulumi config read');
+  if (verb === 'plugin' && sub === 'ls') return read('pulumi plugin ls');
+  return write('deploy', target, `pulumi ${verb} changes infrastructure`);
+}
+
+function cdk(args, ak) {
+  const s = scan(args, ak, { values: new Set(['-a', '--app', '--profile', '-c', '--context', '-o', '--output', '--role-arn', '-r']) });
+  const [verb] = s.pos;
+  if (!verb || ['synth', 'synthesize', 'diff', 'ls', 'list', 'doctor', 'docs', 'doc', 'version', 'context', 'notices', 'metadata', 'acknowledge', 'ack', 'init', 'help'].includes(verb)) return read(`cdk ${verb ?? 'info'}`);
+  return write('deploy', s.first('--profile'), `cdk ${verb} changes infrastructure`);
+}
+
+function serverless(args, ak) {
+  const s = scan(args, ak, { values: new Set(['-s', '--stage', '-r', '--region', '-f', '--function', '-p', '--path', '-d', '--data', '-c', '--config', '--aws-profile']) });
+  const [verb, sub] = s.pos;
+  const target = s.first('-s', '--stage');
+  if (!verb || ['print', 'info', 'package', 'help', 'version', 'logs', 'metrics'].includes(verb)) return read(`serverless ${verb ?? 'info'}`);
+  if (verb === 'invoke' && sub === 'local') return read('serverless invoke local');
+  if (verb === 'plugin' && ['list', 'search'].includes(sub)) return read('serverless plugin list');
+  return write('deploy', target, `serverless ${verb} changes a deployed service`);
+}
+
+// ---------------------------------------------------------------- git and GitHub
+
+function defaultProtected(ctx) {
+  return (name) => {
+    if (typeof name !== 'string' || !name) return true;
+    if (['main', 'master', 'trunk', 'develop'].includes(name) || /^release\//.test(name)) return true;
+    return !!ctx.defaultBranch && name === ctx.defaultBranch;
+  };
+}
+
+function isProtected(ctx, name) {
+  const fn = typeof ctx.isProtectedBranch === 'function' ? ctx.isProtectedBranch : defaultProtected(ctx);
+  try { return !!fn(name); } catch { return true; }
+}
+
+// Environment that makes git read other config, use another repository or work tree, write to
+// another file or run other programs. GIT_DIR and GIT_WORK_TREE are never trusted: git resolves
+// them against wherever it ends up running (after cd, -C or inside a function), which the guard
+// does not model.
+const GIT_EXEC_ENV_RE = /^(GIT_CONFIG_PARAMETERS|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM|GIT_CONFIG|GIT_SSH|GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_ASKPASS|SSH_ASKPASS|GIT_EXTERNAL_DIFF|GIT_PROXY_COMMAND|GIT_TEMPLATE_DIR|GIT_INDEX_FILE|GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_ALLOW_PROTOCOL|GIT_REDIRECT_STDIN|GIT_REDIRECT_STDOUT|GIT_REDIRECT_STDERR)$/i;
+// Programs git starts (pager, editor); git falls back to PAGER, VISUAL and EDITOR.
+const GIT_PROGRAM_ENV_RE = /^(GIT_PAGER|GIT_EDITOR|GIT_SEQUENCE_EDITOR|PAGER|EDITOR|VISUAL)$/i;
+const HARMLESS_PROGRAMS = new Set(['', 'cat', 'true', 'false', ':', 'less', 'more']);
+
+function samePath(a, b, ctx) {
+  return isWin(ctx) ? String(a).toLowerCase() === String(b).toLowerCase() : a === b;
+}
+
+// env: name → literal value, or null when the value is not known. `prefixOnGit`: the assignment
+// is a prefix of a literal `git` command (GIT_PAGER=cat git log), so it lasts for that command
+// only; only then is a harmless pager or editor value allowed.
+function gitEnvProblem(env, prefixOnGit = false) {
+  if (!env || typeof env !== 'object') return null;
+  for (const [k, v] of Object.entries(env)) {
+    // R17.3: CDPATH sends a relative `cd` somewhere the call does not name; any assignment or
+    // export of it is refused, wherever it is made
+    if (/^CDPATH$/i.test(k)) return 'CDPATH changes where cd goes';
+    // R19.6: startup files, prompt hooks and shell options run or change commands unseen
+    if (/^(BASH_ENV|ENV|PROMPT_COMMAND|SHELLOPTS|BASHOPTS)$/i.test(k)) return `${k} makes the shell run or change commands the guard cannot see`;
+    if (/^PS4$/i.test(k) && (typeof v !== 'string' || /\$\(|`/.test(v))) return 'PS4 with a command substitution runs it before every traced command';
+    if (GIT_EXEC_ENV_RE.test(k)) return `${k} changes what git runs or reads`;
+    if (GIT_PROGRAM_ENV_RE.test(k)) {
+      if (prefixOnGit && typeof v === 'string' && HARMLESS_PROGRAMS.has(v)) continue;
+      return `${k} makes git run a program the guard cannot see`;
+    }
+    if (/^GIT_TRACE\w*$/i.test(k)) {
+      if (typeof v === 'string' && /^(|[0-9]|true|false|yes|no|on|off)$/i.test(v)) continue;
+      return `${k} makes git write trace output to a file`;
+    }
+    if (/^GIT_CONFIG_KEY_\d+$/i.test(k)) {
+      if (typeof v !== 'string') return `${k} is not literal`;
+      if (GIT_EXEC_CONFIG_RE.test(v) || /^(push|remote|branch)\./i.test(v)) return `${k}=${v} can make git run arbitrary commands`;
+    }
+  }
+  return null;
+}
+
+const GIT_GLOBAL_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix']);
+// core.worktree points later git commands (reset --hard, checkout) at another directory.
+const GIT_EXEC_CONFIG_RE = /^(core\.(sshcommand|pager|editor|hookspath|fsmonitor|gitproxy|askpass|worktree)|credential\..*|diff\..*\.(textconv|command)|diff\.external|merge\..*\.driver|filter\..*|sequence\.editor|gpg\..*program|pager\..*|uploadpack\..*|alias\..*|remote\..*\.(receivepack|uploadpack|vcs)|protocol\..*|url\..*|include\.path|includeif\..*\.path|submodule\..*\.update|init\.templatedir|(merge|diff)tool\..*\.(cmd|path)|interactive\.difffilter|trailer\..*\.(command|cmd)|sendemail\..*|browser\..*\.(cmd|path)|man\..*\.(cmd|path)|web\.browser|ssh\.variant|core\.(sshcommand|editor|pager|askpass)|gpg\.program)$/i;
+// R58 (final review I1): a run's checkout is a worktree, so refs, objects, reflogs, config and its
+// index live in the owner's repository (<canonical>/.git), outside every root, and git never names
+// those paths. git is therefore classified by what it writes, not by where:
+//  - GIT_READ: read-only subcommands (their read-only forms are picked out below for the rest);
+//  - `git.edit`: changes only the checkout's files (needs edit_source);
+//  - `git.commit`: writes the shared repository's refs, objects, config, hooks or index (needs
+//    commit), and a ref write naming the default or a protected branch is `git.protected`.
+// Anything not listed is unparseable (it may be an alias).
+const GIT_READ = new Set(['status', 'log', 'diff', 'show', 'blame', 'annotate', 'grep', 'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'rev-parse', 'rev-list', 'describe', 'shortlog',
+  'merge-base', 'name-rev', 'for-each-ref', 'show-ref', 'diff-tree', 'diff-index', 'diff-files', 'whatchanged', 'range-diff', 'cherry', 'check-ignore', 'check-attr', 'check-mailmap',
+  'check-ref-format', 'count-objects', 'var', 'version', 'help', 'verify-commit', 'verify-tag', 'verify-pack', 'show-branch', 'show-index', 'get-tar-commit-id', 'column', 'stripspace',
+  'request-pull', 'difftool', 'interpret-trailers']);
+const GIT_WRITE = new Set(['commit-tree', 'mktree', 'mktag', 'write-tree', 'gc', 'prune', 'prune-packed', 'repack', 'pack-refs', 'maintenance', 'unpack-objects', 'index-pack',
+  'update-index', 'read-tree', 'add', 'rm', 'mv', 'mergetool']);
+// Read-only forms of subcommands that otherwise write: the first non-option word.
+const GIT_READ_FORMS = {
+  stash: ['list', 'show'], notes: ['list', 'show', 'get-ref'], reflog: ['show', 'list', 'exists'], worktree: ['list'], submodule: ['status', 'summary'],
+  bisect: ['log', 'view', 'visualize', 'terms', 'help'], rerere: ['status', 'diff', 'remaining'], 'sparse-checkout': ['list'], 'commit-graph': ['verify'], 'multi-pack-index': ['verify'],
+  lfs: ['ls-files', 'status', 'env', 'version', 'logs', 'locks', 'pointer', 'fsck', 'help'], bundle: ['verify', 'list-heads'],
+};
+// Subcommands whose bare form (no subcommand word) only lists.
+const GIT_BARE_READ = new Set(['notes', 'reflog', 'lfs', 'submodule']);
+const GIT_COMMIT = new Set(['commit', 'revert', 'am', 'cherry-pick', 'rebase', 'merge']);
+const GIT_WRITE_REASON = 'it writes the shared repository (refs, objects, index or configuration), which needs the commit permission';
+
+// A ref a git command writes, as the branch it names: a branch name, null for a ref that is not a
+// branch (tags, remote-tracking refs, notes, a detached HEAD), or undefined when it cannot be told.
+function branchOfRef(ref, ctx) {
+  if (typeof ref !== 'string' || !ref) return undefined;
+  const r0 = ref.replace(/^\+/, '');
+  if (r0 === 'HEAD' || r0 === '@') return ctx.currentBranch || null;
+  if (/^refs\/heads\//.test(r0)) return r0.slice('refs/heads/'.length);
+  if (/^refs\//.test(r0)) return null;
+  // a short name: git commands that write one treat it as a branch (update-ref writes $GIT_DIR/<name>)
+  return r0;
+}
+
+// A write of the shared repository: `git.protected` when it names the default or a protected
+// branch (or a ref the guard cannot read), else `git.commit`.
+function gitRefWrite(ctx, refs, what) {
+  for (const ref of refs) {
+    const b = branchOfRef(ref, ctx);
+    if (b === undefined) return write('git.protected', undefined, `${what} writes a ref the guard cannot read`);
+    if (b !== null && /[*?[]/.test(b)) return write('git.protected', b, `${what} writes refs by pattern (${b})`);
+    if (b !== null && isProtected(ctx, b)) return write('git.protected', b, `${what} writes protected branch ${b}`);
+  }
+  return write('git.commit', undefined, `${what}: ${GIT_WRITE_REASON}`);
+}
+
+const gitEdit = (what) => write('git.edit', undefined, `${what} changes the checkout's files`);
+
+// The words of a git subcommand without its options: options in `values` take the next word.
+function gitWords(rest, values = new Set()) {
+  const pos = [];
+  const flags = [];
+  let ended = false;
+  for (let j = 0; j < rest.length; j += 1) {
+    const t = rest[j];
+    if (!ended && t === '--') { ended = true; pos.push('--'); continue; }
+    if (!ended && t.startsWith('-') && t !== '-') {
+      flags.push(t);
+      if (values.has(t)) { j += 1; flags.push(rest[j]); }
+      continue;
+    }
+    pos.push(t);
+  }
+  const has = (...names) => flags.some((f) => names.some((n) => f === n || (n.startsWith('--') && f.startsWith(`${n}=`)) || (/^-[A-Za-z]$/.test(n) && /^-[A-Za-z]+$/.test(f) && !f.startsWith('--') && f.includes(n[1]))));
+  return { pos, flags, has };
+}
+
+// Refspec destinations a fetch or pull would write (src:dst), or the refmap's.
+function fetchDestinations(words) {
+  const out = [];
+  for (const w of words) {
+    const colon = String(w).indexOf(':');
+    if (colon < 0) continue;
+    // a URL (https://, ssh://, user@host:path) is the repository, not a refspec
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(w) || /^[^/:]*@[^/:]+:/.test(w)) continue;
+    const dst = w.slice(colon + 1);
+    if (dst) out.push(w.startsWith('+') && !dst.startsWith('+') ? `+${dst}` : dst);
+  }
+  return out;
+}
+
+function gitBranch(rest, ctx) {
+  const VALUES = new Set(['--contains', '--no-contains', '--merged', '--no-merged', '--points-at', '--sort', '--format', '-u', '--set-upstream-to']);
+  const w = gitWords(rest, VALUES);
+  const pos = w.pos.filter((x) => x !== '--');
+  if (w.has('-d', '-D', '--delete')) return gitRefWrite(ctx, w.has('-r', '--remotes') ? pos.map((x) => `refs/remotes/${x}`) : pos.length ? pos : [undefined], 'git branch delete');
+  if (w.has('-m', '-M', '--move', '-c', '-C', '--copy')) return gitRefWrite(ctx, pos.length >= 2 ? pos : ['HEAD', ...pos], 'git branch rename or copy');
+  if (w.has('-u', '--set-upstream-to', '--unset-upstream', '--edit-description', '-t', '--track', '--no-track')) return write('git.commit', undefined, `git branch upstream or description: ${GIT_WRITE_REASON}`);
+  const listing = w.has('-l', '--list', '--show-current', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at');
+  if (!pos.length || (listing && !w.has('-f', '--force'))) return local('git branch listing');
+  return gitRefWrite(ctx, [pos[0]], 'git branch create');
+}
+
+function gitTag(rest) {
+  const VALUES = new Set(['--contains', '--no-contains', '--merged', '--no-merged', '--points-at', '--sort', '--format', '-m', '--message', '-F', '--file', '-u', '--local-user', '--cleanup']);
+  const w = gitWords(rest, VALUES);
+  const pos = w.pos.filter((x) => x !== '--');
+  if (w.has('-v', '--verify')) return local('git tag --verify');
+  const writing = w.has('-a', '--annotate', '-s', '--sign', '-u', '--local-user', '-f', '--force', '-d', '--delete', '-m', '--message', '-F', '--file', '-e', '--edit', '--create-reflog');
+  const listing = w.has('-l', '--list', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at') || w.flags.some((f) => /^-n\d*$/.test(f));
+  if (!writing && (!pos.length || listing)) return local('git tag listing');
+  return write('git.commit', undefined, `git tag: ${GIT_WRITE_REASON}`);
+}
+
+function gitConfig(rest, restK, h, base, baseRaw) {
+  const cs = scan(rest, restK, { values: new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']) });
+  if (cs.has('-e', '--edit') || cs.pos[0] === 'edit') return unparseable('git config --edit opens an editor');
+  const VERBS = new Set(['set', 'unset', 'rename-section', 'remove-section']);
+  const getting = cs.has('--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l') || ['get', 'list'].includes(cs.pos[0]);
+  const writing = cs.has('--unset', '--unset-all', '--remove-section', '--rename-section', '--add', '--replace-all') || VERBS.has(cs.pos[0]) || (!getting && cs.pos.length >= 2);
+  if (!writing) return local('git config read');
+  const key = VERBS.has(cs.pos[0]) ? cs.pos[1] : cs.pos[0];
+  if (GIT_EXEC_CONFIG_RE.test(String(key ?? ''))) return unparseable(`git config ${key} can make git run arbitrary commands`);
+  if (/^(push|remote|branch)\./i.test(String(key ?? ''))) return unparseable(`git config ${key} changes where pushes go`);
+  if (cs.has('--global', '--system')) return unparseable('git config --global or --system writes the owner\'s configuration outside the run');
+  const files = cs.all('-f', '--file');
+  if (files.length) { for (const f of files) h.write(f.v, f.kind, base, baseRaw); return local('git config --file'); }
+  return write('git.commit', undefined, `git config ${key ?? ''}: ${GIT_WRITE_REASON}`);
+}
+
+// checkout, switch, restore and reset: which forms move refs (commit, protected branch), which
+// only write the index (commit), and which only change the checkout's files (edit).
+function gitMove(sub, rest, ctx) {
+  const VALUES = new Set(['-b', '-B', '-c', '-C', '--orphan', '-s', '--source', '--conflict', '--pathspec-from-file', '--recurse-submodules', '-U', '--inter-hunk-context']);
+  const w = gitWords(rest, VALUES);
+  const dd = w.pos.indexOf('--');
+  const before = (dd < 0 ? w.pos : w.pos.slice(0, dd));
+  const newBranch = (...names) => { for (let j = 0; j < w.flags.length; j += 1) if (names.includes(w.flags[j])) return w.flags[j + 1]; return undefined; };
+  if (sub === 'restore') {
+    if (w.has('-S', '--staged')) return write('git.commit', undefined, `git restore --staged: ${GIT_WRITE_REASON}`);
+    return gitEdit('git restore');
+  }
+  if (sub === 'switch') {
+    const created = newBranch('-c', '-C', '--orphan');
+    return gitRefWrite(ctx, created !== undefined ? [created] : w.has('--detach', '-d') ? [] : [before[0] ?? undefined], 'git switch');
+  }
+  if (sub === 'checkout') {
+    const created = newBranch('-b', '-B', '--orphan');
+    if (created !== undefined) return gitRefWrite(ctx, [created], 'git checkout -b');
+    // `git checkout -- <paths>` copies the index to the checkout's files; anything before `--`
+    // (a branch, a commit, or a path the guard cannot tell from one) may move HEAD or the index
+    if (dd >= 0 && !before.length && !w.has('-p', '--patch', '--detach', '-f', '--force', '-m', '--merge', '--conflict')) return gitEdit('git checkout -- <paths>');
+    if (dd >= 0) return write('git.commit', undefined, `git checkout <tree> -- <paths>: ${GIT_WRITE_REASON}`);
+    if (w.has('--detach')) return write('git.commit', undefined, `git checkout --detach: ${GIT_WRITE_REASON}`);
+    return gitRefWrite(ctx, [before[0] ?? 'HEAD'], 'git checkout (it may switch branches; to discard changes to files use git checkout -- <paths> or git restore <paths>)');
+  }
+  // reset: with a commit it moves the current branch; with paths or nothing it writes the index
+  const moves = before.length > 0 || w.has('--hard', '--soft', '--merge', '--keep');
+  return moves && dd < 0 ? gitRefWrite(ctx, ['HEAD'], 'git reset') : write('git.commit', undefined, `git reset: ${GIT_WRITE_REASON}`);
+}
+
+function gitFetch(sub, rest, ctx) {
+  const VALUES = new Set(['--depth', '--deepen', '--shallow-since', '--shallow-exclude', '--refmap', '-j', '--jobs', '--negotiation-tip', '--server-option', '-o', '--filter', '--submodule-prefix', '--recurse-submodules-default', '-s', '--strategy', '-X', '--strategy-option', '--cleanup']);
+  const w = gitWords(rest, VALUES);
+  const pos = w.pos.filter((x) => x !== '--');
+  const refmaps = [];
+  for (let j = 0; j < w.flags.length; j += 1) {
+    if (w.flags[j] === '--refmap') refmaps.push(w.flags[j + 1]);
+    else if (String(w.flags[j]).startsWith('--refmap=')) refmaps.push(w.flags[j].slice('--refmap='.length));
+  }
+  const dests = fetchDestinations([...(w.has('--all', '--multiple') ? [] : pos.slice(1)), ...refmaps.filter((x) => typeof x === 'string')]);
+  if (sub === 'pull') return gitRefWrite(ctx, ['HEAD', ...dests], 'git pull (a merge or rebase into the current branch)');
+  // a fetch that writes local branches, tags by force, or HEAD; remote-tracking refs are a fetch's own
+  const local0 = dests.filter((d) => !/^\+?refs\/remotes\//.test(d));
+  if (local0.length) return gitRefWrite(ctx, local0, 'git fetch into local refs');
+  if (w.has('--update-head-ok', '-P', '--prune-tags')) return write('git.commit', undefined, `git fetch --update-head-ok or --prune-tags: ${GIT_WRITE_REASON}`);
+  return local('git fetch');
+}
+
+function git(args, ak, seg, ctx, h) {
+  let i = 0;
+  let pushConfig = false;
+  // git -C <dir> runs in <dir>: relative paths resolve there (null = unknown)
+  let base = h.cwd();
+  // the same directory as the text supplied it, so the guard applies a leading `..` physically
+  let baseRaw = h.cwdRaw();
+  let moved = 0; // number of -C options
+  while (i < args.length && args[i].startsWith('-')) {
+    const t = args[i];
+    if (t === '-C') {
+      const v = args[i + 1];
+      if (++moved > 16) return unparseable('too many git -C directory changes to follow');
+      if (v !== undefined) {
+        if (ak[i + 1] !== 'lit' || (base === null && !isAbsLike(v))) {
+          base = null;
+          baseRaw = null;
+        } else {
+          // R17.2: the directory git runs in is read like a path, with the same `..` rules
+          const d = h.dir(v, 'lit', base, baseRaw);
+          if (!d) return unparseable(h.bad ?? `git -C ${String(v).slice(0, 80)} is not a literal path`);
+          base = d.cwd;
+          baseRaw = d.raw;
+        }
+      }
+      i += 2;
+      continue;
+    }
+    // --git-dir and --work-tree are never trusted, like GIT_DIR and GIT_WORK_TREE
+    const dirOpt = /^--(git-dir|work-tree)(=|$)/.exec(t);
+    if (dirOpt) return unparseable(`git --${dirOpt[1]} points git at another repository or work tree`);
+    if (t === '-c' || t.startsWith('-c')) {
+      const kv = t === '-c' ? args[i + 1] : t.slice(2);
+      const key = String(kv ?? '').split('=')[0];
+      if (GIT_EXEC_CONFIG_RE.test(key)) return unparseable(`git -c ${key} can run arbitrary commands`);
+      if (/^(push|remote|branch)\./i.test(key)) pushConfig = true;
+      i += t === '-c' ? 2 : 1;
+      continue;
+    }
+    if (t.startsWith('--exec-path')) return unparseable('git --exec-path changes which programs git runs');
+    if (t === '--config-env' || t.startsWith('--config-env=')) {
+      const key = String(t === '--config-env' ? args[i + 1] ?? '' : t.slice(13)).split('=')[0];
+      if (GIT_EXEC_CONFIG_RE.test(key)) return unparseable(`git --config-env ${key} can run arbitrary commands`);
+      if (/^(push|remote|branch)\./i.test(key)) pushConfig = true;
+      i += t === '--config-env' ? 2 : 1;
+      continue;
+    }
+    if (GIT_GLOBAL_VALUES.has(t)) { i += 2; continue; }
+    i += 1;
+  }
+  // rebase -x and bisect run commands run at the top of the work tree: known only when git runs
+  // at the top of the checkout
+  const top = base !== null && typeof ctx.cwd === 'string' && samePath(normalizeAbs(base, ctx), normalizeAbs(ctx.cwd, ctx), ctx) ? base : null;
+  const topRaw = top === null ? null : baseRaw;
+  const sub = args[i];
+  const rest = args.slice(i + 1);
+  const restK = ak.slice(i + 1);
+  if (sub === undefined) return local('git info');
+  if (ak[i] !== 'lit') return unparseable('git subcommand is not literal');
+  if (rest.some((t) => /^--(upload-pack|receive-pack|exec)(=|$)/.test(t))) return unparseable(`git ${sub} with a custom remote program`);
+  if (sub === 'remote' && ['set-url', 'add', 'set-head', 'rename'].includes(rest.find((x) => !x.startsWith('-')))) return unparseable(`git remote ${rest.find((x) => !x.startsWith('-'))} changes where pushes go`);
+  if (sub === 'config') return gitConfig(rest, restK, h, base, baseRaw);
+  if (sub === 'clone') {
+    const cs = scan(rest, restK, { values: new Set(['-u', '--upload-pack', '-c', '--config', '-b', '--branch', '-o', '--origin', '--depth', '--reference', '--separate-git-dir', '--template', '-j', '--jobs', '--filter', '--shallow-since', '--shallow-exclude', '--server-option']) });
+    if (cs.has('-u', '--upload-pack', '--template')) return unparseable('git clone with a custom upload-pack or template');
+    for (const c of cs.all('-c', '--config')) if (GIT_EXEC_CONFIG_RE.test(String(c.v ?? '').split('=')[0])) return unparseable('git clone --config can run arbitrary commands');
+    if (cs.pos[1] !== undefined) h.write(cs.pos[1], cs.posKinds[1], base, baseRaw);
+    else if (cs.pos[0] !== undefined) h.write(String(cs.pos[0]).replace(/[\\/]+$/, '').replace(/^.*[\\/:]/, '').replace(/\.git$/, '') || '.', cs.posKinds[0], base, baseRaw);
+    for (const d of cs.all('--separate-git-dir')) h.write(d.v, d.kind, base, baseRaw);
+    return local('git clone');
+  }
+  // init and worktree add create a directory: the repository, or a work tree with its .git file
+  if (sub === 'init') {
+    const cs = scan(rest, restK, { values: new Set(['--template', '--separate-git-dir', '-b', '--initial-branch', '--object-format', '--ref-format']) });
+    if (cs.has('--template')) return unparseable('git init --template copies hooks from another directory');
+    h.write(cs.pos[0] ?? '.', cs.posKinds[0] ?? 'lit', base, baseRaw);
+    for (const d of cs.all('--separate-git-dir')) h.write(d.v, d.kind, base, baseRaw);
+    return local('git init');
+  }
+  if (sub === 'worktree' && rest[0] === 'add') {
+    const cs = scan(rest.slice(1), restK.slice(1), { values: new Set(['-b', '-B', '--reason']) });
+    if (cs.pos[0] === undefined) return unparseable('git worktree add without a path');
+    h.write(cs.pos[0], cs.posKinds[0], base, baseRaw);
+    // it also registers the work tree (and with -b/-B a branch) in the shared repository
+    const nb = cs.first('-b', '-B');
+    return gitRefWrite(ctx, typeof nb === 'string' ? [nb] : [], 'git worktree add');
+  }
+  if (sub === 'push') return pushConfig ? write('git.protected', undefined, 'git push with push/remote configuration overrides') : gitPush(rest, restK, ctx);
+  if (sub === 'lfs' && rest[0] === 'push') return gitPush(rest.slice(1), restK.slice(1), ctx);
+  if (sub === 'send-email') return xwrite('http.write', undefined, 'git send-email sends mail');
+  if (sub === 'svn' && rest[0] === 'dcommit') return xwrite('http.write', undefined, 'git svn dcommit');
+  if (sub === 'filter-branch' || sub === 'filter-repo') return unparseable(`git ${sub} rewrites history with arbitrary filters`);
+  if (sub === 'submodule' && rest.includes('foreach')) {
+    const cmd = rest[rest.length - 1];
+    if (restK[rest.length - 1] !== 'lit') return unparseable('git submodule foreach command is not literal');
+    return h.script(cmd, 'bash', null); // runs in each submodule
+  }
+  if (sub === 'bisect' && rest[0] === 'run') {
+    const inner = rest.slice(1);
+    if (!inner.length) return local('git bisect');
+    if (restK.slice(1).some((x) => x !== 'lit')) return unparseable('git bisect run command is not literal');
+    return h.script(inner.map((x) => (/^[\w./:=@%+,-]+$/.test(x) ? x : `'${x.replace(/'/g, "'\\''")}'`)).join(' '), 'bash', top, topRaw);
+  }
+  if (sub === 'rebase' || sub === 'difftool') {
+    for (let j = 0; j < rest.length; j += 1) {
+      const t = rest[j];
+      let cmd = null;
+      if (t === '-x' || t === '--exec' || t === '--extcmd' || t === '-t' && sub === 'difftool') cmd = { v: rest[j + 1], k: restK[j + 1] };
+      else if (t.startsWith('--exec=') || t.startsWith('--extcmd=')) cmd = { v: t.slice(t.indexOf('=') + 1), k: restK[j] };
+      if (cmd) {
+        if (cmd.k !== 'lit' || typeof cmd.v !== 'string') return unparseable(`git ${sub} exec command is not literal`);
+        const inner = h.script(cmd.v, 'bash', top, topRaw);
+        if (inner.class !== 'local') return inner;
+      }
+    }
+  }
+  if (sub === 'rm') {
+    let end = false;
+    for (let j = 0; j < rest.length; j += 1) {
+      if (!end && rest[j] === '--') { end = true; continue; }
+      if (end || !rest[j].startsWith('-')) h.write(rest[j], restK[j], base, baseRaw);
+    }
+  }
+  if (sub === 'merge') {
+    if (ctx.currentBranch && isProtected(ctx, ctx.currentBranch)) return write('git.protected', ctx.currentBranch, 'git merge into a protected branch');
+    return write('git.commit', undefined, rest.some((x) => x === '--abort' || x === '--quit') ? `git merge --abort: ${GIT_WRITE_REASON}` : 'git merge creates a commit');
+  }
+  if (GIT_COMMIT.has(sub)) {
+    if (sub === 'rebase' && rest.length === 1 && rest[0] === '--show-current-patch') return local('git rebase --show-current-patch');
+    // a commit moves the current branch: never a protected one (R58)
+    if (ctx.currentBranch && isProtected(ctx, ctx.currentBranch)) return write('git.protected', ctx.currentBranch, `git ${sub} on protected branch ${ctx.currentBranch}`);
+    return write('git.commit', undefined, `git ${sub} creates commits`);
+  }
+  return gitOther(sub, rest, restK, ctx, h, base, baseRaw);
+}
+
+// Every other subcommand (R58): read-only forms are local, the checkout's files need edit, and
+// everything that writes the shared repository needs commit (protected branches never).
+function gitOther(sub, rest, restK, ctx, h, base, baseRaw) {
+  const w = gitWords(rest, new Set(['--ref', '-m', '-F', '-C', '-c', '-o', '--output', '--output-directory', '--format', '--pretty']));
+  const word = w.pos.find((x) => x !== '--');
+  const words = w.pos.filter((x) => x !== '--');
+  if (GIT_READ.has(sub)) {
+    // a few read commands still write a file (log/diff --output) or start a program (grep -O)
+    if (sub === 'grep' && rest.some((t) => /^(-O|--open-files-in-pager)/.test(t))) return unparseable('git grep -O opens the files in a program the guard cannot see');
+    for (let j = 0; j < rest.length; j += 1) {
+      if (rest[j] === '--') break;
+      if (rest[j] === '--output') { h.write(rest[j + 1] ?? '', restK[j + 1] ?? 'dyn', base, baseRaw); j += 1; } else if (rest[j].startsWith('--output=')) h.write(rest[j].slice('--output='.length), restK[j], base, baseRaw);
+    }
+    if (sub === 'interpret-trailers' && rest.includes('--in-place')) return gitEdit('git interpret-trailers --in-place');
+    return local(`git ${sub}`);
+  }
+  if (sub === 'branch') return gitBranch(rest, ctx);
+  if (sub === 'tag') return gitTag(rest);
+  if (sub === 'checkout' || sub === 'switch' || sub === 'restore' || sub === 'reset') return gitMove(sub, rest, ctx);
+  if (sub === 'fetch' || sub === 'pull') return gitFetch(sub, rest, ctx);
+  if (sub === 'rm') {
+    let end = false;
+    for (let j = 0; j < rest.length; j += 1) {
+      if (!end && rest[j] === '--') { end = true; continue; }
+      if (end || !rest[j].startsWith('-')) h.write(rest[j], restK[j], base, baseRaw);
+    }
+  }
+  if (GIT_WRITE.has(sub)) return write('git.commit', undefined, `git ${sub}: ${GIT_WRITE_REASON}`);
+  if (sub === 'remote') {
+    if (!word || ['show', 'get-url'].includes(word)) return local(`git remote ${word ?? ''}`.trim());
+    return write('git.commit', undefined, `git remote ${word}: ${GIT_WRITE_REASON}`);
+  }
+  if (sub === 'update-ref') {
+    if (w.has('--stdin')) return write('git.protected', undefined, 'git update-ref --stdin writes refs the guard cannot read');
+    return gitRefWrite(ctx, [words[0]], 'git update-ref');
+  }
+  if (sub === 'symbolic-ref') {
+    if (w.has('-d', '--delete')) return write('git.protected', words[0], 'git symbolic-ref --delete removes a symbolic ref');
+    if (words.length < 2) return local('git symbolic-ref');
+    return gitRefWrite(ctx, [words[1]], `git symbolic-ref ${words[0]}`);
+  }
+  if (sub === 'hash-object') return w.has('-w') ? write('git.commit', undefined, `git hash-object -w: ${GIT_WRITE_REASON}`) : local('git hash-object');
+  if (sub === 'replace') return w.has('-l', '--list') || !words.length ? local('git replace --list') : write('git.commit', undefined, `git replace: ${GIT_WRITE_REASON}`);
+  if (sub === 'fsck') return w.has('--lost-found') ? write('git.commit', undefined, `git fsck --lost-found: ${GIT_WRITE_REASON}`) : local('git fsck');
+  if (sub === 'pack-objects') return w.has('--stdout') ? local('git pack-objects --stdout') : write('git.commit', undefined, `git pack-objects: ${GIT_WRITE_REASON}`);
+  if (sub === 'clean') return w.has('-n', '--dry-run') && !w.has('-f', '--force') ? local('git clean --dry-run') : gitEdit('git clean');
+  if (sub === 'apply') {
+    if (w.has('--unsafe-paths')) return unparseable('git apply --unsafe-paths writes outside the work tree');
+    if (w.has('--index', '--cached', '-3', '--3way', '--intent-to-add')) return write('git.commit', undefined, `git apply --index: ${GIT_WRITE_REASON}`);
+    if (w.has('--check', '--stat', '--numstat', '--summary') && !w.has('--apply')) return local('git apply --check');
+    return gitEdit('git apply');
+  }
+  if (sub === 'merge-file') {
+    if (w.has('-p', '--stdout')) return local('git merge-file --stdout');
+    if (words[0] === undefined) return unparseable('git merge-file without a file');
+    h.write(words[0], 'lit', base, baseRaw);
+    return local('git merge-file');
+  }
+  if (sub === 'format-patch') {
+    if (w.has('--stdout')) return local('git format-patch --stdout');
+    let dir = '.';
+    for (let j = 0; j < rest.length; j += 1) {
+      if (rest[j] === '-o' || rest[j] === '--output-directory') { dir = rest[j + 1] ?? ''; j += 1; } else if (rest[j].startsWith('--output-directory=')) dir = rest[j].slice('--output-directory='.length);
+    }
+    h.write(dir, 'lit', base, baseRaw);
+    return local('git format-patch');
+  }
+  if (sub === 'archive') {
+    for (let j = 0; j < rest.length; j += 1) {
+      if (rest[j] === '-o' || rest[j] === '--output') { h.write(rest[j + 1] ?? '', restK[j + 1] ?? 'dyn', base, baseRaw); j += 1; } else if (rest[j].startsWith('--output=')) h.write(rest[j].slice('--output='.length), restK[j], base, baseRaw);
+    }
+    return local('git archive');
+  }
+  if (sub === 'bundle' && word === 'create') { if (words[1] === undefined) return unparseable('git bundle create without a file'); h.write(words[1], 'lit', base, baseRaw); return local('git bundle create'); }
+  if (sub === 'stash' && word === 'branch') return gitRefWrite(ctx, [words[1]], 'git stash branch');
+  if (sub === 'lfs' && ['track', 'untrack'].includes(word)) return words.length > 1 ? gitEdit(`git lfs ${word}`) : local(`git lfs ${word}`);
+  if (Object.hasOwn(GIT_READ_FORMS, sub)) {
+    if (word === undefined ? GIT_BARE_READ.has(sub) : GIT_READ_FORMS[sub].includes(word)) return local(`git ${sub} ${word ?? ''}`.trim());
+    return write('git.commit', undefined, `git ${sub}${word ? ` ${word}` : ''}: ${GIT_WRITE_REASON}`);
+  }
+  if (sub === 'mailinfo' || sub === 'mailsplit') return unparseable(`git ${sub} writes files the guard does not follow`);
+  return unparseable(`unknown git subcommand ${sub} (could be a repository alias)`);
+}
+
+const PUSH_VALUES = new Set(['--repo', '-o', '--push-option', '--receive-pack', '--exec', '--recurse-submodules', '--signed']);
+
+function gitPush(args, ak, ctx) {
+  const prot = (target, why) => write('git.protected', target, why);
+  const s = scan(args, ak, { values: PUSH_VALUES });
+  if (s.has('--receive-pack', '--exec')) return unparseable('git push with a custom receive-pack');
+  if (s.has('-f', '--force', '--force-with-lease', '--force-if-includes', '--mirror', '--all', '--branches', '--prune', '--tags', '--follow-tags', '-d', '--delete')) return prot(undefined, 'forced, mirrored, deleting or tag push');
+  if (s.posKinds.some((x) => x !== 'lit')) return prot(undefined, 'push target is not literal');
+  const refspecs = s.pos.slice(1);
+  const targets = [];
+  if (!refspecs.length) {
+    if (!ctx.currentBranch) return prot(undefined, 'push target unknown (current branch not known)');
+    targets.push(ctx.currentBranch);
+  }
+  for (const spec of refspecs) {
+    if (spec.startsWith('+')) return prot(spec.slice(1), 'a + refspec forces the push');
+    const colon = spec.indexOf(':');
+    let dst = colon >= 0 ? spec.slice(colon + 1) : spec;
+    const src = colon >= 0 ? spec.slice(0, colon) : spec;
+    if (colon >= 0 && !src) return prot(dst, 'deleting a remote branch');
+    if (/@\{/.test(dst)) return prot(dst, 'push to a reflog or upstream shorthand');
+    if (dst === 'HEAD' || dst === '@') {
+      if (!ctx.currentBranch) return prot(undefined, 'push of HEAD with an unknown current branch');
+      dst = ctx.currentBranch;
+    }
+    if (/^refs\/tags\//.test(dst)) return prot(dst, 'tag push');
+    dst = dst.replace(/^refs\/heads\//, '');
+    targets.push(dst);
+  }
+  for (const t of targets) if (isProtected(ctx, t)) return prot(t, `push to protected branch ${t}`);
+  return write('git.push', targets[0], `git push to ${targets.join(', ')}`);
+}
+
+const GH_READ_VERBS = new Set(['view', 'list', 'status', 'diff', 'checks', 'watch', 'download', 'get', 'search', 'browse', 'clone', 'checkout', 'ls']);
+
+function gh(args, ak, seg, ctx) {
+  const s = scan(args, ak, { values: new Set(['-R', '--repo', '--hostname', '-X', '--method', '-f', '--field', '-F', '--raw-field', '--input', '-H', '--header', '-t', '--title', '-b', '--body', '-B', '--base', '--head', '-l', '--label', '-a', '--assignee', '-r', '--reviewer', '-m', '--milestone', '-q', '--jq', '--template', '-L', '--limit', '-s', '--state', '-w', '--web', '--body-file', '-T', '-p', '--project', '--json']) });
+  const [group, verb] = s.pos;
+  const host = s.first('--hostname') ?? 'github.com';
+  const ext = (why) => xwrite('http.write', host, why);
+  if (!group || group === 'help' || group === 'version' || s.has('--version')) return read('gh info');
+  if (s.posKinds.slice(0, 2).some((x) => x !== 'lit')) return ext('gh command is not literal');
+  if (group === 'api') {
+    const method = String(s.first('-X', '--method') ?? '').toUpperCase();
+    const fields = s.has('-f', '--field', '-F', '--raw-field', '--input');
+    const apiHost = host === 'github.com' ? 'api.github.com' : host;
+    if ((method === '' && !fields) || method === 'GET' || method === 'HEAD') {
+      if (fields && method === '') return xwrite('http.write', apiHost, 'gh api with fields sends a POST');
+      return read('gh api GET', { host: apiHost });
+    }
+    return xwrite('http.write', apiHost, `gh api ${method || 'POST'}`);
+  }
+  if (group === 'pr') {
+    if (verb === 'create') {
+      const off = args.some((t) => /^(--draft|-d)=/.test(t) && !/=(true|1|yes)$/i.test(t));
+      return s.has('--draft', '-d') && !off ? write('git.pr', undefined, 'gh pr create --draft') : write('git.protected', undefined, 'gh pr create without --draft');
+    }
+    if (verb === 'merge') return write('git.protected', undefined, 'gh pr merge');
+    if (verb === 'review') return s.has('--approve', '-a') ? write('git.protected', undefined, 'gh pr review --approve') : write('git.pr', undefined, 'gh pr review');
+    if (['edit', 'comment', 'ready', 'close', 'reopen', 'lock', 'unlock'].includes(verb)) return write('git.pr', undefined, `gh pr ${verb}`);
+  }
+  if (group === 'repo' && verb === 'sync') return write('git.protected', undefined, 'gh repo sync updates a default branch');
+  if (group === 'release' && ['create', 'upload', 'edit', 'delete', 'delete-asset'].includes(verb)) return xwrite('package.publish', host, `gh release ${verb}`);
+  if (group === 'auth') return verb === 'status' ? read('gh auth status') : ext(`gh auth ${verb ?? ''}`.trim());
+  if (group === 'search' || group === 'browse' || group === 'status') return read(`gh ${group}`);
+  if (GH_READ_VERBS.has(verb)) return read(`gh ${group} ${verb}`);
+  return ext(`gh ${group} ${verb ?? ''} changes GitHub`.trim());
+}
+
+// ---------------------------------------------------------------- Quill CLI
+
+const QUILL_READ = { status: null, doctor: null, ticket: ['show', 'list', 'children'], agent: ['list', 'show', 'suggestions'], handoff: ['list'], repo: ['list'] };
+
+const QUILL_READ_FLAGS = new Set(['--json', '--statusline', '--session', '--status', '--ticket']);
+
+function quill(args) {
+  const sub = args[0];
+  if (sub === undefined || sub.startsWith('-')) return privileged('Quill CLI outside the read-only subcommands');
+  if (!Object.hasOwn(QUILL_READ, sub)) return privileged(`quill ${sub} is not a read-only subcommand`);
+  const bad = args.find((t) => t.startsWith('-') && !QUILL_READ_FLAGS.has(t.replace(/=.*$/, '')));
+  if (bad) return privileged(`quill ${sub} with flag ${bad} is not a documented read form`);
+  const allowed = QUILL_READ[sub];
+  if (allowed === null || allowed.includes(args[1])) return local(`quill ${sub} ${args[1] ?? ''}`.trim());
+  return privileged(`quill ${sub} ${args[1] ?? ''} is not a read-only subcommand`.trim());
+}
+
+// bin/quill.js and friends: quill, quill.js/.mjs/.cjs (any case, trailing slashes), src/cli/*,
+// anything inside a session-quill package.
+// bin/quill-hook.js and bin/quill-guard.js (any case, with or without the extension), wherever they are.
+function isQuillEntry(p) {
+  const base = String(p).replace(/[\\/]+$/, '').replace(/^.*[\\/]/, '').toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, '');
+  return /^quill-(hook|guard)(\.[cm]?js)?$/.test(base);
+}
+
+function isQuillScript(p) {
+  const t = String(p).replace(/[\\/]+$/, '');
+  const base = t.replace(/^.*[\\/]/, '').toLowerCase();
+  return /^quill(\.[cm]?js)?$/.test(base) || /(^|[\\/])src[\\/]cli([\\/.]|$)/i.test(t) || /(^|[\\/])session-quill([\\/]|$)/i.test(t);
+}
+
+const NODE_VALUES = new Set(['-r', '--require', '--import', '--loader', '--experimental-loader', '-C', '--conditions', '--input-type', '--env-file', '--title', '--stack-size', '--max-old-space-size', '--inspect-port', '--test-reporter', '--test-reporter-destination', '--test-name-pattern', '--watch-path']);
+
+function nodeLike(name, args, ak, seg, ctx, h) {
+  if (name === 'deno' && args[0] === 'eval') return inlineCode(args.slice(1).filter((x) => !x.startsWith('-')).join(' '), ak.slice(1).some((x) => x !== 'lit') ? 'dyn' : 'lit', 'deno');
+  if (name === 'bun') {
+    if (args[0] === 'publish') return xwrite('package.publish', undefined, 'bun publish');
+    if (args[0] === 'run') return args[1] ? scriptByName(args[1], args.slice(2), 'package script') : local('bun run');
+    if (args.includes('-g') || args.includes('--global')) return unknownProd('bun -g changes tools outside the checkout');
+    if (['install', 'i', 'add', 'remove', 'rm', 'update', 'link', 'unlink', 'pm', 'init', 'create', 'upgrade', 'build', 'test', 'outdated', 'audit', 'repl', 'x'].includes(args[0])) return local(`bun ${args[0]}`);
+  }
+  let i = name === 'deno' && args[0] === 'run' ? 1 : 0;
+  for (; i < args.length; i += 1) {
+    const t = args[i];
+    if (t === '-e' || t === '--eval' || t === '-p' || t === '--print') return inlineCode(args[i + 1] ?? '', ak[i + 1], name);
+    if (t.startsWith('--eval=') || t.startsWith('--print=')) return inlineCode(t.slice(t.indexOf('=') + 1), ak[i], name);
+    if (t === '-') {
+      const inFile = seg.redirects.find((x) => x.op.replace(/^\d+/, '') === '<');
+      if (inFile) {
+        if (inFile.kind !== 'lit') return unparseable(`${name} reads its script from a dynamic path`);
+        const b = inFile.target.replace(/^.*[\\/]/, '').toLowerCase();
+        if (b === 'quill.js' || b === 'quill') return quill(args.slice(i + 1));
+        if (isQuillEntry(inFile.target)) return privileged(`${name} runs a Quill entry point`);
+        return scriptByName(inFile.target, args.slice(i + 1));
+      }
+      break;
+    }
+    if (t.startsWith('-')) {
+      const v = NODE_VALUES.has(t) ? args[i + 1] : /^--(require|import|loader|experimental-loader)=/.test(t) ? t.slice(t.indexOf('=') + 1) : null;
+      if (/^(-r|--require|--import|--loader|--experimental-loader)(=|$)/.test(t) && typeof v === 'string') {
+        if (isQuillScript(v) || isQuillEntry(v)) return privileged(`${name} preloads the Quill CLI`);
+        if (SDK_RE.test(v) || v === 'pg' || v.startsWith('pg/')) return unknownProd(`${name} preloads a prod SDK client`);
+      }
+      if (NODE_VALUES.has(t)) i += 1;
+      continue;
+    }
+    if (ak[i] !== 'lit') return unparseable(`${name} script path is not literal`);
+    const base = t.replace(/^.*[\\/]/, '').toLowerCase();
+    if (isQuillScript(t)) return quill(args.slice(i + 1));
+    return scriptByName(t, args.slice(i + 1));
+  }
+  if (seg.stdin !== null) return seg.stdinDyn ? unknownProd(`${name} input has expansions`) : inlineCode(seg.stdin, 'lit', name);
+  if (seg.piped) return unparseable(`code is piped into ${name}`);
+  return local(name);
+}
+
+function python(args, ak, seg, ctx, h) {
+  for (let i = 0; i < args.length; i += 1) {
+    const t = args[i];
+    if (t === '-c') return inlineCode(args[i + 1] ?? '', ak[i + 1], 'python');
+    if (t === '-m') {
+      const mod = args[i + 1] ?? '';
+      if (mod === 'awscli' || mod === 'aws') return aws(args.slice(i + 2), ak.slice(i + 2), seg, ctx, h);
+      if (['alembic', 'flyway', 'yoyo', 'django'].includes(mod) && args.slice(i + 2).some((x) => /migrat/.test(x))) return unknownProd(`python -m ${mod} migration`);
+      if (['twine'].includes(mod) && args.includes('upload')) return xwrite('package.publish', undefined, 'twine upload');
+      if (SCRIPT_NAME_RE.test(mod)) return unknownProd(`python -m ${mod} looks like a deploy/release step`);
+      return local(`python -m ${mod}`);
+    }
+    if (t === '-') break;
+    if (t.startsWith('-')) { if (t === '-W' || t === '-X' || t === '-Q') i += 1; continue; }
+    if (ak[i] !== 'lit') return unparseable('python script path is not literal');
+    return scriptByName(t, args.slice(i + 1));
+  }
+  if (seg.stdin !== null) return seg.stdinDyn ? unknownProd('python input has expansions') : inlineCode(seg.stdin, 'lit', 'python');
+  if (seg.piped) return unparseable('code is piped into python');
+  return local('python');
+}
+
+// ---------------------------------------------------------------- package managers and task runners
+
+// Directory options (R17.2): the directory is read like a path, with the same `..` rules.
+function dirOptions(s, h, names) {
+  for (const d of s.all(...names)) if (d.v !== true) h.dir(d.v, d.kind);
+}
+
+function npm(args, ak, h) {
+  const s = scan(args, ak, { values: new Set(['--prefix', '-w', '--workspace', '--registry', '--userconfig', '--cache', '--loglevel', '--tag', '--otp', '--access', '-C']) });
+  dirOptions(s, h, ['--prefix', '-C']);
+  const [sub, a1, a2] = s.pos;
+  if (!sub) return local('npm');
+  if (s.has('-g', '--global', '--location') || (sub === 'link' && !a1)) return unknownProd(`npm ${sub} -g changes tools outside the checkout`);
+  if (['publish', 'unpublish', 'deprecate', 'undeprecate'].includes(sub)) return xwrite('package.publish', 'registry.npmjs.org', `npm ${sub}`);
+  if ((sub === 'dist-tag' || sub === 'dist-tags') && ['add', 'rm'].includes(a1)) return xwrite('package.publish', 'registry.npmjs.org', 'npm dist-tag change');
+  if (sub === 'owner' && ['add', 'rm'].includes(a1)) return xwrite('package.publish', 'registry.npmjs.org', 'npm owner change');
+  if (sub === 'access' && !['list', 'get', 'ls'].includes(a1)) return xwrite('package.publish', 'registry.npmjs.org', 'npm access change');
+  if (sub === 'version' && a1 && !s.has('--no-git-tag-version')) return write('git.commit', undefined, 'npm version commits and tags');
+  if (['run', 'run-script', 'rum', 'urn'].includes(sub)) return a1 ? scriptByName(a1, [], 'package script') : local('npm run');
+  if (sub === 'pkg' && a1 === 'set') return local('npm pkg set');
+  void a2;
+  return local(`npm ${sub}`);
+}
+
+const YARN_BUILTINS = new Set(['add', 'install', 'remove', 'upgrade', 'up', 'why', 'info', 'init', 'cache', 'config', 'set', 'plugin', 'link', 'unlink', 'pack', 'audit', 'outdated', 'global', 'bin', 'constraints',
+  'dedupe', 'explain', 'node', 'rebuild', 'patch', 'patch-commit', 'stage', 'unplug', 'upgrade-interactive', 'create', 'login', 'logout', 'licenses', 'list', 'autoclean', 'check', 'generate-lock-entry', 'import',
+  'policy', 'help', 'version', 'test', 'start', 'dlx', 'exec', 'search', 'sdks']);
+
+function yarn(args, ak, h) {
+  const s = scan(args, ak, { values: new Set(['--cwd', '--registry', '--cache-folder', '--modules-folder']) });
+  dirOptions(s, h, ['--cwd']);
+  const [sub, a1, a2] = s.pos;
+  if (!sub) return local('yarn install');
+  if (sub === 'global') return unknownProd('yarn global changes tools outside the checkout');
+  if (sub === 'publish' || (sub === 'npm' && (a1 === 'publish' || (a1 === 'tag' && ['add', 'remove'].includes(a2))))) return xwrite('package.publish', 'registry.npmjs.org', 'yarn publish');
+  if (sub === 'owner' || (sub === 'tag' && ['add', 'remove', 'rm'].includes(a1)) || sub === 'team') return xwrite('package.publish', 'registry.npmjs.org', `yarn ${sub}`);
+  if (sub === 'run') return a1 ? scriptByName(a1, [], 'package script') : local('yarn run');
+  if (sub === 'workspace') return a2 ? (a2 === 'publish' || (a2 === 'npm' && s.pos[3] === 'publish') ? xwrite('package.publish', 'registry.npmjs.org', 'yarn workspace publish') : YARN_BUILTINS.has(a2) && a2 !== 'run' ? local(`yarn workspace ${a2}`) : scriptByName(a2 === 'run' ? s.pos[3] ?? '' : a2, [], 'package script')) : local('yarn workspace');
+  if (sub === 'workspaces') return s.pos.slice(1).some((x) => SCRIPT_NAME_RE.test(x)) ? unknownProd('yarn workspaces runs a deploy/release script') : local('yarn workspaces');
+  if (YARN_BUILTINS.has(sub)) return local(`yarn ${sub}`);
+  return scriptByName(sub, [], 'package script');
+}
+
+const PNPM_BUILTINS = new Set(['add', 'install', 'i', 'update', 'up', 'remove', 'rm', 'un', 'uninstall', 'link', 'ln', 'unlink', 'import', 'rebuild', 'rb', 'prune', 'fetch', 'install-test', 'it', 'patch',
+  'patch-commit', 'patch-remove', 'audit', 'list', 'ls', 'outdated', 'why', 'licenses', 'test', 't', 'start', 'store', 'root', 'bin', 'setup', 'init', 'config', 'c', 'env', 'create', 'pack',
+  'dedupe', 'doctor', 'server', 'help', 'exec', 'dlx', 'recursive', 'approve-builds', 'self-update']);
+
+function pnpm(args, ak, h) {
+  const s = scan(args, ak, { values: new Set(['--filter', '-F', '-C', '--dir', '--workspace-dir', '--reporter', '--loglevel']) });
+  dirOptions(s, h, ['-C', '--dir', '--workspace-dir']);
+  const [sub, a1] = s.pos;
+  if (!sub) return local('pnpm');
+  if (s.has('-g', '--global')) return unknownProd(`pnpm ${sub} -g changes tools outside the checkout`);
+  if (sub === 'publish') return xwrite('package.publish', 'registry.npmjs.org', 'pnpm publish');
+  if (sub === 'run' || sub === 'run-script') return a1 ? scriptByName(a1, [], 'package script') : local('pnpm run');
+  if (PNPM_BUILTINS.has(sub)) return local(`pnpm ${sub}`);
+  return scriptByName(sub, [], 'package script');
+}
+
+function taskRunner(name, args, ak, h) {
+  const values = new Set(['-C', '--directory', '-f', '--file', '--makefile', '-j', '--jobs', '-I', '-o', '-W', '-l', '-p', '--project', '-D', '-P', '--settings-file', '-s', '--justfile', '-d', '--working-directory', '-t', '--taskfile']);
+  const s = scan(args, ak, { values });
+  dirOptions(s, h, ['-C', '--directory', '--working-directory']);
+  const targets = s.pos.filter((x) => !/^[A-Za-z_][\w.]*=/.test(x));
+  const hit = s.pos.find((x) => SCRIPT_NAME_RE.test(x)); // includes VAR=value overrides such as DEPLOY=1
+  if (hit) return unknownProd(`${name} ${hit} looks like a deploy/release step`);
+  if (s.posKinds.some((x) => x !== 'lit')) return unparseable(`${name} target is not literal`);
+  return local(`${name} ${targets.join(' ')}`.trim());
+}
+
+// ---------------------------------------------------------------- containers
+
+const DOCKER_READ = new Set(['ps', 'images', 'logs', 'inspect', 'version', 'info', 'stats', 'top', 'events', 'port', 'diff', 'history', 'search', 'help']);
+
+function docker(name, args, ak, seg) {
+  const s = scan(args, ak, { values: new Set(['-H', '--host', '--context', '-c', '--config', '-l', '--log-level', '--tlscacert', '--tlscert', '--tlskey', '-t', '--tag', '-f', '--file', '--platform', '-o', '--output', '--builder', '--target', '--build-arg', '-e', '--env', '-v', '--volume', '-p', '--publish', '--name', '-w', '--workdir', '--network', '--entrypoint', '-u', '--user', '--label', '--cache-from', '--cache-to', '--secret', '--ssh', '--progress', '--format']) });
+  const [sub, a1] = s.pos;
+  const remoteHost = s.first('-H', '--host') ?? seg.env.DOCKER_HOST;
+  const remote = typeof remoteHost === 'string' && !/^(unix|npipe):\/\//i.test(remoteHost);
+  if (!sub) return local(name);
+  const pushes = sub === 'push' || (sub === 'image' && a1 === 'push') || (sub === 'manifest' && a1 === 'push') || (sub === 'compose' && s.pos.includes('push'))
+    || (sub === 'buildx' && (s.has('--push') || String(s.first('-o', '--output') ?? '').includes('registry') || (a1 === 'imagetools' && s.pos[2] === 'create')))
+    || (sub === 'build' && s.has('--push')) || (sub === 'trust' && a1 === 'sign');
+  if (pushes) return xwrite('package.publish', undefined, `${name} pushes an image`);
+  if (remote && !DOCKER_READ.has(sub) && !(['container', 'image', 'volume', 'network'].includes(sub) && ['ls', 'list', 'inspect'].includes(a1))) return unknownProd(`${name} on a remote engine (${remoteHost})`);
+  return local(`${name} ${sub}`);
+}
+
+// ---------------------------------------------------------------- network
+
+function hostOf(url) {
+  if (typeof url !== 'string' || !url) return undefined;
+  let u = url.trim();
+  if (/[$`]/.test(u)) return undefined;
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(u);
+  let auth = m ? m[1] : u.split(/[/?#]/)[0];
+  auth = auth.replace(/^[^@]*@/, '');
+  if (auth.startsWith('[')) return auth.slice(0, auth.indexOf(']') + 1) || undefined;
+  auth = auth.replace(/:\d*$/, '');
+  if (!auth || !/^[A-Za-z0-9.-]+$/.test(auth)) return undefined;
+  return auth.toLowerCase();
+}
+
+const CURL_VALUES = new Set(['-H', '--header', '-o', '--output', '-A', '--user-agent', '-e', '--referer', '-u', '--user', '-b', '--cookie', '-c', '--cookie-jar', '-m', '--max-time', '--connect-timeout', '-w',
+  '--write-out', '-x', '--proxy', '--cacert', '--capath', '--cert', '-E', '--key', '-r', '--range', '-U', '--proxy-user', '--resolve', '--retry', '--retry-delay', '--retry-max-time', '-K', '--config', '--url',
+  '-X', '--request', '-d', '--data', '--data-raw', '--data-binary', '--data-urlencode', '--data-ascii', '--json', '-F', '--form', '--form-string', '-T', '--upload-file', '--limit-rate', '-Y', '-y',
+  '--interface', '--dns-servers', '--oauth2-bearer', '--aws-sigv4', '-z', '--time-cond', '--max-filesize', '--unix-socket', '--abstract-unix-socket', '--variable', '--trace', '--trace-ascii', '--stderr',
+  '-D', '--dump-header', '--output-dir', '--ciphers', '--pinnedpubkey', '--request-target', '--connect-to', '-Q', '--quote', '--mail-from', '--mail-rcpt', '--mail-auth', '--keepalive-time', '--local-port',
+  '--noproxy', '--proto', '--proto-redir', '--socks5', '--socks5-hostname', '--netrc-file', '--service-name', '--parallel-max', '--rate', '-P', '--ftp-port', '-t', '--telnet-option', '--expand-url', '--expand-data',
+  '--url-query']);
+const CURL_DATA = ['-d', '--data', '--data-raw', '--data-binary', '--data-urlencode', '--data-ascii', '--json', '-F', '--form', '--form-string', '-T', '--upload-file', '-Q', '--quote', '--mail-rcpt', '--expand-data'];
+
+function hiddenArgs(ak) {
+  return ak.some((x) => x === 'split' || x === 'group');
+}
+
+function curl(args, ak, seg, h) {
+  const s = scan(args, ak, { values: CURL_VALUES });
+  if (hiddenArgs(ak)) return xwrite('http.write', hostOf(s.pos[0]), 'curl arguments come from an unquoted expansion');
+  const urls = [...s.all('--url', '--expand-url').map((x) => x.v), ...s.pos];
+  const host = hostOf(urls.find((x) => /^[a-z][a-z0-9+.-]*:\/\//i.test(String(x))) ?? urls[0]);
+  for (const o of s.all('-o', '--output', '-D', '--dump-header', '-c', '--cookie-jar', '--trace', '--trace-ascii', '--stderr')) if (o.v !== '-') h.write(o.v, o.kind);
+  for (const o of s.all('--output-dir')) h.write(o.v, o.kind);
+  if (s.has('-K', '--config')) return xwrite('http.write', host, 'curl reads options from a config file');
+  if (urls.some((x) => /^(gopher|dict|telnet|smtps?|ldaps?|mqtt|tftp):/i.test(String(x)))) return xwrite('http.write', host, 'curl protocol that can send commands');
+  if (s.all('-H', '--header').some((x) => /x-http-method(-override)?\s*:\s*(post|put|patch|delete)/i.test(String(x.v)))) return xwrite('http.write', host, 'curl overrides the method in a header');
+  if (urls.some((x) => /[?&]_method=(post|put|patch|delete)/i.test(String(x)))) return xwrite('http.write', host, 'curl overrides the method in the query');
+  const method = String(s.first('-X', '--request') ?? '').toUpperCase();
+  const data = s.has(...CURL_DATA);
+  if (s.has('-G', '--get') && (s.all(...CURL_DATA).some((x) => String(x.v ?? '').startsWith('@')) || s.all('--data-urlencode').some((x) => /^[^=]*@/.test(String(x.v ?? ''))))) return xwrite('http.write', host, 'curl --get sends a file\'s contents');
+  // --url-query [+]name@file and @file put a file's contents into the URL
+  if (s.all('--url-query').some((x) => /^\+?[^=]*@/.test(String(x.v ?? '')))) return xwrite('http.write', host, 'curl --url-query sends a file\'s contents');
+  // --variable name@file loads a file that an --expand-* option can put into the request
+  const fileVars = s.all('--variable').filter((x) => /^[^=@%]*@/.test(String(x.v ?? '')));
+  for (const x of fileVars) h.read(String(x.v).slice(String(x.v).indexOf('@') + 1), x.kind);
+  if (fileVars.length && args.some((t) => t.startsWith('--expand-'))) return xwrite('http.write', host, 'curl sends a file loaded with --variable');
+  if (method && method !== 'GET' && method !== 'HEAD') return xwrite('http.write', host, `curl ${method}`);
+  if (data && !(s.has('-G', '--get') && !s.has('-F', '--form', '--form-string', '-T', '--upload-file', '-Q', '--quote', '--mail-rcpt'))) return xwrite('http.write', host, 'curl sends a body');
+  return read('curl GET', host ? { host } : {});
+}
+
+function wget(args, ak, h) {
+  const s = scan(args, ak, { values: new Set(['-O', '--output-document', '-o', '--output-file', '-a', '--append-output', '-P', '--directory-prefix', '--post-data', '--post-file', '--body-data', '--body-file', '--method', '--header', '-U', '--user-agent', '--user', '--password', '-e', '--execute', '-i', '--input-file', '-t', '--tries', '-T', '--timeout', '-w', '--wait', '-Q', '--quota', '-l', '--level']) });
+  const host = hostOf(s.pos[0]);
+  if (hiddenArgs(ak)) return xwrite('http.write', host, 'wget arguments come from an unquoted expansion');
+  for (const o of s.all('-O', '--output-document', '-o', '--output-file', '-a', '--append-output', '-P', '--directory-prefix')) if (o.v !== '-') h.write(o.v, o.kind);
+  const method = String(s.first('--method') ?? '').toUpperCase();
+  if (s.has('--post-data', '--post-file', '--body-data', '--body-file', '-e', '--execute') || (method && method !== 'GET' && method !== 'HEAD')) return xwrite('http.write', host, 'wget sends data');
+  return read('wget GET', host ? { host } : {});
+}
+
+const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE', 'CONNECT', 'PROPFIND', 'PROPPATCH', 'MKCOL', 'COPY', 'MOVE', 'LOCK', 'UNLOCK', 'PURGE']);
+
+function httpie(args, ak, seg, h) {
+  const s = scan(args, ak, { values: new Set(['-a', '--auth', '-A', '--auth-type', '-o', '--output', '--session', '--session-read-only', '--verify', '--cert', '--cert-key', '--proxy', '--timeout', '-p', '--print', '--pretty', '-s', '--style', '--format-options', '--boundary', '--max-redirects', '--default-scheme', '--ssl', '--ciphers', '--response-charset', '--response-mime', '--unsorted', '--sorted']) });
+  for (const o of s.all('-o', '--output')) h.write(o.v, o.kind);
+  if (hiddenArgs(ak)) return xwrite('http.write', undefined, 'httpie arguments come from an unquoted expansion');
+  if (s.has('--offline')) return local('httpie --offline builds the request without sending it');
+  let pos = s.pos;
+  let method = '';
+  if (pos[0] && HTTP_METHODS.has(pos[0].toUpperCase())) { method = pos[0].toUpperCase(); pos = pos.slice(1); }
+  const host = hostOf(/^:/.test(pos[0] ?? '') ? 'localhost' : pos[0]);
+  const items = pos.slice(1);
+  const data = items.some((x) => /^[^=:@]*(:=@|=@|:=|@|=)(?!=)/.test(x) && !/^[^=]*==/.test(x));
+  const piped = seg.piped && !s.has('--ignore-stdin', '-I');
+  if ((method && method !== 'GET' && method !== 'HEAD') || data || piped) return xwrite('http.write', host, 'httpie sends a body');
+  return read('httpie GET', host ? { host } : {});
+}
+
+// PowerShell parameters: case-insensitive prefix match against the cmdlet's known names.
+// `a, b` and `a ,b` are one PowerShell array argument split across tokens.
+function mergePsArrays(args, ak) {
+  const A = [];
+  const K = [];
+  for (let i = 0; i < args.length; i += 1) {
+    let t = args[i];
+    let kind = ak[i];
+    while (i + 1 < args.length && (t.endsWith(',') || args[i + 1].startsWith(',')) && !args[i + 1].startsWith('-')) {
+      i += 1;
+      t += args[i];
+      if (ak[i] !== 'lit') kind = ak[i] === 'group' ? 'dyn' : ak[i];
+    }
+    A.push(t);
+    K.push(kind);
+  }
+  return [A, K];
+}
+
+function psParams(rawArgs, rawAk, { values = [], switches = [] }) {
+  const [args, ak] = mergePsArrays(rawArgs, rawAk);
+  const named = new Map();
+  const pos = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const t = args[i];
+    // `--` ends the parameters: everything after it is positional (Remove-Item -- -x)
+    if (t === '--') { for (let j = i + 1; j < args.length; j += 1) pos.push({ v: args[j], kind: ak[j] }); break; }
+    if (t.startsWith('-') && t.length > 1 && !/^-\d/.test(t)) {
+      let p = t.slice(1).toLowerCase();
+      let inline;
+      const colon = p.indexOf(':');
+      if (colon > 0) { inline = t.slice(colon + 2); p = p.slice(0, colon); }
+      const sw = switches.find((x) => x === p) ?? (values.includes(p) ? undefined : switches.find((x) => x.startsWith(p)));
+      if (sw && !values.includes(p)) { named.set(sw, { v: true, kind: 'lit' }); continue; }
+      const val = values.find((x) => x === p) ?? values.find((x) => x.startsWith(p));
+      if (val) {
+        if (inline !== undefined) named.set(val, { v: inline, kind: ak[i] });
+        else { named.set(val, { v: args[i + 1], kind: ak[i + 1] ?? 'dyn' }); i += 1; }
+        continue;
+      }
+      named.set(p, { v: true, kind: 'lit' });
+      continue;
+    }
+    pos.push({ v: t, kind: ak[i] });
+  }
+  return { pos, get: (n) => named.get(n), named };
+}
+
+function splitPs(v) {
+  return String(v).split(',').map((x) => x.trim()).filter(Boolean);
+}
+
+const IWR_VALUES = ['uri', 'method', 'custommethod', 'body', 'infile', 'form', 'outfile', 'headers', 'contenttype', 'credential', 'websession', 'sessionvariable', 'useragent', 'proxy', 'proxycredential', 'timeoutsec', 'maximumredirection', 'maximumretrycount', 'retryintervalsec', 'certificate', 'certificatethumbprint', 'token', 'authentication', 'transferencoding', 'responseheaderstvariable', 'statuscodevariable', 'httpversion', 'sslprotocol', 'connectiontimeoutseconds', 'operationtimeoutseconds'];
+const IWR_SWITCHES = ['usebasicparsing', 'usedefaultcredentials', 'disablekeepalive', 'passthru', 'skipcertificatecheck', 'skipheadervalidation', 'skiphttperrorcheck', 'allowunencryptedauthentication', 'noproxy', 'preservefileauthorizationmetadata', 'resume', 'allowinsecureredirect', 'preserveauthorizationonredirect', 'followrellink'];
+
+function iwr(args, ak, h) {
+  const s = psParams(args, ak, { values: IWR_VALUES, switches: IWR_SWITCHES });
+  const uri = s.get('uri') ?? s.pos[0];
+  if (s.pos.length > 1 || s.pos.some((x) => x.kind === 'split' && x !== uri)) return xwrite('http.write', uri ? hostOf(uri.v) : undefined, 'web request has unbound positional arguments');
+  const host = uri ? hostOf(uri.v) : undefined;
+  const out = s.get('outfile');
+  if (out && out.v !== true) h.write(out.v, out.kind);
+  const method = String(s.get('method')?.v ?? s.get('custommethod')?.v ?? '').toUpperCase();
+  if (s.get('body') || s.get('infile') || s.get('form') || (method && method !== 'GET' && method !== 'HEAD' && method !== 'DEFAULT')) return xwrite('http.write', host, 'web request sends a body or a non-GET method');
+  return read('web request GET', host ? { host } : {});
+}
+
+const REMOTE_RE = /^(?:[^@\s/\\:]+@)?([^:\s/\\]{2,}):/;
+
+function remoteHost(arg) {
+  if (typeof arg !== 'string') return undefined;
+  if (/^[A-Za-z]:[\\/]/.test(arg)) return undefined;
+  const scheme = /^(?:scp|sftp|rsync):\/\/(?:[^@/]+@)?([^/:]+)/i.exec(arg);
+  if (scheme) return scheme[1];
+  const m = REMOTE_RE.exec(arg);
+  return m ? m[1] : undefined;
+}
+
+function scp(args, ak, h) {
+  const s = scan(args, ak, { values: new Set(['-P', '-i', '-o', '-F', '-c', '-l', '-S', '-J', '-D', '-X']) });
+  if (s.has('-S')) return unparseable('scp -S runs a custom program');
+  if (s.pos.length < 2) return unknownProd('scp without source and destination');
+  const dst = s.pos[s.pos.length - 1];
+  const dh = remoteHost(dst);
+  if (dh) return xwrite(undefined, dh, 'scp copies files to a remote host');
+  if (s.pos.slice(0, -1).some((x) => remoteHost(x))) { h.write(dst, s.posKinds[s.pos.length - 1]); return read('scp download', { host: remoteHost(s.pos.find((x) => remoteHost(x))) }); }
+  h.write(dst, s.posKinds[s.pos.length - 1]);
+  return local('scp between local paths');
+}
+
+function rsync(args, ak, h) {
+  const s = scan(args, ak, { values: new Set(['-e', '--rsh', '--exclude', '--include', '--filter', '-f', '--password-file', '--port', '--rsync-path', '--exclude-from', '--include-from', '--files-from', '--backup-dir', '--suffix', '--chmod', '--chown', '-T', '--temp-dir', '--log-file', '--bwlimit', '--timeout', '--compare-dest', '--copy-dest', '--link-dest']) });
+  if (s.has('--rsync-path')) return unparseable('rsync --rsync-path runs a custom program');
+  const rsh = s.first('-e', '--rsh');
+  if (typeof rsh === 'string' && !/^ssh(\s|$)/.test(rsh)) return unparseable('rsync with a custom remote shell');
+  if (s.pos.length < 2) return unknownProd('rsync without source and destination');
+  const dst = s.pos[s.pos.length - 1];
+  const dh = remoteHost(dst);
+  if (dh) return xwrite(undefined, dh, 'rsync copies files to a remote host');
+  if (s.pos.slice(0, -1).some((x) => remoteHost(x))) {
+    if (s.has('--remove-source-files')) return xwrite(undefined, remoteHost(s.pos.find((x) => remoteHost(x))), 'rsync removes remote source files');
+    h.write(dst, s.posKinds[s.pos.length - 1]);
+    return read('rsync download');
+  }
+  h.write(dst, s.posKinds[s.pos.length - 1]);
+  return local('rsync between local paths');
+}
+
+// ---------------------------------------------------------------- file commands (write roots)
+
+// `ln -s`: -s, --symbolic, or a short cluster holding s (GNU accepts --sym… prefixes).
+function symbolicLn(opts) {
+  return opts.some((t) => (/^-[a-zA-Z]+$/.test(t) && t.includes('s')) || (t.length >= 5 && '--symbolic'.startsWith(t)));
+}
+
+// The directory part of a path word as written: `a/b` → `a`, `b` → `.`, `/x` → `/`.
+function wordDir(word) {
+  const w = String(word).replace(/(.)[\\/]+$/, '$1');
+  const cut = Math.max(w.lastIndexOf('/'), w.lastIndexOf('\\'));
+  if (cut < 0) return /^[A-Za-z]:/.test(w) ? w.slice(0, 2) : '.';
+  const head = w.slice(0, cut);
+  return cut === 0 || /^[A-Za-z]:$/.test(head) ? w.slice(0, cut + 1) : head;
+}
+
+// A symbolic link's relative target is resolved where the link is, not where the command runs
+// (R17.4), and writing through the link lands on the target, so each target is a write path:
+//  - `where.cwd`: the link is made in the cwd (`ln -s target`);
+//  - `where.dir`: links are made in that directory (`-t dir`, `mklink` into a directory);
+//  - `where.link`: the link's own path; its target is resolved in the link's directory, and, when
+//    `asDir`, also inside the link path itself in case it names an existing directory (the
+//    link is then made there). `alsoCwd` adds the cwd (`ln -r`, PowerShell and cmd links whose
+//    targets are resolved where the command runs).
+function linkTargets(h, targets, where) {
+  const bases = [];
+  if (where.cwd || where.alsoCwd) bases.push({ base: undefined });
+  const add = (word, ifDir) => {
+    if (!word || typeof word.v !== 'string') { h.bad = 'link location is not literal'; return; }
+    const p = h.place(word.v, word.kind);
+    if (p) bases.push({ base: p.cwd, raw: p.raw, ifDir });
+  };
+  if (where.dir) add(where.dir, false);
+  if (where.link) {
+    add({ v: wordDir(where.link.v), kind: where.link.kind }, false);
+    if (where.asDir) add(where.link, true);
+  }
+  for (const t of targets) {
+    if (typeof t.v !== 'string') continue;
+    for (const b of bases) {
+      if (b.base === undefined) h.write(t.v, t.kind);
+      else h.write(t.v, t.kind, b.base, b.raw, b.ifDir || undefined);
+    }
+  }
+}
+
+function posixFileCommand(name, args, ak, h) {
+  // after `--` every word is an operand, even one that starts with a dash
+  const ends = [];
+  for (let i = 0, end = false; i < args.length; i += 1) { ends.push(end); if (args[i] === '--') end = true; }
+  const opt = (t, i) => t.startsWith('-') && t !== '-' && !ends[i];
+  const positional = () => { const out = []; for (let i = 0; i < args.length; i += 1) { if (!ends[i] && args[i] === '--') continue; if (!opt(args[i], i)) out.push(i); } return out; };
+  switch (name) {
+    case 'rm': case 'rmdir': case 'unlink': case 'shred': case 'touch': case 'mkdir': case 'tee': case 'truncate': {
+      const skipNext = { touch: ['-d', '-t', '-r'], mkdir: ['-m'], truncate: ['-s', '-r'], shred: ['-n', '-s'] }[name] ?? [];
+      for (let i = 0; i < args.length; i += 1) {
+        if (!ends[i] && args[i] === '--') continue;
+        if (!ends[i] && skipNext.includes(args[i])) { i += 1; continue; }
+        if (opt(args[i], i)) continue;
+        h.write(args[i], ak[i]);
+      }
+      return local(`${name} files`);
+    }
+    case 'mv': case 'cp': case 'install': case 'ln': {
+      let tdir = null;
+      let tdirWord;
+      let tdirKind;
+      const pos = [];
+      const opts = [];
+      for (let i = 0; i < args.length; i += 1) {
+        const t = args[i];
+        if (!ends[i]) {
+          if (t === '--') continue;
+          if (t === '-t' || t === '--target-directory') { tdir = i + 1; i += 1; continue; }
+          if (t.startsWith('--target-directory=')) { h.write(t.slice(19), ak[i]); tdir = -1; tdirWord = t.slice(19); tdirKind = ak[i]; continue; }
+          if (t === '-S' || t === '--suffix' || t === '-m' || t === '-o' || t === '-g') { i += 1; continue; }
+        }
+        if (opt(t, i)) { opts.push(t); continue; }
+        pos.push(i);
+      }
+      if (tdir !== null && tdir >= 0) h.write(args[tdir], ak[tdir]);
+      if (name === 'mv') for (const i of pos) h.write(args[i], ak[i]);
+      else if (pos.length) {
+        const dstIdx = tdir !== null ? null : pos.length > 1 ? pos[pos.length - 1] : name === 'ln' ? null : null;
+        if (dstIdx !== null) h.write(args[dstIdx], ak[dstIdx]);
+        if (name === 'ln' && pos.length === 1 && tdir === null) h.write(String(args[pos[0]]).replace(/^.*[\\/]/, ''), ak[pos[0]]);
+        // writes through a link land on its target
+        if (name === 'ln' && symbolicLn(opts)) linkTargets(h, pos.slice(0, dstIdx === null ? pos.length : -1).map((i) => ({ v: args[i], kind: ak[i] })), tdir !== null
+          ? { dir: tdir >= 0 ? { v: args[tdir], kind: ak[tdir] } : { v: tdirWord, kind: tdirKind } }
+          : dstIdx === null ? { cwd: true } : { link: { v: args[dstIdx], kind: ak[dstIdx] }, asDir: !opts.some((t) => t === '--no-target-directory' || /^-[a-zA-Z]*T/.test(t)), alsoCwd: opts.some((t) => t === '--relative' || /^-[a-zA-Z]*r/.test(t)) });
+        else if (name === 'ln') for (const i of pos) h.write(args[i], ak[i]);
+        // GNU accepts unambiguous prefixes: --l… is only --link, --sy… only --symbolic-link
+        const linking = name === 'cp' && opts.some((t) => (t.length >= 3 && '--link'.startsWith(t)) || (t.length >= 4 && '--symbolic-link'.startsWith(t)) || (/^-[a-zA-Z]+$/.test(t) && /[ls]/.test(t)));
+        // cp -l/-s makes links: a later write through the copy lands on the source
+        if (name === 'cp') for (const i of pos.slice(0, tdir !== null ? pos.length : -1)) (linking ? h.write : h.read)(args[i], ak[i]);
+      }
+      return local(`${name} files`);
+    }
+    case 'chmod': case 'chown': case 'chgrp': {
+      const pos = positional();
+      for (const i of pos.slice(1)) h.write(args[i], ak[i]);
+      return local(`${name} files`);
+    }
+    case 'dd':
+      for (let i = 0; i < args.length; i += 1) {
+        if (args[i].startsWith('of=')) h.write(args[i].slice(3), ak[i]);
+        if (args[i].startsWith('if=')) h.read(args[i].slice(3), ak[i]);
+      }
+      return local('dd');
+    case 'sed': case 'perl-i': {
+      const inPlace = args.some((t) => /^-[a-zA-Z]*i/.test(t) && !t.startsWith('--') || t.startsWith('--in-place'));
+      if (!inPlace) return null;
+      let scriptGiven = false;
+      const files = [];
+      for (let i = 0; i < args.length; i += 1) {
+        const t = args[i];
+        if (t === '-e' || t === '--expression' || t === '-f' || t === '--file') { scriptGiven = true; i += 1; continue; }
+        if (t === '-l' || t === '--line-length') { i += 1; continue; }
+        if (!ends[i] && t === '--') continue;
+        if (opt(t, i)) continue;
+        files.push(i);
+      }
+      for (const i of scriptGiven ? files : files.slice(1)) h.write(args[i], ak[i]);
+      return local('sed in place');
+    }
+    case 'tar': {
+      // R19.4: an old-style bundle without a dash (`tar cf out.tar src`, `tar xvf a.tar`): its f
+      // takes the next argument as the archive; a bundle with anything else is not followed
+      let rest = args;
+      let restK = ak;
+      let oldFile = null;
+      let mode;
+      if (args[0] && !args[0].startsWith('-')) {
+        const b = args[0];
+        if (!/^[ctxruvzjJapkmOwShPf]+$/.test(b) || !/[ctxru]/.test(b) || (b.match(/f/g) ?? []).length > 1) return unparseable(`tar ${b.slice(0, 40)}: an option bundle the guard does not follow`);
+        if (b.includes('f')) {
+          if (args[1] === undefined) return unparseable('tar f without an archive');
+          oldFile = { v: args[1], kind: ak[1] };
+        }
+        rest = args.slice(b.includes('f') ? 2 : 1);
+        restK = ak.slice(b.includes('f') ? 2 : 1);
+        mode = b;
+      } else mode = args.filter((t) => /^-[A-Za-z]+$/.test(t)).join('').replace(/-/g, '');
+      const s = scan(rest, restK, { values: new Set(['-f', '--file', '-C', '--directory', '-T', '--files-from', '-X', '--exclude-from']) });
+      const file = oldFile ?? s.all('-f', '--file')[0];
+      const dirs = s.all('-C', '--directory');
+      // GNU tar extracts below the last -C: more than one is refused (R19.4)
+      if (dirs.length > 1) return unparseable('tar with more than one -C/--directory');
+      const dir = dirs[0];
+      const extract = /x/.test(mode) || s.has('--extract', '--get');
+      if (/[cru]/.test(mode) || s.has('--create', '--append', '--update')) { if (file && file.v !== '-') h.write(file.v, file.kind); }
+      else if (file && file.v !== '-' && (extract || /t/.test(mode) || s.has('--list'))) h.read(file.v, file.kind);
+      if (extract) { if (dir) h.write(dir.v, dir.kind); else h.write('.', 'lit'); }
+      else if (dir) h.dir(dir.v, dir.kind); // members are read below it (R17.2)
+      return local('tar');
+    }
+    case 'unzip': {
+      const s = scan(args, ak, { values: new Set(['-d', '-x', '-P']) });
+      const dir = s.all('-d')[0];
+      if (s.has('-l', '-t', '-v', '-Z')) return local('unzip listing');
+      if (dir) h.write(dir.v, dir.kind); else h.write('.', 'lit');
+      return local('unzip');
+    }
+    case 'find': {
+      const starts = [];
+      for (let i = 0; i < args.length; i += 1) { if (/^[-(!]/.test(args[i])) break; starts.push(i); }
+      for (const i of starts) h.read(args[i], ak[i]);
+      if (args.includes('-delete')) {
+        if (!starts.length) h.write('.', 'lit');
+        for (const i of starts) h.write(args[i], ak[i]);
+      }
+      return local('find');
+    }
+    case 'grep': case 'egrep': case 'fgrep': case 'rg': case 'ag': case 'ack': case 'findstr': {
+      if (name === 'rg' && args.some((t) => t === '--pre' || t.startsWith('--pre='))) { h.bad = 'rg --pre runs a program on each file'; return local('rg'); }
+      const s = scan(args, ak, { values: new Set([...(name === 'rg' ? ['-g', '-t', '-T', '-r', '-E', '-j', '-M'] : []), '-e', '-f', '-m', '-A', '-B', '-C', '--regexp', '--file', '--max-count', '--context', '--after-context', '--before-context', '--include', '--exclude', '--exclude-dir', '--label', '--glob', '--iglob', '--type', '--type-not', '--replace', '--encoding', '--threads', '--max-columns', '--ignore-file', '--max-depth', '-d', '-D']) });
+      for (const x of s.all('-f', '--file', '--ignore-file')) h.read(x.v, x.kind);
+      const patternGiven = s.has('-e', '--regexp', '-f', '--file');
+      const files = s.pos.map((v, i) => ({ v, kind: s.posKinds[i] })).filter((x) => !(name === 'findstr' && x.v.startsWith('/')));
+      for (const x of patternGiven ? files : files.slice(1)) h.read(x.v, x.kind);
+      return local(`${name} searches files`);
+    }
+    case 'ls': case 'dir': case 'tree': case 'du': case 'stat': case 'file': case 'exa': case 'eza': {
+      for (let i = 0; i < args.length; i += 1) if (!opt(args[i], i) && (ends[i] || args[i] !== '--')) h.read(args[i], ak[i]);
+      return local(`${name} lists files`);
+    }
+    case 'cat': case 'head': case 'tail': case 'less': case 'more': case 'base64': case 'xxd': case 'od': case 'hexdump': case 'strings': case 'nl': case 'wc': {
+      for (let i = 0; i < args.length; i += 1) {
+        if (['-n', '-c', '--lines', '--bytes', '-w', '-s', '-l', '-o', '-x'].includes(args[i]) && i + 1 < args.length && /^[+-]?\d/.test(args[i + 1])) { i += 1; continue; }
+        if (opt(args[i], i)) continue;
+        h.read(args[i], ak[i]);
+      }
+      return local(`${name} reads files`);
+    }
+    default: return null;
+  }
+}
+
+const PS_FILE = {
+  'remove-item': { write: [0], params: ['path', 'literalpath'] },
+  'set-content': { write: [0], params: ['path', 'literalpath'] },
+  'add-content': { write: [0], params: ['path', 'literalpath'] },
+  'clear-content': { write: [0], params: ['path', 'literalpath'] },
+  'out-file': { write: [0], params: ['filepath', 'literalpath', 'path'] },
+  'new-item': { write: [0], params: ['path'] },
+  'copy-item': { write: [1], params: ['destination'], readPos: [0], readParams: ['path', 'literalpath'] },
+  'move-item': { write: [0, 1], params: ['path', 'literalpath', 'destination'] },
+  'rename-item': { write: [0], params: ['path', 'literalpath'], rename: true },
+  'tee-object': { write: [0], params: ['filepath', 'literalpath', 'path'] },
+  'export-csv': { write: [0], params: ['path', 'literalpath'] },
+  'export-clixml': { write: [0], params: ['path', 'literalpath'] },
+  'expand-archive': { write: [1], params: ['destinationpath'], readPos: [0], readParams: ['path', 'literalpath'] },
+  'compress-archive': { write: [1], params: ['destinationpath'], readPos: [0], readParams: ['path', 'literalpath'] },
+  'set-acl': { write: [0], params: ['path', 'literalpath'] },
+  'set-itemproperty': { write: [0], params: ['path', 'literalpath'] },
+};
+const PS_ALIASES = { ri: 'remove-item', rm: 'remove-item', del: 'remove-item', erase: 'remove-item', rd: 'remove-item', rmdir: 'remove-item', sc: 'set-content', ac: 'add-content', clc: 'clear-content',
+  ni: 'new-item', mkdir: 'new-item', md: 'new-item', copy: 'copy-item', cp: 'copy-item', cpi: 'copy-item', move: 'move-item', mv: 'move-item', mi: 'move-item', ren: 'rename-item', rni: 'rename-item',
+  tee: 'tee-object', epcsv: 'export-csv', sp: 'set-itemproperty' };
+const PS_FILE_VALUES = ['path', 'literalpath', 'destination', 'filepath', 'destinationpath', 'value', 'target', 'encoding', 'filter', 'include', 'exclude', 'credential', 'stream', 'itemtype', 'type', 'name', 'newname',
+  'inputobject', 'width', 'delimiter', 'tosession', 'fromsession', 'aclobject', 'compressionlevel', 'variable', 'depth', 'property', 'propertytype', 'useculture', 'quotefields', 'usequotes'];
+const PS_FILE_SWITCHES = ['recurse', 'force', 'whatif', 'confirm', 'passthru', 'nonewline', 'append', 'noclobber', 'asbytestream', 'container', 'notypeinformation', 'includetypeinformation', 'update'];
+
+// A rename's new name with a directory or drive in it (R17.7).
+const NOT_A_NAME = /[\\/:]/;
+
+// The last name of a path word, as a copy with no destination names it in the current directory
+// (`C:\tmp\x` → `x`, `a\b\` → `b`, `C:x` → `x`).
+function wordBase(word) {
+  const w = String(word).replace(/(.)[\\/]+$/, '$1').replace(/^[A-Za-z]:(?![\\/])/, '');
+  const cut = Math.max(w.lastIndexOf('/'), w.lastIndexOf('\\'));
+  return w.slice(cut + 1) || '.';
+}
+
+// The path a rename creates: the new name in the source's own directory (`x` → `./name`,
+// `a\b\` → `a\name`, `C:\x` → `C:\name`).
+function renamed(source, name) {
+  const s = source.replace(/(.)[\\/]+$/, '$1');
+  const cut = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return cut < 0 ? `./${name}` : `${s.slice(0, cut + 1)}${name}`;
+}
+
+function psFileCmdlet(name, args, ak, h, cmdD) {
+  if (cmdD) {
+    const pos = args.map((t, i) => ({ v: t, kind: ak[i] })).filter((x) => !x.v.startsWith('/'));
+    if (['del', 'erase', 'rd', 'rmdir', 'md', 'mkdir'].includes(name)) { for (const p of pos) h.write(p.v, p.kind); return local(`${name} files`); }
+    if (name === 'dir') { for (const p of pos) h.read(p.v, p.kind); return local('dir'); }
+    if (name === 'copy') {
+      // `copy a+b+c out` (or `a + b`) concatenates the sources into one file; /a and /b may follow
+      // any name (R17.5). Without a destination, `copy a+b` writes into a, and `copy x` copies x
+      // into the current directory under its own name (R17.6).
+      const groups = [];
+      let glue = false;
+      for (const p of pos) {
+        if (glue || (groups.length && p.v.startsWith('+'))) groups[groups.length - 1].push(p);
+        else groups.push([p]);
+        glue = p.v.endsWith('+');
+      }
+      const pieces = (g) => g.flatMap((p) => p.v.split('+').map((v) => ({ v: v.replace(/(\/[ab])+$/i, ''), kind: p.kind }))).filter((p) => p.v);
+      const sources = groups.length > 1 ? groups.slice(0, -1).flatMap(pieces) : pieces(groups[0] ?? []);
+      for (const p of sources) h.read(p.v, p.kind);
+      if (groups.length > 1) for (const p of pieces(groups[groups.length - 1])) h.write(p.v, p.kind);
+      else if (sources.length > 1) h.write(sources[0].v, sources[0].kind);
+      else if (sources.length === 1) h.write(wordBase(sources[0].v), sources[0].kind);
+      return local('copy files');
+    }
+    if (name === 'move') {
+      for (const p of pos) h.write(p.v, p.kind);
+      // one operand: the file moves into the current directory under its own name (R19.5)
+      if (pos.length === 1) h.write(wordBase(pos[0].v), pos[0].kind);
+      return local('move files');
+    }
+    if (name === 'ren' || name === 'rename') {
+      // the new name lands in the source's directory: `ren x .claude` creates .claude
+      if (pos[1] && NOT_A_NAME.test(pos[1].v)) { h.bad = `${name} to ${pos[1].v.slice(0, 80)}: the new name has a path in it`; return local('rename'); }
+      if (pos[0]) h.write(pos[0].v, pos[0].kind);
+      if (pos[0] && pos[1]) h.write(renamed(pos[0].v, pos[1].v), pos[0].kind === 'lit' && pos[1].kind === 'lit' ? 'lit' : 'dyn');
+      return local('rename');
+    }
+    if (name === 'type') { for (const p of pos) h.read(p.v, p.kind); return local('type'); }
+    return null;
+  }
+  const canon = PS_FILE[name] ? name : PS_ALIASES[name];
+  const spec = canon && PS_FILE[canon];
+  if (!spec) return null;
+  const s = psParams(args, ak, { values: PS_FILE_VALUES, switches: PS_FILE_SWITCHES });
+  const writes = [];
+  for (const p of spec.params) if (s.get(p) && s.get(p).v !== true) writes.push(s.get(p));
+  // positional slots that are not already bound by name
+  const slots = s.pos;
+  const named0 = spec.params.some((p) => s.get(p) && ['path', 'literalpath', 'filepath'].includes(p));
+  // Copy-Item, Expand-Archive, Compress-Archive: with the source given by name, the first
+  // positional argument is the destination
+  const copyLike = canon === 'copy-item' || canon === 'expand-archive' || canon === 'compress-archive';
+  const srcNamed = copyLike && ['path', 'literalpath'].some((p) => s.get(p) && s.get(p).v !== true);
+  let destSlot = false;
+  for (const idx of spec.write) {
+    const slot = (named0 && !copyLike) || srcNamed ? idx - 1 : idx;
+    if (idx === 0 && named0) continue;
+    if (slots[slot]) { writes.push(slots[slot]); if (idx === 1) destSlot = true; }
+  }
+  // R17.6: Copy-Item / Move-Item without a destination copy into the current location under the
+  // source's own name; Expand-Archive makes a folder there named after the archive
+  if ((canon === 'copy-item' || canon === 'move-item' || canon === 'expand-archive') && !destSlot && !s.get(canon === 'expand-archive' ? 'destinationpath' : 'destination')) {
+    const src = s.get('path') ?? s.get('literalpath') ?? slots[0];
+    if (src && src.v !== true) for (const one of splitPs(src.v)) writes.push({ v: canon === 'expand-archive' ? wordBase(one).replace(/\.zip$/i, '') : wordBase(one), kind: src.kind });
+  }
+  const itemTypeArg = s.get('itemtype') ?? s.get('type');
+  const itemType = String(itemTypeArg?.v ?? '').toLowerCase();
+  // -ItemType is wildcard-matched by PowerShell ('j*', '?unction', 'Junc`tion' with the wildcard
+  // escape) and may come from a variable
+  const maybeLink = !!itemTypeArg && (itemTypeArg.kind !== 'lit' || /[*?[`]/.test(itemType));
+  const isLink = !!itemType && ['symboliclink', 'junction', 'hardlink'].some((x) => x.startsWith(itemType));
+  if (canon === 'new-item' && s.get('name') && s.get('name').v !== true) {
+    const base = writes[0] ?? { v: '.', kind: 'lit' };
+    writes.splice(0, writes.length, { v: `${base.v}/${s.get('name').v}`, kind: base.kind === 'lit' && s.get('name').kind === 'lit' ? 'lit' : 'dyn' });
+  }
+  if (canon === 'new-item' && (isLink || maybeLink)) {
+    // the target, where the command runs and where the link is (R17.4)
+    const t = s.get('target') ?? s.get('value');
+    if (!t || t.v === true) { if (isLink) h.bad = 'link without a literal target'; }
+    else {
+      const targets = splitPs(t.v).map((v) => ({ v, kind: t.kind }));
+      const links = writes.length ? splitPs(writes[0].v).map((v) => ({ v, kind: writes[0].kind })) : [];
+      if (!links.length) linkTargets(h, targets, { cwd: true });
+      for (const link of links) linkTargets(h, targets, { link, alsoCwd: true });
+    }
+  }
+  if (spec.rename) {
+    const target = writes[0];
+    const nn = s.get('newname') ?? slots[target === slots[0] ? 1 : 0];
+    // R17.7: PowerShell accepts a full path as the new name; it is refused rather than resolved
+    if (nn && nn.v !== true && NOT_A_NAME.test(String(nn.v))) { h.bad = `Rename-Item -NewName ${String(nn.v).slice(0, 80)}: the new name has a path in it`; return local('rename-item'); }
+    if (target && nn && nn.v !== true) writes.push({ v: renamed(String(target.v), String(nn.v)), kind: nn.kind === 'lit' && target.kind === 'lit' ? 'lit' : 'dyn' });
+  }
+  for (const wv of writes) for (const one of splitPs(wv.v)) h.write(one, wv.kind);
+  for (const p of spec.readParams ?? []) if (s.get(p) && s.get(p).v !== true) for (const one of splitPs(s.get(p).v)) h.read(one, s.get(p).kind);
+  if (!(spec.readParams ?? []).some((p) => s.get(p))) for (const idx of spec.readPos ?? []) if (slots[idx]) for (const one of splitPs(slots[idx].v)) h.read(one, slots[idx].kind);
+  if (!writes.length && canon !== 'remove-item') return local(`${canon}`);
+  if (!writes.length) { h.bad = 'Remove-Item without a literal path'; }
+  return local(`${canon} files`);
+}
+
+// ---------------------------------------------------------------- MCP
+
+const MCP_READ_VERBS = new Set(['get', 'list', 'search', 'fetch', 'read', 'describe', 'lookup', 'view', 'find', 'show', 'count', 'status', 'logs']);
+const MCP_WRITE_VERBS = new Set(['create', 'update', 'edit', 'delete', 'remove', 'send', 'post', 'reply', 'forward', 'transition', 'add', 'schedule', 'share', 'trash', 'merge', 'sync', 'apply', 'rollback',
+  'terminate', 'restart', 'scale', 'deploy', 'publish', 'upload', 'copy', 'move', 'label', 'mark', 'respond', 'complete', 'approve', 'assign', 'invite', 'set']);
+// Words that change state even though they are not in the spec's write-verb list.
+const MCP_MUTATING = new Set(['purge', 'drop', 'truncate', 'destroy', 'kill', 'reset', 'modify', 'replace', 'push', 'insert', 'upsert', 'save', 'put', 'patch', 'grant', 'revoke', 'enable', 'disable',
+  'stop', 'start', 'restore', 'import', 'submit', 'trigger', 'invoke', 'call', 'write', 'undelete', 'archive', 'unarchive', 'notify', 'comment', 'cancel', 'abort', 'reboot', 'shutdown', 'resize', 'rename',
+  'clear', 'flush', 'wipe', 'erase', 'unlink', 'link', 'attach', 'detach', 'lock', 'unlock', 'block', 'unblock', 'ban', 'unban', 'pause', 'resume', 'suspend', 'promote', 'demote', 'rotate', 'renew',
+  'transfer', 'pay', 'refund', 'charge', 'book', 'reserve', 'order', 'buy', 'sell', 'untrash', 'unlabel', 'unmark', 'accept', 'reject', 'dismiss', 'close', 'reopen', 'merge', 'commit', 'release']);
+
+function globMatch(pattern, name) {
+  if (typeof pattern !== 'string') return false;
+  if (!pattern.includes('*')) return pattern === name;
+  const re = new RegExp(`^${pattern.split('*').map((x) => x.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+  return re.test(name);
+}
+
+function mcpWords(tool) {
+  return tool.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').split(/[^A-Za-z0-9]+/).filter(Boolean).map((x) => x.toLowerCase());
+}
+
+function classifyMcp(name, input, ctx) {
+  const m = /^mcp__(.+?)__(.+)$/.exec(name);
+  if (!m) return unparseable('malformed MCP tool name');
+  const [, server, tool] = m;
+  const policy = ctx.mcpPolicy && typeof ctx.mcpPolicy === 'object' ? ctx.mcpPolicy : {};
+  const writes = policy.write && typeof policy.write === 'object' ? policy.write : {};
+  for (const [pat, scopeSpec] of Object.entries(writes)) {
+    if (globMatch(pat, name)) {
+      const spec = String(scopeSpec ?? '');
+      const colon = spec.indexOf(':');
+      return write(colon > 0 ? spec.slice(0, colon) : spec || `mcp.write`, colon > 0 ? spec.slice(colon + 1) : spec ? undefined : server, 'owner MCP write override');
+    }
+  }
+  const reads = Array.isArray(policy.read) ? policy.read : [];
+  if (reads.some((p) => globMatch(p, name))) return read('owner MCP read override');
+  if (tool === 'slack_send_message_draft' && /slack/i.test(server) && !server.includes('__')) return read('built-in MCP read override (Slack draft)');
+  let hasRead = false;
+  let hasWrite = false;
+  let unknown = null;
+  let mutating = null;
+  for (const w of mcpWords(tool)) {
+    if (w === 'query' || w === 'execute' || w === 'sql' || w.startsWith('run') || w.startsWith('exec')) { unknown = w; break; }
+    if (MCP_WRITE_VERBS.has(w)) hasWrite = true;
+    else if (MCP_MUTATING.has(w)) mutating = mutating ?? w;
+    else if (MCP_READ_VERBS.has(w)) hasRead = true;
+  }
+  if (unknown) return unknownProd(`MCP tool ${tool} (verb ${unknown}) is unavailable for policy`);
+  if (hasWrite) return mcpScope(server, tool, input);
+  if (mutating) return /atlassian|jira|confluence|slack|argo/i.test(server) ? mcpScope(server, tool, input) : unknownProd(`MCP tool ${tool} (${mutating}) changes state; unavailable for policy`);
+  if (hasRead) return read(`MCP read ${tool}`);
+  return unknownProd(`MCP tool ${tool} has no recognised verb; unavailable for policy`);
+}
+
+function str(v) {
+  return typeof v === 'string' && v ? v : typeof v === 'number' ? String(v) : undefined;
+}
+
+function mcpScope(server, tool, input) {
+  const s = server.toLowerCase();
+  const t = tool.toLowerCase();
+  if (/atlassian|jira|confluence/.test(s)) {
+    if (/confluence/.test(t) || /confluence/.test(s) || /page/.test(t)) return write('confluence.write', str(input.pageId) ?? str(input.spaceId), `MCP ${tool} changes Confluence`);
+    return write('jira.write', str(input.issueIdOrKey) ?? str(input.issueKey) ?? str(input.key), `MCP ${tool} changes Jira`);
+  }
+  if (/slack/.test(s)) return write('slack.post', str(input.channel_id) ?? str(input.channel), `MCP ${tool} posts to Slack`);
+  if (/argo/.test(s)) return write('argo.sync', str(input.applicationName) ?? str(input.appName) ?? str(input.application) ?? str(input.name), `MCP ${tool} changes an Argo CD application`);
+  return write('mcp.write', server, `MCP ${tool} is a write`);
+}

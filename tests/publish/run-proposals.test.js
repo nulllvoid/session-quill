@@ -46,7 +46,10 @@ test('auto-run settings from an earlier build are ignored with a warning: every 
 test('the page offers read-only recipes by default, plus the ones the owner allows', () => {
   const c = catalog();
   const names = [...c.forRepo(null).effective.values()].filter(isReadOnlyRecipe).map((r) => r.name).sort();
-  assert.deepEqual(names, ['analyse', 'analyse-followups', 'deploy-check', 'standup', 'workspace-setup']);
+  assert.deepEqual(names, ['analyse', 'analyse-followups', 'deploy-check', 'standup', 'verify-deploy', 'workspace-setup']);
+  // ADR 0028: critical-change needs an approved action pin, so no page ever offers it.
+  assert.equal(isReadOnlyRecipe(c.get('critical-change')), false);
+  assert.deepEqual(runChoices(c, pub({ run_recipes: ['critical-change'] }).publishers[0]), names);
   assert.equal(isReadOnlyRecipe(c.get('attempt-fix')), false);
   assert.equal(isReadOnlyRecipe(c.get('file-task')), false);
   assert.deepEqual(runChoices(c, pub().publishers[0]), names);

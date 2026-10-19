@@ -5,7 +5,7 @@ import { Journal } from '../../core/journal.js';
 import { journalPath } from '../../lib/paths.js';
 import { createState, sessionKey } from '../../core/state.js';
 import { applyEvent } from '../../core/reducer.js';
-import { renderTicketNote, renderSessionNote, renderHandoffNote, parseNote } from '../../worker/notes.js';
+import { renderTicketNote, renderSessionNote, writeHandoffNote, parseNote, hasVaultNote } from '../../worker/notes.js';
 import { safeKeyFileName, validateKey } from '../../core/keys.js';
 import { writeFileAtomic, ensureDir } from '../../lib/atomic-fs.js';
 import { snapshotFileName } from '../../hooks/binding-snapshot.js';
@@ -34,9 +34,12 @@ async function sync(ctx, io, flags) {
   return 0;
 }
 
-export function replayToStaging(ctx, into) {
+// The state the journal replays to. readOnly (commands that only read while the worker may be
+// appending) never opens the journal: open() would rewrite a torn last line, which may be the line
+// the worker is writing; read() stops before it instead.
+export function replayState(ctx, { readOnly = false } = {}) {
   const j = new Journal(journalPath(ctx.env));
-  const info = fs.existsSync(journalPath(ctx.env)) ? j.open() : { lastSequence: 0 };
+  const info = readOnly || !fs.existsSync(journalPath(ctx.env)) ? { lastSequence: 0 } : j.open();
   j.close();
   if (info.corrupt) throw new TrackerError('journal-corrupt', 'journal has mid-log corruption; recovery required');
   const state = createState({
@@ -45,6 +48,11 @@ export function replayToStaging(ctx, into) {
     approval_phrases_enabled: ctx.config.approval_phrases_enabled, projects: ctx.config.projects, repos: ctx.config.repos,
   });
   for (const ev of j.read()) applyEvent(state, ev);
+  return { state, info };
+}
+
+export function replayToStaging(ctx, into) {
+  const { state, info } = replayState(ctx);
   ensureDir(path.join(into, 'tickets'));
   ensureDir(path.join(into, 'sessions'));
   ensureDir(path.join(into, 'handoffs'));
@@ -52,13 +60,15 @@ export function replayToStaging(ctx, into) {
   let authoredRecovered = 0;
   let authoredMissing = 0;
   for (const t of state.tickets.values()) {
+    if (!hasVaultNote(t)) continue;
     const livePath = path.join(ctx.config.store_path, 'tickets', `${safeKeyFileName(t.key)}.md`);
     let authored = {};
     if (fs.existsSync(livePath)) { authored = parseNote(fs.readFileSync(livePath, 'utf8')).authored; authoredRecovered += 1; } else authoredMissing += 1;
     writeFileAtomic(path.join(into, 'tickets', `${safeKeyFileName(t.key)}.md`), renderTicketNote(t, { state, authored }));
   }
   for (const [key, s] of state.sessions) writeFileAtomic(path.join(into, 'sessions', `${snapshotFileName(key).replace(/\.json$/, '')}.md`), renderSessionNote(s, { state }));
-  for (const h of state.handoffs.values()) writeFileAtomic(path.join(into, 'handoffs', `${h.id}.md`), renderHandoffNote(h, { state }));
+  // R49: a run on a local-only ticket has no vault note (the same decision the worker makes).
+  for (const h of state.handoffs.values()) writeHandoffNote(path.join(into, 'handoffs', `${h.id}.md`), h, { state, write: writeFileAtomic });
   fs.copyFileSync(path.join(ctx.config.store_path, 'store.json'), path.join(into, 'store.json'));
   return { events: info.lastSequence, tickets: state.tickets.size, sessions: state.sessions.size, handoffs: state.handoffs.size, authoredRecovered, authoredMissing };
 }

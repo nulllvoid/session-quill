@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildStaticHtml } from '../export/static.js';
-import { sanitizeSnapshot } from '../export/sanitize.js';
+import { sanitizeSnapshot, isExportableTicket } from '../export/sanitize.js';
 import { writeFileAtomic, readJsonIfExists, ensureDir } from '../lib/atomic-fs.js';
 import { ageMs } from '../lib/time.js';
 
@@ -33,7 +33,7 @@ export function writeMirror(snapshot, settings, { now, machineName = null, store
   ensureDir(settings.dir);
   writeFileAtomic(path.join(settings.dir, 'dashboard.html'), buildStaticHtml(snapshot, options));
   writeFileAtomic(path.join(settings.dir, 'snapshot.json'), JSON.stringify(sanitizeSnapshot(snapshot, options)));
-  const info = { schema_version: 1, written_at: now, generation_id: snapshot.generation_id, generated_at: snapshot.generated_at, machine_name: machineName, store_id: storeId, ticket_count: snapshot.tickets.filter((t) => !settings.projects || settings.projects.includes(t.project_id)).length };
+  const info = { schema_version: 1, written_at: now, generation_id: snapshot.generation_id, generated_at: snapshot.generated_at, machine_name: machineName, store_id: storeId, ticket_count: snapshot.tickets.filter((t) => isExportableTicket(t) && (!settings.projects || settings.projects.includes(t.project_id))).length };
   // mirror.json last: a reader that sees it knows the files it describes are complete.
   writeFileAtomic(path.join(settings.dir, 'mirror.json'), JSON.stringify(info, null, 2));
   return info;

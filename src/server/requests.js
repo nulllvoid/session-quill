@@ -1,11 +1,13 @@
 // Durable, revision-checked mutation requests (DATA-CONTRACT §Mutation request).
 import { createHash } from 'node:crypto';
-import { isUuid, uuid } from '../lib/ids.js';
+import { isUuid, uuid, deterministicId } from '../lib/ids.js';
 import { addMs, isIsoZ } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
 import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
 import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
+import { budgetFor } from '../handoff/runner.js';
+import { scopeValidator, loadScopeCatalog, resolveScopes } from '../handoff/scopes.js';
 import { attachedFiles, undoFileEffect } from '../handoff/files.js';
 import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
@@ -16,18 +18,27 @@ import { suggestionMutation } from '../agents/suggestions.js';
 import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
+import { resumeProblem, resumeFields } from '../handoff/resume.js';
 
 export const EDIT_DELAY_MS = 10_000;
-export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run'];
+export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run', 'memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note', 'resume-run'];
+// Owner review of memory (spec §6.4, ADR 0027). Entry kinds target a memory entry by id and are
+// revision-checked against it; memory-note adds an owner entry. Approve and edit belong to the
+// dashboard alone; forget, pin and note may also come from the owner's CLI; nothing else qualifies.
+export const MEMORY_KINDS = new Set(['memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note']);
+const MEMORY_ENTRY_KINDS = new Set(['memory-approve', 'memory-edit', 'memory-forget', 'memory-pin']);
+const DASHBOARD_ONLY = { 'memory-approve': 'memory-approve-dashboard-only', 'memory-edit': 'memory-edit-dashboard-only' };
+const MEMORY_TEXT_MAX = 2000;
+const QUARANTINED_PIN = 'a quarantined learning is not delivered to runs, so it cannot be pinned; approve it first';
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
 // Long-running requests owned by an extension: the scheduler's, and repo-clone (ADR 0024).
 const EXTENSION_KINDS = new Set([...SCHEDULER_KINDS, 'repo-clone']);
-const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run']);
+const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run', 'resume-run']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
-const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run']);
-const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'dismiss-run']);
+const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run', 'resume-run']);
+const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'dismiss-run', 'memory-forget']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 
 // Tracker keys are uppercase (PROJ-123). Requests normalize them, and lookups also match legacy
@@ -113,14 +124,151 @@ function findProposal(state, ticket, payload, now) {
   return p;
 }
 
-// Only the owner approves or dismisses: the dashboard (actor owner) or the CLI. There is no
-// auto-approval (ADR 0025); page edits, schedules and anything else acting for them are refused.
-function approvalRefusal(actor, p, kind) {
-  if (actor === 'owner' || actor === 'cli') return null;
-  return `${kind === 'approve-run' ? 'approving' : 'dismissing'} a proposed run needs the owner, on the dashboard or with quill approve --run`;
+// R59 (final review I2): the one check for owner-dashboard-only requests (memory approve and edit,
+// approve-run of a run-origin proposal, resume-run of a scoped or pinned run). Only the authenticated
+// dashboard server journals a request as the worker (submitRequest, actor owner); ingress can never
+// claim the worker (it is quarantined there), so an ingress request is refused whatever actor it
+// claims, and a schedule or publisher (also through the worker) is refused by its own actor.
+export function fromOwnerDashboard(req) {
+  return !!req && req.producer === 'worker' && (req.actor_id ?? 'owner') === 'owner';
 }
 
-export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null } = {}) {
+// Only the owner approves or dismisses: the dashboard (actor owner) or the CLI. There is no
+// auto-approval (ADR 0025); page edits, schedules and anything else acting for them are refused.
+// A run's critical-change proposal (ADR 0028) is approved on the dashboard alone: the owner actor
+// on a request the worker journaled itself (submitted over the dashboard's authenticated API). The
+// CLI, an ingress request claiming the owner, a schedule or a page never approve one.
+function approvalRefusal(req, p, kind) {
+  const actor = req.actor_id ?? 'owner';
+  if (kind === 'approve-run' && p.origin === 'run') {
+    if (fromOwnerDashboard(req)) return null;
+    return { code: 'critical-approve-dashboard-only', message: 'approving a critical change is a dashboard action by the owner: open Runs → Needs you with quill ui' };
+  }
+  if (actor === 'owner' || actor === 'cli') return null;
+  return { code: 'approval-refused', message: `${kind === 'approve-run' ? 'approving' : 'dismissing'} a proposed run needs the owner, on the dashboard or with quill approve --run` };
+}
+
+// Approval of a run's critical-change proposal (spec §7.5, ADR 0028). Each scope must still resolve
+// in the current catalog to the fingerprint the proposal recorded (else scope-changed: what the
+// scope allows or the credentials it switches to changed since, Review Focus 4). The built-in
+// recipe is pinned by name and source; a newer text is noted, not refused. The run it queues is
+// autonomous, holds exactly the proposal's scopes, and every scope carries the action pin (the
+// pin object's guard string, ruling R43), so the guard allows only that action (R48).
+function approveCritical(worker, req, ticket, p) {
+  const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
+  const id8 = String(p.from_handoff_id ?? '').slice(0, 8);
+  const pin = p.action_pin && typeof p.action_pin.guard === 'string' && p.action_pin.guard.trim() ? p.action_pin.guard : null;
+  const listed = Array.isArray(p.scopes) ? p.scopes : [];
+  if (!pin || !listed.length) return fail('proposal-invalid', 'this critical change has no pinned action or scope, so it cannot be approved');
+  const specs = [];
+  const fingerprints = {};
+  let catalog;
+  try { catalog = loadScopeCatalog(worker.config ?? {}, { env: worker.env }); } catch (err) { return fail('scope-changed', `the scope catalog cannot be read (${err.message}); fix config.toml and approve again`); }
+  for (const s of listed) {
+    const spec = s.target ? `${s.name}:${s.target}` : s.name;
+    let fingerprint;
+    try { fingerprint = resolveScopes([spec], catalog)[0].fingerprint; } catch (err) { return fail('scope-changed', `scope ${spec} no longer resolves as it did when run ${id8} proposed this change (${err.message}); dismiss the proposal, or put the scope back as it was`); }
+    if (fingerprint !== s.fingerprint) return fail('scope-changed', `scope ${spec} changed in config.toml since run ${id8} proposed this change (what it allows or the credentials it switches to); dismiss the proposal, or put the scope back as it was`);
+    specs.push(spec);
+    fingerprints[spec] = fingerprint;
+  }
+  const builtin = catalogFor(worker).builtin(p.recipe.name);
+  const recipeNote = builtin && p.recipe.hash && builtin.hash !== p.recipe.hash ? 'recipe updated since proposed' : null;
+  const actionPins = specs.map((scope) => ({ scope, pin }));
+  return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote });
+}
+
+// The interrupted run a resume-run request names (spec §5.4, Task 19): a run of the target ticket
+// that was interrupted with a recorded session, and that no later run on the ticket superseded
+// (the run detail's rule: once resumed or retried, the later run is the one to act on).
+function resumeTarget(state, ticket, payload) {
+  const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
+  if (!h || h.ticket_id !== ticket.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a run of the target ticket');
+  const problem = resumeProblem(h);
+  if (problem) throw new TrackerError(problem.code, problem.message);
+  const later = [...state.handoffs.values()].find((x) => x.id !== h.id && x.ticket_id === ticket.id && x.requested_at > h.requested_at);
+  if (later) throw new TrackerError('run-superseded', `a later run (${later.id.slice(0, 8)}) on ${ticket.key} superseded this one, so it is not resumed`);
+  return h;
+}
+
+// Resume as new run (spec §5.4, Task 19): the owner (dashboard) or the CLI, never a page, schedule
+// or any other actor; the CLI sends nothing from inside a run (cli-in-run). The new run is a
+// fresh, ordinary run of the same recipe with exactly what the interrupted one was granted (see
+// resumeFields): no wider access, the same scopes whose fingerprints must not have changed, and
+// an approved critical change keeps its action pins or is refused. It starts with --resume.
+function evaluateResume(worker, req, ticket) {
+  const { state } = worker;
+  const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
+  const actor = req.actor_id ?? 'owner';
+  if (actor !== 'owner' && actor !== 'cli') return fail('resume-refused', 'resuming a run needs the owner, on the dashboard or with quill agent resume');
+  let orig;
+  let fields;
+  try {
+    orig = resumeTarget(state, ticket, req.payload ?? {});
+    fields = resumeFields(orig);
+  } catch (err) { return fail(err.code ?? 'resume-refused', err.message); }
+  // R56: a run with write scopes or action pins gets its production write access again, so it is
+  // resumed exactly as a run-origin proposal is approved: the owner on the dashboard alone.
+  if ((fields.scopes && fields.scopes.length) || fields.action_pins) {
+    if (!fromOwnerDashboard(req)) return fail('resume-dashboard-only', 'resuming a run with write scopes grants production write access again, so it is a dashboard action by the owner: open the run in Runs with quill ui');
+  }
+  const id8 = orig.id.slice(0, 8);
+  if (fields.scope_fingerprints) {
+    let catalog;
+    try { catalog = loadScopeCatalog(worker.config ?? {}, { env: worker.env }); } catch (err) { return fail('scope-changed', `the scope catalog cannot be read (${err.message}); fix config.toml and resume again`); }
+    for (const [spec, want] of Object.entries(fields.scope_fingerprints)) {
+      let got;
+      try { got = resolveScopes([spec], catalog)[0].fingerprint; } catch (err) { return fail('scope-changed', `scope ${spec} no longer resolves as it did when run ${id8} started (${err.message}); a resumed run gets only the scope exactly as it was granted`); }
+      if (got !== want) return fail('scope-changed', `scope ${spec} changed in config.toml since run ${id8} started (what it allows or the credentials it switches to); a resumed run gets only the scope exactly as it was granted: put the scope back as it was, or queue a new run`);
+    }
+  }
+  // A built-in is pinned by name and source (an upgrade may change its text); any other recipe
+  // must still have the reviewed hash.
+  const ref = fields.recipe ? { name: fields.recipe.name, source: fields.recipe.source, hash: fields.recipe.source === 'builtin' ? null : fields.recipe.hash } : undefined;
+  const payload = { ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
+  const critical = fields.action_pins ? { actionPins: fields.action_pins, scopeFingerprints: fields.scope_fingerprints, originProposalId: fields.origin_proposal_id } : null;
+  const evaluation = evaluateHandoff(worker, req, ticket, payload, critical);
+  if (evaluation.outcome !== 'applied') return evaluation;
+  const h = evaluation.mutation.handoff;
+  Object.assign(h, { retry_of: orig.id, resume_session_id: orig.session_id, batch_id: null });
+  if (fields.scope_fingerprints) h.scope_fingerprints = { ...fields.scope_fingerprints };
+  if (fields.proposal_id) h.proposal_id = fields.proposal_id;
+  if (fields.proposal) h.proposal = fields.proposal;
+  evaluation.result.resumed = orig.id;
+  return evaluation;
+}
+
+// The owner's wording for an entry: trimmed, non-empty and at most MEMORY_TEXT_MAX characters.
+function memoryText(text) {
+  if (typeof text !== 'string' || !text.trim()) throw new TrackerError('request-invalid', 'memory text must be a non-empty string');
+  if (text.trim().length > MEMORY_TEXT_MAX) throw new TrackerError('request-invalid', `memory text is limited to ${MEMORY_TEXT_MAX} characters`);
+  return text.trim();
+}
+
+const SECTION_RE = /^[a-z][a-z0-9-]{0,39}$/;
+
+// An owner note (quill memory note): machine scope, or repo scope for a configured repository.
+function memoryNotePayload(payload, state) {
+  const scope = payload.scope ?? (payload.repo_id ? 'repo' : 'machine');
+  if (scope !== 'repo' && scope !== 'machine') throw new TrackerError('request-invalid', 'an owner note is repo or machine scope');
+  const out = { scope, section: '', text: memoryText(payload.text) };
+  if (scope === 'repo') {
+    if (typeof payload.repo_id !== 'string' || !payload.repo_id) throw new TrackerError('request-invalid', 'a repo note names its repository');
+    if (!Object.hasOwn(state.meta.repos ?? {}, payload.repo_id)) throw new TrackerError('repo-unknown', `no repository ${payload.repo_id} is configured`);
+    out.repo_id = payload.repo_id;
+  }
+  if (payload.section !== undefined && payload.section !== null && payload.section !== '') {
+    if (typeof payload.section !== 'string' || !SECTION_RE.test(payload.section)) throw new TrackerError('request-invalid', 'section must be a short lower-case name such as build or pitfalls');
+    out.section = payload.section;
+  }
+  if (payload.key !== undefined && payload.key !== null && payload.key !== '') {
+    if (typeof payload.key !== 'string' || !payload.key.trim() || payload.key.length > 100) throw new TrackerError('request-invalid', 'key must be a string of at most 100 characters');
+    out.key = payload.key.trim();
+  }
+  return out;
+}
+
+export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null, scopeCheck = null } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
   const payload = body.payload ?? {};
@@ -139,6 +287,13 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     if (!session) throw new TrackerError('target-unknown', `unknown session ${body.target_id}`);
     if (!hasUnboundWork(session)) throw new TrackerError('unbound-gone', 'this session has no unlinked work to attach or dismiss');
     if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) throw new TrackerError('expected-revision-required', 'unlinked-work actions require expected_revision');
+  }
+  let memoryEntry = null;
+  if (MEMORY_ENTRY_KINDS.has(body.kind)) {
+    if (typeof body.target_id !== 'string' || !body.target_id) throw new TrackerError('target-required', `${body.kind} requires target_id, the memory entry id`);
+    memoryEntry = state.memory ? state.memory.entries.get(body.target_id) ?? null : null;
+    if (!memoryEntry) throw new TrackerError('memory-entry-unknown', `unknown memory entry ${body.target_id}`);
+    if (!Number.isInteger(body.expected_revision) || body.expected_revision < 0) throw new TrackerError('expected-revision-required', 'memory changes require expected_revision');
   }
   let normalized = {};
   switch (body.kind) {
@@ -169,7 +324,7 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       normalized = { items: normalizeDeploymentItems(payload.items, target) };
       break;
     case 'handoff':
-      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, payload, target.repo_id), attachedFileCount: attachedFiles(target).length });
+      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, payload, target.repo_id), attachedFileCount: attachedFiles(target).length, scopeCheck });
       break;
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
@@ -189,6 +344,12 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'handoff-cancel': {
       const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
       if (!h || h.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
+      normalized = { handoff_id: h.id };
+      break;
+    }
+    case 'resume-run': {
+      const h = resumeTarget(state, target, payload);
+      resumeFields(h);
       normalized = { handoff_id: h.id };
       break;
     }
@@ -240,6 +401,21 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'dismiss-unbound':
       normalized = {};
       break;
+    case 'memory-approve':
+    case 'memory-forget':
+      normalized = {};
+      break;
+    case 'memory-edit':
+      normalized = { text: memoryText(payload.text) };
+      break;
+    case 'memory-pin':
+      if (typeof payload.pinned !== 'boolean') throw new TrackerError('request-invalid', 'memory-pin needs payload.pinned, true or false');
+      if (memoryEntry.trust === 'quarantined') throw new TrackerError('memory-quarantined', QUARANTINED_PIN);
+      normalized = { pinned: payload.pinned };
+      break;
+    case 'memory-note':
+      normalized = memoryNotePayload(payload, state);
+      break;
     case 'link-external': {
       const key = typeof payload.key === 'string' ? payload.key.trim().toUpperCase() : '';
       if (!EXTERNAL_KEY_RE.test(key)) throw new TrackerError('key-invalid', 'a ticket key like PROJ-123 is required');
@@ -258,8 +434,8 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
   return {
     id: body.id,
     kind: body.kind,
-    target_id: target ? target.id : (session ? session.id : null),
-    expected_revision: session ? body.expected_revision : (target && !REVISION_OPTIONAL.has(body.kind) ? body.expected_revision : (Number.isInteger(body.expected_revision) ? body.expected_revision : null)),
+    target_id: target ? target.id : (session ? session.id : (memoryEntry ? memoryEntry.id : null)),
+    expected_revision: session || memoryEntry ? body.expected_revision : (target && !REVISION_OPTIONAL.has(body.kind) ? body.expected_revision : (Number.isInteger(body.expected_revision) ? body.expected_revision : null)),
     payload: normalized,
     created_at: nowIso,
     not_before: DELAYED_KINDS.has(body.kind) ? addMs(nowIso, EDIT_DELAY_MS) : nowIso,
@@ -277,7 +453,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
     if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
     throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
   }
-  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts });
+  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts, scopeCheck: (names) => scopeValidator(worker.config ?? {}, { env: worker.env })(names) });
   request.actor_id = actor;
   const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
   if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
@@ -341,7 +517,9 @@ function evaluateSessionRequest(worker, req) {
 }
 
 // A handoff request, or an approved proposal, becomes a queued run (TRD §Handoff execution).
-function evaluateHandoff(worker, req, ticket, payload) {
+// `critical` (ADR 0028) comes only from approveCritical, never from a request payload: the action
+// pins, the fingerprints the scopes must still have at dispatch, and the proposal it came from.
+function evaluateHandoff(worker, req, ticket, payload, critical = null) {
   const { state } = worker;
   // Re-checked here because CLI requests arrive through ingress without submit validation, and
   // the recipe file may have changed during the request's lifetime.
@@ -349,7 +527,8 @@ function evaluateHandoff(worker, req, ticket, payload) {
   let checked;
   try {
     recipe = resolveRecipe(catalogFor(worker), payload, ticket.repo_id);
-    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length });
+    // Write scopes are checked against the worker's catalog here too (spec §4.3).
+    checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(worker.config ?? {}, { env: worker.env }), actionPins: critical ? critical.actionPins : null });
   } catch (err) {
     return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
   }
@@ -365,15 +544,85 @@ function evaluateHandoff(worker, req, ticket, payload) {
     base_ticket_revision: ticket.revision, base_next_action: ticket.next_action ?? '', repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
     requested_at: worker.now(), started_at: null, finished_at: null, deadline_at: null, error: null, result_ref: null, result_summary: null,
     children_ids: [], worktree_path: null, changed_files: [], test_results: [], commit_sha: null, pr_url: null, uncertain_effects: [], retry_of: req.retry_of ?? null,
-    batch_id: checked.batch_id ?? null, recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, deadline_ms: recipe.timeout_min * 60_000, suggestions: [],
+    batch_id: checked.batch_id ?? null, recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, legacy: recipe.legacy && checked.suggest !== true, outputs: recipe.outputs, suggestions: [],
+    // The wall clock the run will get, from the same budget dispatch uses (R8): recipe, config and access.
+    deadline_ms: budgetFor(recipe, worker.config, checked.access ?? 'standard', checked.mode).timeoutMs,
+    // Write scopes (autonomous only) and the run's own turn and spend limits, when it asked for them.
+    ...(checked.scopes ? { scopes: checked.scopes } : {}),
+    ...(checked.max_turns !== undefined ? { max_turns: checked.max_turns } : {}),
+    ...(checked.max_budget_usd !== undefined ? { max_budget_usd: checked.max_budget_usd } : {}),
+    // An approved critical change (ADR 0028): its pinned action per scope, the fingerprints dispatch
+    // checks again before the grant is frozen, and the proposal. Never exported (allow-lists).
+    ...(critical ? { action_pins: critical.actionPins, scope_fingerprints: critical.scopeFingerprints, origin_proposal_id: critical.originProposalId } : {}),
   };
-  return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id } };
+  return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id, ...(critical && critical.recipeNote ? { note: critical.recipeNote } : {}) } };
+}
+
+const memorySource = (requestId) => `memory-tx:request:${requestId}`;
+const memoryFailure = (code, message, current_revision = null) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision } });
+
+// Who may make this memory change (spec §6.4): approve and edit only the dashboard owner; forget,
+// pin and note also the owner's CLI. A page edit, a schedule or any other actor never.
+function memoryRefusal(req) {
+  const actor = req.actor_id ?? 'owner';
+  if (DASHBOARD_ONLY[req.kind]) return fromOwnerDashboard(req) ? null : { code: DASHBOARD_ONLY[req.kind], message: `${req.kind === 'memory-approve' ? 'approving a learning' : 'editing a memory entry'} is a dashboard action: open Memory with quill ui` };
+  if (actor === 'owner' || actor === 'cli') return null;
+  return { code: 'memory-owner-only', message: 'only the owner changes memory, on the dashboard or with quill memory' };
+}
+
+// A memory request becomes one memory-tx event (finish() journals it before the request-tx), so the
+// journal stays the single source of memory. CLI requests arrive without submit validation, so every
+// check is made again here against the entry as it is now.
+function evaluateMemoryRequest(worker, req) {
+  const { state } = worker;
+  const refusal = memoryRefusal(req);
+  if (refusal) return memoryFailure(refusal.code, refusal.message);
+  const payload = req.payload ?? {};
+  const noteId = req.kind === 'memory-note' ? deterministicId(`${req.id}:memory-note`) : null;
+  // After a crash between the two events the memory change already applied: finish the request.
+  if (state.appliedSources.has(memorySource(req.id))) return { outcome: 'applied', result: { entry_id: noteId ?? req.target_id } };
+  if (req.kind === 'memory-note') {
+    let note;
+    try { note = memoryNotePayload(payload, state); } catch (err) { return memoryFailure(err.code ?? 'request-invalid', err.message); }
+    return { outcome: 'applied', memoryTx: { op: 'owner-note', entry: { id: noteId, ...note } }, result: { entry_id: noteId } };
+  }
+  const entry = state.memory.entries.get(req.target_id);
+  if (!entry) return memoryFailure('memory-entry-unknown', 'this memory entry no longer exists');
+  if (!Number.isInteger(req.expected_revision)) return memoryFailure('expected-revision-required', 'memory changes require expected_revision', entry.revision);
+  if (entry.revision !== req.expected_revision) {
+    // The current state without the entry's text: request records reach the owner snapshot.
+    return { outcome: 'conflict', error: { code: 'revision-conflict', message: `this entry changed first (revision ${entry.revision}, request expected ${req.expected_revision})`, retryable: false, current_revision: entry.revision }, result: { current: { revision: entry.revision, trust: entry.trust, pinned: entry.pinned === true, state: entry.state } } };
+  }
+  const guarded = { expected_revision: entry.revision };
+  const result = { entry_id: entry.id };
+  switch (req.kind) {
+    case 'memory-approve':
+      if (entry.trust !== 'quarantined') return memoryFailure('memory-not-quarantined', 'this entry is not waiting for approval', entry.revision);
+      return { outcome: 'applied', memoryTx: { op: 'approved', entry: { id: entry.id }, ...guarded }, result };
+    case 'memory-edit': {
+      let text;
+      try { text = memoryText(payload.text); } catch (err) { return memoryFailure(err.code, err.message, entry.revision); }
+      if (entry.superseded_by) return memoryFailure('memory-entry-retired', 'this entry was superseded; edit its replacement', entry.revision);
+      return { outcome: 'applied', memoryTx: { op: 'edited', entry: { id: entry.id, text }, ...guarded }, result };
+    }
+    case 'memory-forget':
+      if (entry.state === 'retired' || entry.superseded_by) return memoryFailure('memory-entry-retired', 'this entry is already retired', entry.revision);
+      return { outcome: 'applied', memoryTx: { op: 'retired', entry: { id: entry.id }, ...guarded }, result };
+    case 'memory-pin':
+      if (typeof payload.pinned !== 'boolean') return memoryFailure('request-invalid', 'memory-pin needs payload.pinned, true or false', entry.revision);
+      // A held learning is never delivered, pinned or not: approve it first (pinning would claim an effect it has not).
+      if (entry.trust === 'quarantined') return memoryFailure('memory-quarantined', QUARANTINED_PIN, entry.revision);
+      return { outcome: 'applied', memoryTx: { op: payload.pinned ? 'pinned' : 'unpinned', entry: { id: entry.id }, ...guarded }, result };
+    default:
+      return memoryFailure('kind-invalid', 'unsupported memory request kind');
+  }
 }
 
 const REVALIDATED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
 
 export function evaluateRequest(worker, req) {
   if (SESSION_KINDS.has(req.kind)) return evaluateSessionRequest(worker, req);
+  if (MEMORY_KINDS.has(req.kind)) return evaluateMemoryRequest(worker, req);
   const { state } = worker;
   const ticket = req.target_id ? state.tickets.get(req.target_id) : null;
   if (req.kind !== 'refresh' && !ticket) return { outcome: 'failed', error: { code: 'target-unknown', message: 'ticket no longer exists', retryable: false, current_revision: null } };
@@ -403,23 +652,26 @@ export function evaluateRequest(worker, req) {
       return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { deployments: req.payload.items } } };
     case 'handoff':
       return evaluateHandoff(worker, req, ticket, req.payload);
+    case 'resume-run':
+      return evaluateResume(worker, req, ticket);
     case 'approve-run':
     case 'dismiss-run': {
       let p;
       try { p = findProposal(state, ticket, req.payload, worker.now()); } catch (err) {
         return { outcome: 'failed', error: { code: err.code, message: err.message, retryable: false, current_revision: ticket.revision } };
       }
-      const refusal = approvalRefusal(req.actor_id, p, req.kind);
-      if (refusal) return { outcome: 'failed', error: { code: 'approval-refused', message: refusal, retryable: false, current_revision: ticket.revision } };
+      const refusal = approvalRefusal(req, p, req.kind);
+      if (refusal) return { outcome: 'failed', error: { code: refusal.code, message: refusal.message, retryable: false, current_revision: ticket.revision } };
       if (req.kind === 'dismiss-run') return { outcome: 'applied', mutation: { type: 'run-proposal-dismiss', proposal_id: p.id }, result: { proposal_id: p.id } };
+      const critical = p.origin === 'run';
       // The recipe this ticket would run must still be the one the page offered (same layer and
       // text); a repository recipe of that name shadows it and is refused.
-      const shadow = shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
+      const shadow = critical ? null : shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
       if (shadow) return { outcome: 'failed', error: { code: shadow.code, message: shadow.message, retryable: false, current_revision: ticket.revision } };
       // Approval queues an ordinary run through the same checks and reservation as the Run dialog.
       // It suggests rather than applies: whoever proposed it, the owner reviews what it found. Page
       // text never becomes the owner's note; where the run came from travels as `proposal`.
-      const evaluation = evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
+      const evaluation = critical ? approveCritical(worker, req, ticket, p) : evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
       if (evaluation.outcome !== 'applied') {
         if (evaluation.error && evaluation.error.code === 'handoff-reserved') {
           const existing = state.handoffs.get(evaluation.result.existing_handoff_id);
@@ -478,6 +730,13 @@ export function evaluateRequest(worker, req) {
 }
 
 function finish(worker, req, evaluation) {
+  if (evaluation.memoryTx) {
+    const { memoryTx, ...rest } = evaluation;
+    const { result } = worker.emit('memory-tx', memoryTx, { source_identity: memorySource(req.id) });
+    evaluation = result.rejected
+      ? { outcome: result.rejected === 'revision-conflict' ? 'conflict' : 'failed', error: { code: result.rejected, message: `the memory change was not applied (${result.rejected})`, retryable: false, current_revision: null } }
+      : rest;
+  }
   const payload = { request_id: req.id, outcome: evaluation.outcome, error: evaluation.error ?? null, result: evaluation.result ?? null, mutation: evaluation.mutation ?? null };
   // Session-targeted requests carry the session identity so the worker re-renders that session.
   worker.emit('request-tx', payload, { source_identity: `request-tx:${req.id}:${evaluation.outcome}`, ...(evaluation.session ?? {}) });

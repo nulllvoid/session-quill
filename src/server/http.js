@@ -8,6 +8,7 @@ import { ticketDetailPath } from '../worker/projections.js';
 import { getBlob } from '../core/blobs.js';
 import { TrackerError } from '../lib/errors.js';
 import { submitRequest, cancelRequest } from './requests.js';
+import { memoryListing } from '../core/memory.js';
 
 const UI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ui');
 const MAX_BODY = 256 * 1024;
@@ -116,6 +117,9 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
       if (req.method === 'GET') {
         if (url.pathname === '/v1/csrf') return json(res, 200, { csrf: auth.csrfFor(token) });
         if (url.pathname === '/v1/snapshot') return json(res, 200, worker.getSnapshot());
+        // Memory (spec §6.4, §9) is served only here, to the owner session: never in the snapshot,
+        // so no export, mirror or publisher built from a snapshot can carry it.
+        if (url.pathname === '/v1/memory') return json(res, 200, { generated_at: worker.now(), ...memoryListing(worker.state, Date.parse(worker.now())) });
         let m;
         if ((m = /^\/v1\/tickets\/([0-9a-f-]{36})$/.exec(url.pathname))) {
           const gen = url.searchParams.get('generation');

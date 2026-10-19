@@ -562,6 +562,14 @@ table.sessions th { font-size: 12px; color: var(--text-faint); font-weight: 500;
 .proposal { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 8px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; }
 .proposal code { overflow-wrap: anywhere; }
 .proposal .proposal-actions { margin-left: auto; display: inline-flex; gap: 6px; }
+/* A run's critical change (ADR 0028): the action and its verify/rollback lines take a full row. */
+.proposal[data-kind="critical"] .critical-scopes { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.proposal[data-kind="critical"] .critical-body { flex-basis: 100%; min-width: 0; }
+.proposal[data-kind="critical"] .critical-body p { margin: 2px 0; }
+.proposal[data-kind="critical"] .critical-action { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* "Approve and queue (scopes: …)" names each scope target, which may be long: the button wraps. */
+.proposal[data-kind="critical"] .proposal-actions { flex-wrap: wrap; max-width: 100%; min-width: 0; }
+.proposal[data-kind="critical"] .proposal-actions .btn { white-space: normal; overflow-wrap: anywhere; text-align: start; max-width: 100%; }
 .today-day { margin-bottom: 24px; max-width: 920px; }
 .today-day h3 { font-size: 16px; margin-bottom: 6px; }
 .today-tickets, .today-items { list-style: none; margin: 0; padding: 0; }
@@ -805,6 +813,19 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 /* Run access (ADR 0017): Full access reads as a warning where it is chosen. */
 .access label.danger { color: var(--critical); }
 .access label.danger .small { color: var(--critical); opacity: .85; }
+.access label.danger .access-note { opacity: 1; }
+/* Autonomous runs (ADR 0026): connectors and credentials as the worker last recorded them. */
+.autonomy-notes { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline); }
+.autonomy-notes p { margin: 0; }
+.connected-tools, .cred-systems { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.connected-tools li, .autonomy-notes .issues li { overflow-wrap: anywhere; }
+.autonomy-notes .issues { margin: 0; }
+/* Write scopes (spec §4.3): one option per catalog scope, with its own words and credentials. */
+.access .write-scopes { background: var(--surface); margin-top: 8px; }
+.write-scopes p { margin: 0; }
+.scope-option { display: grid; gap: 4px; }
+.scope-option p { margin-left: 23px; overflow-wrap: anywhere; }
+.scope-option code { overflow-wrap: anywhere; }
 
 /* Bulk selection and runs (ADR 0023). */
 .view-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 12px; }
@@ -965,6 +986,27 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-uncertain { display: flex; gap: 8px; padding: 10px 12px; border-radius: var(--radius-ctl); background: var(--status-deploy-bg); color: var(--status-deploy); }
 .run-uncertain ul { margin: 4px 0 0; padding-left: 18px; }
 .run-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 0; }
+/* Run record (autonomous runs spec §8): plan, attempts, checks, critical changes, learnings, tools and
+   Run notes. Every value is agent or tool text, so long words and commands wrap inside the panel. */
+.run-plan { margin: 0; padding-left: 20px; max-width: 70ch; }
+.run-plan li { padding: 2px 0; overflow-wrap: anywhere; }
+.run-attempts, .run-verification, .run-critical, .run-prod-writes, .run-learnings, .run-tools, .run-note-list, .run-lessons { list-style: none; margin: 0; padding: 0; }
+.run-attempts > li, .run-verification > li, .run-critical > li, .run-prod-writes > li, .run-learnings > li, .run-tools > li, .run-lessons > li { padding: 6px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; min-width: 0; }
+.run-attempts > li:first-child, .run-verification > li:first-child, .run-critical > li:first-child, .run-prod-writes > li:first-child, .run-learnings > li:first-child, .run-tools > li:first-child, .run-lessons > li:first-child { border-top: 0; }
+.run-attempts p, .run-verification p, .run-critical p { margin: 4px 0 0; max-width: 70ch; }
+.run-attempts code, .run-verification code, .run-critical code, .run-prod-writes code, .run-tools code, .run-learnings code { overflow-wrap: anywhere; }
+.attempt-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; vertical-align: baseline; }
+.run-critical .critical-action { white-space: pre-wrap; }
+.run-critical .critical-state { color: var(--text-muted); }
+/* Chips that carry a scope target or a memory key (up to 128 characters) wrap inside a narrow panel
+   instead of running past its edge. */
+.run-critical .chip, .critical-scopes .chip, .memory-head .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.run-record-status { margin: 12px 0 0; }
+.run-note { padding: 10px 0; border-top: 1px solid var(--hairline); min-width: 0; overflow-wrap: anywhere; }
+.run-note:first-child { border-top: 0; }
+.run-note-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.run-note .run-attempts, .run-note .run-lessons { margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--hairline-strong); }
+.run-note p { margin: 4px 0 0; }
 @media (max-width: 599px) {
   .run-open { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "state ticket" "state recipe" "state badges" "state facts" "state time"; }
   .run-badges { justify-content: flex-start; }
@@ -973,6 +1015,29 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; width: 100%; margin: 10px 0 4px; padding: 8px 12px; border: 0; border-radius: var(--radius-ctl); background: var(--surface-inset); color: var(--text); font: inherit; text-align: left; box-shadow: inset 0 0 0 1px var(--hairline); min-height: 44px; }
 button.run-strip { cursor: pointer; }
 button.run-strip:hover { box-shadow: inset 0 0 0 1px var(--hairline-strong); }
+
+/* Memory (spec §6.4): trust in words with colour, held reasons and conflicts as warnings, Needs you items. */
+.chip.trust[data-trust="owner"] { background: var(--accent-soft); color: var(--accent); }
+.chip.trust[data-trust="verified"] { background: var(--status-done-bg); color: var(--status-done); }
+.chip.trust[data-trust="sourced"] { background: var(--status-active-bg); color: var(--status-active); }
+.chip.trust[data-trust="observed"] { background: var(--status-todo-bg); color: var(--status-todo); }
+.chip.trust[data-trust="quarantined"] { background: var(--stale-bg); color: var(--stale); }
+.memory-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.memory-entry { padding: 12px 14px; border-radius: var(--radius-ctl); background: var(--surface); box-shadow: inset 0 0 0 1px var(--hairline); overflow-wrap: anywhere; min-width: 0; }
+.memory-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.memory-text { margin: 8px 0 4px; max-width: 70ch; white-space: pre-wrap; }
+.memory-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 2px 6px; }
+.memory-held, .memory-conflicts { display: flex; align-items: center; gap: 6px; margin: 4px 0; color: var(--warning); }
+.memory-conflicts { margin: 0 0 10px; }
+.memory-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.memory-edit { display: grid; gap: 6px; margin-top: 8px; max-width: 70ch; }
+.memory-edit p { margin: 0; }
+.memory-repo { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+.memory-repo select { width: auto; max-width: 100%; }
+.memory-entry .request-feedback { margin-top: 8px; }
+.run-row.memory-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 10px 12px; border-radius: var(--radius-ctl); box-shadow: inset 0 0 0 1px var(--hairline); overflow-wrap: anywhere; }
+.run-row.memory-item .btn { margin-left: auto; }
+@media (pointer: coarse) { .memory-actions .btn, .run-row.memory-item .btn, .memory-tabs [role="tab"] { min-height: 44px; } }
 
 .recipe-cards { list-style: none; margin: 12px 0; padding: 0; display: grid; gap: 8px; }
 .recipe-card { width: 100%; display: flex; flex-direction: column; gap: 4px; text-align: left; font: inherit; color: var(--text); background: var(--surface-raised); border: 0; border-radius: var(--radius-ctl); padding: 10px 12px; cursor: pointer; box-shadow: inset 0 0 0 1px var(--hairline-strong); min-height: 44px; }

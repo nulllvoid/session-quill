@@ -5,10 +5,21 @@ import { TrackerError } from '../lib/errors.js';
 // `files` (ADR 0015) works on a ticket's attached files, outside any repository.
 export const MODES = ['analyse', 'analyse-followups', 'attempt-fix', 'files'];
 export const NOTE_MAX = 280;
-// How much of Claude Code a run may use (ADR 0017): `standard` is Quill's narrow tool profile,
-// `settings` the owner's own Claude Code permission rules and connectors, `full` no permission
-// checks at all. A request that names none stays standard, as schedules and older requests do.
-export const ACCESS = ['standard', 'settings', 'full'];
+// How much of Claude Code a run may use (ADR 0017, ADR 0026): `standard` is Quill's narrow tool
+// profile, `settings` the owner's own Claude Code permission rules and connectors, `autonomous`
+// every tool and connector with the per-run guard deciding each call and credentials redirected,
+// `full` no permission checks at all. A request that names none stays standard, as schedules,
+// page proposals and older requests do; the dashboard and the CLI ask for autonomous.
+export const ACCESS = ['standard', 'settings', 'autonomous', 'full'];
+// Write scopes (spec §4.3) a run may be granted: `name` or `name:target`, autonomous only. The
+// form is checked here; the scope catalog (src/handoff/scopes.js) checks names, targets and
+// credentials through the caller's `scopeCheck`, and resolves them again at dispatch.
+export const SCOPE_RE = /^[a-z][a-z0-9._-]{0,63}(?::[A-Za-z0-9._/@-]{1,128})?$/;
+export const MAX_SCOPES = 20;
+// A run may set its own turn and spend caps (spec §8, `--max-turns`, `--budget`); they win over
+// the recipe and the config, within these bounds.
+export const MAX_RUN_TURNS = 1000;
+export const MAX_RUN_BUDGET_USD = 1000;
 // Runs queued together from the dashboard share a client-chosen batch id (ADR 0023).
 export const BATCH_ID_RE = /^[A-Za-z0-9._:-]{1,64}$/;
 const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
@@ -19,8 +30,14 @@ export function isProtectedBranch(branch, repo) {
 }
 
 // With a recipe (ADR 0008) the mode comes from the recipe and its frontmatter permissions are a
-// ceiling: a request may ask for less, never more.
-export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null, attachedFileCount = null } = {}) {
+// ceiling: a request may ask for less, never more. `scopeCheck(names)` (scopeValidator(config))
+// throws for a scope the catalog does not grant; every request path passes it, so the dashboard,
+// the CLI and the worker refuse the same scopes. The catalog comes in as a function so that this
+// module, which the guard loads, does not load the catalog and its imports.
+// `actionPins` (ADR 0028) come only from the owner's approval of a critical-change proposal, never
+// from a request payload: a recipe that requires an action pin runs only with them, and they
+// need autonomous access and a granted scope for each pin.
+export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null, attachedFileCount = null, scopeCheck = null, actionPins = null } = {}) {
   if (recipe && payload.mode !== undefined && payload.mode !== null && payload.recipe !== undefined && payload.mode !== recipe.mode) throw new TrackerError('mode-mismatch', `recipe ${recipe.name} runs in mode ${recipe.mode}`);
   const mode = recipe ? recipe.mode : payload.mode ?? 'analyse-followups';
   if (!MODES.includes(mode)) throw new TrackerError('mode-invalid', `handoff mode must be one of ${MODES.join(', ')}`);
@@ -31,6 +48,10 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   if (access !== 'standard' && mode === 'files') throw new TrackerError('access-invalid', 'a files run always uses standard access: its staging and undo rely on the agent never reaching the originals');
   if (payload.batch_id !== undefined && payload.batch_id !== null && !(typeof payload.batch_id === 'string' && BATCH_ID_RE.test(payload.batch_id))) throw new TrackerError('batch-invalid', 'batch_id must be 1 to 64 letters, digits, dots, colons, underscores or dashes');
   const batch = typeof payload.batch_id === 'string' ? { batch_id: payload.batch_id } : {};
+  const scopes = scopeList(payload.scopes, access);
+  if (scopes.scopes && typeof scopeCheck === 'function') scopeCheck(scopes.scopes);
+  const limits = runLimits(payload);
+  pinRequirements(recipe, access, scopes.scopes ?? [], actionPins);
   const raw = payload.permissions ?? {};
   const permissions = {};
   for (const k of PERMISSION_KEYS) permissions[k] = raw[k] === true;
@@ -62,7 +83,46 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   }
   if ((permissions.read_source || permissions.edit_source) && !repo) throw new TrackerError('repo-required', 'source access requires a registered repository on the owner machine');
   if (recipe) {
-    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}), ...batch };
+    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}), ...batch, ...scopes, ...limits };
   }
-  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...batch };
+  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...batch, ...scopes, ...limits };
+}
+
+// `{ scopes }` when the request names any, else {}. Scopes cover prod and external writes only and
+// exist only under autonomous access, where the guard enforces them.
+function scopeList(raw, access) {
+  if (raw === undefined || raw === null) return {};
+  if (!Array.isArray(raw) || raw.length > MAX_SCOPES || !raw.every((s) => typeof s === 'string' && SCOPE_RE.test(s))) {
+    throw new TrackerError('scope-invalid', `scopes must be a list of at most ${MAX_SCOPES} names such as jira.write or k8s.write:staging`);
+  }
+  if (!raw.length) return {};
+  if (access !== 'autonomous') throw new TrackerError('scope-needs-autonomous', 'write scopes need autonomous access: only its guard can hold a run to them');
+  return { scopes: [...new Set(raw)] };
+}
+
+function pinRequirements(recipe, access, scopes, actionPins) {
+  const pins = Array.isArray(actionPins) ? actionPins : [];
+  const requires = recipe && Array.isArray(recipe.requires) ? recipe.requires : [];
+  if (requires.includes('action_pin') && !pins.length) throw new TrackerError('recipe-needs-approval', `recipe ${recipe.name} runs only as an approved critical change: approve its proposal in Runs → Needs you on the dashboard`);
+  if (requires.includes('scopes') && !scopes.length) throw new TrackerError('recipe-needs-scopes', `recipe ${recipe.name} needs at least one write scope`);
+  if (!pins.length) return;
+  if (access !== 'autonomous') throw new TrackerError('pin-needs-autonomous', 'an action pin needs autonomous access: only its guard holds a run to it');
+  for (const a of pins) {
+    if (!a || typeof a.scope !== 'string' || typeof a.pin !== 'string' || !a.pin.trim()) throw new TrackerError('pin-invalid', 'an action pin names a scope and the exact action');
+    if (!scopes.includes(a.scope)) throw new TrackerError('pin-without-scope', `the action pin for ${a.scope} needs that scope granted to the run`);
+  }
+}
+
+function runLimits(payload) {
+  const out = {};
+  if (payload.max_turns !== undefined && payload.max_turns !== null) {
+    if (!Number.isInteger(payload.max_turns) || payload.max_turns < 1 || payload.max_turns > MAX_RUN_TURNS) throw new TrackerError('budget-invalid', `max_turns must be a whole number from 1 to ${MAX_RUN_TURNS}`);
+    out.max_turns = payload.max_turns;
+  }
+  if (payload.max_budget_usd !== undefined && payload.max_budget_usd !== null) {
+    const v = payload.max_budget_usd;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || v > MAX_RUN_BUDGET_USD) throw new TrackerError('budget-invalid', `max_budget_usd must be a number above 0 and at most ${MAX_RUN_BUDGET_USD}`);
+    out.max_budget_usd = v;
+  }
+  return out;
 }

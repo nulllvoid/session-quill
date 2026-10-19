@@ -3,12 +3,12 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { Journal } from '../core/journal.js';
-import { validateEvent, makeEvent } from '../core/events.js';
+import { validateEvent, makeEvent, INGRESS_KINDS } from '../core/events.js';
 import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.js';
 import { createState, sessionKey } from '../core/state.js';
 import { applyEvent } from '../core/reducer.js';
 import { safeKeyFileName } from '../core/keys.js';
-import { journalPath, stateDir, requestsDir, configPath } from '../lib/paths.js';
+import { journalPath, stateDir, requestsDir, configPath, quillHome } from '../lib/paths.js';
 import { ensureDir, writeJsonAtomic, readJsonIfExists, listFiles, removeIfExists } from '../lib/atomic-fs.js';
 import { toIso, SECOND } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
@@ -19,11 +19,14 @@ import { onboardSettings } from '../onboard/settings.js';
 import { keyExample } from '../core/external-keys.js';
 import { acquireLock } from './lock.js';
 import { writeBindingSnapshot, readBindingSnapshot, writeHeartbeat, writeRuntimeIdentity, snapshotFileName } from '../hooks/binding-snapshot.js';
-import { renderSessionNote, renderHandoffNote, writeNote, writeGeneratedNote } from './notes.js';
+import { renderSessionNote, writeNote, writeGeneratedNote, writeHandoffNote, handoffHasVaultNote } from './notes.js';
 import { publishGeneration, buildSnapshot } from './projections.js';
 import { captureHealth } from './health.js';
 import { effectiveEnvironments } from '../deploy/environments.js';
 import { descriptionProblems, parseDescription } from '../core/description.js';
+import { writeProjections as writeMemoryProjections } from '../memory/project.js';
+import { memoryPaths } from '../memory/paths.js';
+import { latestInventory } from '../handoff/inventory.js';
 
 // What hooks need to know about a bound ticket, with a signature to tell when it changed.
 function ticketFacts(ticket) {
@@ -36,6 +39,9 @@ export const NOTE_FLUSH_MS = 30 * SECOND;
 export const HEARTBEAT_MS = 5 * SECOND;
 export const IDENTITY_CHECK_MS = 10 * SECOND;
 export const PROVISIONAL_MAX_MS = 30 * SECOND;
+// Memory projections are rewritten after memory events apply, and at least this often so entries
+// move to ## Stale as they age (unchanged files are not rewritten).
+export const MEMORY_REFRESH_MS = 60 * 60 * SECOND;
 
 export class Worker {
   constructor({ config, storeMeta, env = process.env, clock = Date.now, derive = null, log = () => {}, identityCheckMs = IDENTITY_CHECK_MS }) {
@@ -69,6 +75,9 @@ export class Worker {
     this.extensions = [];
     this.running = false;
     this.pendingEffects = [];
+    this.memoryDirty = true;
+    this.lastMemoryProjectionMs = -Infinity;
+    this.memoryProblems = new Set();
   }
 
   now() {
@@ -114,6 +123,7 @@ export class Worker {
     this.running = true;
     this.markGenerationDirty();
     this.publishGeneration();
+    this.publishMemory();
     return this;
   }
 
@@ -230,7 +240,30 @@ export class Worker {
     const nowMs = this.clock();
     if (this.flushRequested || (this.firstDirtyAt !== null && nowMs >= this.firstDirtyAt + NOTE_FLUSH_MS)) this.flushNotes();
     for (const ext of this.extensions) if (ext.tick) ext.tick(this);
+    this.publishMemory();
     if (this.generationDirty) this.publishGeneration();
+  }
+
+  // The Markdown projections of memory under quillHome()/memory (spec §6.1), written from state after
+  // the journal applied the events (ADR 0001). Nothing is created for a store that has no memory yet.
+  publishMemory() {
+    const ms = this.clock();
+    if (!this.memoryDirty && ms - this.lastMemoryProjectionMs < MEMORY_REFRESH_MS) return;
+    this.memoryDirty = false;
+    this.lastMemoryProjectionMs = ms;
+    try {
+      const home = quillHome(this.env);
+      if (!this.state.memory.entries.size && !latestInventory(this.state) && !fs.existsSync(memoryPaths(home).root)) return;
+      const { problems } = writeMemoryProjections(this.state, home, { now: ms });
+      for (const p of problems) {
+        if (this.memoryProblems.has(p)) continue;
+        this.memoryProblems.add(p);
+        this.log(`memory: ${p}`);
+      }
+    } catch (err) {
+      this.log(`memory projections not written: ${err.message}`);
+      this.recordHealthError({ kind: 'memory-projection', error: err.message });
+    }
   }
 
   // Serial ingestion: validate, dedupe, journal (fsync), apply, remove ingress (TRD §Durability 3).
@@ -252,6 +285,23 @@ export class Worker {
         continue;
       }
       if (ev.store_id !== this.storeMeta.store_id) {
+        quarantineIngress(entry.name, this.env);
+        continue;
+      }
+      // R59 (final review I3): only the worker emits its own kinds (request-tx, handoff-tx, memory-tx,
+      // reconcile, notify, critical-proposal …). One arriving through ingress (a page, the CLI, or
+      // anything that can write the ingress folder, an autonomous run included) is never journaled,
+      // whatever producer it claims, and the owner sees a health problem.
+      if (!INGRESS_KINDS.has(ev.kind)) {
+        this.log(`quarantining ${entry.name}: ${ev.kind} events come only from the worker`);
+        quarantineIngress(entry.name, this.env);
+        this.recordHealthError({ kind: 'ingress-forged', event_kind: ev.kind, event_id: ev.event_id, producer: typeof ev.producer === 'string' ? ev.producer.slice(0, 40) : null, error: `a ${ev.kind} event arrived through ingress; only the worker writes that kind, so it was quarantined` });
+        continue;
+      }
+      // Requests the worker journals itself (dashboard, schedules) never arrive through ingress, so a
+      // request there claiming the worker as producer is forged (ADR 0028: critical approval).
+      if (ev.kind === 'request' && ev.producer === 'worker') {
+        this.log(`quarantining ${entry.name}: a request through ingress cannot claim the worker as producer`);
         quarantineIngress(entry.name, this.env);
         continue;
       }
@@ -297,7 +347,14 @@ export class Worker {
   // deterministic), rejected with a health error, and the loop continues.
   safeApply(record, { replay = false } = {}) {
     try {
-      return applyEvent(this.state, record);
+      const result = applyEvent(this.state, record);
+      // A refused critical-proposal (spec §7.2) is never silent: it becomes a health error.
+      if (record.kind === 'critical-proposal' && result.rejected) {
+        const problem = { kind: 'critical-proposal-rejected', event_id: record.event_id, code: result.rejected };
+        if (!replay) this.recordHealthError(problem);
+        else this.replayErrors = [...(this.replayErrors ?? []), problem];
+      }
+      return result;
     } catch (err) {
       this.state.appliedEvents.add(record.event_id);
       if (record.source_identity) this.state.appliedSources.add(record.source_identity);
@@ -343,6 +400,7 @@ export class Worker {
       else this.pendingEffects.push(effect);
     }
     if (record.kind === 'stop' || record.kind === 'subagent-stop') this.flushRequested = true;
+    if (record.kind === 'memory-tx' || (record.kind === 'handoff-tx' && record.payload && record.payload.update && record.payload.update.inventory)) this.memoryDirty = true;
     this.markGenerationDirty();
     return result;
   }
@@ -398,7 +456,7 @@ export class Worker {
 
   // Dirty notes flush no later than 30 s after the first unmaterialized event (TRD §Durability 5).
   flushNotes() {
-    const outcomes = { written: 0, unchanged: 0, conflict: 0 };
+    const outcomes = { written: 0, unchanged: 0, conflict: 0, skipped: 0 };
     for (const id of this.dirtyTickets) {
       const ticket = this.state.tickets.get(id);
       if (!ticket) continue;
@@ -417,10 +475,13 @@ export class Worker {
       if (!session) continue;
       writeGeneratedNote(path.join(this.layout.sessions, `${snapshotFileName(key).replace(/\.json$/, '')}.md`), renderSessionNote(session, { state: this.state }));
     }
+    // R49: a requested flush (`quill sync --notes`) also sweeps runs that have no vault note, so a
+    // note an earlier version wrote for one is removed; worker start marks every run dirty anyway.
+    if (this.flushRequested) for (const h of this.state.handoffs.values()) if (!handoffHasVaultNote(h, this.state)) this.dirtyHandoffs.add(h.id);
     for (const id of this.dirtyHandoffs) {
       const handoff = this.state.handoffs.get(id);
       if (!handoff) continue;
-      writeGeneratedNote(path.join(this.layout.handoffs, `${id}.md`), renderHandoffNote(handoff, { state: this.state }));
+      writeHandoffNote(path.join(this.layout.handoffs, `${id}.md`), handoff, { state: this.state });
     }
     writeJsonAtomic(path.join(stateDir(this.env), 'notes-index.json'), this.notesIndex);
     this.dirtyTickets.clear();
@@ -449,6 +510,7 @@ export class Worker {
       environmentsFor: (repoId) => this.environmentsFor(repoId),
       publishers: this.publishInfo ? this.publishInfo() : [],
       handoff_limits: this.handoffLimits ? this.handoffLimits() : null,
+      autonomy: this.autonomyInfo ? this.autonomyInfo() : null,
       onboarding: (({ clone_hosts, auto_clone_dir, import_assigned }) => ({ clone_hosts, auto_clone_dir, import_assigned }))(onboardSettings(this.config.tracker)),
     };
   }

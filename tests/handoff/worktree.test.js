@@ -39,3 +39,72 @@ test('protected branch targets are refused', () => {
   assert.equal(isProtectedTarget('release/1.0', { default_branch: 'main' }), true);
   assert.equal(isProtectedTarget('feat/handoff-x', { default_branch: 'main' }), false);
 });
+
+import { worktreeBase, pruneWorktrees } from '../../src/handoff/worktree.js';
+import { attachExtensions, extensionOptions } from '../../src/cli/commands/worker.js';
+
+const ticketOn = (...names) => ({ branches: names.map((name, i) => ({ name, first_seen: `2026-10-0${i + 1}T00:00:00Z`, last_seen: `2026-10-0${i + 1}T00:00:00Z` })) });
+
+test('worktreeBase uses the ticket branch when it exists locally, else HEAD with an honest label', async () => {
+  const repo = makeRepo();
+  git(repo.dir, 'branch', 'feat/x');
+  fs.writeFileSync(path.join(repo.dir, 'x.txt'), 'x');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'on main');
+  const onBranch = await worktreeBase(ticketOn('feat/x'), { canonical_path: repo.dir });
+  assert.equal(onBranch.ref, git(repo.dir, 'rev-parse', 'feat/x'));
+  assert.match(onBranch.label, /checkout based on branch feat\/x/);
+  const missing = await worktreeBase(ticketOn('feat/gone'), { canonical_path: repo.dir });
+  assert.equal(missing.ref, 'HEAD');
+  assert.match(missing.label, /on HEAD; ticket branch unknown/);
+  assert.equal((await worktreeBase({ branches: [] }, { canonical_path: repo.dir })).ref, 'HEAD');
+  assert.equal((await worktreeBase(ticketOn('--upload-pack=evil'), { canonical_path: repo.dir })).ref, 'HEAD', 'an unsafe branch name is never passed to git');
+});
+
+test('worktreeBase fetches the branch from origin when it is not local', async () => {
+  const origin = makeRepo();
+  git(origin.dir, 'branch', 'feat/remote');
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'st-clone-'));
+  git(parent, 'clone', '-q', origin.dir, 'c');
+  const dir = path.join(parent, 'c');
+  git(origin.dir, 'checkout', '-q', 'feat/remote');
+  fs.writeFileSync(path.join(origin.dir, 'r.txt'), 'r');
+  git(origin.dir, 'add', '.');
+  git(origin.dir, 'commit', '-q', '-m', 'remote work');
+  const base = await worktreeBase(ticketOn('feat/remote'), { canonical_path: dir });
+  assert.equal(base.ref, git(origin.dir, 'rev-parse', 'feat/remote'), 'the fetched tip, not the stale clone state');
+  assert.match(base.label, /feat\/remote/);
+});
+
+test('pruneWorktrees drops registrations whose directory is gone', async () => {
+  const repo = makeRepo();
+  const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'st-wt-')), 'wt');
+  await createWorktree({ repoPath: repo.dir, baseCommit: repo.head, dir });
+  fs.rmSync(dir, { recursive: true, force: true });
+  assert.match(git(repo.dir, 'worktree', 'list'), /st-wt-/);
+  await pruneWorktrees(repo.dir);
+  assert.doesNotMatch(git(repo.dir, 'worktree', 'list'), /st-wt-/);
+});
+
+test('the worker hands the configured claude_path to the handoff extension', async () => {
+  assert.deepEqual(extensionOptions('../../handoff/extension.js', { config: { claude_path: 'C:/tools/claude.cmd' } }), { claudePath: 'C:/tools/claude.cmd' });
+  assert.deepEqual(extensionOptions('../../handoff/extension.js', { config: {} }), {}, 'unset keeps the extension default');
+  assert.equal(extensionOptions('../../server/extension.js', { config: { claude_path: 'x' } }), undefined);
+  const seen = [];
+  const fake = { use: (e) => seen.push(e.name) };
+  await attachExtensions(fake, { config: { claude_path: 'claude', repos: {} }, env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-h-')) }, storeMeta: {} }, { only: ['../../handoff/extension.js'] });
+  assert.deepEqual(seen, ['handoff']);
+});
+
+test('a failed removeWorktree never deregisters the owner\'s own missing worktrees', async () => {
+  const repo = makeRepo();
+  const ownerWt = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'st-owner-')), 'wt');
+  await createWorktree({ repoPath: repo.dir, baseCommit: repo.head, dir: ownerWt });
+  fs.rmSync(ownerWt, { recursive: true, force: true }); // the owner's drive is unplugged
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'st-root-'));
+  const plain = path.join(root, 'not-a-worktree');
+  fs.mkdirSync(plain);
+  await removeWorktree({ repoPath: repo.dir, dir: plain });
+  assert.equal(fs.existsSync(plain), false, 'the fallback still deletes the directory');
+  assert.ok(git(repo.dir, 'worktree', 'list').includes(path.basename(path.dirname(ownerWt))), 'the owner registration survives');
+});

@@ -15,3 +15,6 @@ Carry out this ticket's task on its attached files, as its description asks.
 4. Change only what the task needs. Leave every other attached file as it is.
 
 Summary: for each attached file, what you did (deleted, edited, left alone) and why, citing what you read. Suggest as the next action whatever is left for a person, such as confirming the result and closing the ticket.
+
+## Definition of done
+- Every attached file is accounted for: deleted, edited or left alone, each with the reason and what you read.
