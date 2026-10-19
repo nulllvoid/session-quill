@@ -1,12 +1,11 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { loadContext, cliEvent, submitAndWait, findTicketByKey, latestSnapshot } from '../context.js';
 import { validateHandoffRequest, MODES } from '../../handoff/permissions.js';
 import { scopeValidator } from '../../handoff/scopes.js';
 import { uuid } from '../../lib/ids.js';
 import { nowIso, formatDuration } from '../../lib/time.js';
-import { requestsDir, handoffsDir } from '../../lib/paths.js';
-import { readJsonIfExists, writeJsonAtomic } from '../../lib/atomic-fs.js';
+import { requestsDir } from '../../lib/paths.js';
+import { readJsonIfExists } from '../../lib/atomic-fs.js';
 import { TrackerError } from '../../lib/errors.js';
 import { bodyHash } from '../../server/requests.js';
 import { capMinutes } from '../../handoff/runner.js';
@@ -155,15 +154,10 @@ async function cancel(ctx, io, args, flags) {
   return 0;
 }
 
-// `quill handoff result <id> --json <file>`: an agent (or operator) hands back a structured result.
-function result(ctx, io, args, flags) {
-  const [id] = args;
-  if (!id || !flags.json || flags.json === true) throw new TrackerError('usage', 'usage: handoff result <handoff-id> --json <file>');
-  const payload = JSON.parse(fs.readFileSync(path.resolve(String(flags.json)), 'utf8'));
-  const dir = path.join(handoffsDir(ctx.env), 'results');
-  writeJsonAtomic(path.join(dir, `${id}.result.json`), { summary: payload.summary ?? null, next_action: payload.next_action ?? null, blocker: payload.blocker ?? null, children: payload.children ?? [], test_results: payload.test_results ?? [], changed_files: payload.changed_files ?? [] });
-  io.println(`result recorded for handoff ${id}; the worker attaches it when the run finishes`);
-  return 0;
+// `quill handoff result` was removed (final review M2): a run's result comes only from its stream's
+// final result event (spec §5.4), so a hand-written result file is never read.
+function result() {
+  throw new TrackerError('usage', "quill handoff result was removed: a run's result comes only from its final result event");
 }
 
 export async function run({ args, flags, io, env }) {

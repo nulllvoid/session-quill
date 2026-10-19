@@ -50,6 +50,7 @@ Autonomous runs: an agent run can use your connected tools and read production l
 - The plugin's own PreToolUse hook only records events inside a guarded run, so each call is decided once.
 - `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are removed from autonomous runs unless `[handoff] api_billing = true`, because they would drop claude.ai connectors.
 - `quill doctor` warns when Claude Code is older than 2.1.295 or git is older than 2.31.
+- `quill handoff result` is removed, and a `handoffs/results/<id>.result.json` file no longer overrides a run's result: the result comes only from the stream's final result event, with its caps and truncation marks.
 - `npm test` and `npm run test:acceptance` run in a private temp root that is removed afterwards.
 
 ### Fixed

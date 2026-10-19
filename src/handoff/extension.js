@@ -21,7 +21,6 @@ import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js'
 import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSources } from '../memory/file.js';
 import { writeDocsProjection } from '../memory/project.js';
 import { addMs, MINUTE } from '../lib/time.js';
-import { readJsonIfExists } from '../lib/atomic-fs.js';
 import { getBlob } from '../core/blobs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
 import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, prodEffects } from './autonomous.js';
@@ -319,25 +318,24 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       return;
     }
     if (outcome.error) { await record(worker, h.id, { summary: null }, { state: 'failed', error: { code: outcome.error.code === 'ENOENT' ? 'runtime-missing' : 'spawn-failed', message: outcome.error.message } }); return; }
-    const resultFile = path.join(handoffsDir(worker.env), 'results', `${h.id}.result.json`);
-    const explicit = readJsonIfExists(resultFile);
-    const streamed = parseOutcome(outcome, parseOpts);
-    const parsed = explicit ? { ...parseAgentResult(''), ...explicit, raw: streamed.raw } : streamed;
+    // Spec §5.4 (final review M2): the result comes only from the stream's final result event; the
+    // legacy handoffs/results/<id>.result.json file is never read, so it cannot bypass the parser's caps.
+    const parsed = parseOutcome(outcome, parseOpts);
     if (outcome.code !== 0) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-exit', message: `agent exited with exit code ${outcome.code}${outcome.signal ? ` (signal ${outcome.signal})` : ''}${current.resume_session_id ? '; Claude Code may not have found the session to resume, and its log says why. Retry as a new run to start afresh' : ''}` }, extra: await fixExtras(worker, current) }); return; }
-    if (!explicit && streamed.no_result) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'no-result', message: 'the agent exited without a final result event; its log and tool ledger show how far it got' }, extra: await fixExtras(worker, current) }); return; }
+    if (parsed.no_result) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'no-result', message: 'the agent exited without a final result event; its log and tool ledger show how far it got' }, extra: await fixExtras(worker, current) }); return; }
     if (parsed.is_error) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
     // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
     // ticket change, only the diff for the owner to inspect and the reason (ADR 0023).
     if (gate && (gate.status === 'failed' || gate.status === 'timeout')) {
       const extra = { ...(await fixExtras(worker, current)), test_gate: gate };
-      if (quality) extra.result_quality = { ...quality, problems: explicit ? [] : parsed.problems };
+      if (quality) extra.result_quality = { ...quality, problems: parsed.problems };
       const why = gate.status === 'timeout' ? 'did not finish in time' : `exited with code ${gate.exit_code ?? 'unknown'}`;
       await record(worker, h.id, parsed, { state: 'failed', error: { code: gate.status === 'timeout' ? 'tests-timeout' : 'tests-failed', message: `the test command ${why}${gate.attempts > 1 ? ' again after one repair turn' : ' and no repair turn was possible'}; no fix is suggested` }, extra });
       return;
     }
     const extras = await fixExtras(worker, current, { finalize: true, gate });
     if (gate) extras.test_gate = gate;
-    if (quality) extras.result_quality = { ...quality, problems: explicit ? [] : parsed.problems };
+    if (quality) extras.result_quality = { ...quality, problems: parsed.problems };
     // Only a run that finished cleanly changes files; a failed, cancelled or timed-out one leaves
     // every original untouched.
     if (entry && entry.staged) {

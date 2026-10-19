@@ -122,7 +122,7 @@ How far this reaches depends on the access level:
 - **Autonomous:** the guard also refuses the forms that clear the variable (`env -u QUILL_HANDOFF_ID quill …`, `unset`, PowerShell `$env:`) and Quill's entry points run by path from any checkout (`bin/quill.js`, `bin/quill-hook.js`, `bin/quill-guard.js`): all are `quill-privileged`.
 - **`settings` and `full`:** an agent that clears the variable is stopped only by the owner's own Claude Code rules.
 
-Within those limits, a run cannot use the CLI to approve or dismiss proposals, accept suggestions, queue or cancel runs, edit tickets, publish, or hand back a result with `quill handoff result`. Its result comes from the stream's final result event. The plugin's capture hooks run through `bin/quill-hook.js`, not the dispatcher, so capture inside a run is unchanged. `quill hook` typed as a command is refused like any other. An agent running `bin/quill-hook.js` itself could only forge capture events, never requests; the guard refuses that by path in autonomous runs.
+Within those limits, a run cannot use the CLI to approve or dismiss proposals, accept suggestions, queue or cancel runs, edit tickets, publish, or hand back a result. Its result comes only from the stream's final result event: `quill handoff result` was removed, and a `handoffs/results/<id>.result.json` file is never read (final review M2). The plugin's capture hooks run through `bin/quill-hook.js`, not the dispatcher, so capture inside a run is unchanged. `quill hook` typed as a command is refused like any other. An agent running `bin/quill-hook.js` itself could only forge capture events, never requests; the guard refuses that by path in autonomous runs.
 
 ## Boundary statement and residual risk
 

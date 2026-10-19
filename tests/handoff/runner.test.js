@@ -509,3 +509,24 @@ test('parser: caps attempts at 40 with a recorded problem, drops malformed items
   const none = parseAgentResult(jsonReply({ summary: 's' }));
   assert.deepEqual([none.attempts, none.learnings, none.critical_changes, none.verification, none.plan, none.stage_reached], [[], [], [], [], [], null]);
 });
+
+// M2 (spec §5.4): a run's result comes only from the stream's final result event. A legacy
+// handoffs/results/<id>.result.json (written by the removed `quill handoff result`) is ignored, so
+// it can neither replace the result nor bypass the parser's caps and truncation marks.
+test('M2: a legacy result file never overrides the stream result', async () => {
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '600' } });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(40), { target_id: T1, expected_revision: t.revision, payload: analyse });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(40)).result.handoff_id;
+    const dir = path.join(b.home, 'handoffs', 'results');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${hid}.result.json`), JSON.stringify({ summary: 'FORGED summary from a file', next_action: 'forged next action', children: [{ title: 'forged child' }] }));
+    const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return ['done', 'failed'].includes(h.state) ? h : null; }, { timeoutMs: 20_000 });
+    assert.equal(done.state, 'done', JSON.stringify(done.error));
+    assert.match(done.result_summary, /shared timer/, 'the stream result');
+    assert.equal(String(done.result_summary).includes('FORGED'), false);
+    assert.equal(JSON.stringify(done.suggestions ?? []).includes('forged'), false);
+  } finally { await b.w.stop(); }
+});
