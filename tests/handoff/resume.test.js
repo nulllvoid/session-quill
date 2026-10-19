@@ -96,9 +96,12 @@ test('resume queues a NEW run with retry_of that the worker starts with --resume
     const args = turns[0].args;
     assert.equal(args[args.indexOf('--resume') + 1], S1);
     // Copied, never moved: the interrupted run's transcript stays where it was.
+    // The fake, like Claude Code, names the folder from the cwd it sees: the worker's spelling on
+    // Windows, the real path on macOS (/private/var for /var).
     const projects = path.join(config, 'projects');
-    assert.ok(fs.existsSync(path.join(projects, projectDirName(path.join(e.home, 'handoffs', 'sandbox', hid)), `${S1}.jsonl`)), 'the original transcript is still there');
-    assert.ok(fs.existsSync(path.join(projects, projectDirName(path.join(e.home, 'handoffs', 'sandbox', nid)), `${S1}.jsonl`)), 'the resumed run found it under its own working directory');
+    const kept = (id) => [e.home, fs.realpathSync.native(e.home)].some((home) => fs.existsSync(path.join(projects, projectDirName(path.join(home, 'handoffs', 'sandbox', id)), `${S1}.jsonl`)));
+    assert.ok(kept(hid), 'the original transcript is still there');
+    assert.ok(kept(nid), 'the resumed run found it under its own working directory');
     assert.match(turns[0].prompt, /interrupted/i);
     assert.match(turns[0].prompt, /check .*before repeating/i, 'the resumed agent is told not to repeat a write blindly');
     assert.equal(fs.existsSync(capture), false, 'no fresh session was started for it');
@@ -368,9 +371,15 @@ test('carrySession copies (never moves) a UUID session into the new working dire
   const src = path.join(projects, projectDirName(oldCwd), `${S1}.jsonl`);
   fs.mkdirSync(path.dirname(src), { recursive: true });
   fs.writeFileSync(src, '{"type":"user"}\n');
-  assert.equal(projectDirName('C:\\Users\\shiva\\.claude\\x_y'), 'C--Users-shiva--claude-x-y', 'every character outside [A-Za-z0-9] becomes -');
-  const [dest] = carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: newCwd });
-  assert.equal(dest, path.join(projects, projectDirName(newCwd), `${S1}.jsonl`));
+  if (process.platform === 'win32') assert.equal(projectDirName('C:\\Users\\shiva\\.claude\\x_y'), 'C--Users-shiva--claude-x-y', 'every character outside [A-Za-z0-9] becomes -');
+  else assert.equal(projectDirName('/Users/shiva/.claude/x_y'), '-Users-shiva--claude-x-y', 'every character outside [A-Za-z0-9] becomes -');
+  const dests = carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: newCwd });
+  // The child names its folder from its cwd as the worker spelled it (Windows keeps 8.3 short names
+  // such as RUNNER~1) or as its real path (macOS: /private/var for /var), so both get the copy, in
+  // the real projects folder.
+  const names = [...new Set([newCwd, fs.realpathSync.native(newCwd)].map(projectDirName))];
+  assert.deepEqual(dests, names.map((name) => path.join(fs.realpathSync.native(projects), name, `${S1}.jsonl`)));
+  const [dest] = dests;
   assert.equal(fs.readFileSync(dest, 'utf8'), '{"type":"user"}\n');
   assert.ok(fs.existsSync(src), 'the source stays');
   // Again with the same content: nothing to do. A different transcript is never replaced.
@@ -382,7 +391,7 @@ test('carrySession copies (never moves) a UUID session into the new working dire
   for (const bad of ['s1', '../../evil', `..\\${S1}`, `${S1}:x`, `${S1}/../../x`, '']) {
     assert.throws(() => carrySession({ configRoot: root, sessionId: bad, fromCwd: oldCwd, toCwd: newCwd }), (err) => err.code === 'no-session', bad);
   }
-  assert.equal(fs.readdirSync(projects).length, 2, 'nothing was written outside the two project folders');
+  assert.equal(fs.readdirSync(projects).length, 1 + names.length, 'nothing was written outside the old and new project folders');
   // A missing transcript fails with the owner-facing message.
   assert.throws(() => carrySession({ configRoot: root, sessionId: S2, fromCwd: oldCwd, toCwd: newCwd }), (err) => err.code === 'resume-session-missing' && err.message === SESSION_MISSING);
   // A source folder Claude Code shortened (a long path) is found by its one transcript of that id.
@@ -395,6 +404,32 @@ test('carrySession copies (never moves) a UUID session into the new working dire
   assert.equal(fs.readFileSync(d2, 'utf8'), 'long');
   // A destination name Claude Code would shorten cannot be predicted: refused, not guessed.
   assert.throws(() => carrySession({ configRoot: root, sessionId: S1, fromCwd: oldCwd, toCwd: path.join(root, 'z'.repeat(220)) }), (err) => err.code === 'resume-session-unreachable');
+});
+
+test('carrySession resumes the transcript Claude Code last wrote when the old cwd has two spellings', (t) => {
+  // A resumed run's cwd gets the copy under both spellings (as given, real path); its child then
+  // appends to only one. Resuming THAT run again must carry the live transcript, not the copy.
+  const root = configRoot();
+  const projects = path.join(root, 'projects');
+  fs.mkdirSync(path.join(root, 'work', 'real-run'), { recursive: true });
+  const real = fs.realpathSync.native(path.join(root, 'work', 'real-run'));
+  const alias = path.join(root, 'work', 'alias-run');
+  if (!linkDir(real, alias)) { t.skip('this account may not create directory links'); return; }
+  const newCwd = path.join(root, 'work', 'next-run');
+  fs.mkdirSync(newCwd, { recursive: true });
+  const write = (cwd, text, mtime) => {
+    const f = path.join(projects, projectDirName(cwd), `${S1}.jsonl`);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, text);
+    fs.utimesSync(f, mtime, mtime);
+  };
+  for (const [stale, live] of [[alias, real], [real, alias]]) {
+    fs.rmSync(projects, { recursive: true, force: true });
+    write(stale, 'copy\n', new Date('2026-10-01T00:00:00Z'));
+    write(live, 'copy\nturns since\n', new Date('2026-10-02T00:00:00Z'));
+    const dests = carrySession({ configRoot: root, sessionId: S1, fromCwd: alias, toCwd: newCwd });
+    for (const d of dests) assert.equal(fs.readFileSync(d, 'utf8'), 'copy\nturns since\n', `live under ${live === real ? 'the real path' : 'the given spelling'}`);
+  }
 });
 
 test('claudeConfigRoot: CLAUDE_CONFIG_DIR, else the platform home', () => {

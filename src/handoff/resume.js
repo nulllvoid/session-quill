@@ -211,14 +211,26 @@ function plainTranscript(realDir, name) {
   return real && samePath(path.dirname(real), realDir) ? real : null;
 }
 
-// The interrupted session's transcript: under the original working directory's project folder,
+// The project folder names a child started in `cwd` may use: the cwd as the worker passed it (what
+// a Windows child reports, 8.3 short names such as RUNNER~1 kept) and its real path (what getcwd
+// reports on macOS and Linux: /private/var for /var).
+function cwdNames(cwd) {
+  const real = realOf(cwd);
+  return [...new Set([projectDirName(cwd), ...(real ? [projectDirName(real)] : [])])];
+}
+
+// The interrupted session's transcript: under the original working directory's project folder
+// (the one Claude Code last wrote, when both spellings hold one: the other is an earlier copy),
 // else (a long name Claude Code shortened) the one plain project folder that holds it.
 function sessionSource(realRoot, fromCwd, file) {
   if (fromCwd) {
-    const name = projectDirName(fromCwd);
-    const dir = name.length <= PROJECT_NAME_MAX ? plainProjectDir(realRoot, path.join(realRoot, name)) : null;
-    const direct = dir ? plainTranscript(dir, file) : null;
-    if (direct) return direct;
+    const direct = cwdNames(fromCwd)
+      .map((name) => (name.length <= PROJECT_NAME_MAX ? plainProjectDir(realRoot, path.join(realRoot, name)) : null))
+      .map((dir) => (dir ? plainTranscript(dir, file) : null))
+      .filter(Boolean)
+      .map((f) => ({ f, st: lstatOf(f) }))
+      .sort((a, b) => (b.st?.mtimeMs ?? 0) - (a.st?.mtimeMs ?? 0) || (b.st?.size ?? 0) - (a.st?.size ?? 0));
+    if (direct.length) return direct[0].f;
   }
   let entries = [];
   try { entries = fs.readdirSync(realRoot, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.isSymbolicLink()); } catch { entries = []; }
@@ -243,9 +255,8 @@ export function carrySession({ configRoot, sessionId, fromCwd = null, toCwd }) {
   const realRoot = realOf(path.join(path.resolve(configRoot), 'projects'));
   const source = realRoot ? sessionSource(realRoot, fromCwd, file) : null;
   if (!source) throw new TrackerError('resume-session-missing', SESSION_MISSING);
-  let real = null;
-  try { real = fs.realpathSync.native(toCwd); } catch { real = null; }
-  const names = [...new Set([projectDirName(toCwd), ...(real ? [projectDirName(real)] : [])])];
+  // The child is started in `toCwd`: its folder name is one of these spellings, so both get the copy.
+  const names = cwdNames(toCwd);
   const bytes = fs.readFileSync(source);
   const out = [];
   for (const name of names) {
