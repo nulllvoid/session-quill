@@ -530,3 +530,30 @@ test('M2: a legacy result file never overrides the stream result', async () => {
     assert.equal(JSON.stringify(done.suggestions ?? []).includes('forged'), false);
   } finally { await b.w.stop(); }
 });
+
+// M7: a stop that begins while a run is still in dispatch setup (here the Claude Code version probe)
+// starts nothing: the check after the setup awaits re-tests stopping and paused, and onStop waits for
+// dispatches whose process does not exist yet. The run stays queued for the next start.
+test('M7: a run still in dispatch setup when the worker stops is never spawned and stays queued', async () => {
+  const capture = path.join(os.tmpdir(), `quill-m7-${process.pid}-${Date.now()}.json`);
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_VERSION_DELAY_MS: '1500', FAKE_CLAUDE_CAPTURE: capture } });
+  let stopped = false;
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(41), { target_id: T1, expected_revision: t.revision, payload: { ...analyse, access: 'autonomous' } });
+    b.w.tick();
+    const hid = b.w.state.requests.get(RID(41)).result.handoff_id;
+    await until(() => { b.w.tick(); return b.hext.runningIds().has(hid); });
+    await b.w.stop();
+    stopped = true;
+    // the probe answers after the stop began; give a late spawn every chance to happen
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal(fs.existsSync(capture), false, 'the agent was never spawned');
+    const h = b.w.state.handoffs.get(hid);
+    assert.equal(h.state, 'queued', JSON.stringify(h.error));
+    assert.equal(h.started_at ?? null, null);
+  } finally {
+    if (!stopped) await b.w.stop();
+    fs.rmSync(capture, { force: true });
+  }
+});

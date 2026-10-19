@@ -56,6 +56,7 @@ Autonomous runs: an agent run can use your connected tools and read production l
 ### Fixed
 
 - Runs honour `claude_path`.
+- A run still setting up (version probe, checkout) when the worker pauses or stops is no longer spawned afterwards: it stays queued, and stopping waits for such dispatches.
 - Long scope targets in run detail and in the Needs you critical change item wrap inside the panel instead of running past it.
 
 ### Security

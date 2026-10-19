@@ -115,6 +115,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   const finishing = new Set(); // finish() promises, until memory filing has landed
   const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
+  const dispatches = new Map(); // handoff id -> its dispatch promise, until it settles (M7: onStop waits)
   const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
@@ -663,10 +664,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       try { observe = prepareObserve({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the full-access observer: ${err.message}`); }
       Object.assign(env, observe.vars);
     }
-    // A cancel can also land during the setup awaits above (version probe, checkout): the run is
-    // still queued until the next line, so check once more. Its checkout and run files go with the
-    // cancelled run's cleanup.
-    if (!stillQueued(worker, h.id)) return undefined;
+    // A cancel, a pause or a stop can also land during the setup awaits above (version probe,
+    // checkout): the run is still queued until the next line, so check once more (final review M7).
+    // Its checkout and run files go with the run's cleanup; a paused or stopped run stays queued.
+    if (!stillQueued(worker, h.id) || paused || stopping) return undefined;
     // The credential report is what the Run dialog's warnings rest on (Task 9): which systems got a
     // read-only profile, a stub or a scope, and what no redirect can close.
     // A scoped run records the fingerprints its grant was frozen with, so a resume of it (Task 19)
@@ -824,13 +825,23 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
         if (inUse(fix) >= (fix ? limits.fix : limits.readonly)) continue;
         if (h.batch_id && !batchMayStart(worker, h.batch_id, batchBudget)) continue;
         running.set(h.id, { child: null, done: null, reason: null, deadlineAt: null, fix });
-        dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); return cleanupRun(worker, h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); cleanupRun(worker, h.id).catch(() => {}); });
+        const p = dispatch(worker, h).then(() => { if (running.has(h.id) && !running.get(h.id).child) running.delete(h.id); return cleanupRun(worker, h.id); }).catch((err) => { running.delete(h.id); worker.log(`dispatch failed: ${err.stack ?? err.message}`); failRun(worker, h, 'dispatch-failed', err.message); cleanupRun(worker, h.id).catch(() => {}); });
+        dispatches.set(h.id, p);
+        p.finally(() => { if (dispatches.get(h.id) === p) dispatches.delete(h.id); });
       }
     },
     async onStop(worker, { abandonRuns = false } = {}) {
       // A run still waiting in dispatch for an earlier filing must not start once a stop began.
       stopping = true;
       if (abandonRuns) { running.clear(); return; }
+      // M7: a dispatch still setting up (no process yet) returns once it sees `stopping`, or has just
+      // spawned: wait for it, bounded, so no run starts after the stop and a fresh child is stopped below.
+      const setting = [...dispatches.entries()].filter(([id]) => !(running.get(id) && running.get(id).child)).map(([, p]) => p);
+      if (setting.length) {
+        let timer;
+        await Promise.race([Promise.allSettled(setting), new Promise((r) => { timer = setTimeout(r, FINISH_WAIT_MS); })]);
+        clearTimeout(timer);
+      }
       const pending = [];
       for (const [id, entry] of running) {
         // Wait for the whole finish, not just the process: it may be in a follow-up turn or the

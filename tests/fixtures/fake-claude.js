@@ -23,6 +23,7 @@
 //   FAKE_CLAUDE_ENV_PROBE — comma-separated variable names whose values (or null) the capture
 //                           records as `env_probe`; tests set only fake values
 //   FAKE_CLAUDE_VERSION   — what `--version` prints (default '2.1.296 (Claude Code)')
+//   FAKE_CLAUDE_VERSION_DELAY_MS — how long `--version` takes to answer (default 0)
 //   FAKE_CLAUDE_INIT_VERSION — claude_code_version in the init event (default: the version's number)
 //   FAKE_CLAUDE_MCP_SERVERS — JSON list for the init event's mcp_servers (default [])
 //   FAKE_CLAUDE_GUARD_CALLS — JSON list of { tool_name, tool_input } the fake "calls": each runs the
@@ -35,6 +36,8 @@ import { spawnSync } from 'node:child_process';
 const args = process.argv.slice(2);
 const VERSION = process.env.FAKE_CLAUDE_VERSION ?? '2.1.296 (Claude Code)';
 if (args.includes('--version')) {
+  const delay = Number(process.env.FAKE_CLAUDE_VERSION_DELAY_MS ?? 0);
+  if (delay > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
   process.stdout.write(`${VERSION}\n`);
   process.exit(0);
 }
