@@ -54,6 +54,30 @@ function claudeWordsProblem(words) {
   return null;
 }
 
+// R59 part 3 (final review I3): the Quill home (store, ingress, config, journal, memory) is
+// protected. Paths a command names as files are checked against the guard's roots; a program whose
+// arguments the classifier does not follow (an interpreter's inline code, an unknown tool) is refused
+// when its text names the Quill home's own files or QUILL_HOME. Run directories and checkouts under
+// handoffs/ are the run's own and are not matched here.
+const QUILL_HOME_PARTS = '(?:ingress|config\\.toml|events\\.jsonl|memory|state|projections|blobs|machine\\.json|logs|run|bin)';
+const QUILL_HOME_RE = new RegExp(`[\\\\/]\\.claude[\\\\/]+quill[\\\\/]+${QUILL_HOME_PARTS}(?![\\w.-])|\\bQUILL_HOME\\b`, 'i');
+const QUILL_HOME_PART_RE = new RegExp(`^${QUILL_HOME_PARTS}(?![\\w.-])`, 'i');
+function quillHomeProblem(text, ctx) {
+  if (typeof text !== 'string' || !text) return null;
+  const why = 'it names the Quill home (its ingress, config, journal or memory), which a run never touches';
+  if (QUILL_HOME_RE.test(text)) return why;
+  const custom = ctx && ctx.env && typeof ctx.env === 'object' ? envLookup(ctx, 'QUILL_HOME') : null;
+  if (typeof custom === 'string' && custom.length > 3) {
+    const norm = (s) => s.replace(/\\+/g, '/').replace(/\/+$/, '').toLowerCase();
+    const root = norm(custom);
+    const t = norm(text);
+    for (let at = t.indexOf(`${root}/`); at >= 0; at = t.indexOf(`${root}/`, at + 1)) {
+      if (QUILL_HOME_PART_RE.test(t.slice(at + root.length + 1))) return why;
+    }
+  }
+  return null;
+}
+
 export function classifyCall(call, ctx) {
   try {
     return classifyInner(call && typeof call === 'object' ? call : {}, ctx && typeof ctx === 'object' ? ctx : {});
@@ -374,6 +398,11 @@ function classifySegment(seg, ctx, st) {
   // a PowerShell script (any program named by a path, or .ps1) may Set-Location this session (R19)
   if (seg.dialect === 'powershell' && (seg.script !== undefined || /[\\/]|\.ps1$/i.test(String(seg.argv[0])))) h.lostCwd();
   if (h.bad) return unparseable(h.bad);
+  // R59: a program whose words the classifier does not follow may not name the Quill home
+  if (!DATA_COMMANDS.has(name) && RANK[res.class] < RANK.privileged) {
+    const qh = seg.argv.map((w) => quillHomeProblem(String(w), ctx)).find(Boolean) ?? quillHomeProblem(seg.stdin ?? '', ctx);
+    if (qh) return privileged(`${name}: ${qh}`);
+  }
   if (res.class === 'local' && (!DATA_COMMANDS.has(name) || (name === 'sed' && SED_EXEC_RE.test(seg.argv.slice(1).join(' '))))) {
     const b = backstop(name, seg, ctx);
     if (b) return b;
@@ -1529,13 +1558,177 @@ function gitEnvProblem(env, prefixOnGit = false) {
 const GIT_GLOBAL_VALUES = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix']);
 // core.worktree points later git commands (reset --hard, checkout) at another directory.
 const GIT_EXEC_CONFIG_RE = /^(core\.(sshcommand|pager|editor|hookspath|fsmonitor|gitproxy|askpass|worktree)|credential\..*|diff\..*\.(textconv|command)|diff\.external|merge\..*\.driver|filter\..*|sequence\.editor|gpg\..*program|pager\..*|uploadpack\..*|alias\..*|remote\..*\.(receivepack|uploadpack|vcs)|protocol\..*|url\..*|include\.path|includeif\..*\.path|submodule\..*\.update|init\.templatedir|(merge|diff)tool\..*\.(cmd|path)|interactive\.difffilter|trailer\..*\.(command|cmd)|sendemail\..*|browser\..*\.(cmd|path)|man\..*\.(cmd|path)|web\.browser|ssh\.variant|core\.(sshcommand|editor|pager|askpass)|gpg\.program)$/i;
-const GIT_LOCAL = new Set(['status', 'log', 'diff', 'show', 'branch', 'checkout', 'switch', 'add', 'rm', 'mv', 'restore', 'reset', 'stash', 'fetch', 'pull', 'clone', 'init', 'rev-parse', 'rev-list',
-  'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'blame', 'grep', 'remote', 'tag', 'config', 'worktree', 'clean', 'describe', 'shortlog', 'reflog', 'merge-base', 'name-rev', 'for-each-ref', 'show-ref',
-  'symbolic-ref', 'notes', 'bisect', 'apply', 'format-patch', 'archive', 'bundle', 'sparse-checkout', 'gc', 'fsck', 'prune', 'count-objects', 'var', 'version', 'help', 'diff-tree', 'diff-index',
-  'diff-files', 'whatchanged', 'range-diff', 'cherry', 'check-ignore', 'check-attr', 'check-ref-format', 'hash-object', 'write-tree', 'mktree', 'merge-file', 'maintenance', 'update-index', 'read-tree',
-  'difftool', 'mergetool', 'request-pull', 'show-branch', 'verify-commit', 'verify-tag', 'interpret-trailers', 'column', 'stripspace', 'rerere', 'replace', 'commit-graph', 'multi-pack-index', 'repack',
-  'pack-refs', 'unpack-objects', 'index-pack', 'pack-objects', 'update-ref', 'commit-tree', 'mailinfo', 'mailsplit', 'get-tar-commit-id', 'submodule', 'lfs']);
+// R58 (final review I1): a run's checkout is a worktree, so refs, objects, reflogs, config and its
+// index live in the owner's repository (<canonical>/.git), outside every root, and git never names
+// those paths. git is therefore classified by what it writes, not by where:
+//  - GIT_READ: read-only subcommands (their read-only forms are picked out below for the rest);
+//  - `git.edit`: changes only the checkout's files (needs edit_source);
+//  - `git.commit`: writes the shared repository's refs, objects, config, hooks or index (needs
+//    commit), and a ref write naming the default or a protected branch is `git.protected`.
+// Anything not listed is unparseable (it may be an alias).
+const GIT_READ = new Set(['status', 'log', 'diff', 'show', 'blame', 'annotate', 'grep', 'ls-files', 'ls-tree', 'ls-remote', 'cat-file', 'rev-parse', 'rev-list', 'describe', 'shortlog',
+  'merge-base', 'name-rev', 'for-each-ref', 'show-ref', 'diff-tree', 'diff-index', 'diff-files', 'whatchanged', 'range-diff', 'cherry', 'check-ignore', 'check-attr', 'check-mailmap',
+  'check-ref-format', 'count-objects', 'var', 'version', 'help', 'verify-commit', 'verify-tag', 'verify-pack', 'show-branch', 'show-index', 'get-tar-commit-id', 'column', 'stripspace',
+  'request-pull', 'difftool', 'interpret-trailers']);
+const GIT_WRITE = new Set(['commit-tree', 'mktree', 'mktag', 'write-tree', 'gc', 'prune', 'prune-packed', 'repack', 'pack-refs', 'maintenance', 'unpack-objects', 'index-pack',
+  'update-index', 'read-tree', 'add', 'rm', 'mv', 'mergetool']);
+// Read-only forms of subcommands that otherwise write: the first non-option word.
+const GIT_READ_FORMS = {
+  stash: ['list', 'show'], notes: ['list', 'show', 'get-ref'], reflog: ['show', 'list', 'exists'], worktree: ['list'], submodule: ['status', 'summary'],
+  bisect: ['log', 'view', 'visualize', 'terms', 'help'], rerere: ['status', 'diff', 'remaining'], 'sparse-checkout': ['list'], 'commit-graph': ['verify'], 'multi-pack-index': ['verify'],
+  lfs: ['ls-files', 'status', 'env', 'version', 'logs', 'locks', 'pointer', 'fsck', 'help'], bundle: ['verify', 'list-heads'],
+};
+// Subcommands whose bare form (no subcommand word) only lists.
+const GIT_BARE_READ = new Set(['notes', 'reflog', 'lfs', 'submodule']);
 const GIT_COMMIT = new Set(['commit', 'revert', 'am', 'cherry-pick', 'rebase', 'merge']);
+const GIT_WRITE_REASON = 'it writes the shared repository (refs, objects, index or configuration), which needs the commit permission';
+
+// A ref a git command writes, as the branch it names: a branch name, null for a ref that is not a
+// branch (tags, remote-tracking refs, notes, a detached HEAD), or undefined when it cannot be told.
+function branchOfRef(ref, ctx) {
+  if (typeof ref !== 'string' || !ref) return undefined;
+  const r0 = ref.replace(/^\+/, '');
+  if (r0 === 'HEAD' || r0 === '@') return ctx.currentBranch || null;
+  if (/^refs\/heads\//.test(r0)) return r0.slice('refs/heads/'.length);
+  if (/^refs\//.test(r0)) return null;
+  // a short name: git commands that write one treat it as a branch (update-ref writes $GIT_DIR/<name>)
+  return r0;
+}
+
+// A write of the shared repository: `git.protected` when it names the default or a protected
+// branch (or a ref the guard cannot read), else `git.commit`.
+function gitRefWrite(ctx, refs, what) {
+  for (const ref of refs) {
+    const b = branchOfRef(ref, ctx);
+    if (b === undefined) return write('git.protected', undefined, `${what} writes a ref the guard cannot read`);
+    if (b !== null && /[*?[]/.test(b)) return write('git.protected', b, `${what} writes refs by pattern (${b})`);
+    if (b !== null && isProtected(ctx, b)) return write('git.protected', b, `${what} writes protected branch ${b}`);
+  }
+  return write('git.commit', undefined, `${what}: ${GIT_WRITE_REASON}`);
+}
+
+const gitEdit = (what) => write('git.edit', undefined, `${what} changes the checkout's files`);
+
+// The words of a git subcommand without its options: options in `values` take the next word.
+function gitWords(rest, values = new Set()) {
+  const pos = [];
+  const flags = [];
+  let ended = false;
+  for (let j = 0; j < rest.length; j += 1) {
+    const t = rest[j];
+    if (!ended && t === '--') { ended = true; pos.push('--'); continue; }
+    if (!ended && t.startsWith('-') && t !== '-') {
+      flags.push(t);
+      if (values.has(t)) { j += 1; flags.push(rest[j]); }
+      continue;
+    }
+    pos.push(t);
+  }
+  const has = (...names) => flags.some((f) => names.some((n) => f === n || (n.startsWith('--') && f.startsWith(`${n}=`)) || (/^-[A-Za-z]$/.test(n) && /^-[A-Za-z]+$/.test(f) && !f.startsWith('--') && f.includes(n[1]))));
+  return { pos, flags, has };
+}
+
+// Refspec destinations a fetch or pull would write (src:dst), or the refmap's.
+function fetchDestinations(words) {
+  const out = [];
+  for (const w of words) {
+    const colon = String(w).indexOf(':');
+    if (colon < 0) continue;
+    // a URL (https://, ssh://, user@host:path) is the repository, not a refspec
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(w) || /^[^/:]*@[^/:]+:/.test(w)) continue;
+    const dst = w.slice(colon + 1);
+    if (dst) out.push(w.startsWith('+') && !dst.startsWith('+') ? `+${dst}` : dst);
+  }
+  return out;
+}
+
+function gitBranch(rest, ctx) {
+  const VALUES = new Set(['--contains', '--no-contains', '--merged', '--no-merged', '--points-at', '--sort', '--format', '-u', '--set-upstream-to']);
+  const w = gitWords(rest, VALUES);
+  const pos = w.pos.filter((x) => x !== '--');
+  if (w.has('-d', '-D', '--delete')) return gitRefWrite(ctx, w.has('-r', '--remotes') ? pos.map((x) => `refs/remotes/${x}`) : pos.length ? pos : [undefined], 'git branch delete');
+  if (w.has('-m', '-M', '--move', '-c', '-C', '--copy')) return gitRefWrite(ctx, pos.length >= 2 ? pos : ['HEAD', ...pos], 'git branch rename or copy');
+  if (w.has('-u', '--set-upstream-to', '--unset-upstream', '--edit-description', '-t', '--track', '--no-track')) return write('git.commit', undefined, `git branch upstream or description: ${GIT_WRITE_REASON}`);
+  const listing = w.has('-l', '--list', '--show-current', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at');
+  if (!pos.length || (listing && !w.has('-f', '--force'))) return local('git branch listing');
+  return gitRefWrite(ctx, [pos[0]], 'git branch create');
+}
+
+function gitTag(rest) {
+  const VALUES = new Set(['--contains', '--no-contains', '--merged', '--no-merged', '--points-at', '--sort', '--format', '-m', '--message', '-F', '--file', '-u', '--local-user', '--cleanup']);
+  const w = gitWords(rest, VALUES);
+  const pos = w.pos.filter((x) => x !== '--');
+  if (w.has('-v', '--verify')) return local('git tag --verify');
+  const writing = w.has('-a', '--annotate', '-s', '--sign', '-u', '--local-user', '-f', '--force', '-d', '--delete', '-m', '--message', '-F', '--file', '-e', '--edit', '--create-reflog');
+  const listing = w.has('-l', '--list', '--contains', '--no-contains', '--merged', '--no-merged', '--points-at') || w.flags.some((f) => /^-n\d*$/.test(f));
+  if (!writing && (!pos.length || listing)) return local('git tag listing');
+  return write('git.commit', undefined, `git tag: ${GIT_WRITE_REASON}`);
+}
+
+function gitConfig(rest, restK, h, base, baseRaw) {
+  const cs = scan(rest, restK, { values: new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value']) });
+  if (cs.has('-e', '--edit') || cs.pos[0] === 'edit') return unparseable('git config --edit opens an editor');
+  const VERBS = new Set(['set', 'unset', 'rename-section', 'remove-section']);
+  const getting = cs.has('--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '--list', '-l') || ['get', 'list'].includes(cs.pos[0]);
+  const writing = cs.has('--unset', '--unset-all', '--remove-section', '--rename-section', '--add', '--replace-all') || VERBS.has(cs.pos[0]) || (!getting && cs.pos.length >= 2);
+  if (!writing) return local('git config read');
+  const key = VERBS.has(cs.pos[0]) ? cs.pos[1] : cs.pos[0];
+  if (GIT_EXEC_CONFIG_RE.test(String(key ?? ''))) return unparseable(`git config ${key} can make git run arbitrary commands`);
+  if (/^(push|remote|branch)\./i.test(String(key ?? ''))) return unparseable(`git config ${key} changes where pushes go`);
+  if (cs.has('--global', '--system')) return unparseable('git config --global or --system writes the owner\'s configuration outside the run');
+  const files = cs.all('-f', '--file');
+  if (files.length) { for (const f of files) h.write(f.v, f.kind, base, baseRaw); return local('git config --file'); }
+  return write('git.commit', undefined, `git config ${key ?? ''}: ${GIT_WRITE_REASON}`);
+}
+
+// checkout, switch, restore and reset: which forms move refs (commit, protected branch), which
+// only write the index (commit), and which only change the checkout's files (edit).
+function gitMove(sub, rest, ctx) {
+  const VALUES = new Set(['-b', '-B', '-c', '-C', '--orphan', '-s', '--source', '--conflict', '--pathspec-from-file', '--recurse-submodules', '-U', '--inter-hunk-context']);
+  const w = gitWords(rest, VALUES);
+  const dd = w.pos.indexOf('--');
+  const before = (dd < 0 ? w.pos : w.pos.slice(0, dd));
+  const newBranch = (...names) => { for (let j = 0; j < w.flags.length; j += 1) if (names.includes(w.flags[j])) return w.flags[j + 1]; return undefined; };
+  if (sub === 'restore') {
+    if (w.has('-S', '--staged')) return write('git.commit', undefined, `git restore --staged: ${GIT_WRITE_REASON}`);
+    return gitEdit('git restore');
+  }
+  if (sub === 'switch') {
+    const created = newBranch('-c', '-C', '--orphan');
+    return gitRefWrite(ctx, created !== undefined ? [created] : w.has('--detach', '-d') ? [] : [before[0] ?? undefined], 'git switch');
+  }
+  if (sub === 'checkout') {
+    const created = newBranch('-b', '-B', '--orphan');
+    if (created !== undefined) return gitRefWrite(ctx, [created], 'git checkout -b');
+    // `git checkout -- <paths>` copies the index to the checkout's files; anything before `--`
+    // (a branch, a commit, or a path the guard cannot tell from one) may move HEAD or the index
+    if (dd >= 0 && !before.length && !w.has('-p', '--patch', '--detach', '-f', '--force', '-m', '--merge', '--conflict')) return gitEdit('git checkout -- <paths>');
+    if (dd >= 0) return write('git.commit', undefined, `git checkout <tree> -- <paths>: ${GIT_WRITE_REASON}`);
+    if (w.has('--detach')) return write('git.commit', undefined, `git checkout --detach: ${GIT_WRITE_REASON}`);
+    return gitRefWrite(ctx, [before[0] ?? 'HEAD'], 'git checkout (it may switch branches; to discard changes to files use git checkout -- <paths> or git restore <paths>)');
+  }
+  // reset: with a commit it moves the current branch; with paths or nothing it writes the index
+  const moves = before.length > 0 || w.has('--hard', '--soft', '--merge', '--keep');
+  return moves && dd < 0 ? gitRefWrite(ctx, ['HEAD'], 'git reset') : write('git.commit', undefined, `git reset: ${GIT_WRITE_REASON}`);
+}
+
+function gitFetch(sub, rest, ctx) {
+  const VALUES = new Set(['--depth', '--deepen', '--shallow-since', '--shallow-exclude', '--refmap', '-j', '--jobs', '--negotiation-tip', '--server-option', '-o', '--filter', '--submodule-prefix', '--recurse-submodules-default', '-s', '--strategy', '-X', '--strategy-option', '--cleanup']);
+  const w = gitWords(rest, VALUES);
+  const pos = w.pos.filter((x) => x !== '--');
+  const refmaps = [];
+  for (let j = 0; j < w.flags.length; j += 1) {
+    if (w.flags[j] === '--refmap') refmaps.push(w.flags[j + 1]);
+    else if (String(w.flags[j]).startsWith('--refmap=')) refmaps.push(w.flags[j].slice('--refmap='.length));
+  }
+  const dests = fetchDestinations([...(w.has('--all', '--multiple') ? [] : pos.slice(1)), ...refmaps.filter((x) => typeof x === 'string')]);
+  if (sub === 'pull') return gitRefWrite(ctx, ['HEAD', ...dests], 'git pull (a merge or rebase into the current branch)');
+  // a fetch that writes local branches, tags by force, or HEAD; remote-tracking refs are a fetch's own
+  const local0 = dests.filter((d) => !/^\+?refs\/remotes\//.test(d));
+  if (local0.length) return gitRefWrite(ctx, local0, 'git fetch into local refs');
+  if (w.has('--update-head-ok', '-P', '--prune-tags')) return write('git.commit', undefined, `git fetch --update-head-ok or --prune-tags: ${GIT_WRITE_REASON}`);
+  return local('git fetch');
+}
 
 function git(args, ak, seg, ctx, h) {
   let i = 0;
@@ -1598,16 +1791,7 @@ function git(args, ak, seg, ctx, h) {
   if (ak[i] !== 'lit') return unparseable('git subcommand is not literal');
   if (rest.some((t) => /^--(upload-pack|receive-pack|exec)(=|$)/.test(t))) return unparseable(`git ${sub} with a custom remote program`);
   if (sub === 'remote' && ['set-url', 'add', 'set-head', 'rename'].includes(rest.find((x) => !x.startsWith('-')))) return unparseable(`git remote ${rest.find((x) => !x.startsWith('-'))} changes where pushes go`);
-  if (sub === 'config') {
-    const cs = scan(rest, restK, { values: new Set(['-f', '--file', '--blob', '--type', '--default', '--comment']) });
-    const reading = cs.has('--get', '--get-all', '--get-regexp', '--get-urlmatch', '--list', '-l', '--unset', '--unset-all', '--remove-section', '--rename-section', '-e', '--edit') || (cs.pos[0] && ['get', 'list'].includes(cs.pos[0]) );
-    const key = cs.pos[0] === 'set' ? cs.pos[1] : cs.pos[0];
-    const writing = !reading && (cs.pos.length >= 2 || cs.has('--add', '--replace-all'));
-    if (cs.has('-e', '--edit')) return unparseable('git config --edit opens an editor');
-    if (writing && GIT_EXEC_CONFIG_RE.test(String(key ?? ''))) return unparseable(`git config ${key} can make git run arbitrary commands`);
-    if (writing && /^(push|remote|branch)\./i.test(String(key ?? ''))) return unparseable(`git config ${key} changes where pushes go`);
-    return local('git config');
-  }
+  if (sub === 'config') return gitConfig(rest, restK, h, base, baseRaw);
   if (sub === 'clone') {
     const cs = scan(rest, restK, { values: new Set(['-u', '--upload-pack', '-c', '--config', '-b', '--branch', '-o', '--origin', '--depth', '--reference', '--separate-git-dir', '--template', '-j', '--jobs', '--filter', '--shallow-since', '--shallow-exclude', '--server-option']) });
     if (cs.has('-u', '--upload-pack', '--template')) return unparseable('git clone with a custom upload-pack or template');
@@ -1629,7 +1813,9 @@ function git(args, ak, seg, ctx, h) {
     const cs = scan(rest.slice(1), restK.slice(1), { values: new Set(['-b', '-B', '--reason']) });
     if (cs.pos[0] === undefined) return unparseable('git worktree add without a path');
     h.write(cs.pos[0], cs.posKinds[0], base, baseRaw);
-    return local('git worktree add');
+    // it also registers the work tree (and with -b/-B a branch) in the shared repository
+    const nb = cs.first('-b', '-B');
+    return gitRefWrite(ctx, typeof nb === 'string' ? [nb] : [], 'git worktree add');
   }
   if (sub === 'push') return pushConfig ? write('git.protected', undefined, 'git push with push/remote configuration overrides') : gitPush(rest, restK, ctx);
   if (sub === 'lfs' && rest[0] === 'push') return gitPush(rest.slice(1), restK.slice(1), ctx);
@@ -1668,16 +1854,99 @@ function git(args, ak, seg, ctx, h) {
     }
   }
   if (sub === 'merge') {
-    if (rest.some((x) => x === '--abort' || x === '--quit')) return local('git merge --abort');
     if (ctx.currentBranch && isProtected(ctx, ctx.currentBranch)) return write('git.protected', ctx.currentBranch, 'git merge into a protected branch');
-    return write('git.commit', undefined, 'git merge creates a commit');
+    return write('git.commit', undefined, rest.some((x) => x === '--abort' || x === '--quit') ? `git merge --abort: ${GIT_WRITE_REASON}` : 'git merge creates a commit');
   }
   if (GIT_COMMIT.has(sub)) {
-    if (sub === 'rebase' && rest.some((x) => x === '--abort' || x === '--quit' || x === '--show-current-patch')) return local('git rebase --abort');
-    if ((sub === 'cherry-pick' || sub === 'revert' || sub === 'am') && rest.some((x) => x === '--abort' || x === '--quit' || x === '--skip')) return local(`git ${sub} --abort`);
+    if (sub === 'rebase' && rest.length === 1 && rest[0] === '--show-current-patch') return local('git rebase --show-current-patch');
+    // a commit moves the current branch: never a protected one (R58)
+    if (ctx.currentBranch && isProtected(ctx, ctx.currentBranch)) return write('git.protected', ctx.currentBranch, `git ${sub} on protected branch ${ctx.currentBranch}`);
     return write('git.commit', undefined, `git ${sub} creates commits`);
   }
-  if (GIT_LOCAL.has(sub)) return local(`git ${sub}`);
+  return gitOther(sub, rest, restK, ctx, h, base, baseRaw);
+}
+
+// Every other subcommand (R58): read-only forms are local, the checkout's files need edit, and
+// everything that writes the shared repository needs commit (protected branches never).
+function gitOther(sub, rest, restK, ctx, h, base, baseRaw) {
+  const w = gitWords(rest, new Set(['--ref', '-m', '-F', '-C', '-c', '-o', '--output', '--output-directory', '--format', '--pretty']));
+  const word = w.pos.find((x) => x !== '--');
+  const words = w.pos.filter((x) => x !== '--');
+  if (GIT_READ.has(sub)) {
+    // a few read commands still write a file (log/diff --output) or start a program (grep -O)
+    if (sub === 'grep' && rest.some((t) => /^(-O|--open-files-in-pager)/.test(t))) return unparseable('git grep -O opens the files in a program the guard cannot see');
+    for (let j = 0; j < rest.length; j += 1) {
+      if (rest[j] === '--') break;
+      if (rest[j] === '--output') { h.write(rest[j + 1] ?? '', restK[j + 1] ?? 'dyn', base, baseRaw); j += 1; } else if (rest[j].startsWith('--output=')) h.write(rest[j].slice('--output='.length), restK[j], base, baseRaw);
+    }
+    if (sub === 'interpret-trailers' && rest.includes('--in-place')) return gitEdit('git interpret-trailers --in-place');
+    return local(`git ${sub}`);
+  }
+  if (sub === 'branch') return gitBranch(rest, ctx);
+  if (sub === 'tag') return gitTag(rest);
+  if (sub === 'checkout' || sub === 'switch' || sub === 'restore' || sub === 'reset') return gitMove(sub, rest, ctx);
+  if (sub === 'fetch' || sub === 'pull') return gitFetch(sub, rest, ctx);
+  if (sub === 'rm') {
+    let end = false;
+    for (let j = 0; j < rest.length; j += 1) {
+      if (!end && rest[j] === '--') { end = true; continue; }
+      if (end || !rest[j].startsWith('-')) h.write(rest[j], restK[j], base, baseRaw);
+    }
+  }
+  if (GIT_WRITE.has(sub)) return write('git.commit', undefined, `git ${sub}: ${GIT_WRITE_REASON}`);
+  if (sub === 'remote') {
+    if (!word || ['show', 'get-url'].includes(word)) return local(`git remote ${word ?? ''}`.trim());
+    return write('git.commit', undefined, `git remote ${word}: ${GIT_WRITE_REASON}`);
+  }
+  if (sub === 'update-ref') {
+    if (w.has('--stdin')) return write('git.protected', undefined, 'git update-ref --stdin writes refs the guard cannot read');
+    return gitRefWrite(ctx, [words[0]], 'git update-ref');
+  }
+  if (sub === 'symbolic-ref') {
+    if (w.has('-d', '--delete')) return write('git.protected', words[0], 'git symbolic-ref --delete removes a symbolic ref');
+    if (words.length < 2) return local('git symbolic-ref');
+    return gitRefWrite(ctx, [words[1]], `git symbolic-ref ${words[0]}`);
+  }
+  if (sub === 'hash-object') return w.has('-w') ? write('git.commit', undefined, `git hash-object -w: ${GIT_WRITE_REASON}`) : local('git hash-object');
+  if (sub === 'replace') return w.has('-l', '--list') || !words.length ? local('git replace --list') : write('git.commit', undefined, `git replace: ${GIT_WRITE_REASON}`);
+  if (sub === 'fsck') return w.has('--lost-found') ? write('git.commit', undefined, `git fsck --lost-found: ${GIT_WRITE_REASON}`) : local('git fsck');
+  if (sub === 'pack-objects') return w.has('--stdout') ? local('git pack-objects --stdout') : write('git.commit', undefined, `git pack-objects: ${GIT_WRITE_REASON}`);
+  if (sub === 'clean') return w.has('-n', '--dry-run') && !w.has('-f', '--force') ? local('git clean --dry-run') : gitEdit('git clean');
+  if (sub === 'apply') {
+    if (w.has('--unsafe-paths')) return unparseable('git apply --unsafe-paths writes outside the work tree');
+    if (w.has('--index', '--cached', '-3', '--3way', '--intent-to-add')) return write('git.commit', undefined, `git apply --index: ${GIT_WRITE_REASON}`);
+    if (w.has('--check', '--stat', '--numstat', '--summary') && !w.has('--apply')) return local('git apply --check');
+    return gitEdit('git apply');
+  }
+  if (sub === 'merge-file') {
+    if (w.has('-p', '--stdout')) return local('git merge-file --stdout');
+    if (words[0] === undefined) return unparseable('git merge-file without a file');
+    h.write(words[0], 'lit', base, baseRaw);
+    return local('git merge-file');
+  }
+  if (sub === 'format-patch') {
+    if (w.has('--stdout')) return local('git format-patch --stdout');
+    let dir = '.';
+    for (let j = 0; j < rest.length; j += 1) {
+      if (rest[j] === '-o' || rest[j] === '--output-directory') { dir = rest[j + 1] ?? ''; j += 1; } else if (rest[j].startsWith('--output-directory=')) dir = rest[j].slice('--output-directory='.length);
+    }
+    h.write(dir, 'lit', base, baseRaw);
+    return local('git format-patch');
+  }
+  if (sub === 'archive') {
+    for (let j = 0; j < rest.length; j += 1) {
+      if (rest[j] === '-o' || rest[j] === '--output') { h.write(rest[j + 1] ?? '', restK[j + 1] ?? 'dyn', base, baseRaw); j += 1; } else if (rest[j].startsWith('--output=')) h.write(rest[j].slice('--output='.length), restK[j], base, baseRaw);
+    }
+    return local('git archive');
+  }
+  if (sub === 'bundle' && word === 'create') { if (words[1] === undefined) return unparseable('git bundle create without a file'); h.write(words[1], 'lit', base, baseRaw); return local('git bundle create'); }
+  if (sub === 'stash' && word === 'branch') return gitRefWrite(ctx, [words[1]], 'git stash branch');
+  if (sub === 'lfs' && ['track', 'untrack'].includes(word)) return words.length > 1 ? gitEdit(`git lfs ${word}`) : local(`git lfs ${word}`);
+  if (Object.hasOwn(GIT_READ_FORMS, sub)) {
+    if (word === undefined ? GIT_BARE_READ.has(sub) : GIT_READ_FORMS[sub].includes(word)) return local(`git ${sub} ${word ?? ''}`.trim());
+    return write('git.commit', undefined, `git ${sub}${word ? ` ${word}` : ''}: ${GIT_WRITE_REASON}`);
+  }
+  if (sub === 'mailinfo' || sub === 'mailsplit') return unparseable(`git ${sub} writes files the guard does not follow`);
   return unparseable(`unknown git subcommand ${sub} (could be a repository alias)`);
 }
 

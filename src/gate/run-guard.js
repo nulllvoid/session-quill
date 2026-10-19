@@ -76,7 +76,8 @@ const REASONS = {
   protectedAncestor: (p, inner) => `QUILL_DENIED protected-path: ${p} contains ${inner}, which is protected, so a command that changes ${p} as a whole is not allowed. Name the files you mean explicitly instead of the directory.`,
   noEdit: (p) => `QUILL_DENIED no-edit-permission: this run may read ${p} but not change it; edit_source is not granted for this run. Write scratch files under the run directory or the temp directory, and describe the change you would make in the result.`,
   outsideWritable: (p, via) => `QUILL_DENIED outside-writable: ${p ?? 'this location'}${via && via !== p ? ` reaches ${via}, which` : ''} is outside what this run may change (the checkout when editing is granted, the run directory and the temp directory). Write there instead, or describe the change in the result.`,
-  noCommit: () => 'QUILL_DENIED no-commit-permission: git commits need the commit permission, which this run does not have. Leave the changes uncommitted and describe them in the result.',
+  noCommit: (why) => `QUILL_DENIED no-commit-permission: ${why && !/creates? commits?/.test(why) ? `${why}. ` : ''}git commits, and every git command that writes the shared repository (refs, branches, tags, stash, notes, objects, the index or configuration), need the commit permission, which this run does not have. Use read-only git (status, log, show, diff, blame, grep, ls-files, rev-parse, branch and tag listings, fetch), leave the changes uncommitted and describe them in the result.`,
+  noGitEdit: (why) => `QUILL_DENIED no-edit-permission: ${why}; edit_source is not granted for this run, so git may not change the checkout's files. Describe the change you would make in the result.`,
   noPush: () => 'QUILL_DENIED no-push-permission: git push needs the push_branch permission, which this run does not have. Leave the commits local and say in the result that they need pushing.',
   noPr: () => 'QUILL_DENIED no-pr-permission: creating or changing a pull request needs the open_draft_pr permission, which this run does not have. Put the title and description you would use in the result.',
   protectedBranch: (why) => `QUILL_DENIED protected-branch: ${why}. Pushing to the default or a protected branch, force and tag pushes, deleting branches, merging into a protected branch and non-draft pull requests are never allowed in a run; push the run's own branch or open a draft PR when granted, and leave the rest to the owner.`,
@@ -318,11 +319,16 @@ function canonicalRoot(p) {
 }
 
 // What a run never reads, in canonical form: Claude's settings and the credential locations under
-// home, and the Quill home (whose run dir and worktrees are readable as deeper roots).
+// home, and the Quill home (whose run dir and worktrees are readable as deeper roots). Inside the
+// run dir, `env/` holds the run's credential files (read-only profiles, stubs, scope credentials):
+// the run's processes read them through the variables that point there, never the agent (R59).
 function unreadableRoots(vars, home) {
   const base = canonicalRoot(home);
-  const qh = canonicalRoot(quillHome({ QUILL_HOME: varOf(vars, 'QUILL_HOME') ?? path.join(home, '.claude', 'quill') }));
-  return [...(base ? HOME_SECRETS.map((n) => path.join(base, n)) : []), ...(qh ? [qh] : [])];
+  const qhEnv = { QUILL_HOME: varOf(vars, 'QUILL_HOME') ?? path.join(home, '.claude', 'quill') };
+  const qh = canonicalRoot(quillHome(qhEnv));
+  let runEnv = null;
+  try { runEnv = varOf(vars, 'QUILL_HANDOFF_ID') ? path.join(canonicalRoot(handoffRunDir(qhEnv, varOf(vars, 'QUILL_HANDOFF_ID'))) ?? '', 'env') : null; } catch { runEnv = null; }
+  return [...(base ? HOME_SECRETS.map((n) => path.join(base, n)) : []), ...(qh ? [qh] : []), ...(runEnv && path.isAbsolute(runEnv) ? [runEnv] : [])];
 }
 
 /**
@@ -724,7 +730,10 @@ function protectedBranch(name, e) {
 // Ruling R2: the classifier's git pseudo-scopes are per-run permissions, never grantable scopes.
 function gitProblem(p, perms, e) {
   switch (p.scope) {
-    case 'git.commit': return perms.commit === true ? null : REASONS.noCommit();
+    // R58: anything that writes the shared repository (refs, objects, index, config) needs commit
+    case 'git.commit': return perms.commit === true ? null : REASONS.noCommit(p.reason);
+    // R58: git that changes only the checkout's files needs an edit permission, like any edit
+    case 'git.edit': return perms.edit_source === true || perms.commit === true ? null : REASONS.noGitEdit(p.reason);
     case 'git.push':
       if (perms.push_branch !== true) return REASONS.noPush();
       return protectedBranch(p.target, e) ? REASONS.protectedBranch(p.reason) : null;

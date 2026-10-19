@@ -502,6 +502,61 @@ const ROWS = [
   ['full: a read records nothing', bash('kubectl get pods'), FULL, 'allow', undefined],
   ['full without the observe guard is enforced', bash('kubectl apply -f deploy.yaml'), { grant: { access: 'full' } }, critical('k8s.write', '')],
   ['observe guard with an autonomous grant is enforced', bash('kubectl apply -f deploy.yaml'), { env: FULL.env }, critical('k8s.write', '')],
+
+  // I1 / R58: a read-only run uses git only through read-only forms; anything that writes the shared
+  // repository's refs, objects, config, hooks or index needs commit, and ref writes keep the
+  // protected-branch rule
+  ...[
+    'git status', 'git log --oneline -5', 'git show HEAD', 'git diff HEAD~1', 'git blame src/app.js', 'git grep -n foo', 'git ls-files', 'git ls-tree HEAD',
+    'git cat-file -p HEAD', 'git rev-parse HEAD', 'git rev-list --count HEAD', 'git describe --tags', 'git branch', 'git branch -a', "git branch --list 'feat/*'",
+    'git branch --contains HEAD', 'git branch --show-current', 'git branch -vv', 'git tag', "git tag -l 'v1*'", 'git tag --points-at HEAD', 'git remote -v', 'git remote show origin',
+    'git config --get user.email', 'git config --list', 'git config user.email', 'git fetch', 'git fetch origin', 'git fetch origin main', 'git fetch --all --prune',
+    'git reflog', 'git reflog show HEAD', 'git stash list', 'git stash show', 'git notes list', 'git notes show HEAD', 'git worktree list', 'git symbolic-ref HEAD',
+    'git replace -l', 'git hash-object src/app.js', 'git clean -n', 'git apply --check x.patch', 'git submodule status', 'git lfs ls-files', 'git bisect log', 'git fsck',
+    'git sparse-checkout list', 'git log --stat -- src',
+  ].map((cmd) => [`I1: read-only form: ${cmd}`, bash(cmd), {}, 'allow']),
+  ...[
+    'git update-ref refs/heads/feat/y HEAD', 'git commit-tree HEAD^{tree} -m x', 'git hash-object -w src/app.js', 'git mktree', 'git write-tree',
+    'git branch feat/y', 'git branch -f feat/y HEAD', 'git branch -D feat/y', 'git branch -d feat/y', 'git branch -m feat/y', 'git branch -M feat/a feat/b', 'git branch -c feat/y', 'git branch -C feat/a feat/b', 'git branch -u origin/feat/x',
+    'git tag v1', 'git tag -a v1 -m x', 'git tag -d v1', 'git tag -f v1', 'git gc --prune=now', 'git gc', 'git prune', 'git repack -ad', 'git pack-refs --all', 'git prune-packed',
+    'git reflog expire --expire=now --all', 'git reflog delete HEAD@{1}', 'git pull', 'git pull --rebase origin feat/x', 'git replace HEAD HEAD~1', 'git replace -d HEAD',
+    'git notes add -m x', 'git notes remove HEAD', 'git stash', 'git stash push -m x', 'git stash pop', 'git stash drop', 'git stash clear', 'git symbolic-ref HEAD refs/heads/feat/y',
+    'git worktree remove ../other', 'git worktree prune', 'git worktree move a b', 'git config user.email x@example.com', 'git config --unset user.email', 'git config --add a.b c',
+    'git config set user.email x@example.com', 'git config --remove-section foo', 'git fetch origin feat/y:feat/y', 'git fetch origin +refs/heads/*:refs/tags/*', 'git fetch --prune-tags', 'git fetch --update-head-ok origin',
+    'git add -A', 'git add src/app.js', 'git mv src/app.js src/b.js', 'git checkout feat/y', 'git checkout HEAD~1 -- src/app.js', 'git switch feat/y', 'git switch -c feat/y', 'git switch --detach HEAD~1',
+    'git reset --hard HEAD~1', 'git reset', 'git reset -- src/app.js', 'git restore --staged src/app.js', 'git update-index --add src/app.js', 'git read-tree HEAD',
+    'git apply --index x.patch', 'git apply --cached x.patch', 'git maintenance run', 'git commit-graph write', 'git multi-pack-index write', 'git unpack-objects',
+    'git submodule update --init', 'git submodule sync', 'git lfs install', 'git lfs pull', 'git bisect start', 'git bisect good', 'git sparse-checkout set src', 'git rerere forget src/app.js',
+    'git mergetool', 'git bundle unbundle x.bundle', 'git remote prune origin', 'git remote remove upstream', 'git fsck --lost-found',
+  ].map((cmd) => [`I1: needs commit: ${cmd}`, bash(cmd), {}, denied('no-commit-permission')]),
+  ['I1: git add without commit in an edit run', bash('git add -A'), { grant: { permissions: EDIT } }, denied('no-commit-permission')],
+  ...['git checkout -- src/app.js', 'git restore src/app.js', 'git restore --worktree src/app.js', 'git clean -fd', 'git apply x.patch'].flatMap((cmd) => [
+    [`I1: changes the checkout's files: ${cmd}`, bash(cmd), {}, denied('no-edit-permission')],
+    [`I1: changes the checkout's files with edit_source: ${cmd}`, bash(cmd), { grant: { permissions: EDIT } }, 'allow'],
+  ]),
+  ...[
+    'git update-ref refs/heads/feat/y HEAD', 'git branch feat/y', 'git branch -f feat/y HEAD', 'git branch -D feat/y', 'git tag v1', 'git stash', 'git add -A', 'git pull', 'git reset --hard HEAD~1',
+    'git checkout feat/y', 'git switch -c feat/y', 'git fetch origin feat/y:feat/y', 'git config user.email x@example.com', 'git gc', 'git notes add -m x',
+  ].map((cmd) => [`I1: with commit: ${cmd}`, bash(cmd), { grant: { permissions: COMMIT } }, 'allow']),
+  ...[
+    'git update-ref refs/heads/main HEAD', 'git update-ref main HEAD', 'git update-ref -d refs/heads/release/1.2', 'git update-ref --stdin', 'git branch -f main HEAD', 'git branch -D main', 'git branch -d develop',
+    'git branch -m main', 'git branch -M feat/x main', 'git branch main', 'git branch -c main', 'git fetch origin main:main', 'git fetch . HEAD:main', 'git fetch origin +main:refs/heads/main',
+    'git checkout main', 'git checkout -B main', 'git switch main', 'git switch -C main', 'git symbolic-ref HEAD refs/heads/main', 'git pull origin main:main', 'git stash branch main',
+  ].map((cmd) => [`I1: protected branch: ${cmd}`, bash(cmd), { grant: { permissions: COMMIT } }, denied('protected-branch')]),
+  ['I1: pull into a protected current branch', bash('git pull'), { grant: { permissions: COMMIT }, env: { currentBranch: 'main' } }, denied('protected-branch')],
+  ['I1: reset of a protected current branch', bash('git reset --hard HEAD~3'), { grant: { permissions: COMMIT }, env: { currentBranch: 'main' } }, denied('protected-branch')],
+  ['I1: update-ref of HEAD on a protected current branch', bash('git update-ref HEAD HEAD~1'), { grant: { permissions: COMMIT }, env: { currentBranch: 'main' } }, denied('protected-branch')],
+  ['I1: commit on a protected current branch', bash('git commit -m x'), { grant: { permissions: COMMIT }, env: { currentBranch: 'main' } }, denied('protected-branch')],
+  ['I1: global git config is never written', bash('git config --global user.email x@example.com'), { grant: { permissions: COMMIT } }, denied('unparseable')],
+  ['I1: git grep that opens files in a program', bash('git grep -Ovim foo'), {}, denied('unparseable')],
+  ['I1: git log --output writes a file in the checkout', bash('git log --output=log.txt'), {}, denied('no-edit-permission')],
+  ['I1: git format-patch writes into the checkout', bash('git format-patch -1'), {}, denied('no-edit-permission')],
+  ['I1: git format-patch to stdout', bash('git format-patch -1 --stdout'), {}, 'allow'],
+  ['I1: git format-patch into the temp dir', bash(`git format-patch -1 -o ${q(path.join(tmp, 'patches'))}`), {}, 'allow'],
+
+  // T16-deferred guard rows: a pin equal to the call does not widen what the granted scope covers
+  ['R48: an argocd pin naming another server is not covered by the scope', bash('argocd app sync pay-stg --server argo-prod.example'), { grant: { scopes: [ARGO_STG], actionPins: [{ scope: 'argo.sync:pay-stg', pin: 'argocd app sync pay-stg --server argo-prod.example' }] } }, critical('argo.sync', 'pay-stg')],
+  ['R48: an MCP pin whose designated field names another app is not covered', call('mcp__argocd__sync_application', { applicationName: 'pay-prod', name: 'pay-stg' }, { mcp_server_source: 'user' }), { grant: { scopes: [ARGO_STG], actionPins: [{ scope: 'argo.sync:pay-stg', pin: 'mcp__argocd__sync_application {"applicationName":"pay-prod","name":"pay-stg"}' }] } }, critical('argo.sync', 'pay-prod')],
 ];
 
 function run(c, opts = {}) {
