@@ -152,7 +152,7 @@ Examples the shipped UI produces:
 - "47 turns · ≈ $1.87 (estimated)" under a subscription; "$0.42" only when the run had an API key (`cost_estimated: false`).
 - "Refused (no scope)", "Unavailable (needs auth)", "Not verified", "Claimed, no tool call seen".
 - "Critical change · PROJ-12 Sync payments to staging · proposed by run 1a2b3c4d of PROJ-7" with "Approve and queue (scopes: argo.sync:pay-stg)": an owner-approved proposal with an exact pin, not a change that ran.
-- "Written in production" under "Production writes (full access)": recorded by the observe-mode guard, never prevented.
+- "Production write allowed (outcome not recorded)" under "Production writes (full access)": a call the observe-mode guard allowed and recorded, never prevented; whether it succeeded is not recorded, so the label never says it was written.
 - "kubectl apply on stg may have run" (owner dashboard) and "1 production write may have run" (exports), for an interrupted run's guard-allowed writes.
 - "Batch budget reached" on a held batch member and its batch summary.
 - "Resume as new run" for an interrupted run with a recorded session; "Retry as new run" otherwise.

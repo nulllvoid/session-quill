@@ -205,7 +205,10 @@ test('production writes of a full-access run: owner only, warning, escaped, omit
   const html = renderRunDetail(h, snap(h), { now: NOW });
   const sec = /<h3>Production writes \(full access\)<\/h3>[\s\S]*?<\/section>/.exec(html);
   assert.ok(sec, 'section present');
-  assert.match(sec[0], /class="chip warning small"[^>]*>[\s\S]*?Written in production<\/span>/);
+  assert.match(sec[0], /class="chip warning small"[^>]*>[\s\S]*?Production write allowed \(outcome not recorded\)<\/span>/);
+  // M3 (design system §6): prod_effects are calls the observer allowed, not outcomes
+  assert.doesNotMatch(sec[0], /Written in production/);
+  assert.match(sec[0], /whether each one succeeded is not recorded/);
   assert.match(sec[0], /<code>Bash<\/code>[\s\S]*?k8s\.write:stg[\s\S]*?<time datetime="2026-10-10T10:03:00Z"/);
   assert.match(sec[0], /<code>&lt;img src=x onerror=alert\(1\)&gt;<\/code>[\s\S]*?http\.write · target not pinned to one/);
   assert.doesNotMatch(sec[0], /<img/);

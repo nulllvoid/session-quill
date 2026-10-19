@@ -157,7 +157,8 @@ function runCriticalChanges(h, changes, snapshot, caps) {
   }).join('');
 }
 
-// What a full-access run wrote in production, as the observe-mode guard recorded it (spec §7, R52):
+// The production writes a full-access run's observe-mode guard allowed (spec §7, R52; final review M3:
+// the calls it let through, not their outcomes):
 // owner only (exports drop prod_effects), each as a warning in words. The ledger keeps the tool,
 // scope, target and time, not the command line.
 function productionWrites(h, caps, { now, tz }) {
@@ -169,9 +170,9 @@ function productionWrites(h, caps, { now, tz }) {
     const target = recordText(e.target);
     const where = scope ? `${scope}${target ? `:${target}` : e.ambiguous === true ? ' · target not pinned to one' : ''}` : 'scope not recorded';
     const when = typeof e.t === 'string' && e.t ? ` ${timeEl(e.t, now, tz)}` : '';
-    return `<li><span class="chip warning small">${icon('alert')}Written in production</span> <code>${esc(recordText(e.tool) || 'tool not recorded')}</code> <span class="small">${esc(where)}</span>${when}</li>`;
+    return `<li><span class="chip warning small">${icon('alert')}Production write allowed (outcome not recorded)</span> <code>${esc(recordText(e.tool) || 'tool not recorded')}</code> <span class="small">${esc(where)}</span>${when}</li>`;
   });
-  return `<p class="small muted">Full access lifts the guard: it recorded these writes and did not stop them.</p><ul class="run-prod-writes">${items.join('')}</ul>`;
+  return `<p class="small muted">Full access lifts the guard: it allowed these production writes and did not stop them; whether each one succeeded is not recorded.</p><ul class="run-prod-writes">${items.join('')}</ul>`;
 }
 
 // What the worker filed from this run (spec §6.2): memory entries that name it (repo, machine and
