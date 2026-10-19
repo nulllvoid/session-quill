@@ -46,4 +46,15 @@ test('a socket path that would exceed the Unix limit falls back to a short one b
   assert.notEqual(a, lockEndpoint('other-store', 'machine', deep));
   const shallow = lockEndpoint('store', 'machine', { QUILL_HOME: '/h' });
   assert.ok(shallow.startsWith(path.resolve('/h')), 'a short home keeps its own run folder');
+  // A temp folder that is deep too (macOS TMPDIR is /var/folders/…/T/, and may be nested further)
+  const saved = process.env.TMPDIR;
+  try {
+    process.env.TMPDIR = path.join('/var/folders', 'n'.repeat(40), 'T', 'quill-test-run-abcdef');
+    const viaTmp = lockEndpoint('store', 'machine', deep);
+    assert.ok(Buffer.byteLength(viaTmp) <= MAX_SOCKET_PATH, viaTmp);
+    assert.equal(viaTmp, lockEndpoint('store', 'machine', deep), 'every caller computes the same endpoint');
+    assert.ok(viaTmp.startsWith('/tmp/session-quill-'), viaTmp);
+  } finally {
+    if (saved === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = saved;
+  }
 });
