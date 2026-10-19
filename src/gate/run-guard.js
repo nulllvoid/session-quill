@@ -8,7 +8,8 @@
 // Order of checks in enforce mode (the first that fails decides the reason):
 //   1. MCP server source  — an untrusted server is refused whatever the call is
 //   2. unparseable        — nothing else about the command can be trusted
-//   3. quill-privileged   — Quill's own mutating commands are never available in a run
+//   3. quill-privileged   — Quill's own mutating commands are never available in a run, and
+//      nested-claude-code — nor is starting Claude Code (R57: it would run unguarded)
 //   4. file boundary      — Glob/Grep patterns that climb out, readable roots, then writable roots
 //                           and protected paths (links resolved, wildcards expanded)
 //   5. git per-run permissions and protected branches (ADR 0017, ruling R2)
@@ -20,7 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classifyCall, CLIMB_REASON_RE } from './prod-classify.js';
+import { classifyCall, CLIMB_REASON_RE, NESTED_CLAUDE_RULE } from './prod-classify.js';
 import { parseShell, binName } from './shell-tokens.js';
 import { quillHome, handoffRunDir } from '../lib/paths.js';
 import { isProtectedBranch } from '../handoff/permissions.js';
@@ -62,6 +63,7 @@ const REASONS = {
   climbs: (p) => `QUILL_DENIED unparseable: the path ${p} has '..' after a directory name, which shells resolve through links differently than the guard can check. Write the path without 'name/..': name the directory you mean directly, or start the path with '..' only.`,
   cdMissing: (dir) => `QUILL_DENIED unparseable: the command changes directory to ${dir}, which does not exist (or is not a directory), and later commands would still run in the old directory. Create the directory first, join the commands with && after the cd, or use paths from the current directory.`,
   climbFrom: (p, dir) => `QUILL_DENIED unparseable: ${p} climbs with '..' from ${dir}, which is not an existing directory, so the guard cannot tell where the shell really is (a cd into it fails, or it is created in the same command). Create the directory or change into it in an earlier command, or write the path without '..'.`,
+  nestedClaude: (why) => `QUILL_DENIED nested-claude-code: ${why}. A run never starts another Claude Code session (claude or claude.exe by any path, npx/pnpm dlx/bunx/yarn dlx/npm exec @anthropic-ai/claude-code, node …/@anthropic-ai/claude-code/…, behind any wrapper) or passes a flag that turns permission checks off: that session would have no run guard and would use the owner's login and connectors. Use the Task or Agent tool for a subagent, which keeps the guard, and record anything else in the result.`,
   privileged: (why) => `QUILL_DENIED quill-privileged: ${why}. A run may use only Quill's read commands (status, ticket show|list|children, agent list|show|suggestions, handoff list, repo list, doctor); put what you wanted Quill to do in the result instead.`,
   outsideReadable: (p, via) => `QUILL_DENIED outside-readable: ${p ?? 'this location'}${via && via !== p ? ` reaches ${via}, which` : ''} is outside what this run may read (its checkout, run directory, context snapshot, temp directory and plugin directories). Work from those, and record in attempts what you could not reach.`,
   patternClimbs: (pattern) => `QUILL_DENIED outside-readable: the pattern ${pattern} climbs out of its search directory ('..' after a wildcard or brace), so the guard cannot tell what it reaches. Search from an explicit path inside the readable area instead.`,
@@ -150,7 +152,7 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
     return deny(climb ? REASONS.climbs(climb[1]) : REASONS.unparseable(bad.reason));
   }
   const priv = parts.find((p) => p.class === 'privileged');
-  if (priv) return deny(REASONS.privileged(priv.reason));
+  if (priv) return deny(priv.rule === NESTED_CLAUDE_RULE ? REASONS.nestedClaude(priv.reason) : REASONS.privileged(priv.reason));
 
   const climbing = climbingPattern(tool, c.tool_input);
   if (climbing) return deny(REASONS.patternClimbs(climbing));

@@ -25,6 +25,35 @@ const unknownProd = (reason) => r('unknown-prod', reason);
 const unparseable = (reason) => r('unparseable', reason);
 const privileged = (reason) => r('privileged', reason);
 
+// R57 (final review C1): a guarded run never starts Claude Code. A nested session has no Quill
+// guard (it does not get the run's --settings, and QUILL_HANDOFF_GUARD makes the plugin's gate
+// stand down) yet signs in with the owner's login, connectors and user MCP servers. Refused in
+// every tier except `full` (observe), whatever the spelling or wrapper; `rule` lets the guard name it.
+export const NESTED_CLAUDE_RULE = 'nested-claude-code';
+const nestedClaude = (why) => r('privileged', why, { rule: NESTED_CLAUDE_RULE });
+const CLAUDE_PROGRAMS = new Set(['claude', 'claude-code']);
+// The npm package (by any path or spec), the native installer's versioned binaries, and the flags
+// that turn permission checks off: in the command text, any word, or any input a command reads.
+const CLAUDE_PACKAGE_RE = /@anthropic-ai[\\/]+claude-code|[\\/]claude[\\/]+versions[\\/]/i;
+const SKIP_PERMISSIONS_RE = /--dangerously-skip-permissions|--permission-mode(?:\s*=\s*|\s+)["'`]?bypassPermissions/i;
+function claudeTextProblem(text) {
+  if (typeof text !== 'string' || !text) return null;
+  if (CLAUDE_PACKAGE_RE.test(text)) return 'it names the Claude Code package or binary';
+  if (SKIP_PERMISSIONS_RE.test(text)) return 'it turns Claude Code permission checks off';
+  return null;
+}
+// The same check over a command's words after quotes are removed (`--dangerous"ly-skip-…"`), with
+// `--permission-mode` and its value as two words.
+function claudeWordsProblem(words) {
+  for (let i = 0; i < words.length; i += 1) {
+    const w = String(words[i]);
+    const why = claudeTextProblem(w);
+    if (why) return why;
+    if (/^--permission-mode$/i.test(w) && /^bypassPermissions$/i.test(String(words[i + 1] ?? ''))) return 'it turns Claude Code permission checks off';
+  }
+  return null;
+}
+
 export function classifyCall(call, ctx) {
   try {
     return classifyInner(call && typeof call === 'object' ? call : {}, ctx && typeof ctx === 'object' ? ctx : {});
@@ -225,6 +254,8 @@ function classifyShell(command, dialect, ctx) {
   if (!command.trim()) return unparseable('empty command');
   if (command.length > MAX_COMMAND) return unparseable('command too long to classify');
   if (command.includes('\u0000')) return unparseable('command contains a NUL byte');
+  const claude = claudeTextProblem(command);
+  if (claude) return nestedClaude(`this command may start Claude Code: ${claude}`);
   return classifyScript(command, dialect, ctx, 0);
 }
 
@@ -284,7 +315,7 @@ function uniqueSpecs(specs) {
 
 function strip(res) {
   const o = { class: res.class };
-  for (const k of ['scope', 'target', 'host']) if (res[k] !== undefined) o[k] = res[k];
+  for (const k of ['scope', 'target', 'host', 'rule']) if (res[k] !== undefined) o[k] = res[k];
   o.reason = res.reason;
   return o;
 }
@@ -310,6 +341,8 @@ function directoryMark(seg, ctx, st) {
 function classifySegment(seg, ctx, st) {
   if (seg.cwdMark) return directoryMark(seg, ctx, st);
   if (seg.unparseable) return unparseable(seg.unparseable);
+  const claude = claudeWordsProblem(Array.isArray(seg.argv) ? seg.argv : []) ?? claudeTextProblem(seg.stdin ?? '');
+  if (claude) return nestedClaude(`this command may start Claude Code: ${claude}`);
   // Prefix assignments (VAR=x git …) apply to that command only; an assignment on its own, or
   // environment handed to a nested script, lasts for whatever runs later.
   const envBad = gitEnvProblem(seg.env, seg.argv.length > 0 && seg.kinds[0] === 'lit' && binName(seg.argv[0]) === 'git');
@@ -358,20 +391,22 @@ const DATA_COMMANDS = new Set(['echo', 'printf', 'grep', 'egrep', 'fgrep', 'rg',
 // GNU sed's `e` command and the s///e flag run shell commands.
 const SED_EXEC_RE = /(^|[\s;{}0-9$\/,'"])e(\s|$)|\/[gpiImMw0-9]*e[gpiImMw0-9]*(\s|;|$|'|")/;
 let backstopReCache = null;
-const backstopRe = () => (backstopReCache ??= new RegExp(`(^|[^A-Za-z0-9_-])(${[...PROD_BINS, 'quill', 'session-quill'].map((b) => b.replace(/-/g, '\\-')).join('|')})(\\.exe|\\.cmd|\\.ps1)?($|[^A-Za-z0-9_.-])`, 'i'));
+const backstopRe = () => (backstopReCache ??= new RegExp(`(^|[^A-Za-z0-9_-])(${[...PROD_BINS, 'quill', 'session-quill', ...CLAUDE_PROGRAMS].map((b) => b.replace(/-/g, '\\-')).join('|')})(\\.exe|\\.cmd|\\.ps1)?($|[^A-Za-z0-9_.-])`, 'i'));
 const NOOP_H = { bad: null, write: () => true, read: () => true, chdir: () => {}, cwd: () => null, script: () => local('nested script') };
 
 function backstop(name, seg, ctx) {
   const text = [seg.argv.slice(1).join(' '), seg.stdin ?? ''].join(' ');
   if (!backstopRe().test(text)) return null;
   const tokens = text.split(/[\s'"`;&|(){}!,=<>]+/).filter(Boolean);
-  for (let i = 0; i < tokens.length - 1; i += 1) {
+  for (let i = 0; i < tokens.length; i += 1) {
     const nm = binName(tokens[i]).replace(/\.ps1$/, '');
-    if (!PROD_BINS.includes(nm) && nm !== 'quill' && nm !== 'session-quill') continue;
+    // Claude Code needs no arguments to start (`start claude`); the others are judged by their verb
+    if (i === tokens.length - 1 && !CLAUDE_PROGRAMS.has(nm)) continue;
+    if (!PROD_BINS.includes(nm) && nm !== 'quill' && nm !== 'session-quill' && !CLAUDE_PROGRAMS.has(nm)) continue;
     const argv = tokens.slice(i);
     const fake = { argv, kinds: argv.map(() => 'lit'), redirects: [], stdin: null, stdinDyn: false, piped: false, env: {}, dialect: 'bash', nested: true };
     const inner = classifyCommand(nm, fake, ctx, NOOP_H);
-    if (inner.class === 'privileged') return privileged(`${name} arguments run ${nm}: ${inner.reason}`);
+    if (inner.class === 'privileged') return r('privileged', `${name} arguments run ${nm}: ${inner.reason}`, inner.rule ? { rule: inner.rule } : {});
     if (inner.class !== 'local' && inner.class !== 'read') return unknownProd(`${name} arguments mention ${nm} ${argv[1] ?? ''}, which may run it (${inner.reason})`);
   }
   return null;
@@ -623,6 +658,7 @@ function classifyCommand(name, seg, ctx, h) {
     case 'gh': return gh(args, ak, seg, ctx);
     case 'quill': case 'session-quill': return quill(args);
     case 'quill-hook': case 'quill-guard': return privileged(`${name} is a Quill entry point (capture hook or guard); a run never starts it`);
+    case 'claude': case 'claude-code': return nestedClaude(`${name} starts Claude Code`);
     case 'node': case 'deno': case 'bun': case 'tsx': case 'ts-node':
       return nodeLike(name, args, ak, seg, ctx, h);
     case 'python': case 'python3': case 'py': case 'pythonw': case 'python2':
