@@ -124,6 +124,15 @@ function findProposal(state, ticket, payload, now) {
   return p;
 }
 
+// R59 (final review I2): the one check for owner-dashboard-only requests (memory approve and edit,
+// approve-run of a run-origin proposal, resume-run of a scoped or pinned run). Only the authenticated
+// dashboard server journals a request as the worker (submitRequest, actor owner); ingress can never
+// claim the worker (it is quarantined there), so an ingress request is refused whatever actor it
+// claims, and a schedule or publisher (also through the worker) is refused by its own actor.
+export function fromOwnerDashboard(req) {
+  return !!req && req.producer === 'worker' && (req.actor_id ?? 'owner') === 'owner';
+}
+
 // Only the owner approves or dismisses: the dashboard (actor owner) or the CLI. There is no
 // auto-approval (ADR 0025); page edits, schedules and anything else acting for them are refused.
 // A run's critical-change proposal (ADR 0028) is approved on the dashboard alone: the owner actor
@@ -132,7 +141,7 @@ function findProposal(state, ticket, payload, now) {
 function approvalRefusal(req, p, kind) {
   const actor = req.actor_id ?? 'owner';
   if (kind === 'approve-run' && p.origin === 'run') {
-    if (actor === 'owner' && req.producer === 'worker') return null;
+    if (fromOwnerDashboard(req)) return null;
     return { code: 'critical-approve-dashboard-only', message: 'approving a critical change is a dashboard action by the owner: open Runs → Needs you with quill ui' };
   }
   if (actor === 'owner' || actor === 'cli') return null;
@@ -201,7 +210,7 @@ function evaluateResume(worker, req, ticket) {
   // R56: a run with write scopes or action pins gets its production write access again, so it is
   // resumed exactly as a run-origin proposal is approved: the owner on the dashboard alone.
   if ((fields.scopes && fields.scopes.length) || fields.action_pins) {
-    if (!(actor === 'owner' && req.producer === 'worker')) return fail('resume-dashboard-only', 'resuming a run with write scopes grants production write access again, so it is a dashboard action by the owner: open the run in Runs with quill ui');
+    if (!fromOwnerDashboard(req)) return fail('resume-dashboard-only', 'resuming a run with write scopes grants production write access again, so it is a dashboard action by the owner: open the run in Runs with quill ui');
   }
   const id8 = orig.id.slice(0, 8);
   if (fields.scope_fingerprints) {
@@ -556,7 +565,7 @@ const memoryFailure = (code, message, current_revision = null) => ({ outcome: 'f
 // pin and note also the owner's CLI. A page edit, a schedule or any other actor never.
 function memoryRefusal(req) {
   const actor = req.actor_id ?? 'owner';
-  if (DASHBOARD_ONLY[req.kind]) return actor === 'owner' ? null : { code: DASHBOARD_ONLY[req.kind], message: `${req.kind === 'memory-approve' ? 'approving a learning' : 'editing a memory entry'} is a dashboard action: open Memory with quill ui` };
+  if (DASHBOARD_ONLY[req.kind]) return fromOwnerDashboard(req) ? null : { code: DASHBOARD_ONLY[req.kind], message: `${req.kind === 'memory-approve' ? 'approving a learning' : 'editing a memory entry'} is a dashboard action: open Memory with quill ui` };
   if (actor === 'owner' || actor === 'cli') return null;
   return { code: 'memory-owner-only', message: 'only the owner changes memory, on the dashboard or with quill memory' };
 }

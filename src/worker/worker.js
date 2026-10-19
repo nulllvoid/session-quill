@@ -3,7 +3,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { Journal } from '../core/journal.js';
-import { validateEvent, makeEvent } from '../core/events.js';
+import { validateEvent, makeEvent, INGRESS_KINDS } from '../core/events.js';
 import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.js';
 import { createState, sessionKey } from '../core/state.js';
 import { applyEvent } from '../core/reducer.js';
@@ -288,11 +288,14 @@ export class Worker {
         quarantineIngress(entry.name, this.env);
         continue;
       }
-      // Only the worker emits a critical-proposal (spec §7.2): one arriving through ingress (a page,
-      // the CLI, or anything that can write the ingress folder) is never journaled, whatever producer it claims.
-      if (ev.kind === 'critical-proposal') {
-        this.log(`quarantining ${entry.name}: critical-proposal events come only from the worker`);
+      // R59 (final review I3): only the worker emits its own kinds (request-tx, handoff-tx, memory-tx,
+      // reconcile, notify, critical-proposal …). One arriving through ingress (a page, the CLI, or
+      // anything that can write the ingress folder, an autonomous run included) is never journaled,
+      // whatever producer it claims, and the owner sees a health problem.
+      if (!INGRESS_KINDS.has(ev.kind)) {
+        this.log(`quarantining ${entry.name}: ${ev.kind} events come only from the worker`);
         quarantineIngress(entry.name, this.env);
+        this.recordHealthError({ kind: 'ingress-forged', event_kind: ev.kind, event_id: ev.event_id, producer: typeof ev.producer === 'string' ? ev.producer.slice(0, 40) : null, error: `a ${ev.kind} event arrived through ingress; only the worker writes that kind, so it was quarantined` });
         continue;
       }
       // Requests the worker journals itself (dashboard, schedules) never arrive through ingress, so a
