@@ -961,7 +961,8 @@ test('onboarding (spec §3, Review Focus 5): a prod CLI read on a system without
   for (const [cmd, system] of [['kubectl get pods', 'kubernetes'], ['helm list', 'kubernetes'], ['aws s3 ls', 'aws'], ['gcloud compute instances list', 'gcp'], ['az vm list', 'azure'], ['psql -c "select 1"', 'databases'], ['argocd app get pay', 'argo'], ['bash -c "kubectl.exe get pods"', 'kubernetes']]) {
     const r = decide(bash(cmd), none, ENV);
     assert.equal(r.decision, 'deny', cmd);
-    assert.ok(r.reason.startsWith(`QUILL_DENIED no-readonly-credentials: no read-only credentials configured for ${system} — set them in quill doctor`), `${cmd}: ${r.reason}`);
+    assert.ok(r.reason.startsWith(`QUILL_DENIED no-readonly-credentials: no read-only credentials configured for ${system} — set them in [prod.readonly] in config.toml.`), `${cmd}: ${r.reason}`);
+    assert.equal(r.reason.includes('quill doctor'), false, 'M4: doctor does not report read-only profiles, so the refusal does not send the agent there');
   }
   assert.equal(decide(bash('kubectl get pods'), grantWith({ credentialSystems: ['kubernetes'] }), ENV).decision, 'allow', 'a read-only profile lets the read through');
   assert.equal(decide(bash('kubectl get pods'), grantWith(), ENV).decision, 'allow', 'a grant without credentialSystems (older grants) is unaffected');

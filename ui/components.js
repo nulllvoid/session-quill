@@ -501,10 +501,10 @@ function autonomyNotes(snapshot) {
   out.push(`<p>Production command-line tools <span class="muted">(${cred ? `credentials as run ${short(cred.run_id)} got them` : 'from your config; no autonomous run yet'})</span></p><ul class="cred-systems">${lines.join('')}</ul>`);
   const issues = [];
   const anyReadonly = CRED_SYSTEM_TEXT.some(([sys]) => report[sys] === 'readonly' || configured.has(sys));
-  if (!anyReadonly) issues.push('No read-only credentials configured: reads through production commands (kubectl, aws, gcloud, az, psql, argocd) are refused in autonomous runs; connectors and local tools still work. Add profiles under [prod.readonly] in config.toml; quill doctor shows what is set.');
+  if (!anyReadonly) issues.push('No read-only credentials configured: reads through production commands (kubectl, aws, gcloud, az, psql, argocd) are refused in autonomous runs; connectors and local tools still work. Add profiles under [prod.readonly] in config.toml.');
   // A profile the config names but the latest run could not use is as actionable as none (review M-4).
   const unusable = cred ? CRED_SYSTEM_TEXT.filter(([sys]) => configured.has(sys) && report[sys] !== 'readonly') : [];
-  if (unusable.length) issues.push(`Read-only profile configured but not used by run ${String(cred.run_id ?? '').slice(0, 8)}: ${unusable.map(([, label]) => label).join(', ')}. Its reads were refused; check the path or profile name under [prod.readonly] (quill doctor shows what is set).`);
+  if (unusable.length) issues.push(`Read-only profile configured but not used by run ${String(cred.run_id ?? '').slice(0, 8)}: ${unusable.map(([, label]) => label).join(', ')}. Its reads were refused; check the path or profile name under [prod.readonly] in config.toml.`);
   if (report.provider === 'shared') issues.push('Claude Code signs in through Bedrock or Vertex, so the agent can use those provider credentials too.');
   for (const r of Array.isArray(report.residual) ? report.residual : []) issues.push(`Not redirected (the guard refuses reading these files, but a script could still reach them): ${r}`);
   for (const e of Array.isArray(report.scope_errors) ? report.scope_errors : []) issues.push(`Scope setting ignored: ${e}`);
