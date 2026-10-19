@@ -13,6 +13,11 @@ import { PUBLISH_FIELDS } from '../../src/publish/config.js';
 import { renderHandoffNote, renderTicketNote, renderSessionNote, writeNote, hasVaultNote, handoffHasVaultNote, writeHandoffNote, HANDOFF_NOTE_FIELDS } from '../../src/worker/notes.js';
 import { syncable } from '../../src/tracker/client.js';
 import { snapshot, TID } from '../ui/fixtures.js';
+import { bootWorker } from '../handoff/helpers.js';
+import { recordResult } from '../../src/handoff/results.js';
+import { parseAgentResult } from '../../src/handoff/runner.js';
+import { writeIngress } from '../../src/core/ingress.js';
+import { createJobs } from '../../src/schedule/jobs.js';
 
 const S = 'SENTINEL-7f3a';
 
@@ -196,4 +201,56 @@ test('an interrupted scoped run reaches exports, the mirror and the vault note o
   const one = fixture();
   one.handoffs[0].possible_writes = ['git push on feat may have run'];
   assert.deepEqual(sanitizeSnapshot(one, ALL).handoffs[0].uncertain_effects, ['1 production write may have run']);
+});
+
+// I4 / ruling R60: a local-only ticket and its runs never reach the vault. Markers planted in a
+// local-only critical child's title, in the prompt title and final message of a session bound to it,
+// and in the final message of a run on it, are absent from everything the worker writes under
+// store_path: ticket, session and run notes and the daily digest. The digest omits the child entirely.
+test('R60: nothing about a local-only ticket, its sessions or its runs reaches the vault (digest included)', async () => {
+  const M = 'VAULT-SENTINEL-4c2e';
+  const b = await bootWorker({ runtimeAvailable: true });
+  const ingest = (kind, payload, extra = {}) => { writeIngress(b.mk(kind, payload, extra), b.env); b.w.tick(); };
+  try {
+    const T = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    b.ticket(T, 'LOCAL-a-00000001');
+    const rid = '22222222-0000-4000-8000-0000000000a1';
+    const analyse = { mode: 'analyse', note: 'look', permissions: { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false }, branch: null };
+    b.request(rid, { target_id: T, expected_revision: b.w.state.tickets.get(T).revision, payload: analyse });
+    b.w.tick();
+    const hid = b.w.state.requests.get(rid).result.handoff_id;
+    const change = { title: `Sync payments ${M}`, scope: 'argo.sync', target: 'pay-stg', action: 'argocd app sync pay-stg --prune', risk: 'medium', why: 'w', evidence: 'e', verify: 'v', rollback: 'r' };
+    recordResult(b.w, hid, parseAgentResult({ text: `x\n\`\`\`json\n${JSON.stringify({ summary: 's', critical_changes: [change] })}\n\`\`\``, is_error: false, session_id: 's1' }), { state: 'done' });
+    const child = [...b.w.state.tickets.values()].find((t) => t.local_only === true);
+    assert.ok(child && child.title.includes(M), 'the local-only child carries the marker in its title');
+    // a session bound to the child: its prompt title and its final message carry the marker
+    ingest('session-start', { source: 'startup', cwd: b.home }, { session_id: 'sess-crit' });
+    ingest('bind', { ticket_id: child.id, project_id: 'demo', handoff_id: null }, { session_id: 'sess-crit', ticket_id: child.id });
+    ingest('prompt', { title_candidate: `Run the change ${M}`, length: 20 }, { session_id: 'sess-crit' });
+    ingest('stop', { preview: `I synced pay-stg ${M}`, complete: false, length: 30 }, { session_id: 'sess-crit' });
+    const session = [...b.w.state.sessions.values()].find((s) => s.host_session_id === 'sess-crit');
+    assert.ok(session && session.ticket_ids.includes(child.id) && String(session.last_checkpoint_preview).includes(M));
+    // a run on the child: its final message carries the marker
+    const rid2 = '22222222-0000-4000-8000-0000000000a2';
+    b.request(rid2, { target_id: child.id, expected_revision: child.revision, payload: analyse });
+    b.w.tick();
+    const hid2 = b.w.state.requests.get(rid2).result.handoff_id;
+    recordResult(b.w, hid2, parseAgentResult({ text: `Final message ${M}\n\`\`\`json\n${JSON.stringify({ summary: `Synced ${M}` })}\n\`\`\``, is_error: false, session_id: 's2' }), { state: 'done' });
+    b.w.flushRequested = true;
+    b.w.flushNotes();
+    const jobs = createJobs({ providers: null });
+    await jobs.digest(b.w, { settings: { to: ['vault-daily'], day: 'today' }, due_at: b.iso() });
+    const files = [];
+    const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else files.push(p); } };
+    walk(b.storePath);
+    const daily = files.filter((f) => f.includes(`${path.sep}daily${path.sep}`));
+    assert.ok(daily.length, 'the digest was written to the vault');
+    assert.match(fs.readFileSync(daily[0], 'utf8'), /LOCAL-a-00000001/, 'the parent ticket is in the digest');
+    for (const f of files) {
+      const text = fs.readFileSync(f, 'utf8');
+      assert.equal(text.includes(M), false, `${path.relative(b.storePath, f)} names the local-only ticket's marker`);
+      assert.equal(text.includes(child.key), false, `${path.relative(b.storePath, f)} names the local-only ticket's key`);
+    }
+    assert.ok(files.some((f) => f.includes(`${path.sep}sessions${path.sep}`)), 'the session note itself is still written');
+  } finally { await b.w.stop(); }
 });

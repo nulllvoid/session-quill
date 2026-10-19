@@ -61,7 +61,7 @@ Autonomous runs: an agent run can use your connected tools and read production l
 
 - Static exports, the mirror, publisher payloads, tracker push bodies and vault notes use allow-lists. None of the following ever leaves the machine:
   - attempts, learnings, critical changes and their specs, action pins, scope names and targets, the ledger, `prod_effects`, the inventory, the credential report or memory;
-  - local-only tickets (with their runs and notes).
+  - local-only tickets (with their runs and notes): the daily digest leaves them out entirely, and a session that worked on one keeps no prompt title or final message in its vault note.
 
   Exports carry only counts, the recorded stage and `scope_count`. A sentinel test enforces this.
 - Inside any agent run the `quill` CLI refuses every mutating command (`cli-in-run`). Approving a run's critical change, approving or editing memory, and resuming a scoped run are owner dashboard actions only: they are honoured only when the authenticated dashboard server journaled the request, never on an actor claim, so the CLI and ingress requests are refused whatever actor they name (ADR 0026 amends ADR 0017 and ADR 0025; ADR 0028 amends ADR 0025).

@@ -76,11 +76,25 @@ export function renderTicketNote(ticket, { state, authored = {} } = {}) {
   return `---\n${stringifyYaml(frontmatterFor(ticket, state))}---\n## Summary\n${summary}${blocks}## Notes\n${notes}`;
 }
 
+// R60: a session that was bound to a local-only ticket (an approved critical change's run) carries
+// that ticket's work in its prompt title and final message, so its note keeps neither; ids of
+// local-only tickets are left out of the front matter, as the export drops them (sanitizeSnapshot).
+const SESSION_TEXT_FIELDS = ['title', 'last_checkpoint_preview', 'last_checkpoint_id', 'unbound_work'];
+const WITHHELD = '_withheld: this session worked on a local-only ticket_';
+
 export function renderSessionNote(session, { state }) {
   const tickets = session.ticket_ids.map((id) => state.tickets.get(id)).filter((t) => t && hasVaultNote(t));
+  const local = (id) => !!id && !hasVaultNote(state.tickets.get(id));
+  const touchesLocal = (session.ticket_ids ?? []).some(local) || local(session.current_ticket_id) || (session.bindings ?? []).some((b) => local(b.ticket_id));
   const fm = { ...session };
   delete fm.run_notes;
   delete fm.critical_spec;
+  if (touchesLocal) {
+    for (const k of SESSION_TEXT_FIELDS) delete fm[k];
+    fm.ticket_ids = (session.ticket_ids ?? []).filter((id) => !local(id));
+    if (local(session.current_ticket_id)) fm.current_ticket_id = null;
+    fm.bindings = (session.bindings ?? []).map((b) => (local(b.ticket_id) ? { ...b, ticket_id: null } : b));
+  }
   const body = [
     `## Session ${session.host_session_id}${session.agent_id ? ` / agent ${session.agent_id}` : ''}`,
     `- State: ${session.state}${session.ended_at ? ` (ended ${session.ended_at})` : ''}`,
@@ -96,7 +110,7 @@ export function renderSessionNote(session, { state }) {
     ...(tickets.length ? tickets.map((t) => `- [[${safeInline(t.key)}]] ${safeInline(t.title)} — ${t.status}`) : ['- none']),
     '',
     '### Last checkpoint',
-    session.last_checkpoint_preview ? safeInline(session.last_checkpoint_preview) : '_none_',
+    touchesLocal ? WITHHELD : session.last_checkpoint_preview ? safeInline(session.last_checkpoint_preview) : '_none_',
     '',
   ].join('\n');
   return `---\n${stringifyYaml(fm)}---\n${block('session', body)}## Notes\n\n`;
