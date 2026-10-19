@@ -178,6 +178,30 @@ test('default protected branches without ctx.isProtectedBranch, and a custom pre
   assert.equal(classifyCall({ tool_name: 'Bash', tool_input: { command: 'git push' } }, noBranch).scope, 'git.protected', 'unknown push target is refused');
 });
 
+test('PowerShell words take \\ as a path separator on macOS and Linux too; Bash words do not', () => {
+  // pwsh accepts \ as a separator on every platform, so a POSIX run reads `esc\..\x` as a climb
+  const posix = { ...baseCtx, cwd: '/work/repo', home: '/home/dev', env: { HOME: '/home/dev' } };
+  const ps = (command) => classifyCall({ tool_name: 'PowerShell', tool_input: { command } }, posix);
+  const climb = /has '\.\.' after a directory name/;
+  for (const command of ['Get-Content esc\\..\\credentials', 'Set-Location esc\\..; Get-Content credentials', 'Push-Location esc\\..', "bash -c \"pwsh -c 'Get-Content a\\..\\b'\""]) {
+    const r = command.startsWith('bash') ? classifyCall({ tool_name: 'Bash', tool_input: { command } }, posix) : ps(command);
+    assert.equal(r.class, 'unparseable', command);
+    assert.match(r.reason, climb, command);
+  }
+  assert.deepEqual(ps('Get-Content ~\\.aws\\credentials').readSpecs, [{ path: '/home/dev/.aws/credentials', root: '/', segs: ['home', 'dev', '.aws', 'credentials'], dialect: 'powershell' }]);
+  assert.deepEqual(ps('Get-Content $env:HOME\\.aws\\x').readSpecs.map((s) => s.path), ['/home/dev/.aws/x']);
+  // a link's relative target is resolved where the link is (R17.4), with \ separating names
+  const link = ps('New-Item -ItemType SymbolicLink -Path src\\lnk -Target ..\\..\\outside');
+  assert.deepEqual(link.writeSpecs.map((s) => s.path).sort(), ['/outside', '/work/outside', '/work/repo/src/lnk']);
+  // a later leading `..` is applied after the cd, as Bash's would be (R19.1)
+  const cds = ps('Set-Location L; Set-Location ..\\esc; Get-Content ..\\secret.txt');
+  const same = classifyCall({ tool_name: 'Bash', tool_input: { command: 'cd L; cd ../esc; cat ../secret.txt' } }, posix);
+  assert.deepEqual(cds.readSpecs.map(({ dialect, ...s }) => s), same.readSpecs.map(({ dialect, ...s }) => s));
+  // Bash keeps \ as an escape or a literal character
+  const bash = classifyCall({ tool_name: 'Bash', tool_input: { command: "cat 'esc\\..\\credentials'" } }, posix);
+  assert.deepEqual(bash.readSpecs.map((s) => s.segs), [['esc\\..\\credentials']]);
+});
+
 test('tokenize unwraps wrappers into segments', () => {
   assert.deepEqual(tokenize('sh -c "kubectl get pods | grep x"', 'bash'), [['kubectl', 'get', 'pods'], ['grep', 'x']]);
   assert.deepEqual(tokenize('& kubectl.exe delete pod p; Get-Date', 'powershell'), [['kubectl.exe', 'delete', 'pod', 'p'], ['Get-Date']]);

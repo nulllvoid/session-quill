@@ -212,6 +212,9 @@ function expandLiteral(word, ctx, kind) {
       p = t + p.slice(4);
     }
   }
+  // PowerShell on macOS and Linux also takes \ as a path separator, so a PowerShell word's
+  // backslashes separate names there too (fail-safe: `esc\..\x` climbs; it is not one odd name)
+  if (ctx.psBackslash) p = p.replace(/\\/g, '/');
   return p;
 }
 
@@ -252,7 +255,7 @@ export const CLIMB_REASON_RE = /^path (.*) has '\.\.' after a directory name$/s;
 function climbProblem(word, ctx, kind) {
   if (typeof word !== 'string' || !word.includes('.')) return null;
   const win = isWin(ctx);
-  const full = expandLiteral(word, ctx, kind) ?? word;
+  const full = expandLiteral(word, ctx, kind) ?? (ctx.psBackslash ? word.replace(/\\/g, '/') : word);
   // the root (`/`, `C:\`, `\\server\share\`, or the drive of a drive-relative `C:..\x`) is not a
   // name: `..` right after it is a leading one
   const text = full.slice((win ? path.win32 : path.posix).parse(full).root.length);
@@ -441,7 +444,9 @@ function backstop(name, seg, ctx) {
   return null;
 }
 
-function helpers(seg, ctx, st) {
+function helpers(seg, shellCtx, st) {
+  // a PowerShell word's paths take \ as a separator on every platform (see expandLiteral)
+  const ctx = seg.dialect === 'powershell' && !isWin(shellCtx) ? { ...shellCtx, psBackslash: true } : shellCtx;
   // `base` resolves relative paths somewhere other than the current directory (git -C, a link's
   // directory); null = unknown. `baseRaw` is the same directory as rawPath() describes it; by
   // default the tracked cwd's when `base` is the cwd, else unknown (the resolved path is scanned).
@@ -546,7 +551,7 @@ function helpers(seg, ctx, st) {
     // A nested script starts in the caller's directory, and the files it reads or writes are
     // reported with the caller's.
     script(text, dialect, base = st.cwd, baseRaw = undefined) {
-      const res = classifyScript(text, dialect, ctx, st.depth + 1, base, rawOf(base, baseRaw));
+      const res = classifyScript(text, dialect, shellCtx, st.depth + 1, base, rawOf(base, baseRaw));
       if (res.paths) st.paths.push(...res.paths);
       if (res.readPaths) st.readPaths.push(...res.readPaths);
       if (res.readSpecs) st.readSpecs.push(...res.readSpecs);
