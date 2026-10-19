@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sanitizeSnapshot } from './sanitize.js';
+import { sanitizeSnapshot, isExportableTicket } from './sanitize.js';
 
 const UI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ui');
 const LINE_SEP = String.fromCharCode(0x2028);
@@ -64,5 +64,6 @@ export function writeStaticHtml(snapshot, outPath, options = {}) {
   const html = buildStaticHtml(snapshot, options);
   fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
   fs.writeFileSync(outPath, html);
-  return { path: path.resolve(outPath), bytes: Buffer.byteLength(html), ticket_count: snapshot.tickets.length };
+  // M10: the count is of what the file holds; local-only tickets are never in it
+  return { path: path.resolve(outPath), bytes: Buffer.byteLength(html), ticket_count: snapshot.tickets.filter(isExportableTicket).length };
 }
