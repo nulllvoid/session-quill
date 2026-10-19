@@ -874,7 +874,11 @@ function scopeCovers(s, p, c, g = {}, e = {}, { where = true } = {}) {
   if (!where) return hostsAndPatterns(check, m, p);
   const root = typeof g.checkoutRoot === 'string' && g.checkoutRoot ? g.checkoutRoot : strings(g.readableRoots)[0];
   const cwd = typeof e.cwd === 'string' && e.cwd ? e.cwd : null;
-  if (!root || !cwd || !isWithin(path.resolve(cwd), path.resolve(root))) return 'the command does not run inside the run\'s checkout';
+  // Judged on real paths: the hook reports the cwd as the OS gives it (macOS: /private/var for a
+  // checkout recorded under /var), and a link inside the checkout may lead out of it.
+  const realRoot = root ? canonicalRoot(path.resolve(root)) : null;
+  const realCwd = cwd ? canonicalPath(path.resolve(cwd)) : null;
+  if (!realRoot || !realCwd || !isWithin(realCwd, realRoot)) return 'the command does not run inside the run\'s checkout';
   // R26.2: every file the request reads through an option value is inside the checkout or this
   // run's directory (links resolved); a readable root elsewhere is not enough.
   const vars = isPlainObject(e.vars) ? e.vars : {};

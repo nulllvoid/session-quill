@@ -903,6 +903,22 @@ test('a leading .. is resolved from the real path of the directory a cd moved to
   }
 });
 
+test('a scope covers a call by where it really runs: the checkout through a link, never a link out of it', (t) => {
+  // macOS: a checkout recorded under /var/folders/… runs in /private/var/folders/…, which is what
+  // the hook reports as its cwd
+  const alias = at('checkout-alias');
+  fs.symlinkSync(checkout, alias, 'junction');
+  t.after(() => fs.rmSync(alias, { force: true }));
+  const grant = { scopes: [ARGO_STG], actionPins: [PIN_STG] };
+  const pinned = bash('argocd app sync pay-stg');
+  assert.equal(run(pinned, { grant }).decision, 'allow', 'the plain case');
+  assert.equal(run(pinned, { grant: { ...grant, checkoutRoot: alias } }).decision, 'allow', 'the grant names the checkout through a link, the hook its real path');
+  assert.equal(run(pinned, { grant, env: { cwd: alias } }).decision, 'allow', 'the hook names the checkout through a link');
+  const out = run(pinned, { grant, env: { cwd: path.join(checkout, 'esc') } });
+  assert.equal(out.decision, 'deny', 'a directory inside the checkout that is a link to somewhere else');
+  assert.match(out.reason, /does not run inside the run's checkout/);
+});
+
 test('a symbolic link target is resolved where the link is, also inside an existing directory (R17.4)', (t) => {
   // `ln -s ../../q x/y/L` where x/y/L is a junction to the shallow directory sh: the link lands
   // in sh, and its target climbs from there
