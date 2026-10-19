@@ -89,6 +89,11 @@ const CLIMBS = /^QUILL_DENIED unparseable: the path .* has '\.\.' after a direct
 // outside the writable roots (the fixture's outside directories sit under the protected Quill home)
 const OUT_W = /^QUILL_DENIED (outside-writable|protected-path): /;
 const critical = (scope, target) => new RegExp(`^QUILL_CRITICAL_CHANGE scope=${scope.replace(/\./g, '\\.')} target=${target === undefined ? '' : target.replace(/\./g, '\\.')}`);
+// A row option: cmd.exe forms that only mean what the row says on Windows. cmd does not exist on
+// macOS or Linux, where the fixture's absolute paths start with / (which cmd reads as a switch) and
+// \ is part of a name in every shell but PowerShell.
+const CMD_ONLY = 'cmd.exe exists only on Windows';
+const skipOn = (opts) => (opts.winOnly && process.platform !== 'win32' ? opts.winOnly : false);
 
 // Install root used as the checkout (Review Focus 2): edits must work, the guard code must not change.
 const IN_INSTALL = {
@@ -326,7 +331,7 @@ const ROWS = [
   ['R19.4: tar with a bundle it does not follow', bash('tar cbf 20 out.tar src'), {}, denied('unparseable')],
 
   // fix round 5, R19.5: cmd move with one operand
-  ['R19.5: cmd move, one operand, read-only run', bash(`cmd /c 'move "${path.join(tmp, 'note.txt')}"'`), {}, denied('no-edit-permission')],
+  ['R19.5: cmd move, one operand, read-only run', bash(`cmd /c 'move "${path.join(tmp, 'note.txt')}"'`), { winOnly: CMD_ONLY }, denied('no-edit-permission')],
 
   // fix round 5, R19.6: hidden command text
   ['R19.6: trap pushing to main', bash("trap 'git push origin HEAD:main' EXIT"), { grant: { permissions: PUSH } }, denied('protected-branch')],
@@ -369,22 +374,22 @@ const ROWS = [
   ['R17.4: ln -s with a relative target into the checkout', bash('ln -s ../src/app.js src/again.js'), { grant: { permissions: EDIT } }, 'allow'],
   ['R17.4: ln -s into an existing directory', bash('ln -s ../../outside src'), { grant: { permissions: EDIT } }, OUT_W],
   ['R17.4: New-Item SymbolicLink with a target relative to the link', pwsh('New-Item -ItemType SymbolicLink -Path src\\lnk -Target ..\\..\\outside'), { grant: { permissions: EDIT } }, OUT_W],
-  ['R17.4: mklink with a target relative to the link', bash(`cmd /c 'mklink /D src\\lnk ..\\..\\outside'`), { grant: { permissions: EDIT } }, OUT_W],
+  ['R17.4: mklink with a target relative to the link', bash(`cmd /c 'mklink /D src\\lnk ..\\..\\outside'`), { grant: { permissions: EDIT }, winOnly: CMD_ONLY }, OUT_W],
 
   // fix round 4, R17.5: cmd copy concatenation
   ['OOS-C3: copy a+<outside file>', bash(`cmd /c 'copy /b src\\app.js+"${path.join(outside, 'credentials')}" out.txt'`), { grant: { permissions: EDIT } }, denied('outside-readable')],
   ['OOS-C3: copy a+<outside file> from PowerShell', pwsh(`cmd /c "copy /b src\\app.js+\`"${path.join(outside, 'credentials')}\`" out.txt"`), { grant: { permissions: EDIT } }, denied('outside-readable')],
-  ['OOS-C3: copy a + b with spaces', bash(`cmd /c 'copy src\\app.js + "${path.join(outside, 'credentials')}" /b out.txt'`), { grant: { permissions: EDIT } }, denied('outside-readable')],
+  ['OOS-C3: copy a + b with spaces', bash(`cmd /c 'copy src\\app.js + "${path.join(outside, 'credentials')}" /b out.txt'`), { grant: { permissions: EDIT }, winOnly: CMD_ONLY }, denied('outside-readable')],
   ['OOS-C3: copy a+b with no destination writes into a', bash(`cmd /c 'copy src\\app.js+"${path.join(outside, 'credentials')}"'`), { grant: { permissions: EDIT } }, denied('outside-readable')],
   ['OOS-C3: copy a+b of plain files', bash(`cmd /c 'copy /b src\\app.js+src\\app.js out.txt'`), { grant: { permissions: EDIT } }, 'allow'],
 
   // fix round 4, R17.6: copies and moves with no destination land in the current directory
   ['OOS-I: Copy-Item .mcp.json, no destination', pwsh(`Copy-Item ${q(path.join(tmp, '.mcp.json'))}`), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
   ['OOS-I: Copy-Item -Recurse .claude, no destination', pwsh(`Copy-Item -Path ${q(path.join(tmp, 'stage', '.claude'))} -Recurse -Force`), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
-  ['OOS-I: cmd copy .mcp.json, one operand', bash(`cmd /c 'copy "${path.join(tmp, '.mcp.json')}"'`), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
+  ['OOS-I: cmd copy .mcp.json, one operand', bash(`cmd /c 'copy "${path.join(tmp, '.mcp.json')}"'`), { grant: { permissions: EDIT }, winOnly: CMD_ONLY }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
   ['OOS-I: Move-Item, no destination, read-only run', pwsh(`Move-Item ${q(path.join(tmp, 'note3.txt'))}`), {}, denied('no-edit-permission')],
   ['OOS-I: Copy-Item, no destination, read-only run', pwsh(`Copy-Item ${q(path.join(tmp, 'note2.txt'))}`), {}, denied('no-edit-permission')],
-  ['OOS-I: cmd copy, one operand, read-only run', bash(`cmd /c 'copy "${path.join(tmp, 'note.txt')}"'`), {}, denied('no-edit-permission')],
+  ['OOS-I: cmd copy, one operand, read-only run', bash(`cmd /c 'copy "${path.join(tmp, 'note.txt')}"'`), { winOnly: CMD_ONLY }, denied('no-edit-permission')],
   ['OOS-I: xcopy, one operand', bash(`cmd /c 'xcopy "${path.join(tmp, 'stage')}" /E /I'`), { grant: { permissions: EDIT } }, denied('protected-path')],
   ['OOS-I: robocopy without a destination', bash(`robocopy ${q(path.join(tmp, 'stage'))}`), {}, /^QUILL_DENIED (no-edit-permission|protected-path): /],
   ['R17.6: Copy-Item -Path with a positional destination', pwsh(`Copy-Item -Path ${q(path.join(tmp, '.mcp.json'))} .mcp.json`), { grant: { permissions: EDIT } }, denied('protected-path')],
@@ -402,7 +407,7 @@ const ROWS = [
   ['N3: cmd < wildcard beside the junction', bash(`cmd /c 'type "es<"'`), {}, denied('outside-readable')],
   ['N3: cmd > wildcard beside the junction', pwsh('cmd /c "type cred^>ntials"'), {}, denied('outside-readable')],
   ['N3: cmd copy reads its source', bash(`cmd /c 'copy "es>" out.txt'`), { grant: { permissions: EDIT } }, denied('outside-readable')],
-  ['N3: cmd > wildcard over plain files', bash(`cmd /c 'type "src\\app.j>"'`), {}, 'allow'],
+  ['N3: cmd > wildcard over plain files', bash(`cmd /c 'type "src\\app.j>"'`), { winOnly: CMD_ONLY }, 'allow'],
 
   // fix round 3, P2: a rename's destination is a write path
   ['P2: cmd ren to .claude', bash('cmd /c ren x .claude'), { grant: { permissions: EDIT } }, /^QUILL_DENIED protected-path: .*needs a full-access run or a manual edit/],
@@ -566,7 +571,7 @@ function run(c, opts = {}) {
 
 for (const row of ROWS) {
   const [name, c, opts, expected] = row;
-  test(name, () => {
+  test(name, { skip: skipOn(opts) }, () => {
     const r = run(c, opts);
     assert.ok(r.classification && typeof r.classification.class === 'string', 'returns the classification');
     if (expected === 'allow') {
@@ -581,7 +586,7 @@ for (const row of ROWS) {
 
 test('deny reasons tell the agent what to do instead', () => {
   for (const [name, c, opts, expected] of ROWS) {
-    if (expected === 'allow') continue;
+    if (expected === 'allow' || skipOn(opts)) continue;
     const { reason } = run(c, opts);
     assert.match(reason, /^QUILL_(DENIED [a-z-]+|CRITICAL_CHANGE scope=\S+ target=\S*): \S/, name);
     assert.ok(reason.length > 90, `${name}: reason too short to act on: ${reason}`);
