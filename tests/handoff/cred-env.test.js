@@ -436,7 +436,13 @@ test('report.residual lists owner credentials that exist and no variable can red
   assert.deepEqual(report.residual.map((r) => r.split(':')[0]), ['ssh', 'netrc', 'azure', 'aws']);
   const win = build(t, { baseEnv: { PATH: 'C:\\bin', USERPROFILE: home }, platform: 'win32' });
   assert.ok(win.report.residual.some((r) => /Windows Credential Manager/.test(r)));
-  assert.ok(win.report.residual.some((r) => r.startsWith('ssh:')), 'USERPROFILE is the profile on Windows');
+  // a win32 build joins paths the Windows way, which names this temp home only on Windows
+  if (process.platform === 'win32') assert.ok(win.report.residual.some((r) => r.startsWith('ssh:')), 'USERPROFILE is the profile on Windows');
+  // macOS and Linux: HOME is the profile, and USERPROFILE (set by some tools) is not
+  const posix = build(t, { baseEnv: { PATH: '/usr/bin', USERPROFILE: home }, platform: 'darwin' });
+  assert.equal(posix.report.residual.some((r) => r.startsWith('ssh:')), false, 'USERPROFILE is not the profile on macOS or Linux');
+  assert.ok(posix.report.residual.some((r) => /login keychain/.test(r)));
+  assert.ok(build(t, { baseEnv: { PATH: '/usr/bin', HOME: home }, platform: 'darwin' }).report.residual.some((r) => r.startsWith('ssh:')), 'HOME is the profile on macOS');
 });
 
 test('a cloud.write scope with Azure client credentials is not forced onto the CLI credential (review N3)', (t) => {
