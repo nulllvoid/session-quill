@@ -28,6 +28,7 @@ import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, p
 import { interruptedEffects, batchBudgetUsd, batchBudgetReached, resumePrompt, carrySession, claudeConfigRoot } from './resume.js';
 import { createTicketWorktreeSweep } from './ticket-worktrees.js';
 import { takeSnapshot, archiveSnapshots } from './snapshots.js';
+import { patchFields, criticSettings, runCritic, criticFields } from './critic.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -279,19 +280,24 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     await takeSnapshot(worker, h.id, 'agent');
     let quality = null;
     let gate = null;
+    let critic = null;
     if (entry && !entry.reason && !outcome.error && outcome.code === 0) {
       const first = outcome;
       ({ outcome, quality } = await improve(worker, entry, outcome));
       // A run that may edit source is checked by the worker's own test gate (ADR 0023).
       if (!entry.reason && entry.permissions.edit_source) ({ outcome, gate } = await testGate(worker, entry, current, outcome));
+      // ADR 0040: then, when the repository opts in, the critic reviews it (opinion, never a check).
+      if (!entry.reason && gate) critic = await reviewRun(worker, entry, current, gate);
       // A deadline or cancellation during a follow-up keeps the first reply as the partial result.
-      if (entry.reason) { outcome = first; gate = null; }
+      if (entry.reason) { outcome = first; gate = null; critic = null; }
     }
     running.delete(h.id);
     // Measured, not estimated (ADR 0022): agent time covers every turn, including the self-check
     // and the test repair turn; the gate's own test runs are test time.
     const testMs = gate && Number.isFinite(gate.total_ms) ? gate.total_ms : null;
-    const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}) } : null;
+    const criticMs = critic && Number.isFinite(critic.ms) ? critic.ms : null;
+    const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0) - (criticMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}), ...(criticMs !== null ? { critic_ms: criticMs } : {}) } : null;
+    const criticExtra = critic ? criticFields(critic, worker.env, { runId: h.id }) : {};
     if (gate) delete gate.total_ms;
     // A turn that produced no result event (killed by the deadline or a cancel) leaves usage unknown: recorded as null, not omitted.
     const usage = entry && entry.env ? { num_turns: entry.usage ? entry.usage.turns : null, cost_usd: entry.usage && entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !((entry.spawnExtras && entry.spawnExtras.childEnv) ?? { ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
@@ -344,7 +350,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
     // ticket change, only the diff for the owner to inspect and the reason (ADR 0023).
     if (gate && (gate.status === 'failed' || gate.status === 'timeout')) {
-      const extra = { ...(await fixExtras(worker, current)), test_gate: gate };
+      const extra = { ...(await fixExtras(worker, current)), test_gate: gate, ...criticExtra };
       if (quality) extra.result_quality = { ...quality, problems: parsed.problems };
       const why = gate.status === 'timeout' ? 'did not finish in time' : `exited with code ${gate.exit_code ?? 'unknown'}`;
       await record(worker, h.id, parsed, { state: 'failed', error: { code: gate.status === 'timeout' ? 'tests-timeout' : 'tests-failed', message: `the test command ${why}${gate.attempts > 1 ? ' again after one repair turn' : ' and no repair turn was possible'}; no fix is suggested` }, extra });
@@ -352,6 +358,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     }
     const extras = await fixExtras(worker, current, { finalize: true, gate });
     if (gate) extras.test_gate = gate;
+    Object.assign(extras, criticExtra);
     if (quality) extras.result_quality = { ...quality, problems: parsed.problems };
     // Only a run that finished cleanly changes files; a failed, cancelled or timed-out one leaves
     // every original untouched.
@@ -523,6 +530,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       fs.mkdirSync(path.dirname(patchPath), { recursive: true });
       fs.writeFileSync(patchPath, patch);
       out.patch_path = patchPath;
+      // ADR 0040: the patch as a blob too, so the owner's dashboard can show it grouped.
+      Object.assign(out, patchFields(patch, worker.env));
     } catch (err) {
       out.uncertain_effects = [...(h.uncertain_effects ?? []), `could not collect diff: ${err.message}`];
       return out;
@@ -583,6 +592,28 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     }
     if (entry.reason) return { outcome, gate: null };
     return { outcome, gate: { status: result.status, command, exit_code: result.exit_code, ms: result.ms, tail: result.tail, attempts, repaired: attempts > 1 && result.status === 'passed', total_ms: total } };
+  }
+
+  // ADR 0040: with `[repos.<id>] critic = true`, a fresh read-only process (a new session: never a
+  // resume of the run's own) reviews a fix whose worker tests passed. It reads the run's checkout
+  // with the read-only profile and the run's own environment when it has one, its spend counts
+  // against the run's cap, and nothing it does changes how the run ends. Null when not enabled.
+  async function reviewRun(worker, entry, h, gate) {
+    const repo = ctx.config.repos[h.repo_id];
+    if (!criticSettings(repo).enabled) return null;
+    const spawn = (prompt, { maxTurns, maxBudgetUsd }) => {
+      const run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools: selfCheckTools({ read_source: true }), env: entry.env, childEnv: (entry.spawnExtras && entry.spawnExtras.childEnv) ?? null, permissions: { read_source: true }, logPath: entry.logPath, model, maxTurns, maxBudgetUsd, permissionMode: 'dontAsk', keepCredentials: false });
+      // Tracked like any turn of the run, so a cancel or a stop also stops the critic.
+      Object.assign(entry, { child: run.child, kill: null, done: run.done });
+      return run;
+    };
+    const timeLeftMs = entry.deadlineAt ? Date.parse(entry.deadlineAt) - Date.parse(worker.now()) : Infinity;
+    let result;
+    try {
+      result = await runCritic({ run: worker.state.handoffs.get(h.id) ?? h, ticket: worker.state.tickets.get(h.ticket_id) ?? { key: '', title: '' }, repo, gate, recipe: catalogFor(worker).builtin('critic-review'), budgetUsd: remainingUsd(entry), timeLeftMs, spawn, kill: killTree });
+    } catch (err) { result = { status: 'failed', reason: `the critic step failed: ${err.message}`, findings: [], ms: null, outcome: null }; }
+    addUsage(entry, result.outcome);
+    return result;
   }
 
   async function dispatch(worker, h) {

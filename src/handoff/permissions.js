@@ -120,6 +120,8 @@ function plannedList(raw, access, permissions) {
 function pinRequirements(recipe, access, scopes, actionPins) {
   const pins = Array.isArray(actionPins) ? actionPins : [];
   const requires = recipe && Array.isArray(recipe.requires) ? recipe.requires : [];
+  // ADR 0040: the critic reviews a fix run's diff inside that run; nothing can queue it as a run.
+  if (requires.includes('run_diff')) throw new TrackerError('recipe-needs-run-diff', `recipe ${recipe.name} runs only as the critic step of a fix run whose tests passed (set critic = true for the repository); it cannot be queued`);
   if (requires.includes('action_pin') && !pins.length) throw new TrackerError('recipe-needs-approval', `recipe ${recipe.name} runs only as an approved critical change: approve its proposal in Runs → Needs you on the dashboard`);
   if (requires.includes('scopes') && !scopes.length) throw new TrackerError('recipe-needs-scopes', `recipe ${recipe.name} needs at least one write scope`);
   if (!pins.length) return;

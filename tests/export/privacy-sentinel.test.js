@@ -38,6 +38,8 @@ function fixture() {
     possible_writes: [`kubectl apply on ${S}-ctx may have run`, `mcp__${S}__editIssue on X-1 may have run`, `a ${S}.write call may have run`],
     // Run snapshots (ADR 0035): refs, trees, commits and labels stay on the owner's dashboard.
     snapshots: [{ id: `snap-${S}`, n: 0, step: 'agent', label: S, tree: S, commit: S, ref: `refs/quill/snapshots/${S}/00-agent`, files_changed: 1, at: 'T', restored_at: 'T', archived_at: null, request_id: S, restores: S, restore: { request_id: S, pre_restore_id: S, restored: 1, removed: 0, skipped: 0 } }],
+    // ADR 0040: the patch and the critic's notes are blobs on the owner's dashboard; refs, status and reason stay local.
+    patch_ref: S, patch_too_large: true, critic_ref: S, critic_status: 'warnings', critic_count: 2, critic_reason: S,
   });
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
   s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
@@ -88,7 +90,7 @@ test('exported handoffs carry counts and the stage, not the records', () => {
   forged.handoffs[0].scope_drift = `src/${S}.js`;
   assert.equal('scope_drift' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a whole-number drift count travels');
   for (const k of ['planned_paths', 'drift']) assert.equal(k in sanitizeSnapshot(fixture(), ALL).sessions[0], false, k);
-  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes', 'planned_paths']) assert.equal(k in out, false, k);
+  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes', 'planned_paths', 'patch_ref', 'patch_too_large', 'critic_ref', 'critic_status', 'critic_count', 'critic_reason']) assert.equal(k in out, false, k);
   assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
   assert.ok(Object.keys(out).every((k) => HANDOFF_EXPORT_FIELDS.includes(k)));
 });
