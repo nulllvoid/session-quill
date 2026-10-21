@@ -22,7 +22,7 @@ Rulings that constrain the design: blunt, exact fail-safe rules rather than mode
    - an allowed `guard` line whose `argv_sha` is the twin's hash, and
    - after it, the latest `tool_result` line with the same `tool_use_id` reporting `exit_code` 0.
 
-   The refusal is `QUILL_DENIED dry-run-required: run <twin> first, with the <tool> tool…`, or, when the pin has no twin, a `dry-run-required` reason that says so. The guard hook writes `argv_sha` on every ledger line of such a run: the SHA-256 of the canonical JSON of the tool name and the call's one plain command (argv, redirects, stdin) as the guard parses it. The stream collector already writes each shell result with its exit code (`src/handoff/stream.js`). The ledger is a protected run-dir file, so a run cannot write either kind of line itself. The ledger is read only for a pinned k8s or db write, so every other call keeps the guard's usual cost. A ledger that cannot be read refuses.
+   The refusal is `QUILL_DENIED dry-run-required: run <twin> first, with the <tool> tool…`. A pin with no twin decides as in 1.1 (see the amendment below). The guard hook writes `argv_sha` on every ledger line of such a run: the SHA-256 of the canonical JSON of the tool name and the call's one plain command (argv, redirects, stdin) as the guard parses it. The stream collector already writes each shell result with its exit code (`src/handoff/stream.js`). The ledger is a protected run-dir file, so a run cannot write either kind of line itself. The ledger is read only for a pinned k8s or db write, so every other call keeps the guard's usual cost. A ledger that cannot be read refuses.
 
 3. **Leases on the dashboard approval.** The critical change item gets a **Valid for** select (Whole run by default, 5 min, 15 min, 1 h). The approve-run request carries `ttl_minutes` ∈ {5, 15, 60}, or nothing for the whole run. Anything else is `invalid-ttl`, both at submit and again when the worker evaluates the request. So is a `ttl_minutes` on a page proposal. The run records `lease_minutes`. Dispatch writes `notAfter` = dispatch time + lease into the grant, so it is frozen by the grant's hash like everything else there. After `notAfter` the guard refuses every scoped write and pinned action with `QUILL_DENIED lease-expired`, before any coverage or preflight check. Reads, git under its own permissions and the run's scratch files are not scoped and still pass. A `notAfter` that does not parse counts as passed. A resumed critical run keeps `lease_minutes`, counted from its own dispatch. More time needs a new approval, which means a new run.
 
@@ -53,11 +53,11 @@ So the lease is chosen once, on the dashboard, and frozen. No CLI path grants, e
 - **gh:** no dry-run mode.
 - **aws:** `--dry-run` exists only for EC2 APIs, and the classifier does not read it as a read elsewhere.
 
-Their pinned writes are unaffected by `require_dry_run`, whatever their scope. Helm and the other `k8s.write`/`db.write` tools (mysql, redis-cli, MCP tools) have no twin under this rule, so they are refused while the setting is on. The owner can set `[critical] require_dry_run = false` for them. The item says so before approval.
+Their pinned writes are unaffected by `require_dry_run`, whatever their scope. Helm and the other `k8s.write`/`db.write` tools (mysql, redis-cli, MCP tools) have no twin under this rule, so they run as pinned, without a dry run, as in 1.1. The item shows "No dry run" before approval.
 
 ## Consequences
 
-- Turning on the default changes 1.1 behaviour for critical runs whose pin is a kubectl or psql write: the run needs one more call. A pin without a twin can no longer run until the owner turns the setting off. This is intended: the setting narrows.
+- Turning on the default changes 1.1 behaviour for critical runs whose pin is a kubectl or psql write: the run needs one more call. A pin without a twin is unaffected.
 - An agent that runs the twin and the action in the same message is refused, because the twin's result is not yet in the ledger. The refusal says what to run.
 - A twin must run with the same tool as the pinned call, because the tool name is part of `argv_sha`. Pins are proposed and approved as Bash commands. A PowerShell result carries an exit code only when Claude Code reports one, so a twin run through PowerShell usually never counts. That is fail-safe: the pin stays refused.
 - A twin is matched by exact words. A reordered option is not the twin, as a reordered pin is not the pin (R43).
@@ -69,3 +69,7 @@ Their pinned writes are unaffected by `require_dry_run`, whatever their scope. H
 - Twins for helm, mysql, redis-cli and MCP tools.
 - A lease countdown on the running run's detail. The lease end is in the grant, and the run record has the minutes.
 - Server dry runs that the classifier would have to be widened to read (`rollout restart`, helm).
+
+## Amendment, 21 October 2026
+
+The first version refused every pinned k8s or db write that has no twin while `require_dry_run` was on. That made `kubectl rollout restart`, helm, mysql, redis-cli and MCP pins unapprovable by default, a regression for critical changes that worked in 1.1. The preflight now applies only where a twin exists; a pin without one decides exactly as in 1.1, and the critical change item says "No dry run" so the owner knows before approving. The rule still only narrows: a twin never allows anything the 1.1 guard refused.

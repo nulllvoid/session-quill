@@ -113,12 +113,12 @@ test('a pinned psql statement needs its EXPLAIN twin; the twin is a read', () =>
   assert.notEqual(decide(bash(SQL_TWIN.replace('EXPLAIN', 'EXPLAIN ANALYZE')), dbGrant(), ENV).decision, 'allow');
 });
 
-test('a pinned k8s or db write with no twin is refused while require_dry_run is on', () => {
+test('a pinned k8s or db write with no twin decides as in 1.1 while require_dry_run is on', () => {
   const pin = 'kubectl --context stg rollout restart deployment/api';
-  const r = decide(bash(pin), k8sGrant({ actionPins: [{ scope: 'k8s.write:stg', pin }] }), ENV);
-  assert.equal(r.decision, 'deny');
-  assert.match(r.reason, denied('dry-run-required'));
-  assert.match(r.reason, /has none the guard accepts/);
+  const on = decide(bash(pin), k8sGrant({ actionPins: [{ scope: 'k8s.write:stg', pin }] }), ENV);
+  const off = decide(bash(pin), k8sGrant({ actionPins: [{ scope: 'k8s.write:stg', pin }], requireDryRun: false }), ENV);
+  assert.equal(on.decision, off.decision);
+  assert.doesNotMatch(String(on.reason ?? ''), /dry-run-required/);
 });
 
 test('without requireDryRun in the grant, and for pins outside k8s and db, the 1.1 decision stands', () => {

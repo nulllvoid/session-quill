@@ -575,7 +575,7 @@ const LEASE_CHOICES = [['', 'Whole run'], ['5', '5 min'], ['15', '15 min'], ['60
 function dryRunLine(d) {
   if (!d || typeof d !== 'object') return '';
   if (typeof d.twin === 'string' && d.twin) return `<p class="small">Dry run required in run: the guard refuses the action until <code class="critical-action">${esc(d.twin)}</code> exits 0 in the same run.</p>`;
-  return `<p class="small"><span class="chip warning small">${icon('alert')}Dry run required in run</span> This action has no dry run Quill accepts, so the approved run refuses it while [critical] require_dry_run is on.</p>`;
+  return `<p class="small"><span class="chip warning small">${icon('alert')}No dry run</span> Quill accepts no dry run for this action, so the approved run makes it as pinned, without one.</p>`;
 }
 
 // Whether the ticket already has a run, which an approval would then report instead of queueing.

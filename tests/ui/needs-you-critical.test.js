@@ -112,8 +112,8 @@ test('a pinned k8s or db write shows "Dry run required in run" with its twin as 
   assert.ok(html.includes('<code class="critical-action">kubectl --context stg scale deployment/api --replicas=3 --dry-run=server &lt;b&gt;</code>'));
   const none = snap({ run_proposals: [{ ...proposal, dry_run: { twin: null } }] });
   const nh = proposalItem(none.run_proposals[0], none, { now: NOW });
-  assert.match(nh, /<span class="chip warning small">[^<]*(?:<svg[^]*?<\/svg>)?Dry run required in run<\/span>/);
-  assert.match(text(nh), /has no dry run Quill accepts, so the approved run refuses it while \[critical\] require_dry_run is on/);
+  assert.match(nh, /<span class="chip warning small">[^<]*(?:<svg[^]*?<\/svg>)?No dry run<\/span>/);
+  assert.match(text(nh), /Quill accepts no dry run for this action, so the approved run makes it as pinned, without one/);
   // Not projected (another scope, or require_dry_run off): no note.
   assert.doesNotMatch(proposalItem(snap().run_proposals[0], snap(), { now: NOW }), /Dry run required/);
   // The note is information, so a read-only copy shows it too.

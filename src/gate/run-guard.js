@@ -86,7 +86,6 @@ const REASONS = {
   unknownProd: (why) => `QUILL_DENIED unknown-prod: ${why}; the guard cannot tell what this changes, so it is not allowed. Use a read-only form, or record the change in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.`,
   leaseExpired: (notAfter) => `QUILL_DENIED lease-expired: the owner approved this run's writes only until ${notAfter}, and that time has passed, so no scoped write or pinned action is allowed any more; reads still are. Do not retry or try another route: record in attempts that the approval's time ran out before the action ran, and finish. Only a new approval (a new run) gives more time.`,
   dryRun: (twin, tool, last) => `QUILL_DENIED dry-run-required: run ${twin} first, with the ${tool} tool, exactly as written and on its own${last === undefined ? '' : last === null ? ' (its last run has no recorded exit code)' : ` (its last run exited ${last})`}. This pinned action is allowed only after that server-side dry run finished with exit 0; then run the pinned action exactly as before. Do not change the action itself.`,
-  noTwin: () => 'QUILL_DENIED dry-run-required: this pinned Kubernetes or database write is allowed only after its server-side dry run passed, and it has none the guard accepts (only a kubectl write that takes --dry-run=server, or one psql -c statement that EXPLAIN takes, has one). Do not try a variation: record this in attempts and finish; the owner decides.',
   critical: (change, pins, ambiguous) => `QUILL_CRITICAL_CHANGE scope=${change.scope} target=${change.target ?? 'unknown'}: not granted for this run${pins.length ? ` (it may perform only its approved action, run exactly as written, alone and without environment changes: ${pins.join(' | ')})` : ''}${ambiguous ? `; the granted scope does not cover this command (${ambiguous}): a covered write is one plain command run by its bare name, with a listed write verb and only listed options, naming its one target once` : ''}. ${CRITICAL_TAIL}`,
 };
 
@@ -866,14 +865,15 @@ function leaseProblem(g, e) {
   return REASONS.leaseExpired(typeof g.notAfter === 'string' ? g.notAfter.slice(0, 40) : 'an unreadable time');
 }
 
-// ADR 0031 (FR-3.2): with `requireDryRun` in the grant, a pinned k8s.write or db.write action is
-// refused until the run ledger shows its dry-run twin allowed and finished with exit 0. The ledger
+// ADR 0031 (FR-3.2): with `requireDryRun` in the grant, a pinned k8s.write or db.write action that
+// has a dry-run twin is refused until the run ledger shows that twin allowed and finished with exit 0. The ledger
 // is read only here, for such a pinned write, so other calls keep the guard's usual cost. A ledger
 // that cannot be read refuses.
 function dryRunProblem(p, g, c, vars, home, ctx) {
   if (g.requireDryRun !== true || !DRY_RUN_SCOPES.has(p.scope)) return null;
   const twin = dryRunTwin(c, ctx);
-  if (!twin) return REASONS.noTwin();
+  // A pin with no twin the guard accepts decides as in 1.1 (ADR 0031, amendment of 21 October 2026).
+  if (!twin) return null;
   let file = null;
   try { const id = varOf(vars, 'QUILL_HANDOFF_ID'); file = id ? path.join(handoffRunDir({ QUILL_HOME: varOf(vars, 'QUILL_HOME') ?? path.join(home, '.claude', 'quill') }, id), 'ledger.jsonl') : null; } catch { file = null; }
   const text = file ? readLedgerText(file) : null;
