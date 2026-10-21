@@ -146,6 +146,24 @@ export function applySuggestion(state, ev, m, req, result) {
 
 // The last this-many Run notes are kept per ticket; an older note is dropped when a new one arrives.
 export const RUN_NOTES_MAX = 20;
+// A note holding only dismissal reasons (a run that left no note of its own, ADR 0032) is capped on
+// its own: it never pushes out a note with attempts, lessons or a failure record.
+export const DISMISSAL_NOTES_MAX = 10;
+
+const filled = (v) => Array.isArray(v) && v.length > 0;
+const dismissalOnly = (n) => !filled(n.attempts) && !filled(n.lessons) && !n.failure && !n.withheld;
+
+// The newest RUN_NOTES_MAX real notes and the newest DISMISSAL_NOTES_MAX dismissal-only ones, in
+// arrival order: each kind only ever evicts its own oldest.
+function capRunNotes(list) {
+  let real = list.filter((n) => !dismissalOnly(n)).length;
+  let quiet = list.length - real;
+  return list.filter((n) => {
+    if (dismissalOnly(n)) { if (quiet > DISMISSAL_NOTES_MAX) { quiet -= 1; return false; } return true; }
+    if (real > RUN_NOTES_MAX) { real -= 1; return false; }
+    return true;
+  });
+}
 
 function appendRunNote(ticket, note, runId) {
   const entry = {
@@ -165,7 +183,7 @@ function appendRunNote(ticket, note, runId) {
   if (previous && Array.isArray(previous.dismissals)) entry.dismissals = previous.dismissals;
   const list = (Array.isArray(ticket.run_notes) ? ticket.run_notes : []).filter((n) => n && n.run_id !== runId);
   list.push(entry);
-  ticket.run_notes = list.slice(-RUN_NOTES_MAX);
+  ticket.run_notes = capRunNotes(list);
 }
 
 // The failure ledger (ADR 0032): only the worker-structured fields of a failed test gate, copied
@@ -184,7 +202,8 @@ function runNoteFailure(f) {
 }
 
 // An owner's reason for dismissing a run's suggestion (ADR 0032), kept on that run's Run note, which
-// stays local (exports, the mirror and vault notes drop run_notes). A run without a note gets one.
+// stays local (exports, the mirror and vault notes drop run_notes). A run without a note gets a
+// dismissal-only one, capped apart from the real notes (capRunNotes), so it never evicts one.
 export const DISMISS_REASON_CHARS = 280;
 export const DISMISSALS_MAX = 20;
 function recordDismissal(ticket, h, sug, reason, req, ev) {
@@ -192,7 +211,7 @@ function recordDismissal(ticket, h, sug, reason, req, ev) {
   let note = list.find((n) => n && n.run_id === h.id);
   if (!note) {
     note = { run_id: h.id, at: ev.occurred_at, attempts: [], lessons: [], ...(h.proposal ? { origin: 'page' } : {}) };
-    ticket.run_notes = [...list, note].slice(-RUN_NOTES_MAX);
+    ticket.run_notes = capRunNotes([...list, note]);
   }
   const item = { suggestion_id: sug.id, type: typeof sug.type === 'string' ? sug.type : null, reason: reason.slice(0, DISMISS_REASON_CHARS), at: ev.occurred_at, by: req.actor_id ?? 'owner' };
   note.dismissals = [...(Array.isArray(note.dismissals) ? note.dismissals : []).filter((d) => d && d.suggestion_id !== sug.id), item].slice(-DISMISSALS_MAX);
