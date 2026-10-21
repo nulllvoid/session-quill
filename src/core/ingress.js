@@ -4,12 +4,16 @@ import { ingressDir } from '../lib/paths.js';
 import { ensureDir, tempPathFor, renameAtomic, isTempFile, listFiles, removeIfExists } from '../lib/atomic-fs.js';
 import { TrackerError } from '../lib/errors.js';
 import { validateEvent } from './events.js';
+import { redactEvent } from '../lib/redact.js';
 
 // Producers (hooks, CLI) persist one complete file per event. Only complete `<event_id>.json`
-// files are eligible for ingestion; temp files are never read (TRD §Durability 1).
+// files are eligible for ingestion; temp files are never read (TRD §Durability 1). Every hook and
+// CLI event passes here, so this is where payload text loses its secrets (ADR 0029): the file holds
+// a redacted copy, identifier fields byte for byte, and the caller's event is left as it was.
 export function writeIngress(ev, env = process.env, { timeoutMs = 1000, clock = Date.now } = {}) {
   validateEvent(ev);
   const started = clock();
+  const stored = redactEvent(ev);
   const dir = ingressDir(env);
   const dest = path.join(dir, `${ev.event_id}.json`);
   try {
@@ -17,7 +21,7 @@ export function writeIngress(ev, env = process.env, { timeoutMs = 1000, clock = 
     const tmp = tempPathFor(dest);
     const fd = fs.openSync(tmp, 'wx');
     try {
-      fs.writeSync(fd, JSON.stringify(ev));
+      fs.writeSync(fd, JSON.stringify(stored));
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);

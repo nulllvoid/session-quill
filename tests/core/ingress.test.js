@@ -71,3 +71,23 @@ test('putBlob stores by content hash before events reference it and getBlob read
   assert.equal(getBlob('0'.repeat(64), e), null);
   assert.deepEqual(putBlob('full checkpoint text', e).hash, hash);
 });
+
+// ADR 0029: ingress redacts free text before it reaches the folder the worker journals from.
+const TOKEN = `${'gh' + 'p_'}${'aB3'.repeat(12)}`;
+
+test('writeIngress stores redacted payload text and keeps identities byte for byte', () => {
+  const e = env();
+  const mk = () => makeEvent({ ...base, kind: 'stop', session_id: 'sess-1', occurred_at: '2026-10-02T08:00:01Z', source_identity: `stop:sess-1:${'c'.repeat(64)}:2026-10-02T08:00:01Z`, payload: { content_ref: 'c'.repeat(64), preview: `pushed with ${TOKEN}`, conclusions: [`token ${TOKEN}`], write_paths: ['src/a/b.js'], length: 10, complete: true } });
+  const stored = (ev) => { writeIngress(ev, e); return JSON.parse(fs.readFileSync(path.join(e.QUILL_HOME, 'ingress', `${ev.event_id}.json`), 'utf8')); };
+  const a = mk();
+  const out = stored(a);
+  assert.ok(!JSON.stringify(out).includes(TOKEN), 'no token reaches ingress');
+  assert.equal(out.payload.preview, 'pushed with [secret redacted]');
+  assert.deepEqual(out.payload.conclusions, ['token [secret redacted]']);
+  for (const k of ['event_id', 'session_id', 'source_identity', 'occurred_at']) assert.equal(out[k], a[k], k);
+  assert.deepEqual(out.payload.write_paths, ['src/a/b.js']);
+  assert.equal(out.payload.content_ref, 'c'.repeat(64));
+  assert.equal(a.payload.preview, `pushed with ${TOKEN}`, 'the caller\'s event is not modified');
+  const b = mk();
+  assert.deepEqual(stored(b).payload, out.payload, 'the same input gives the same stored payload');
+});

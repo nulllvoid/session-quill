@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createStreamCollector, resultFromStream, readLedger, redactLog, redactCapped } from '../../src/handoff/stream.js';
+import { createHash } from 'node:crypto';
+import { createStreamCollector, resultFromStream, readLedger, redactLog, redactCapped, capBytes } from '../../src/handoff/stream.js';
+import { redactText, REDACTED, capBytes as sharedCapBytes } from '../../src/lib/redact.js';
 import { parseAgentResult, spawnAgent } from '../../src/handoff/runner.js';
 import { handoffRunDir } from '../../src/lib/paths.js';
 import { FAKE_CLAUDE } from './helpers.js';
@@ -159,6 +161,16 @@ test('redactLog hides secrets in their common shapes and keeps numbers', () => {
   }
   for (const kept of ['max_tokens=4096', 'tokens: 1234', '{"input_tokens": 52, "output_tokens": 7}', 'see https://example.com/a/b']) assert.equal(redactLog(kept), kept);
   assert.equal(redactLog('git.example.com and GH_TOKEN=abc'), 'git.example.com and GH_TOKEN=[secret redacted]');
+});
+
+test('redactLog applies the shared secret rules of src/lib/redact.js, then path redaction (ADR 0029)', () => {
+  assert.equal(REDACTED, '[secret redacted]');
+  for (const input of ['DB_PASSWORD=hunter2', `${'AS' + 'IA'}QRSTUVWXYZ234567`, `blob ${createHash('sha512').update('x').digest('base64').slice(0, 40)} end`]) {
+    assert.equal(redactLog(input), redactText(input), input);
+    assert.match(redactLog(input), /\[secret redacted\]/, input);
+  }
+  assert.equal(redactLog('a basic understanding'), 'a basic understanding');
+  assert.equal(capBytes, sharedCapBytes);
 });
 
 test('redaction stays linear on long word runs; excerpts are capped before redacting', () => {

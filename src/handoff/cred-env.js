@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { SECRET_NAME } from '../lib/redact.js';
 
 // One `report` entry per system of the spec §4.4 table.
 export const CRED_SYSTEMS = ['kubernetes', 'aws', 'gcp', 'azure', 'databases', 'argo', 'git', 'netrc', 'registries'];
@@ -17,8 +18,9 @@ export const GIT_PROGRAM_VARS = /^(GIT_EXTERNAL_DIFF|GIT_CONFIG|GIT_CONFIG_PARAM
 // Provider tokens and prompts that let git push; removed unless push or a PR is granted.
 export const CREDENTIAL_VARS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITLAB_TOKEN', 'BITBUCKET_TOKEN', 'GIT_ASKPASS', 'SSH_ASKPASS'];
 
-// The generic pass (spec §4.4): any inherited name that looks like a secret.
-export const SECRET_NAME = /(token|secret|password|passwd|api_?key|credential|auth)/i;
+// The generic pass (spec §4.4): any inherited name that looks like a secret. Defined with the
+// journal's redaction, which applies the same rule to `.env` lines (ADR 0029).
+export { SECRET_NAME };
 
 // Set in no-push runs so gh never falls back to the OS keyring: with an empty GH_CONFIG_DIR and no
 // GH_TOKEN, `gh auth token` still returns the owner's keyring token (gh 2.102, checked on Windows).

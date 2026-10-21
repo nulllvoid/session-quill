@@ -8,6 +8,7 @@ import { createTrackerClient, syncSettings, writeSettings, targetStatus, linkedT
 import { planImport, importProject, importSourceIdentity, IMPORT_LIMIT } from '../../onboard/import.js';
 import { writeIngress } from '../../core/ingress.js';
 import { nowIso } from '../../lib/time.js';
+import { redactText } from '../../lib/redact.js';
 import { TrackerError } from '../../lib/errors.js';
 
 const USAGE = 'usage: tracker push <KEY> [--to "<remote status>"] [--comment "<text>"] [--confirm] [--json] | tracker import [--json]';
@@ -28,7 +29,8 @@ export async function push(ctx, io, args, flags, { fetchImpl } = {}) {
   if (!linkedTo(ticket, tracker)) throw new TrackerError('not-linked', `${ticket.key} is not linked to an issue on your ${tracker.system} tracker; link it with ticket relink ${ticket.key} --external <KEY>`);
   const issueKey = ticket.external.key;
   const to = typeof flags.to === 'string' ? flags.to.trim() : targetStatus(tracker.system, ticket.status, settings);
-  const comment = typeof flags.comment === 'string' ? flags.comment : null;
+  // Redacted before the preview, so what is shown is exactly what would be sent (ADR 0029).
+  const comment = typeof flags.comment === 'string' ? redactText(flags.comment) : null;
   if (!to && !comment) throw new TrackerError('target-required', `no ${tracker.system} status is mapped to "${ticket.status}"; pass --to "<remote status>" or add it to [tracker.status_map]`);
 
   const client = createTrackerClient({ tracker, settings: syncSettings(raw), env: ctx.env, ...(fetchImpl ? { fetchImpl } : {}) });
