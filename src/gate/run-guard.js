@@ -33,7 +33,7 @@ export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL('../..', import.m
 // The guard's code and every local module it loads, relative to the install root. A run never
 // changes them, even when its checkout is the install root (Review Focus 2). A test walks the
 // guard's imports to keep this list complete.
-export const GUARD_CODE = ['src/gate', 'bin/quill-guard.js', 'src/handoff/grant.js', 'src/handoff/permissions.js', 'src/handoff/stream.js', 'src/handoff/mcp-sources.js', 'src/export/sanitize.js', 'src/lib/paths.js', 'src/lib/errors.js', 'src/lib/atomic-fs.js', 'src/lib/git-head.js'];
+export const GUARD_CODE = ['src/gate', 'bin/quill-guard.js', 'src/handoff/grant.js', 'src/handoff/permissions.js', 'src/handoff/stream.js', 'src/handoff/mcp-sources.js', 'src/export/sanitize.js', 'src/lib/redact.js', 'src/lib/paths.js', 'src/lib/errors.js', 'src/lib/atomic-fs.js', 'src/lib/git-head.js'];
 // A shell wildcard that can match more directory entries than this is refused rather than checked.
 export const MAX_GLOB_MATCHES = 512;
 // The worker's own files in the run dir: the rest of the run dir is scratch. mcp-servers.json

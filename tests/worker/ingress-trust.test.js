@@ -100,3 +100,22 @@ for (const claim of [{ actor_id: 'owner' }, {}]) {
     } finally { await s.stop(); }
   });
 }
+
+// ADR 0029: the worker redacts again at ingest, so a file written past writeIngress (a forged or
+// older producer) still reaches the journal redacted.
+test('an ingress file with an unredacted token is redacted again at worker ingest', async () => {
+  const s = scenario();
+  await s.start();
+  try {
+    const token = `${'gh' + 'p_'}${'aB3'.repeat(12)}`;
+    const ev = s.mk('tool-failure', { tool_name: 'Bash', error: `auth failed for ${token}`, write_paths: [`src/${token}.js`] }, { producer: 'hook' });
+    fs.mkdirSync(ingressDir(s.env), { recursive: true });
+    fs.writeFileSync(path.join(ingressDir(s.env), `${ev.event_id}.json`), JSON.stringify(ev));
+    s.w.tick();
+    const rec = [...s.w.journal.read()].find((r) => r.event_id === ev.event_id);
+    assert.ok(rec, 'journaled');
+    assert.equal(rec.payload.error, 'auth failed for [secret redacted]');
+    assert.deepEqual(rec.payload.write_paths, [`src/${token}.js`], 'identifier fields are kept');
+    assert.equal(rec.source_identity, ev.source_identity);
+  } finally { await s.stop(); }
+});

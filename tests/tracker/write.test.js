@@ -168,3 +168,26 @@ test('tracker push refuses a local-only ticket before any request, and never sen
     await w.stop();
   }
 });
+
+test('tracker push redacts a comment before the preview and before it is sent (ADR 0029)', async () => {
+  const fx = makeHome();
+  const w = await linkedTicket(fx);
+  try {
+    const ctx = loadContext({ ...fx.env, JIRA_TOKEN: 'tok' });
+    const token = `${'gh' + 'p_'}${'aB3'.repeat(12)}`;
+    const comment = `token ${token}`;
+    const f = fake((u, init) => (u.endsWith('/comment') ? { status: 201, body: {} } : jiraRoute(u, init)));
+    const preview = io();
+    assert.equal(await push(ctx, preview.io, ['PROJ-7'], { comment }, { fetchImpl: f.fetchImpl }), 0);
+    assert.match(preview.out, /would add a comment: token \[secret redacted\]/);
+    const json = io();
+    assert.equal(await push(ctx, json.io, ['PROJ-7'], { comment, json: true }, { fetchImpl: f.fetchImpl }), 0);
+    assert.equal(JSON.parse(json.out).comment, 'token [secret redacted]');
+    assert.equal(await push(ctx, io().io, ['PROJ-7'], { comment, confirm: true }, { fetchImpl: f.fetchImpl }), 0);
+    const sent = writes(f.calls).find((c) => c.url.endsWith('/comment'));
+    assert.deepEqual(sent.body, { body: 'token [secret redacted]' });
+    assert.equal(JSON.stringify(f.calls).includes(token), false, 'no request carries the token');
+  } finally {
+    await w.stop();
+  }
+});

@@ -255,3 +255,43 @@ test('without QUILL_HANDOFF_GUARD (or with it empty) the handoff PreToolUse outp
     assert.equal(events(env)[0].payload.denied, true);
   }
 });
+
+// ADR 0029: free text is redacted before it is cut, so no cut leaves a token's prefix behind, and
+// blobs are stored redacted (their hash, and so the event's source identity, stays deterministic).
+test('hook text is redacted before blobs, previews, conclusions, targets, errors, titles and commit messages', () => {
+  const env = setup({ bound: true });
+  const token = `${'gh' + 'p_'}${'aB3'.repeat(12)}`;
+  const leaks = (v) => JSON.stringify(v).includes('gh' + 'p_');
+  const pad = (n) => 'x '.repeat(n / 2);
+  const stop = { ...fixture('stop'), last_assistant_message: `${pad(1490)}${token}\n\nConclusion: pushed with ${token}\n` };
+  runHook('Stop', stop, { env, now: NOW });
+  runHook('Stop', stop, { env, now: NOW });
+  const plan = fixture('post-tool-use-exit-plan-mode');
+  plan.tool_input.plan = `# Plan\n\n1. export GH_TOKEN=${token}`;
+  runHook('PostToolUse', plan, { env, now: NOW });
+  const commit = fixture('post-tool-use-bash-commit');
+  commit.tool_response.stdout = `[main 1a2b3c4d] fix: use ${token}\n 1 file changed`;
+  runHook('PostToolUse', commit, { env, now: NOW });
+  const pre = fixture('pre-tool-use-bash-npm');
+  pre.tool_input = { command: `${pad(110)}${token}` };
+  runHook('PreToolUse', pre, { env, now: NOW });
+  const failure = { ...fixture('post-tool-use-failure'), error: `${pad(290)}${token}` };
+  runHook('PostToolUseFailure', failure, { env, now: NOW });
+  runHook('UserPromptSubmit', { ...fixture('user-prompt-submit'), prompt: `Push ${pad(66)}${token}` }, { env, now: NOW });
+  const evs = events(env);
+  assert.equal(evs.length, 7);
+  for (const ev of evs) assert.ok(!leaks(ev), `${ev.kind}: ${JSON.stringify(ev.payload)}`);
+  const [s1, s2] = evs.filter((e) => e.kind === 'stop');
+  assert.ok(!leaks(getBlob(s1.payload.content_ref, env)), 'the checkpoint blob is redacted');
+  assert.match(getBlob(s1.payload.content_ref, env), /\[secret redacted\]/);
+  assert.equal(s1.payload.content_ref, s2.payload.content_ref, 'redaction is deterministic');
+  assert.deepEqual(s1.payload.conclusions, ['pushed with [secret redacted]']);
+  const p = evs.find((e) => e.payload.plan_ref);
+  assert.equal(getBlob(p.payload.plan_ref, env), '# Plan\n\n1. export GH_TOKEN=[secret redacted]');
+  const c = evs.find((e) => e.payload.commit);
+  assert.equal(c.payload.commit.sha, '1a2b3c4d');
+  assert.equal(c.payload.commit.message, 'fix: use [secret redacted]');
+  assert.ok(evs.find((e) => e.kind === 'pre-tool').payload.write_target.length <= 120);
+  assert.ok(evs.find((e) => e.kind === 'tool-failure').payload.error.length <= 300);
+  assert.ok(evs.find((e) => e.kind === 'prompt').payload.title_candidate.startsWith('Push x'));
+});

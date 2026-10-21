@@ -5,7 +5,8 @@
 // and a rolling window of other lines.
 import fs from 'node:fs';
 import path from 'node:path';
-import { redactText } from '../export/sanitize.js';
+import { redactText as redactPaths } from '../export/sanitize.js';
+import { redactText as redactSecrets, capRedacted, capBytes } from '../lib/redact.js';
 import { writeMcpServersFile } from './mcp-sources.js';
 
 export const EXCERPT_BYTES = 2048;
@@ -21,85 +22,25 @@ const LOG_TEXT_BYTES = 65_536;
 // A single line longer than this many UTF-8 bytes (no newline in sight) is dropped rather than
 // held in memory. The pending line sits outside the rolling window, so this is its own bound.
 const MAX_LINE_BYTES = 16 * 1_048_576;
-// Text is cut to this before it is redacted, so redaction cost never scales with a huge result.
+// A summary is redacted from at most this much of the input.
 const PRECAP_BYTES = 4 * EXCERPT_BYTES;
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const SESSION_RE = /^[\w-]{1,100}$/;
 
-// Provider tokens, cloud keys, private keys, URL credentials and `secret=value` pairs, on top of
-// the export path redaction. Every quantifier is bounded or anchored on a literal, so the cost is
-// linear in the input (a long run of word characters must not go quadratic).
-const R = '[secret redacted]';
-const PEM_BEGIN = /-----BEGIN ([A-Z ]{0,40})PRIVATE KEY-----/y;
-const TOKENS = /\b(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_\w{20,255}|glpat-[\w-]{20,255}|xox[abprs]-[\w-]{10,255}|xapp-[\w-]{10,255}|npm_[A-Za-z0-9]{30,255}|sk-[A-Za-z0-9_-]{20,255}|AKIA[0-9A-Z]{16})\b/g;
-const AUTH_SCHEME = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,1000}/gi;
-const URL_USERINFO = /\b([a-z][a-z0-9+.-]{1,20}:\/\/)[^\s/@:]{1,200}:[^\s/@]{1,200}@/gi;
-// The key starts at the keyword (any prefix such as GH_ stays in place), may carry a short suffix
-// and a closing quote (JSON), then `=` or `:`. Purely numeric values (max_tokens=4096) are kept.
-const SECRET_ASSIGN = /((?:password|passwd|secret|token|api[_-]?key|access[_-]?key)[\w.-]{0,40}["']?\s{0,10}[=:]\s{0,10})(?!["']?\d+["']?(?:[\s,;})\]]|$))("[^"\n]{0,1000}"|'[^'\n]{0,1000}'|[^\s,;})\]]{1,1000})/gi;
-
-// Private key blocks, found with indexOf rather than a lazy regex: each BEGIN either finds its END
-// further on (scanning resumes after it) or has none, and then everything after it goes, as for a
-// key cut off by a length cap. Each character is scanned a bounded number of times.
-function redactPem(text) {
-  let out = '';
-  let pos = 0;
-  for (;;) {
-    const at = text.indexOf('-----BEGIN ', pos);
-    if (at < 0) return out + text.slice(pos);
-    PEM_BEGIN.lastIndex = at;
-    const m = PEM_BEGIN.exec(text);
-    if (!m) { out += text.slice(pos, at + 11); pos = at + 11; continue; }
-    const endMark = `-----END ${m[1]}PRIVATE KEY-----`;
-    const end = text.indexOf(endMark, PEM_BEGIN.lastIndex);
-    if (end < 0) return `${out}${text.slice(pos, at)}${R}`;
-    out += `${text.slice(pos, at)}${R}`;
-    pos = end + endMark.length;
-  }
-}
-
-// A secret-looking fragment left at the very end of a cut (its rest fell past the cut). Only the
-// last 300 characters are examined, so this stays cheap on long text.
-const TRAILING_SECRET = /(?:gh[pousr]_|github_pat_|glpat-|xox[abprs]-|xapp-|npm_|sk-|AKIA|-----BEGIN )\S*$/;
-function dropTrailingSecret(text) {
-  const tail = text.slice(-300);
-  const m = TRAILING_SECRET.exec(tail);
-  return m ? text.slice(0, text.length - tail.length + m.index) : text;
-}
-
-const DELIMITER = /[\s,;"'<>()[\]{}]/;
-// Cut to `max` bytes, then back to the last delimiter within 1 KB, so the cut never splits a
-// secret (a split token is too short to be recognised and would leak its prefix).
-function cutAtBoundary(text, max) {
-  if (Buffer.byteLength(text) <= max) return text;
-  const s = capBytes(text, max);
-  for (let i = s.length - 1; i >= Math.max(0, s.length - 1024); i--) if (DELIMITER.test(s[i])) return s.slice(0, i + 1);
-  return dropTrailingSecret(s);
-}
-
+// Secrets go first (src/lib/redact.js: provider tokens, cloud keys, private keys, URL credentials,
+// `secret=value` pairs, `.env` lines, high-entropy strings), then the export path redaction.
 export function redactLog(text) {
-  return redactText(redactPem(String(text ?? ''))
-    .replace(URL_USERINFO, `$1${R}@`)
-    .replace(TOKENS, R)
-    .replace(AUTH_SCHEME, `$1 ${R}`)
-    .replace(SECRET_ASSIGN, `$1${R}`));
+  return redactPaths(redactSecrets(text));
 }
 
 // Redact a bounded slice of `text`, then cut it to `max` bytes; neither cut leaves part of a
 // secret behind.
 export function redactCapped(text, max) {
-  const red = redactLog(cutAtBoundary(String(text ?? ''), Math.max(max, PRECAP_BYTES)));
-  return Buffer.byteLength(red) <= max ? red : dropTrailingSecret(capBytes(red, max));
+  return capRedacted(text, max, redactLog);
 }
 
-// Cut to at most `max` UTF-8 bytes without splitting a character.
-export function capBytes(text, max) {
-  if (Buffer.byteLength(text) <= max) return text;
-  let s = Buffer.from(text).subarray(0, max).toString('utf8');
-  while (Buffer.byteLength(s) > max || s.endsWith('�')) s = s.slice(0, -1);
-  return s;
-}
+export { capBytes };
 
 // Log text (and the window handed back by end()): redacted and capped, marked when it was cut.
 function logText(s) {

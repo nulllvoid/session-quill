@@ -2,6 +2,7 @@
 // prompts, environments, credentials or command output (PRD NFR Privacy).
 import path from 'node:path';
 import { stripMarkupTags } from '../lib/text.js';
+import { redactCapped } from '../lib/redact.js';
 
 export const PREVIEW_CHARS = 1500;
 export const TITLE_CHARS = 80;
@@ -51,7 +52,8 @@ export function commitFromBash(command, response) {
   const text = responseText(response);
   const m = /\[[^\]\s]+(?:\s+\([^)]*\))?\s+([0-9a-f]{7,40})\]\s*(.*)/.exec(text);
   if (!m) return null;
-  return { sha: m[1], message: (m[2] ?? '').trim().slice(0, 200) || null };
+  // A commit message can carry a pasted token; it is redacted before the cut (ADR 0029).
+  return { sha: m[1], message: redactCapped((m[2] ?? '').trim(), 200) || null };
 }
 
 export function prFromBash(command, response) {

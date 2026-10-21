@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { Journal } from '../core/journal.js';
 import { validateEvent, makeEvent, INGRESS_KINDS } from '../core/events.js';
 import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.js';
+import { redactEvent } from '../lib/redact.js';
 import { createState, sessionKey } from '../core/state.js';
 import { applyEvent } from '../core/reducer.js';
 import { safeKeyFileName } from '../core/keys.js';
@@ -276,8 +277,11 @@ export class Worker {
         quarantineIngress(entry.name, this.env);
         continue;
       }
-      const ev = entry.event;
+      // Redacted again here (ADR 0029): writeIngress already did, but anything that can write the
+      // ingress folder (an older producer, an autonomous run) bypasses it.
+      let ev;
       try {
+        ev = redactEvent(entry.event);
         validateEvent(ev);
       } catch (err) {
         this.log(`quarantining ${entry.name}: ${err.message}`);
