@@ -19,6 +19,7 @@ import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
 import { resumeProblem, resumeFields } from '../handoff/resume.js';
+import { restoreTarget, evaluateRestore } from '../handoff/snapshots.js';
 
 export const EDIT_DELAY_MS = 10_000;
 export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run', 'memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note', 'resume-run'];
@@ -40,6 +41,10 @@ const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
 const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run', 'resume-run']);
 const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'dismiss-run', 'memory-forget']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+// Run snapshots (ADR 0035): restore one into the run's checkout. A ticket request without a
+// revision check, with the 10 s undo; applied on the owner's dashboard only (evaluateRestore).
+KINDS.push('restore-snapshot');
+for (const set of [TICKET_KINDS, REVISION_OPTIONAL, DELAYED_KINDS]) set.add('restore-snapshot');
 
 // Tracker keys are uppercase (PROJ-123). Requests normalize them, and lookups also match legacy
 // keys that differ only in case, so "proj-42" can never become a second ticket beside PROJ-42.
@@ -335,6 +340,11 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'undo-file-effect': {
       const { h, effect } = findFileEffect(state, target, payload);
       normalized = { handoff_id: h.id, effect_id: effect.id };
+      break;
+    }
+    case 'restore-snapshot': {
+      const { h, snap } = restoreTarget(state, target, payload);
+      normalized = { handoff_id: h.id, snapshot_id: snap.id };
       break;
     }
     case 'approve-run':
@@ -654,6 +664,8 @@ export function evaluateRequest(worker, req) {
       return evaluateHandoff(worker, req, ticket, req.payload);
     case 'resume-run':
       return evaluateResume(worker, req, ticket);
+    case 'restore-snapshot':
+      return evaluateRestore(worker, req, ticket, { owner: fromOwnerDashboard(req) });
     case 'approve-run':
     case 'dismiss-run': {
       let p;

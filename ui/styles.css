@@ -1007,6 +1007,12 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-note-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .run-note .run-attempts, .run-note .run-lessons { margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--hairline-strong); }
 .run-note p { margin: 4px 0 0; }
+/* Run snapshots (ADR 0035): one row per step boundary; labels, commits and controls wrap at 390px. */
+.run-snapshots { list-style: none; margin: 0; padding: 0; }
+.run-snapshots > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 0; border-top: 1px solid var(--hairline); min-width: 0; overflow-wrap: anywhere; }
+.run-snapshots > li:first-child { border-top: 0; }
+.run-snapshots .snapshot-commit { white-space: nowrap; }
+.run-snapshots .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
 @media (max-width: 599px) {
   .run-open { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "state ticket" "state recipe" "state badges" "state facts" "state time"; }
   .run-badges { justify-content: flex-start; }

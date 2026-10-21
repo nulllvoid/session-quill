@@ -730,6 +730,8 @@ function handleAction(el) {
       submit({ kind: r.kind, target_id: r.target_id, expected_revision: targetRevision(r), payload: r.original }, { announceText: 'Reversal queued as a new revision-checked edit' });
       break;
     }
+    // Run snapshots (ADR 0035): a ticket request with the 10 s undo; only the checkout changes.
+    case 'restore-snapshot': submit({ kind: 'restore-snapshot', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff, snapshot_id: el.dataset.snapshot } }, { announceText: 'Restore queued; undo within 10 seconds. Only the run checkout changes' }); break;
     case 'undo-file-effect': submit({ kind: 'undo-file-effect', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff, effect_id: el.dataset.effect } }, { announceText: 'Undo queued; the file is restored within 10 seconds' }); break;
     case 'accept-suggestion':
     case 'dismiss-suggestion': {

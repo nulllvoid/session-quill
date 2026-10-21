@@ -1,0 +1,27 @@
+# ADR 0035 — Run snapshots and restore
+
+Date: 2026-10-21 · Status: accepted · Builds on [ADR 0001](0001-single-writer-cli.md), [ADR 0015](0015-file-runs.md), [ADR 0023](0023-bulk-runs-and-test-gate.md), [ADR 0026](0026-autonomous-access-and-guard.md) and [ADR 0028](0028-critical-changes.md) · PRD FR-1.2, FR-1.3 (archive) as adopted in `docs/research/2.0.0/01-gap-analysis.md`
+
+## Context
+
+A fix run edits its checkout over several turns: the main turn, a repair turn, the self-check, the test repair turn, then the commit. When a later turn makes things worse, the owner has only the final diff and the patch file. The PRD asked for "deterministic checkpoint snapshots" in `blobs.js` and one-click rollback in the edit/undo UI. Neither fits: `blobs.js` is a sha256 text store, git tree objects live in the repository's object database and die in `git gc` without a ref, and "checkpoint" already names a captured session turn. The 10 s undo UI handles ticket-field requests, not files.
+
+## Decision
+
+- **Snapshots, not checkpoints.** The worker snapshots a fix run's checkout (`permissions.edit_source`) at step boundaries: `start` (after the worktree is created), `agent` (after the main turn, whatever its outcome), `before-repair`, `before-self-check`, `before-test-repair` (before each follow-up turn), `before-tests` (before the worker's test gate) and `before-commit`. Read-only runs have no snapshots; their checkout goes at the terminal state. The `start` snapshot is the base commit itself (the checkout was just created clean), and a boundary with nothing run since the previous snapshot (`before-repair` right after `agent`, `before-self-check` when no repair turn ran) is not taken again: the previous snapshot already holds that checkout.
+- **How.** `snapshotTree` (src/handoff/snapshots.js) uses a temporary `GIT_INDEX_FILE`: a copy of the real index for its stat cache, reset to HEAD with `read-tree -m HEAD` (plain `read-tree HEAD` if that fails), `add -A`, `write-tree`, `commit-tree -p HEAD`, then `update-ref refs/quill/snapshots/<run>/<nn>-<step>` with an empty old value, so a ref is created and never moved (a name already taken gets `-2`, `-3` …). The real index, HEAD and branch are untouched; ignored files are not captured. Git runs with `cleanGitEnv` (no inherited `GIT_*`, replace refs or grafts), `core.hooksPath` pointing nowhere and `core.fsmonitor=false`: the checkout's configuration is the agent's to edit, so no hook or fsmonitor command runs from a snapshot.
+- **Journal.** The worker journals each snapshot as `snapshot-tx` `created` (worker-only, R59). The reducer (`src/core/reduce/snapshots.js`) is pure, validates step, ids and ref folder, and keeps at most 20 per run in the local-only `handoff.snapshots[]`. A snapshot never fails a run: errors are logged.
+- **Restore.** The owner restores from run detail ("Restore checkout to this snapshot"), a `restore-snapshot` request with the 10 s undo window, accepted only from the dashboard (`fromOwnerDashboard`, the same check as critical approval). It needs a finished run whose checkout is still under the store's worktrees folder and a free snapshot slot. Like `undo-file-effect` it runs once, synchronously, when the request applies: it snapshots the checkout first (`pre-restore`) and journals that before touching any file, then deletes only files in the pre-restore tree that the target lacks and writes the target's changed files through a second temporary index (`checkout-index`). A target path now occupied by something the pre-restore snapshot could not hold (an ignored file, a directory) is skipped. The `restored` event is journaled before the request transaction, so a crash between them finishes the request without restoring twice. The text says "Restores the run's checkout only; the commit, branch and pull request are unchanged."
+- **Archive (FR-1.3).** When a run's checkout is removed (`dropWorktree`, the 7-day fix keep), its refs move in one `update-ref --stdin` transaction to `refs/quill/archive/<run>/` and each snapshot is marked `archived`. The commits stay reachable; the dashboard no longer offers Restore.
+- **Privacy.** Snapshots name refs, trees and commits of the owner's repository and labels; they stay on the owner's dashboard. Exports, the mirror, publishers, tracker pushes and vault notes use allow-lists that do not name them (privacy sentinel test). Nothing about a snapshot enters a run's prompt.
+
+## Consequences
+
+- Review Focus 3: a restore never deletes uncommitted work it did not save first. Everything it replaces or removes is in the pre-restore snapshot, which is itself restorable; ignored files (`.env`) are never touched. A restore that fails part-way says the checkout may be partly restored and names the pre-restore snapshot.
+- Each snapshot costs about five to six git processes (about half a second on Windows; `start` costs two); a fix run usually takes three or four.
+- `add -A` hashes untracked files that are not ignored, as the patch collection already does. A huge unignored build output is captured too.
+- Archived refs are kept indefinitely; the owner can list them with `git for-each-ref refs/quill/archive` and delete them with `git update-ref -d`.
+
+## Deferred
+
+Per-tool-call and interactive-session snapshots; restoring an archived snapshot into a new checkout; pruning archive refs with log retention; snapshots of ticket worktrees (ADR 0036).

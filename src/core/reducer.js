@@ -15,6 +15,7 @@ import { handleRequest, handleRequestTx, handleHandoffTx } from './reduce/reques
 import { applyMemoryTx } from './reduce/memory.js';
 import { applyCriticalProposal } from './reduce/critical.js';
 import { applyWorktree } from './reduce/worktrees.js';
+import { applySnapshotTx } from './reduce/snapshots.js';
 
 export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 
@@ -242,7 +243,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'critical-proposal': Object.assign(result, applyCriticalProposal(state, ev, result)); break;
     // 2.0.0 kinds reserved as no-ops; each task replaces its own line with its handler.
     case 'worktree': Object.assign(result, applyWorktree(state, ev, result)); break;
-    case 'snapshot-tx': break;
+    case 'snapshot-tx': Object.assign(result, applySnapshotTx(state, ev, result)); break;
     case 'ci-observation': break;
     case 'ci-proposal': break;
     case 'schedule-run':

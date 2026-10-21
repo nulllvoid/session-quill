@@ -69,7 +69,8 @@ export async function restartWorker(prev, { runtimeAvailable = true, clock, spaw
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function until(fn, { timeoutMs = 5000, stepMs = 25 } = {}) {
+// A fix run snapshots its checkout at each step (ADR 0035); a loaded machine needs more than 5 s for one.
+export async function until(fn, { timeoutMs = 20_000, stepMs = 25 } = {}) {
   const started = Date.now();
   for (;;) {
     const v = fn();
