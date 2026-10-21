@@ -392,3 +392,20 @@ test('writes outside the planned files are an amber chip in the header; the plan
   assert.match(viewer, /2 writes outside planned files/, 'an export shows the count');
   assert.doesNotMatch(viewer, /Planned files:/, 'and no paths');
 });
+
+// ADR 0041: an autonomous run's environment, owner only, never in an export.
+test('an autonomous run shows what its environment lost by design; omitted without a record, for a read-only copy and in an export', async () => {
+  const h = fix({ access: 'autonomous', run_env: { removed: ['BITBUCKET_API_TOKEN', 'X<y>'], env_fingerprint: 'fedcba9876543210' } });
+  const html = renderRunDetail(h, snap(h), { now: NOW });
+  assert.match(html, /<h3>Environment<\/h3>/);
+  assert.match(html, /Removed by design \(2\)/);
+  assert.match(html, /<code>X&lt;y&gt;<\/code>/);
+  assert.match(html, /Fingerprint <code>fedcba9876543210<\/code>/);
+  assert.doesNotMatch(renderRunDetail(fix(), snap(fix()), { now: NOW }), /<h3>Environment<\/h3>/);
+  const readOnly = snap(h, { capabilities: { read: true, handoff: false, edit_tickets: false } });
+  assert.doesNotMatch(renderRunDetail(h, readOnly, { now: NOW }), /<h3>Environment<\/h3>/);
+  const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
+  const s = normalizeSnapshot(sanitizeSnapshot(snap(h), { exportedAt: NOW, includeCheckpoints: true, includeLinks: true }));
+  const out = renderRunDetail(s.handoffs[0], s, { now: NOW });
+  assert.doesNotMatch(out, /<h3>Environment<\/h3>|BITBUCKET_API_TOKEN|fedcba9876543210/);
+});

@@ -12,6 +12,7 @@ import { TrackerError } from '../lib/errors.js';
 import { handoffRunDir } from '../lib/paths.js';
 import { MINUTE } from '../lib/time.js';
 import { buildChildEnv, CRED_SYSTEMS } from './cred-env.js';
+import { envFingerprint, readonlyKeyNames } from './run-env.js';
 import { writeGrant, leaseNotAfter } from './grant.js';
 import { writeRunSettings } from './run-settings.js';
 import { MCP_SERVERS_FILE } from './mcp-sources.js';
@@ -125,6 +126,9 @@ export function prepareAutonomous({ storeEnv, config, handoff: h, cwd, checkout,
     const why = (built.report.scope_errors ?? []).filter((e) => e.startsWith(`${s.name}:`)).map((e) => e.slice(s.name.length + 1).trim());
     throw new TrackerError('scope-credentials-missing', `scope ${s.target ? `${s.name}:${s.target}` : s.name} got no credentials when the run started${why.length ? ` (${why.join('; ')})` : ''}; check [scopes."${s.name}"] in config.toml and the variables it references`);
   }
+  // ADR 0041: the run environment's fingerprint (names only, never values), recorded in cred_report
+  // beside the removed names; environment-anchored memory goes stale when it changes.
+  built.report.env_fingerprint = envFingerprint({ removed: built.report.removed, keepEnv, report: built.report, readonlyKeys: readonlyKeyNames(readonly) });
   // Systems whose credentials are not an empty stub (read-only, scope or the owner's): a prod
   // CLI read on any other is refused with the onboarding hint (spec §3).
   const credentialSystems = CRED_SYSTEMS.filter((sys) => built.report[sys] && built.report[sys] !== 'stub');

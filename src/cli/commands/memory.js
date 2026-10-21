@@ -50,7 +50,7 @@ function find(entries, ref) {
 }
 
 function chips(e) {
-  return [TRUST_LABELS[e.trust] ?? e.trust, e.pinned ? 'Pinned' : null, e.staleness === 'stale' ? (e.stale_reason === 'anchor-changed' ? 'Stale (source changed)' : 'Stale') : null, e.conflict_key ? 'Conflict' : null].filter(Boolean).join(' · ');
+  return [TRUST_LABELS[e.trust] ?? e.trust, e.pinned ? 'Pinned' : null, e.staleness === 'stale' ? (e.stale_reason === 'anchor-changed' ? 'Stale (source changed)' : e.stale_reason === 'run-env-changed' ? 'Stale (run environment changed)' : 'Stale') : null, e.conflict_key ? 'Conflict' : null].filter(Boolean).join(' · ');
 }
 
 function line(e) {

@@ -81,7 +81,11 @@ function entryItem(e, snapshot, { now, tz, pending, editing, canAct }) {
   const chips = [trustChip(e.trust)];
   if (e.pinned) chips.push(`<span class="chip small" data-pinned="true">${icon('check')}Pinned</span>`);
   // ADR 0032: an entry whose cited source changed says so; one unconfirmed for 90 days is plain stale.
-  if (e.staleness === 'stale') chips.push(e.stale_reason === 'anchor-changed' ? `<span class="chip stale small" data-stale="anchor-changed" title="The file this entry cites changed since it was recorded. A run that confirms it again, or your edit, brings it back.">${icon('clock')}Source changed · not delivered to runs</span>` : `<span class="chip stale small">${icon('clock')}Stale · not delivered to runs</span>`);
+  // ADR 0041: one staled because the autonomous run environment it was learned in changed says so.
+  if (e.staleness === 'stale') chips.push(e.stale_reason === 'anchor-changed' ? `<span class="chip stale small" data-stale="anchor-changed" title="The file this entry cites changed since it was recorded. A run that confirms it again, or your edit, brings it back.">${icon('clock')}Source changed · not delivered to runs</span>`
+    : e.stale_reason === 'run-env-changed' ? `<span class="chip stale small" data-stale="run-env-changed" title="The variables, read-only profiles or keep_env of autonomous runs changed since this was learned. A run that confirms it again, or your edit, brings it back.">${icon('clock')}Run environment changed · not delivered to runs</span>`
+    : `<span class="chip stale small">${icon('clock')}Stale · not delivered to runs</span>`);
+  if (e.observed_in === 'autonomous') chips.push('<span class="chip small" data-observed="autonomous" title="Learned in an autonomous run about its own tools or environment, where some variables are removed by design. It may not hold in your own session.">Seen in autonomous runs</span>');
   if (e.conflict_key) chips.push(`<span class="chip warning small" data-conflict="true">${icon('alert')}Conflict on key ${esc(e.conflict_key)}</span>`);
   const section = SECTION_LABELS[e.section] ?? (e.section || null);
   const meta = [];

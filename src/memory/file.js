@@ -21,6 +21,11 @@
 //
 // Worker-observed facts (src/memory/worker-facts.js) join as `verified` candidates outside the cap.
 //
+// An autonomous run's learning that depends on its environment (src/handoff/run-env.js envDependent:
+// machine Tools or Connectors & MCP, a removed variable named, an MCP server of the run named) also
+// gets a `{ kind: 'run-env', env_fingerprint }` anchor and `observed_in: 'autonomous'` (ADR 0041),
+// whatever its trust, so it goes stale when that environment changes.
+//
 // Placing a candidate (key first, so a changed value is never swallowed as a duplicate):
 //   - with a key: an entry of the same scope and key with the same normalised text is confirmed; one
 //     with other text is superseded when the candidate is verified and may supersede (never an owner
@@ -38,7 +43,8 @@ import { deterministicId } from '../lib/ids.js';
 import { redactCapped, summarizeInput } from '../handoff/stream.js';
 import { canonicalSection } from './sections.js';
 import { instructionLike } from './instructions.js';
-import { makeAnchor, MAX_ANCHORS } from './anchors.js';
+import { makeAnchor, MAX_ANCHORS, fileAnchors, isRunEnvAnchor } from './anchors.js';
+import { envDependent } from '../handoff/run-env.js';
 
 export { instructionLike, INSTRUCTION_PATTERNS, scanForms } from './instructions.js';
 export { workerLearnings } from './worker-facts.js';
@@ -406,11 +412,12 @@ const poolEntry = (e, fromRun) => {
  *   learnings: the agent's (pass [] for a run that did not finish done); ledger: readLedger()
  *   lines; checkout: the run's checkout, read before it is removed; existing: state.memory.entries;
  *   workerFacts: workerLearnings() output; citeSources: readCiteSources() output (else the cited
- *   files are read synchronously).
+ *   files are read synchronously); runEnv: runEnvForFiling() output (src/handoff/run-env.js) for an
+ *   autonomous run, else null.
  * @returns {{ kind: string, payload: object, source_identity: string }[]}  memory-tx events in apply
  *   order, then one handoff-tx recording the filing summary (`memory_filing`) on the run.
  */
-export function fileLearnings({ learnings, run, ledger = [], checkout = null, existing = [], now, workerFacts = [], citeSources }) {
+export function fileLearnings({ learnings, run, ledger = [], checkout = null, existing = [], now, workerFacts = [], citeSources, runEnv = null }) {
   const list = (Array.isArray(learnings) ? learnings : []).slice(0, MAX_LEARNINGS_READ);
   const facts = Array.isArray(workerFacts) ? workerFacts : [];
   if ((!list.length && !facts.length && !(workerFacts && workerFacts.dropped)) || !run || !nonEmpty(run.id)) return [];
@@ -438,9 +445,11 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
       if (match.fromRun || confirmedIds.has(match.id)) { counts.duplicates += 1; return; }
       confirmedIds.add(match.id);
       tally.confirmed += 1;
-      // A sourced confirmation re-anchors the entry at the file version this run checked (ADR 0032).
-      const reanchor = match.trust === 'sourced' && entry.trust === 'sourced' && Array.isArray(entry.anchors) && entry.anchors.length;
-      events.push({ kind: 'memory-tx', payload: { op: 'confirmed', entry: { id: match.id, ...(reanchor ? { anchors: entry.anchors } : {}) } }, source_identity: `memory-tx:${run.id}:${tag}:confirmed` });
+      // A sourced confirmation re-anchors the entry at the file version this run checked (ADR 0032);
+      // any confirmation from an autonomous run carries its run-env anchor (ADR 0041).
+      const files = match.trust === 'sourced' && entry.trust === 'sourced' ? fileAnchors(entry.anchors) : [];
+      const carry = [...files, ...(Array.isArray(entry.anchors) ? entry.anchors.filter(isRunEnvAnchor) : [])];
+      events.push({ kind: 'memory-tx', payload: { op: 'confirmed', entry: { id: match.id, ...(carry.length ? { anchors: carry } : {}), ...(entry.observed_in ? { observed_in: entry.observed_in } : {}) } }, source_identity: `memory-tx:${run.id}:${tag}:confirmed` });
       return;
     }
     events.push({ kind: 'memory-tx', payload: { op: 'filed', entry }, source_identity: `memory-tx:${run.id}:${tag}:filed` });
@@ -478,6 +487,9 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
     if (l.rekeyed) problem('learning-key-reserved');
     const decided = decideTrust(l, { page, calls, checkout, run, citeSources });
     const quarantined = decided.trust === 'quarantined';
+    const anchors = [...(decided.anchors ?? [])];
+    const byEnv = envDependent({ scope: l.scope, section: l.section, text: l.raw }, runEnv);
+    if (byEnv) anchors.push({ kind: 'run-env', env_fingerprint: runEnv.env_fingerprint });
     const entry = {
       id: deterministicId(`${run.id}:learning:${i}`), scope: l.scope, section: l.section, kind: l.kind, text: l.text, evidence: decided.evidence ?? l.evidence, derived_from: l.derived_from,
       trust: decided.trust, run_id: run.id, created_at: at, last_confirmed_at: at, confirmations: 0, state: 'active',
@@ -485,7 +497,8 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
       ...(l.scope === 'repo' ? { repo_id: run.repo_id } : {}),
       ...(l.scope === 'task' ? { ticket_id: run.ticket_id } : {}),
       ...(quarantined ? { quarantine_reason: decided.reason } : {}),
-      ...(decided.anchors && decided.anchors.length ? { anchors: decided.anchors } : {}),
+      ...(anchors.length ? { anchors } : {}),
+      ...(byEnv ? { observed_in: 'autonomous' } : {}),
     };
     place(entry, { tag: `learning:${i}`, tally: counts });
   });
