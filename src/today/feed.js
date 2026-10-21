@@ -39,6 +39,8 @@ export function buildToday(state, { nowIso, days = TODAY_DAYS, timezone = null, 
     if (!shown(t)) continue;
     for (const e of t.timeline ?? []) {
       if (!e.at || e.at < cutoff || e.at > nowIso || !TODAY_KINDS.includes(e.kind)) continue;
+      // A local-only line (the CI watch's proposal line, ADR 0039) never reaches the vault digest.
+      if (vault && e.local_only === true) continue;
       const date = dateOf(e.at);
       if (date < firstDate || date > lastDate) continue;
       const day = dayFor(date);

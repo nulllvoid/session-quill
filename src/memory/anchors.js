@@ -144,7 +144,7 @@ export function anchorCandidates(state, repoId) {
  * candidate swapped for another, or re-anchored by a confirmation, at the same HEAD is a new key.
  */
 export function anchorCheckKey(head, entries) {
-  const lines = entries.map((e) => [e.id, ...fileAnchors(e.anchors).map((a) => `${a.file_path}@${a.blob_sha}`).sort()].join('\t')).sort();
+  const lines = entries.map((e) => [e.id, ...fileAnchors(e.anchors).map((a) => `${a.file_path}@${a.blob_sha}:${a.line ?? ''}:${a.symbol_name ?? ''}`).sort()].join('\t')).sort();
   return `${head}:${createHash('sha256').update(lines.join('\n')).digest('hex')}`;
 }
 

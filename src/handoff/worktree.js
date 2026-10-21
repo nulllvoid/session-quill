@@ -318,6 +318,13 @@ const sameBytes = (a, b) => { try { return fs.readFileSync(a).equals(fs.readFile
  * original is gone, and an ignored non-file at the entry's path count; a tracked path never does
  * (git status covers it), nor does a symlink (removing it loses only the link).
  */
+// `git check-ignore -q`: exit 0 ignored, exit 1 not ignored, anything else unknown.
+function ignoreState(cwd, rel) {
+  return new Promise((resolve) => {
+    execFile('git', ['check-ignore', '-q', '--', rel], { cwd, timeout: 60_000, windowsHide: true }, (err) => resolve(!err ? 'ignored' : err.code === 1 ? 'not-ignored' : 'unknown'));
+  });
+}
+
 export async function copiedFilesChanged({ repoPath, dir, entries = [] }) {
   for (const raw of Array.isArray(entries) ? entries : []) {
     const parts = copyEntryParts(raw);
@@ -332,8 +339,9 @@ export async function copiedFilesChanged({ repoPath, dir, entries = [] }) {
       try { srcSt = fs.lstatSync(src); } catch { srcSt = null; }
       if (srcSt && srcSt.isFile() && srcSt.size === st.size && sameBytes(src, dest)) continue;
     }
-    // Exit 0 only for a path an ignore rule matches; a tracked file is never reported ignored.
-    if (await git(dir, ['check-ignore', '-q', '--', parts.join('/')]).then(() => true, () => false)) return true;
+    // Exit 0 only for a path an ignore rule matches; a tracked file is never reported ignored (exit 1).
+    // Any other outcome (git failed, timed out) keeps the worktree: nothing is removed on a guess.
+    if ((await ignoreState(dir, parts.join('/'))) !== 'not-ignored') return true;
   }
   return false;
 }
