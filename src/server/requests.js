@@ -16,6 +16,7 @@ import { catalogFor } from '../agents/recipes.js';
 import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
 import { DISMISS_REASON_CHARS } from '../core/reduce/requests.js';
+import { ciPrEnded } from '../core/reduce/ci.js';
 import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
@@ -120,12 +121,20 @@ function findSuggestion(state, ticket, payload) {
   return { h, sug };
 }
 
+// Why a CI fix proposal lapsed (ADR 0039), in the owner's words.
+const LAPSED = Object.freeze({
+  'pr-merged': 'the pull request was merged, so this CI fix proposal lapsed',
+  'pr-closed': 'the pull request was closed, so this CI fix proposal lapsed',
+  'head-changed': 'the pull request has a newer commit, so this CI fix proposal lapsed',
+  'ci-passed': 'CI passed on this commit, so this CI fix proposal lapsed',
+});
+
 // A run proposed from a shared page (ADR 0025), still open: not approved, dismissed or lapsed.
 function findProposal(state, ticket, payload, now) {
   const p = typeof payload.proposal_id === 'string' && state.runProposals ? state.runProposals.get(payload.proposal_id) : null;
   if (!p || p.ticket_id !== ticket.id) throw new TrackerError('proposal-unknown', 'proposal_id must name a proposed run of the target ticket');
   const st = proposalState(p, ticket, now);
-  if (st === 'expired') throw new TrackerError('proposal-expired', ticket.status === 'done' ? `${ticket.key} is done, so this proposed run lapsed` : 'this proposed run is more than 7 days old and lapsed; ask for it again on the page');
+  if (st === 'expired') throw new TrackerError('proposal-expired', ticket.status === 'done' ? `${ticket.key} is done, so this proposed run lapsed` : LAPSED[p.lapse_reason] ?? 'this proposed run is more than 7 days old and lapsed; ask for it again on the page');
   if (st !== 'proposed') throw new TrackerError('proposal-resolved', `this proposed run was already ${st}`);
   return p;
 }
@@ -203,6 +212,8 @@ function approveCi(worker, req, ticket, p) {
   const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
   const ci = p.ci && typeof p.ci === 'object' ? p.ci : {};
   const h = worker.state.handoffs.get(p.from_handoff_id);
+  const ended = ciPrEnded(worker.state, h);
+  if (ended) return fail('ci-pr-closed', `the pull request is recorded ${ended}, so a CI fix is not queued`);
   if (!h || !h.ci || h.ci.state !== 'failing' || h.ci.head_sha !== ci.head_sha || h.ci.pr_url !== ci.pr_url) return fail('ci-proposal-stale', 'CI on this pull request changed since the fix was proposed (a new commit, a pass or a merge), so nothing was queued');
   if (!h.pushed_branch || h.pushed_branch !== ci.head_branch || h.ci.head_branch !== ci.head_branch) return fail('ci-branch-mismatch', `the pull request's branch is not the branch run ${String(h.id).slice(0, 8)} pushed, so a CI fix is not queued`);
   const evaluation = evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: p.access === 'autonomous' ? 'autonomous' : 'standard', branch: ci.head_branch, suggest: true });

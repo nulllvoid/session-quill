@@ -59,6 +59,36 @@ function lapseReason(p, obs) {
   return null;
 }
 
+/**
+ * How the run's pull request is recorded ended, or null while it is not: 'merged' or 'closed', from
+ * the CI watch's latest observation, the reconciler's observation of the run's own PR
+ * (`pr_observed`) or the ticket's PR record of the same URL. Pure; the approval checks it too.
+ */
+export function ciPrEnded(state, h) {
+  if (!h) return null;
+  const t = state.tickets.get(h.ticket_id);
+  const pr = t && typeof h.pr_url === 'string' ? (t.prs ?? []).find((x) => x && x.url === h.pr_url) : null;
+  for (const s of [isPlainObject(h.ci) ? h.ci.pr_state : null, isPlainObject(h.pr_observed) ? h.pr_observed.state : null, pr ? pr.state : null]) {
+    if (s === 'merged' || s === 'closed') return s;
+  }
+  return null;
+}
+
+/**
+ * After a reconcile: each open CI fix proposal whose run's pull request is now recorded merged or
+ * closed lapses (`pr-merged`, `pr-closed`), even when the CI watch no longer polls that PR.
+ */
+export function lapseCiProposalsOnEndedPr(state, ev, result) {
+  for (const x of (state.runProposals ?? new Map()).values()) {
+    if (x.origin !== 'ci' || x.state !== 'proposed' || x.lapsed_at) continue;
+    const ended = ciPrEnded(state, state.handoffs.get(x.from_handoff_id));
+    if (!ended) continue;
+    x.lapsed_at = ev.occurred_at;
+    x.lapse_reason = ended === 'merged' ? 'pr-merged' : 'pr-closed';
+    result.handoffsChanged.add(x.from_handoff_id);
+  }
+}
+
 export function applyCiObservation(state, ev, result) {
   if (ev.producer !== 'worker') return { rejected: 'ci-observation-source' };
   const p = ev.payload;

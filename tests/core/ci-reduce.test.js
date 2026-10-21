@@ -136,3 +136,19 @@ test('no proposal on a done ticket; replay of the same events gives the same sta
   assert.deepEqual(a.handoffs.get(HID).ci, b.handoffs.get(HID).ci);
   assert.deepEqual(a.runProposals.get(ciProposalId(HID, SHA1)), b.runProposals.get(ciProposalId(HID, SHA1)));
 });
+
+test('an open proposal lapses when the reconciler records the pull request merged or closed, on the ticket or on the run', () => {
+  for (const [upd, reason] of [[{ ticket_id: TID, url: PR, state: 'merged', merged_at: '2026-10-02T09:00:00Z' }, 'pr-merged'], [{ ticket_id: TID, url: PR, state: 'closed' }, 'pr-closed'], [{ handoff_id: HID, url: PR, state: 'merged', merged_at: '2026-10-02T09:00:00Z' }, 'pr-merged']]) {
+    const state = setup();
+    state.tickets.get(TID).prs.push({ id: 'pr1', provider: 'github', url: PR, state: 'draft', opened_at: T0, merged_at: null, base_branch: 'main', head_branch: BRANCH, observed_at: T0, error: null, evidence_id: null });
+    obs(state);
+    propose(state);
+    const p = state.runProposals.get(ciProposalId(HID, SHA1));
+    // A failed poll records nothing about the pull request's state.
+    worker(state, 'reconcile', { pr_updates: [{ ...upd, state: undefined, error: 'gh offline' }] });
+    assert.equal(p.lapsed_at, null);
+    worker(state, 'reconcile', { pr_updates: [upd] }, { occurred_at: '2026-10-02T09:01:00Z' });
+    assert.deepEqual([p.lapse_reason, p.lapsed_at], [reason, '2026-10-02T09:01:00Z'], JSON.stringify(upd));
+    assert.equal(proposalState(p, state.tickets.get(TID), '2026-10-02T09:01:00Z'), 'expired');
+  }
+});

@@ -16,7 +16,7 @@ import { applyMemoryTx } from './reduce/memory.js';
 import { applyCriticalProposal } from './reduce/critical.js';
 import { applyWorktree } from './reduce/worktrees.js';
 import { applySnapshotTx } from './reduce/snapshots.js';
-import { applyCiObservation, applyCiProposal } from './reduce/ci.js';
+import { applyCiObservation, applyCiProposal, lapseCiProposalsOnEndedPr } from './reduce/ci.js';
 
 export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 
@@ -324,6 +324,8 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
           result.changed.add(ticket.id);
         }
       }
+      // ADR 0039: a CI fix proposal never outlives its pull request.
+      lapseCiProposalsOnEndedPr(state, ev, result);
       break;
     }
     default:

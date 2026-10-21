@@ -4,9 +4,14 @@
 // the dashboard, as a CI fix, and only while CI still fails on its commit.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { bootWorker, makeRepo, until, T1 } from './helpers.js';
+import { bootWorker, makeRepo, git, until, T1 } from './helpers.js';
 import { updateHandoff } from '../../src/handoff/results.js';
+import { submitRequest } from '../../src/server/requests.js';
+import { ciProposalId } from '../../src/core/reduce/ci.js';
 
 const NONE = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 const FIX = { read_source: true, edit_source: true, commit: true, push_branch: true, open_draft_pr: true };
@@ -67,5 +72,64 @@ test('a branch git accepts (fix/#123) is observed and gets a proposal', async ()
     const before = b.w.journal.lastSequence;
     const again = await b.hext.sweepCi();
     assert.deepEqual([again.observed, again.proposed, b.w.journal.lastSequence], [0, 0, before]);
+  } finally { await b.w.stop(); }
+});
+
+const BRANCH = 'quill/pmo-7';
+// A repository with a bare origin and the run's branch pushed there; returns the commit CI "failed" on.
+function repoWithOrigin() {
+  const repo = makeRepo();
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), 'st-origin-'));
+  git(origin, 'init', '-q', '--bare');
+  git(repo.dir, 'remote', 'add', 'origin', origin);
+  git(repo.dir, 'checkout', '-q', '-b', BRANCH);
+  fs.writeFileSync(path.join(repo.dir, 'src.js'), 'export const a = 2;\n');
+  git(repo.dir, 'commit', '-q', '-am', 'fix attempt');
+  git(repo.dir, 'push', '-q', 'origin', BRANCH);
+  git(repo.dir, 'checkout', '-q', 'main');
+  return { repo, origin, head: git(repo.dir, 'rev-parse', BRANCH) };
+}
+const failing = (sha) => ({ head_sha: sha, head_branch: BRANCH, pr_state: 'draft', state: 'failing', checks: [{ name: 'CI / test', state: 'failed', run_id: null, job_id: null }] });
+const approve = (b, p) => submitRequest(b.w, { id: randomUUID(), kind: 'approve-run', target_id: p.ticket_id, expected_revision: null, payload: { proposal_id: p.id } });
+
+test('a CI proposal lapses once the reconciler records its pull request merged; approval refuses a PR recorded ended', async () => {
+  const { repo, head } = repoWithOrigin();
+  const gh = github(failing(head));
+  const b = await bootWorker({ repo, runtimeAvailable: true, repoExtra: { provider: 'github' }, ciProviderFor: () => gh });
+  try {
+    const root = await rootRun(b, BRANCH);
+    await b.hext.sweepCi();
+    const p = b.w.state.runProposals.get(ciProposalId(root, head));
+    assert.equal(p.state, 'proposed');
+    // A record that says the PR closed while the proposal is still open (an older state): refused.
+    b.w.state.handoffs.get(root).pr_observed = { state: 'closed' };
+    const closed = approve(b, p).request;
+    b.w.tick();
+    assert.deepEqual([b.w.state.requests.get(closed.id).state, b.w.state.requests.get(closed.id).error.code], ['failed', 'ci-pr-closed']);
+    delete b.w.state.handoffs.get(root).pr_observed;
+    // The reconciler sees the ticket's PR merged: the proposal lapses, though the watch stops polling it.
+    b.w.state.tickets.get(T1).prs.push({ id: 'pr1', provider: 'github', url: PR, state: 'draft', opened_at: b.iso(), merged_at: null, base_branch: 'main', head_branch: BRANCH, observed_at: b.iso(), error: null, evidence_id: null });
+    b.w.emit('reconcile', { pr_updates: [{ ticket_id: T1, url: PR, state: 'merged', merged_at: b.iso() }] });
+    assert.deepEqual([p.lapse_reason, typeof p.lapsed_at], ['pr-merged', 'string']);
+    assert.throws(() => approve(b, p), /pull request was merged, so this CI fix proposal lapsed/);
+  } finally { await b.w.stop(); }
+});
+
+test('a CI fix whose branch is gone from origin does not start, even with a remote-tracking ref left over', async () => {
+  const { repo, origin, head } = repoWithOrigin();
+  const gh = github(failing(head));
+  const b = await bootWorker({ repo, runtimeAvailable: true, repoExtra: { provider: 'github' }, ciProviderFor: () => gh, fakeEnv: { FAKE_CLAUDE_EDIT: 'src.js' } });
+  try {
+    const root = await rootRun(b, BRANCH);
+    await b.hext.sweepCi();
+    const p = b.w.state.runProposals.get(ciProposalId(root, head));
+    git(origin, 'update-ref', '-d', `refs/heads/${BRANCH}`);
+    assert.equal(git(repo.dir, 'rev-parse', `refs/remotes/origin/${BRANCH}`), head, 'the stale tracking ref still names the failing commit');
+    const { request } = approve(b, p);
+    b.w.tick();
+    const fixId = b.w.state.requests.get(request.id).result.handoff_id;
+    const failed = await settle(b, fixId);
+    assert.deepEqual([failed.state, failed.error.code], ['failed', 'ci-branch-missing'], JSON.stringify(failed.error));
+    assert.throws(() => git(origin, 'rev-parse', '--verify', `refs/heads/${BRANCH}`), 'nothing pushed');
   } finally { await b.w.stop(); }
 });

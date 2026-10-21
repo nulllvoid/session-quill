@@ -731,7 +731,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
           updateHandoff(worker, h.id, { worktree_path: worktreePath });
         } finally { timings.worktree_ms = Math.round(performance.now() - worktreeStarted); }
       } catch (err) {
-        return fail(worker, h, ['worktree-failed', 'ci-head-changed', 'branch-protected'].includes(err.code) ? err.code : 'source-failed', err.message);
+        return fail(worker, h, ['worktree-failed', 'ci-head-changed', 'ci-branch-missing', 'branch-protected'].includes(err.code) ? err.code : 'source-failed', err.message);
       }
       cwd = worktreePath;
       await takeSnapshot(worker, h.id, 'start');

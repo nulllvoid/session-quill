@@ -42,6 +42,7 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
    - `head_branch` is any branch git accepts (`git check-ref-format --branch` rules, at most 255 characters, no Unicode control, format or separator character), so a GitHub branch such as `fix/#123` is observed. The CI fix's checkout uses the same rule.
    - The reducer applies each run's observations in order (`n` = the previous one plus 1), keeps check names to one line of at most 120 characters, and sets the run's local `ci` record.
    - It lapses an open CI fix proposal of that run when the pull request is merged (`pr-merged`) or closed (`pr-closed`), when the head commit changed (`head-changed`), or when CI passed (`ci-passed`). A rerun on the same commit (pending) keeps the proposal open.
+   - The watch stops polling a pull request once anything records it merged or closed, so a reconcile event lapses the open CI proposals too: when the ticket's PR record of the run's `pr_url`, or the run's own `pr_observed`, is merged or closed, the proposal lapses with `pr-merged` or `pr-closed` (`lapseCiProposalsOnEndedPr`).
    - CI data never goes on `ticket.prs`: `sanitizePr` copies every PR field to exports.
 
 6. **`ci-proposal` (worker only): one per failing commit, two per pull request.**
@@ -67,12 +68,12 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
 
 8. **Approval is the owner's, on the dashboard.**
    - `approve-run` and `dismiss-run` of a CI proposal need `fromOwnerDashboard` (ruling R59). The CLI, an ingress request claiming the owner, a schedule or a page fail with `ci-fix-dashboard-only`. This is stricter than a critical change, whose dismissal the CLI may send, because the plan makes both CI actions dashboard-only.
-   - Approval fails with `ci-proposal-stale` unless the opening run still records CI failing on the proposal's commit. It fails with `ci-branch-mismatch` when the branch is not the run's pushed branch.
+   - Approval fails with `ci-pr-closed` when the pull request is recorded merged or closed (by the watch, the run's `pr_observed` or the ticket's PR record). It fails with `ci-proposal-stale` unless the opening run still records CI failing on the proposal's commit. It fails with `ci-branch-mismatch` when the branch is not the run's pushed branch.
    - Approval then queues an ordinary `attempt-fix` through `evaluateHandoff`: the same validation, reservation and protected-branch refusal (`branch-protected`) as the Run dialog. There is no "Valid for": `ttl_minutes` is refused (`invalid-ttl`).
    - The queued run carries `origin: 'ci'`, `ci_fix` { proposal_id, root_handoff_id, pr_url, head_sha, head_branch, failing, log_tail, log_withheld } and `proposal` { id, origin: 'ci', from_handoff_id, recipe }. Memory therefore treats it as a proposed run (ADR 0027): its learnings wait for the owner, and its Run note is never given to other runs.
 
 9. **The fix run.**
-   - Dispatch checks the run out at exactly the commit CI failed on: `worktreeBase(ticket, repo, { ci: { branch, commit } })`. It first fetches the branch. If origin's tip is another commit, the run fails with `ci-head-changed` before anything starts, and nothing changes; the next observation of the new commit decides again.
+   - Dispatch checks the run out at exactly the commit CI failed on: `worktreeBase(ticket, repo, { ci: { branch, commit } })`. It first fetches the branch. If origin's tip is another commit, the run fails with `ci-head-changed` before anything starts, and nothing changes; the next observation of the new commit decides again. If the repository has no origin, the fetch fails (the branch was deleted there, or origin is unreachable) or origin has no such branch, the run fails with `ci-branch-missing`: a remote-tracking ref left from an earlier fetch may be stale, so it is never used in its place.
    - The worker commits the change and pushes it with the existing `git push origin HEAD:refs/heads/<branch>`. The refspec has no `+` and there is no `--force`, so git accepts only a fast-forward of the same branch. `pushBranch` refuses a protected branch, and the runtime's deny list keeps `git push --force*` away from the agent.
    - No pull request is opened.
 

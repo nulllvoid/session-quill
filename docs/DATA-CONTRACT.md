@@ -470,6 +470,7 @@ ADR 0039. Every field below is local only. None is on an export, sanitize, mirro
   - `failing` holds the names of the failed checks.
   - `since` is when this commit's current state was first observed.
 - Applying an observation lapses each open CI proposal of the run. It sets the proposal's `lapsed_at` and its `lapse_reason`: `pr-merged`, `pr-closed`, `head-changed` (another commit) or `ci-passed`.
+- A `reconcile` event lapses each open CI proposal whose run's pull request it leaves recorded merged or closed (the ticket's PR record of the run's `pr_url`, or the run's `pr_observed`), with `pr-merged` or `pr-closed`.
 - Event `ci-proposal` (worker only; quarantined through ingress). Payload `{ id, handoff_id, pr_url, head_sha, head_branch, failing[≤10], log_tail (≤ 4096 characters, or null), log_withheld }`. `id` = deterministicId(`<handoff_id>:ci:<head_sha>`). Source identity `ci-proposal:<id>`. The same id again is a duplicate. Refusals:
   - `ci-proposal-source`, `ci-proposal-invalid` and `ci-id-mismatch` (the event itself);
   - `handoff-unknown`, `ci-not-failing` (the run's latest observation is not failing on that commit and URL) and `ci-branch-mismatch` (not the observed branch, or not the run's `pushed_branch`);
@@ -482,11 +483,12 @@ ADR 0039. Every field below is local only. None is on an export, sanitize, mirro
 - Proposal `failing[]`: check names with each instruction-like name replaced by `[name withheld: instruction-like text]`.
 - Log tail: the last part of `gh run view --job <id> --log-failed` for the first failed GitHub Actions check. It has colour codes and control characters removed, is redacted with `redactLog`, and has each instruction-like line replaced by `[line withheld: instruction-like text]` (`log_withheld` counts them). It is cut to its last 4096 characters on a line boundary.
 - Request `approve-run` / `dismiss-run` of a CI proposal: only a request the dashboard server journaled (producer `worker`, actor `owner`). Anything else fails with `ci-fix-dashboard-only`. `ttl_minutes` is refused (`invalid-ttl`). Approve also fails with:
+  - `ci-pr-closed`: the pull request is recorded merged or closed;
   - `ci-proposal-stale`: the opening run's `ci` is no longer failing on the proposal's commit;
   - `ci-branch-mismatch`;
   - any `evaluateHandoff` refusal: `branch-protected`, `handoff-reserved`, ….
 - Handoff fields of an approved CI fix: `origin: 'ci'`, `ci_fix` `{ proposal_id, root_handoff_id, pr_url, head_sha, head_branch, failing[], log_tail, log_withheld }`, `branch` (the PR's branch), `proposal` `{ id, origin: 'ci', from_handoff_id, recipe }`.
-- Dispatch of a CI fix checks out exactly `ci_fix.head_sha`. It fails the run with `ci-head-changed` when origin's tip of the branch is another commit, `ci-branch-mismatch` when `branch` differs from `ci_fix.head_branch`, and `branch-protected` for a protected branch. The push is the ordinary fast-forward-only `git push origin HEAD:refs/heads/<branch>`. No pull request is opened.
+- Dispatch of a CI fix checks out exactly `ci_fix.head_sha`. It fails the run with `ci-head-changed` when origin's tip of the branch is another commit, `ci-branch-missing` when there is no origin, the branch cannot be fetched or origin does not have it (a stale remote-tracking ref is never used), `ci-branch-mismatch` when `branch` differs from `ci_fix.head_branch`, and `branch-protected` for a protected branch. The push is the ordinary fast-forward-only `git push origin HEAD:refs/heads/<branch>`. No pull request is opened.
 - User config `[ci]` (user-only: a `.quill.toml` cannot set it): `watch` (boolean, default true; only `false` turns it off) and `interval_minutes` (whole minutes 1–60, default 5).
 - Watched runs: done, a GitHub `pr_url`, finished in the last 7 days, not `origin: 'ci'`, on an open ticket, and with a pull request not recorded merged or closed. At most 50 per sweep. The repository provider must be `github`.
 - Dashboard: Needs you groups and `group=` (`attention` by default, or `none`). The counting rules and wording are in design system §5–§7.

@@ -14,7 +14,7 @@ import { MINUTE } from '../lib/time.js';
 import { repoFor } from '../core/state.js';
 import { ciSettings } from '../config/config.js';
 import { defaultProviders } from '../reconcile/providers/index.js';
-import { ciProposalId, ciProposalsOf, ciCheckName, CI_LOG_MAX, CI_PROPOSALS_PER_PR } from '../core/reduce/ci.js';
+import { ciProposalId, ciProposalsOf, ciPrEnded, ciCheckName, CI_LOG_MAX, CI_PROPOSALS_PER_PR } from '../core/reduce/ci.js';
 import { isProtectedBranch } from './permissions.js';
 import { redactLog } from './stream.js';
 import { instructionLike } from '../memory/instructions.js';
@@ -30,7 +30,6 @@ const PRE_CUT = 16 * 1024;
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[@-_]/g;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
-const TERMINAL_PR = new Set(['merged', 'closed']);
 
 /**
  * The redacted, filtered last part of a CI log: `{ text, withheld }`, text at most `max` characters
@@ -47,14 +46,10 @@ export function ciLogTail(raw, max = CI_LOG_MAX) {
   return { text: s || null, withheld };
 }
 
-const prRecord = (state, h) => {
-  const t = state.tickets.get(h.ticket_id);
-  return t ? (t.prs ?? []).find((p) => p.url === h.pr_url) ?? null : null;
-};
-
 /**
  * Runs whose pull request the watch polls: done, opened a GitHub PR, finished in the last 7 days,
- * not themselves a CI fix, on an open ticket, and whose PR is not known to be merged or closed.
+ * not themselves a CI fix, on an open ticket, and whose PR is not recorded merged or closed (by the
+ * watch, on the run's own PR observation or on the ticket's PR record).
  * Newest first, at most CI_WATCH_MAX_PRS.
  */
 export function watchedRuns(state, nowIso) {
@@ -66,9 +61,7 @@ export function watchedRuns(state, nowIso) {
     if (!Number.isFinite(at) || now - at > CI_WATCH_WINDOW_MS) continue;
     const t = state.tickets.get(h.ticket_id);
     if (!t || t.status === 'done') continue;
-    if (h.ci && TERMINAL_PR.has(h.ci.pr_state)) continue;
-    const pr = prRecord(state, h);
-    if (pr && TERMINAL_PR.has(pr.state)) continue;
+    if (ciPrEnded(state, h)) continue;
     out.push(h);
   }
   return out.sort((a, b) => String(b.finished_at ?? '').localeCompare(String(a.finished_at ?? ''))).slice(0, CI_WATCH_MAX_PRS);
@@ -88,7 +81,7 @@ function changed(prev, seen) {
 // Why the watch stages no fix for this failing commit, or null when it may.
 export function proposalBlocker(state, h, repo) {
   const ci = h.ci;
-  if (!ci || ci.state !== 'failing' || TERMINAL_PR.has(ci.pr_state)) return 'not-failing';
+  if (!ci || ci.state !== 'failing' || ciPrEnded(state, h)) return 'not-failing';
   if (state.runProposals.has(ciProposalId(h.id, ci.head_sha))) return 'already-proposed';
   if (ciProposalsOf(state, h.id).length >= CI_PROPOSALS_PER_PR) return 'limit';
   if (!h.pushed_branch || ci.head_branch !== h.pushed_branch) return 'branch-mismatch';
