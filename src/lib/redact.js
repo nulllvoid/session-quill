@@ -150,12 +150,20 @@ export function isIdentifierKey(key) {
   return (IDENTIFIER_NAMES.has(key) || IDENTIFIER_SUFFIX.test(key)) && !CREDENTIAL_NAME.test(key);
 }
 
+// URLs are identifiers, but the user-info part of one (`https://user:token@host`) is a credential, never
+// part of what identifies it: that part alone is replaced.
+const URL_KEYS = new Set(['url', 'pr_url']);
+function stripUserinfo(v) {
+  if (typeof v === 'string') return v.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/?#@\s]+@/i,'$1[secret redacted]@');
+  return structuredClone(v);
+}
+
 function redactValue(value) {
   if (typeof value === 'string') return redactText(value);
   if (Array.isArray(value)) return value.map(redactValue);
   if (value && typeof value === 'object') {
     const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = isIdentifierKey(k) ? structuredClone(v) : redactValue(v);
+    for (const [k, v] of Object.entries(value)) out[k] = isIdentifierKey(k) ? (URL_KEYS.has(k) ? stripUserinfo(v) : structuredClone(v)) : redactValue(v);
     return out;
   }
   return value;

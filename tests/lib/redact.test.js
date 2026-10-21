@@ -135,3 +135,10 @@ test('redactEvent tolerates events without an object payload', () => {
   assert.deepEqual(redactEvent({ kind: 'bind', payload: null }), { kind: 'bind', payload: null });
   assert.equal(redactEvent(null), null);
 });
+
+test('a URL identifier keeps its bytes except a user-info credential', () => {
+  const ev = { kind: 'post-tool', payload: { url: 'https://bob:ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com/o/r.git', pr_url: 'https://github.com/o/r/pull/7' } };
+  const out = redactEvent(ev).payload;
+  assert.equal(out.url, 'https://[secret redacted]@github.com/o/r.git');
+  assert.equal(out.pr_url, 'https://github.com/o/r/pull/7');
+});

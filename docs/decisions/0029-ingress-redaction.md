@@ -38,7 +38,7 @@ The PRD asked to move `src/export/sanitize.js` into ingress. The gap analysis co
 
 - **Formats the rules do not know.** A short or low-entropy secret with no known prefix and no `secret=` shape (a plain password typed into prose) is not caught. The high-entropy rule misses a small share of short random strings.
 - **False positives.** Long random-looking text that is not a secret (a document id in a URL, a base64 image) is redacted in free text. Identifier fields are never touched, so this costs readability, not identity.
-- **Identifier fields are trusted.** A producer that put a secret under an identifier-shaped key (`*_id`, `url`, `branch`) would keep it. Quill's own producers put only identifiers there; the credential-name exception covers the obvious names, and a URL's userinfo under `url` is kept as an identity.
+- **Identifier fields are trusted.** A producer that put a secret under an identifier-shaped key (`*_id`, `url`, `branch`) would keep it. Quill's own producers put only identifiers there; the credential-name exception covers the obvious names; the user-info part of a `url` or `pr_url` (`https://user:token@host`) is replaced, the rest of the URL kept.
 - **Outside ingress.** Events the worker emits itself (run transitions, `memory-tx`, tracker sync) and requests the dashboard server journals do not pass through `redactEvent`. Run text is already redacted by the run ledger rules; dashboard input is the owner's own typing.
 - **Old data.** Journals and blobs from before 2.0.0 keep any secrets they hold; removing them needs a manual rewrite of the store.
 
