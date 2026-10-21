@@ -6,6 +6,10 @@
 import { createHash } from 'node:crypto';
 import { redactCapped } from '../handoff/stream.js';
 import { deliverableRunNotes, memoryLine } from './deliver.js';
+import { instructionLike } from './instructions.js';
+
+// A changed file's name is the agent's choice: one that reads like an instruction is withheld (R29).
+export const WITHHELD_FILE = '[withheld: instruction-like file name]';
 
 export const SIGNATURE_LINES = 5;
 export const FAILURE_FILES = 20;
@@ -54,7 +58,7 @@ const clean = (s, max = FIELD_CHARS) => redactCapped(String(s).replace(/[\x00-\x
 export function failureRecord(run) {
   const gate = run && run.test_gate;
   if (!gate || typeof gate !== 'object' || (gate.status !== 'failed' && gate.status !== 'timeout')) return null;
-  const files = (Array.isArray(run.changed_files) ? run.changed_files : []).filter((f) => typeof f === 'string' && f.trim()).slice(0, FAILURE_FILES).map((f) => clean(f.split('\\').join('/')));
+  const files = (Array.isArray(run.changed_files) ? run.changed_files : []).filter((f) => typeof f === 'string' && f.trim()).slice(0, FAILURE_FILES).map((f) => (instructionLike(f) ? WITHHELD_FILE : clean(f.split('\\').join('/'))));
   return {
     kind: 'test-gate',
     status: gate.status,
