@@ -741,7 +741,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
     const environments = worker.environmentsFor ? worker.environmentsFor(ticket.repo_id) : repoCfg ? repoCfg.deployment_environments ?? [] : [];
     const render = (r) => renderRecipe(r, { ticket, url, note: h.note, prs: ticket.prs ?? [], deployments: ticket.deployments ?? [], environments });
-    const context = gatherContext(worker.state, ticket, { env: worker.env, currentId: h.id });
+    const context = gatherContext(worker.state, ticket, { env: worker.env, currentId: h.id, now: worker.now() });
     const inputs = !recipe || recipe.legacy ? null : new Set(recipe.inputs);
     // The diff is read from the run's own checkout, so it exists only with source access.
     if (worktreePath && (!inputs || inputs.has('work'))) context.diff = await gatherDiff(worktreePath, context.commits);
