@@ -326,7 +326,20 @@ _Not yet filled._
 
 ### Task 3 Dry-run preflight and leases
 
-_Not yet filled._
+ADR 0031 (FR-3.2, FR-3.4). It adds no event kinds. Every field below is local only: none is on an export, sanitize, mirror, vault-note or publisher allow-list (`tests/export/privacy-sentinel.test.js`).
+
+- Config: `[critical] require_dry_run` (boolean, default `true`; only an explicit `false` turns it off; user config only, so a `.quill.toml` cannot set it).
+- Request `approve-run` payload: optional `ttl_minutes` ∈ {5, 15, 60}. Leaving it out, or `null`, means the whole run. Only a run-origin (critical) proposal takes it. Any other value, or any value on a page proposal, fails with `invalid-ttl`, at submit and again when the worker evaluates the request. The request record keeps the normalised `ttl_minutes`.
+- Handoff field: `lease_minutes` (5, 15 or 60; absent for a whole-run approval), set when a critical approval is queued and copied by a resume of that run. Dispatch fails the run with `invalid-ttl` if it holds any other value.
+- Grant (`<runDir>/grant.json`, hashed at dispatch): `requireDryRun` (boolean; on every run with action pins, from `[critical] require_dry_run` at dispatch) and `notAfter` (ISO time = dispatch time + `lease_minutes`; absent without a lease). A grant without either decides as in 1.1.
+- Run ledger (`<runDir>/ledger.jsonl`): in a run whose grant has `requireDryRun: true`, each `guard` line of a shell call holding one plain command carries `argv_sha`. That is the SHA-256 hex of the canonical JSON of `{ tool, argv, redirects, stdin }` as the guard parses the command. The stream collector's `tool_result` lines (with `tool_use_id` and `exit_code`) are unchanged.
+- Dry-run twin of a pinned action: kubectl gets the same words, with `--dry-run`/`--dry-run=*` removed and `--dry-run=server` added (before a `--`). psql gets the same words, with `EXPLAIN ` before its single `-c`/`--command` statement, which must start with INSERT, UPDATE, DELETE, MERGE, SELECT, WITH or VALUES. A twin exists only when the guard reads it as a read. Other tools, MCP pins and other verbs have none.
+- Owner snapshot: `run_proposals[].dry_run` = `{ twin }` (the twin's command text, or `null` when the pin has none). It is present only on a run-origin proposal with a `k8s.write` or `db.write` scope while `[critical] require_dry_run` is on. Run proposals never reach an export.
+- Error code (request submission and apply): `invalid-ttl`.
+- Guard refusals the agent sees:
+  - `QUILL_DENIED dry-run-required: run <twin> first, …`: a pinned `k8s.write`/`db.write` call in a grant with `requireDryRun`, until the ledger holds an allowed guard line with the twin's `argv_sha` and, after it, the latest `tool_result` of the same `tool_use_id` with `exit_code` 0. A pin without a twin gets a `dry-run-required` reason saying it has none. An unreadable ledger refuses.
+  - `QUILL_DENIED lease-expired: …`: every scoped write and pinned action once the clock is past the grant's `notAfter`, or when `notAfter` does not parse. Reads, git under its per-run permissions and the run's scratch files still pass.
+- UI (critical change item, owner dashboard): a "Valid for" select (Whole run, 5 min, 15 min, 1 h) before Approve and queue, sent as `ttl_minutes`. It shows "Dry run required in run" when `dry_run` is projected, with the twin as escaped code, or a warning that the action has none.
 
 ### Task 4 Anchored memory and failure ledger
 
