@@ -142,3 +142,15 @@ test('a URL identifier keeps its bytes except a user-info credential', () => {
   assert.equal(out.url, 'https://[secret redacted]@github.com/o/r.git');
   assert.equal(out.pr_url, 'https://github.com/o/r/pull/7');
 });
+
+test('tool names and planned paths are identifiers: an MCP tool name survives, free text is still redacted', () => {
+  const tool = 'mcp__s3v2__putObjectV2InBucket4Region9';
+  for (const k of ['tool_name', 'tool', 'planned_paths', 'write_paths', 'other_paths']) assert.ok(isIdentifierKey(k), k);
+  assert.ok(!isIdentifierKey('token_paths'), 'a credential-named key is never an identifier');
+  const planned = ['src/aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3x.js'];
+  const out = redactEvent({ kind: 'post-tool', payload: { tool_name: tool, planned_paths: planned, nested: { tool }, note: `called ${tool}` } });
+  assert.equal(out.payload.tool_name, tool);
+  assert.deepEqual(out.payload.planned_paths, planned);
+  assert.equal(out.payload.nested.tool, tool);
+  assert.equal(out.payload.note, `called ${REDACTED}`, 'the same name in prose is text, and the entropy rule still applies');
+});

@@ -26,6 +26,12 @@ const LEDGER_FILE = 'ledger.jsonl';
 const FALLBACK_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const OVERSIZE = Symbol('oversize');
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+// A tool name is an identifier the host chose (`Bash`, `mcp__server__tool`). It is kept by its shape,
+// not passed through the secret rules, whose entropy rule mistakes long MCP names for secrets and
+// would break reconcile's and prodEffects' matching by name; any other shape is a fixed placeholder.
+const TOOL_NAME = /^[\w.:-]{1,200}$/;
+const INVALID_TOOL_NAME = '[invalid tool name]';
+const toolNameField = (v) => (v === undefined || v === null ? null : typeof v === 'string' && TOOL_NAME.test(v) ? v : INVALID_TOOL_NAME);
 
 const REASONS = {
   error: 'QUILL_DENIED guard-error: the guard could not check this call, so it is refused. Try a simpler form of the call once; if that is refused too, record the step in attempts and continue with the rest of the task.',
@@ -161,7 +167,7 @@ function callFields(s) {
   let input_summary = null;
   try { input_summary = summarizeInput(input.tool_name, input.tool_input, s.cwd); } catch { input_summary = null; }
   return {
-    tool_name: summary(input.tool_name, 200),
+    tool_name: toolNameField(input.tool_name),
     ...(typeof input.tool_use_id === 'string' && TOOL_USE_ID.test(input.tool_use_id) ? { tool_use_id: input.tool_use_id } : {}),
     input_summary,
     input_excerpt: excerpt(input.tool_input),

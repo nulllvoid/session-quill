@@ -395,3 +395,17 @@ test('a run cannot rewrite its own mcp-servers.json', () => {
   assert.match(r.reason, /^QUILL_DENIED protected-path/);
   assert.equal(guard(hookInput(run, 'Write', { file_path: path.join(run.runDir, 'notes.txt'), content: 'x' }), envFor(run)).decision, 'allow');
 });
+
+test('the ledger keeps a tool name by its shape, not through the secret rules, so reconcile still matches it', () => {
+  const run = makeRun();
+  const tool = 'mcp__s3v2__putObjectV2InBucket4Region9';
+  guard(hookInput(run, tool, { Bucket: 'b' }, { tool_use_id: 'toolu_mcp' }), envFor(run));
+  const [g] = ledgerOf(run);
+  assert.equal(g.tool_name, tool, 'an MCP tool name is an identifier, not a high-entropy secret');
+  const recon = reconcileAttempts([{ route: 'mcp', tool, outcome: 'refused' }], ledgerOf(run));
+  assert.equal(recon.attempts[0].verified, 'seen', 'the attempt matches its ledger line');
+  for (const bad of ['Bash; rm -rf /', 'x'.repeat(201), 'tab\tname', 7]) {
+    guard(hookInput(run, bad, {}, { tool_use_id: 'toolu_bad' }), envFor(run));
+    assert.equal(ledgerOf(run).at(-1).tool_name, '[invalid tool name]', String(bad).slice(0, 20));
+  }
+});
