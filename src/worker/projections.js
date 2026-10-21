@@ -9,7 +9,7 @@ import { ensureDir, writeJsonAtomic, readJsonIfExists } from '../lib/atomic-fs.j
 import { addMs, HOUR } from '../lib/time.js';
 import { environmentStatus } from '../deploy/environments.js';
 import { descriptionProblems, parseDescription } from '../core/description.js';
-import { dryRunTwin, DRY_RUN_SCOPES } from '../gate/dry-run.js';
+import { pinnedTwin, DRY_RUN_SCOPES } from '../gate/dry-run.js';
 
 export const SNAPSHOT_TIMELINE_LIMIT = 20;
 
@@ -82,7 +82,8 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
 function dryRunNote(p, on) {
   if (!on || p.origin !== 'run' || !(Array.isArray(p.scopes) && p.scopes.some((s) => s && DRY_RUN_SCOPES.has(s.name)))) return null;
   const pin = p.action_pin && typeof p.action_pin.guard === 'string' && p.action_pin.kind !== 'mcp' ? p.action_pin.guard : null;
-  const twin = pin ? dryRunTwin({ tool_name: 'Bash', tool_input: { command: pin } }) : null;
+  // The guard's own derivation (pinnedTwin), so the item names the twin the run will need, or none.
+  const twin = pin ? pinnedTwin({ tool_name: 'Bash', tool_input: { command: pin } }) : null;
   return { twin: twin ? twin.text : null };
 }
 

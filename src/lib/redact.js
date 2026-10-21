@@ -141,10 +141,12 @@ export function redactCapped(text, max) {
 // key lookups and dedupe still hold; producers put only identifiers under these names. A name that
 // says it holds a credential (`api_key`, `access_key_id`, `token_hash`) is never one: it is redacted
 // like text, so a secret cannot ride through under an identifier-shaped name.
-const IDENTIFIER_NAMES = new Set(['id', 'ids', 'key', 'sha', 'hash', 'ref', 'write_paths', 'paths', 'files', 'source_identity', 'cwd', 'branch', 'url', 'pr_url']);
-const IDENTIFIER_SUFFIX = /_(?:id|ids|key|sha|hash|ref)$/;
+// Tool names (`tool_name`, `tool`) are the host's identifiers: the entropy rule would take a long MCP
+// name such as `mcp__s3v2__putObjectV2InBucket4Region9` for a secret and break matching by name.
+const IDENTIFIER_NAMES = new Set(['id', 'ids', 'key', 'sha', 'hash', 'ref', 'write_paths', 'paths', 'files', 'source_identity', 'cwd', 'branch', 'url', 'pr_url', 'tool_name', 'tool']);
+const IDENTIFIER_SUFFIX = /_(?:id|ids|key|sha|hash|ref|paths)$/;
 const CREDENTIAL_NAME = /(token|secret|password|passwd|api_?key|credential|access_?key|private_?key)/i;
-export const IDENTIFIER_KEYS = Object.freeze([...IDENTIFIER_NAMES, '*_id', '*_ids', '*_key', '*_sha', '*_hash', '*_ref']);
+export const IDENTIFIER_KEYS = Object.freeze([...IDENTIFIER_NAMES, '*_id', '*_ids', '*_key', '*_sha', '*_hash', '*_ref', '*_paths']);
 
 export function isIdentifierKey(key) {
   return (IDENTIFIER_NAMES.has(key) || IDENTIFIER_SUFFIX.test(key)) && !CREDENTIAL_NAME.test(key);

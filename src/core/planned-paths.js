@@ -8,29 +8,41 @@ import path from 'node:path';
 
 export const MAX_PLANNED = 50;
 export const PLANNED_CHARS = 200;
+export const MAX_WILDCARDS = 4;
+/** How much of a plan's text is searched for paths: plans are agent output of any size. */
+export const PLAN_TEXT_CHARS = 64 * 1024;
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
-const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s)>\]`'"]*/gi;
+// The scheme is bounded, so a long run of scheme characters with no `://` stays linear.
+const URL_RE = /\b[a-z][a-z0-9+.-]{0,20}:\/\/[^\s)>\]`'"]*/gi;
 const WWW_RE = /\bwww\.[^\s)>\]`'"]*/gi;
 // The characters a path token in prose may hold. Anything else (spaces, quotes, brackets, colons,
 // commas, backticks) ends it, so `C:\x`, `~/x` and `[a](b)` split into parts the checks reject.
 const TOKEN_RE = /[A-Za-z0-9_@+\-.*?/\\]+/g;
 
 const slashes = (s) => s.replace(/\\/g, '/');
+// `s` without its trailing dots. A loop, not `/\.+$/`, which is quadratic on a long run of dots.
+function trimDots(s) {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === '.') end -= 1;
+  return s.slice(0, end);
+}
 
 // One planned entry in canonical form (forward slashes, no leading `./`, no trailing `/`), or
 // null when it is not a repo-relative path or glob: absolute, drive- or home-relative, a URL,
-// climbing with `..`, holding control characters or a colon, empty, or longer than PLANNED_CHARS.
+// climbing with `..`, holding control characters or a colon, empty, longer than PLANNED_CHARS, or
+// with more than MAX_WILDCARDS wildcards (`*`, `**`, `?`; a run of `*` counts as one `**`).
 function canonicalEntry(raw) {
   if (typeof raw !== 'string') return null;
   if (!raw || raw.length > PLANNED_CHARS || CONTROL.test(raw) || raw.includes(':')) return null;
   if (/^[\\/~]/.test(raw)) return null;
   let s = slashes(raw.trim()).replace(/\/{2,}/g, '/');
   while (s.startsWith('./')) s = s.slice(2);
-  s = s.replace(/\/+$/, '');
+  s = s.replace(/\/+$/, '').replace(/\*{3,}/g, '**');
   if (!s || s.split('/').some((seg) => seg === '..')) return null;
+  if ((s.match(/\*\*|\*|\?/g) || []).length > MAX_WILDCARDS) return null;
   if (!/[A-Za-z0-9]/.test(s)) return null;
   return s;
 }
@@ -57,7 +69,7 @@ export function invalidPlannedEntry(list) {
 // letter in it (so `1.1.1`, `e.g` and `i.e` are not files).
 function looksLikePath(token) {
   if (token.startsWith('-')) return false;
-  const s = token.replace(/\.+$/, '');
+  const s = trimDots(token);
   if (s.includes('/') || s.includes('\\')) return true;
   const dot = s.lastIndexOf('.');
   if (dot < 0) return false;
@@ -74,38 +86,77 @@ function looksLikePath(token) {
  */
 export function extractPlannedPaths(text) {
   if (typeof text !== 'string' || !text) return [];
-  const clean = text.replace(URL_RE, ' ').replace(WWW_RE, ' ');
+  const clean = text.slice(0, PLAN_TEXT_CHARS).replace(URL_RE, ' ').replace(WWW_RE, ' ');
   const out = [];
   for (const m of clean.matchAll(TOKEN_RE)) {
     const token = m[0];
     // A token right after a colon is the rest of a drive path (`C:\x`) or a scheme: never a repo path.
     if (m.index > 0 && clean[m.index - 1] === ':') continue;
     if (!looksLikePath(token)) continue;
-    const s = canonicalEntry(token.replace(/\.+$/, ''));
+    const s = canonicalEntry(trimDots(token));
     if (s && !out.includes(s)) out.push(s);
     if (out.length >= MAX_PLANNED) break;
   }
   return out;
 }
 
-const regexCache = new Map();
-function globRegExp(glob) {
-  let re = regexCache.get(glob);
-  if (re) return re;
-  let src = '';
+// A glob as matcher tokens. `**/` matches nothing or anything ending in `/`; `**` anything; `*`
+// anything within one level; `?` one character other than `/`; every other character itself.
+const tokenCache = new Map();
+function globTokens(glob) {
+  let tokens = tokenCache.get(glob);
+  if (tokens) return tokens;
+  tokens = [];
   for (let i = 0; i < glob.length; i += 1) {
     const c = glob[i];
     if (c === '*' && glob[i + 1] === '*') {
-      if (glob[i + 2] === '/') { src += '(?:.*/)?'; i += 2; } else { src += '.*'; i += 1; }
-    } else if (c === '*') src += '[^/]*';
-    else if (c === '?') src += '[^/]';
-    else src += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      while (glob[i + 1] === '*') i += 1;
+      if (glob[i + 1] === '/') { tokens.push('dirs'); i += 1; } else tokens.push('any');
+    } else if (c === '*') tokens.push('star');
+    else if (c === '?') tokens.push('one');
+    else tokens.push({ c: c.toLowerCase() });
   }
-  // A glob also covers everything below a directory it names (`src/hooks` covers `src/hooks/a.js`).
-  re = new RegExp(`^${src}(?:/.*)?$`, 'i');
-  if (regexCache.size > 500) regexCache.clear();
-  regexCache.set(glob, re);
-  return re;
+  if (tokenCache.size > 500) tokenCache.clear();
+  tokenCache.set(glob, tokens);
+  return tokens;
+}
+
+// Whether `text` matches the glob, or lies below a directory the glob matches (`src/hooks` covers
+// `src/hooks/a.js`). A dynamic programme over the text positions, one pass per token: O(glob x text)
+// whatever the wildcards, never the backtracking a regular expression does on agent-chosen globs.
+function globMatches(glob, text) {
+  const tokens = globTokens(glob);
+  const n = text.length;
+  const low = Array.from({ length: n }, (_, j) => text[j].toLowerCase());
+  let cur = new Uint8Array(n + 1);
+  let next = new Uint8Array(n + 1);
+  cur[0] = 1;
+  for (const tok of tokens) {
+    next.fill(0);
+    let any = false;
+    if (tok === 'star' || tok === 'any') {
+      for (let j = 0; j <= n; j += 1) {
+        next[j] = cur[j] || (j > 0 && next[j - 1] && (tok === 'any' || text[j - 1] !== '/')) ? 1 : 0;
+        any ||= next[j] === 1;
+      }
+    } else if (tok === 'dirs') {
+      let seen = false;
+      for (let j = 0; j <= n; j += 1) {
+        if (j > 0 && cur[j - 1]) seen = true;
+        next[j] = cur[j] || (seen && text[j - 1] === '/') ? 1 : 0;
+        any ||= next[j] === 1;
+      }
+    } else {
+      for (let j = 0; j < n; j += 1) {
+        if (cur[j] && (tok === 'one' ? text[j] !== '/' : low[j] === tok.c)) { next[j + 1] = 1; any = true; }
+      }
+    }
+    if (!any) return false;
+    [cur, next] = [next, cur];
+  }
+  if (cur[n]) return true;
+  for (let k = 0; k < n; k += 1) if (cur[k] && text[k] === '/') return true;
+  return false;
 }
 
 /**
@@ -120,7 +171,8 @@ export function matchesPlanned(p, globs) {
   while (rel.startsWith('./')) rel = rel.slice(2);
   if (!rel) return false;
   const segments = rel.split('/').filter(Boolean);
-  return globs.some((g) => typeof g === 'string' && g && (g.includes('/') ? globRegExp(g).test(rel) : segments.some((seg) => globRegExp(g).test(seg))));
+  return globs.some((g) => typeof g === 'string' && g && g.length <= PLANNED_CHARS
+    && (g.includes('/') ? globMatches(g, rel) : segments.some((seg) => globMatches(g, seg))));
 }
 
 const isAbsoluteAny = (p) => /^[\\/]/.test(p) || /^[A-Za-z]:/.test(p);

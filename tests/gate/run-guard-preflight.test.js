@@ -11,6 +11,8 @@ import { decide } from '../../src/gate/run-guard.js';
 import { dryRunTwin, commandSha, dryRunRecord } from '../../src/gate/dry-run.js';
 import { writeGrant } from '../../src/handoff/grant.js';
 import { createStreamCollector } from '../../src/handoff/stream.js';
+import { buildSnapshot } from '../../src/worker/projections.js';
+import { newState } from '../core/helpers.js';
 import { runDir, checkout, home, qh, tmp, VARS, ENV, grantWith, bash, pwsh, K8S_STG, ARGO_STG, PIN_STG, denied } from './guard-fixture.js';
 
 const GUARD = fileURLToPath(new URL('../../bin/quill-guard.js', import.meta.url));
@@ -184,4 +186,27 @@ test('end to end: the guard hook records the twin by argv_sha, the stream record
   const pin = hook(K8S_PIN_TEXT, 'toolu_c');
   assert.equal(pin.permissionDecision, 'allow', pin.permissionDecisionReason);
   assert.ok(home);
+});
+
+// The Needs you item's note is projected before any run exists (no checkout, no run env); the
+// guard derives the twin from the real call in the run. Both must name the same twin, or none.
+test('the Needs you item names the same twin the guard requires in the run, or none when the guard has none', () => {
+  const pins = [
+    [K8S_PIN_TEXT, k8sGrant],
+    ['kubectl --context stg delete pod api-1 --dry-run=client', k8sGrant],
+    ["kubectl --context stg patch deploy api -p '{\"spec\":{\"replicas\":2}}'", k8sGrant],
+    ['kubectl --context stg apply -f deploy/api.yaml', k8sGrant],
+    ['kubectl --context stg rollout restart deployment/api', k8sGrant],
+    [SQL_PIN_TEXT, dbGrant],
+    ['psql -h db-stg -c "DROP TABLE jobs"', dbGrant],
+  ];
+  for (const [pin, grantOf] of pins) {
+    const state = newState();
+    const scope = grantOf === k8sGrant ? K8S_PIN.scope : SQL_PIN.scope;
+    state.runProposals = new Map([['p1', { id: 'p1', origin: 'run', ticket_id: 't-none', scopes: [{ name: scope.split(':')[0], target: scope.split(':')[1] }], action_pin: { kind: 'bash', guard: pin } }]]);
+    const note = buildSnapshot(state, { generation_id: 'g', generated_at: '2026-10-21T10:00:00.000Z' }).run_proposals[0].dry_run;
+    const r = decide(bash(pin), grantOf({ actionPins: [{ scope, pin }] }), ENV);
+    const required = /^QUILL_DENIED dry-run-required: run (.+) first, with the Bash tool/.exec(r.reason);
+    assert.equal(note.twin, required ? required[1] : null, `${pin}: ${r.decision} ${r.reason.slice(0, 80)}`);
+  }
 });

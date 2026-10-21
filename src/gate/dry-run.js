@@ -118,6 +118,23 @@ export function dryRunTwin(call, ctx = CLASSIFY_CTX) {
 }
 
 /**
+ * The twin the guard's preflight requires before this pinned call, or null when the preflight does
+ * not apply to it: the guard classifies no part of it as a k8s.write or db.write write (a read, such
+ * as a client dry run, or another scope's write), or it has no twin. One derivation for the run
+ * guard (with the run's context) and the Needs you item (with the proposal's, as `dryRunTwin`).
+ * @param {{ tool_name: string, tool_input: object }} call
+ * @param {object} [ctx]
+ * @returns {{ text: string, sha: string } | null}
+ */
+export function pinnedTwin(call, ctx = CLASSIFY_CTX) {
+  const c = isPlainObject(ctx) ? ctx : CLASSIFY_CTX;
+  const cls = classifyCall(isPlainObject(call) ? { tool_name: call.tool_name, tool_input: call.tool_input } : {}, c);
+  const parts = Array.isArray(cls.calls) ? cls.calls : [cls];
+  if (!parts.some((p) => p && (p.class === 'write' || p.class === 'external.write') && DRY_RUN_SCOPES.has(p.scope))) return null;
+  return dryRunTwin(call, c);
+}
+
+/**
  * What the run ledger shows about the twin with this `argv_sha`: whether an allowed guard line for
  * it exists, and the exit code of the latest tool result recorded after such a line for the same
  * tool_use_id (undefined when none has one yet). Lines that do not parse are skipped.

@@ -27,7 +27,7 @@ import { quillHome, handoffRunDir } from '../lib/paths.js';
 import { isProtectedBranch } from '../handoff/permissions.js';
 import { canonicalJson } from '../handoff/grant.js';
 import { commandProblem, commandCheck, BUILTIN_COMMANDS } from './scope-commands.js';
-import { soleCommand, dryRunTwin, dryRunRecord, readLedgerText, DRY_RUN_SCOPES } from './dry-run.js';
+import { soleCommand, pinnedTwin, dryRunRecord, readLedgerText, DRY_RUN_SCOPES } from './dry-run.js';
 
 // The Quill install this guard runs from.
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -201,15 +201,20 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
     }
   }
 
-  let via = null;
+  const covered = [];
   for (const p of parts) {
     if (!(p.class === 'external.write' || (p.class === 'write' && !String(p.scope ?? '').startsWith('git.')))) continue;
-    // ADR 0031: after the approval's lease every scoped write and pinned action is refused; reads
-    // and the run's own files are not scoped and still pass.
-    const lease = leaseProblem(g, e);
-    if (lease) return deny(lease);
     const cover = coverOf(p, g, c, e);
     if (!cover.ok) return deny(REASONS.critical(changeOf(p), cover.pins, cover.why ?? null), changeOf(p));
+    covered.push([p, cover]);
+  }
+  // ADR 0031: after the approval's lease every write a granted scope or pin covers is refused. It is
+  // checked once every write part is covered, so a write nothing covers is still refused above as a
+  // critical change and proposed, as in 1.1. Reads and the run's own files are not scoped and pass.
+  const lease = covered.length ? leaseProblem(g, e) : null;
+  if (lease) return deny(lease);
+  let via = null;
+  for (const [p, cover] of covered) {
     if (cover.pinned) {
       const why = dryRunProblem(p, g, c, vars, home, ctx);
       if (why) return deny(why);
@@ -871,7 +876,7 @@ function leaseProblem(g, e) {
 // that cannot be read refuses.
 function dryRunProblem(p, g, c, vars, home, ctx) {
   if (g.requireDryRun !== true || !DRY_RUN_SCOPES.has(p.scope)) return null;
-  const twin = dryRunTwin(c, ctx);
+  const twin = pinnedTwin(c, ctx);
   // A pin with no twin the guard accepts decides as in 1.1 (ADR 0031, amendment of 21 October 2026).
   if (!twin) return null;
   let file = null;
