@@ -8,6 +8,7 @@ import { ensureDir, writeJsonAtomic, readJsonIfExists } from '../lib/atomic-fs.j
 import { addMs, HOUR } from '../lib/time.js';
 import { environmentStatus } from '../deploy/environments.js';
 import { descriptionProblems, parseDescription } from '../core/description.js';
+import { dryRunTwin, DRY_RUN_SCOPES } from '../gate/dry-run.js';
 
 export const SNAPSHOT_TIMELINE_LIMIT = 20;
 
@@ -73,7 +74,18 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
   };
 }
 
-export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [], handoff_limits = null, onboarding = null, autonomy = null }) {
+// ADR 0031: what the Needs you item says about a run-origin proposal whose pinned shell action is
+// a k8s.write or db.write while [critical] require_dry_run is on: the dry-run twin the approved run
+// must pass first, or null when it has none (the run will then refuse the action). Owner snapshot
+// only: run proposals never reach an export.
+function dryRunNote(p, on) {
+  if (!on || p.origin !== 'run' || !(Array.isArray(p.scopes) && p.scopes.some((s) => s && DRY_RUN_SCOPES.has(s.name)))) return null;
+  const pin = p.action_pin && typeof p.action_pin.guard === 'string' && p.action_pin.kind !== 'mcp' ? p.action_pin.guard : null;
+  const twin = pin ? dryRunTwin({ tool_name: 'Bash', tool_input: { command: pin } }) : null;
+  return { twin: twin ? twin.text : null };
+}
+
+export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [], handoff_limits = null, onboarding = null, autonomy = null, critical_dry_run = true }) {
   const dayAgo = addMs(generated_at, -24 * HOUR);
   // Memory requests keep their kind and state but not their text: memory never reaches a snapshot (spec §9).
   const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo)
@@ -95,7 +107,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     recipes,
     publishers,
     // Runs proposed from shared pages (ADR 0025), with their state as of this snapshot.
-    run_proposals: [...(state.runProposals ?? new Map()).values()].map((p) => { const t = state.tickets.get(p.ticket_id); return { ...p, state: proposalState(p, t, generated_at), ticket_key: t ? t.key : null }; }),
+    run_proposals: [...(state.runProposals ?? new Map()).values()].map((p) => { const t = state.tickets.get(p.ticket_id); const dry = dryRunNote(p, critical_dry_run); return { ...p, state: proposalState(p, t, generated_at), ticket_key: t ? t.key : null, ...(dry ? { dry_run: dry } : {}) }; }),
     picknext: derived.picknext ?? [],
     blocked: derived.blocked ?? [],
     deployments_outstanding: derived.deployments_outstanding ?? [],

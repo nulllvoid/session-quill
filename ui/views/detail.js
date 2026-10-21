@@ -49,10 +49,10 @@ function trackerChip(t, readOnly) {
 }
 
 // Runs proposed for this ticket from a shared page (ADR 0025), waiting for the owner.
-function proposalsBlock(t, snapshot, { now, pending }) {
+function proposalsBlock(t, snapshot, { now, pending, leases = null }) {
   const list = openProposals(snapshot, t.id);
   if (!list.length) return '';
-  return `<section class="detail-section proposals"><h3>Proposed runs <span class="count">${esc(list.length)}</span></h3><ul class="proposal-list">${list.map((p) => proposalItem(p, snapshot, { now, pending })).join('')}</ul>${hasActiveRun(snapshot, t.id) ? '<p class="muted small">A run is already queued or running on this ticket; approving now reports that instead of queueing a second one.</p>' : ''}</section>
+  return `<section class="detail-section proposals"><h3>Proposed runs <span class="count">${esc(list.length)}</span></h3><ul class="proposal-list">${list.map((p) => proposalItem(p, snapshot, { now, pending, leases })).join('')}</ul>${hasActiveRun(snapshot, t.id) ? '<p class="muted small">A run is already queued or running on this ticket; approving now reports that instead of queueing a second one.</p>' : ''}</section>
 `;
 }
 
@@ -96,7 +96,7 @@ function runStrip(t, snapshot, { now, tz }) {
   return `<button type="button" class="run-strip" data-action="open-run" data-run="${attr(current.id)}" aria-label="${attr(`Open run: ${[name, current.state, ...accessWords(current).slice(1)].join(', ')}`)}">${handoffChip({ ...current, error: null })} <strong>${esc(name)}</strong> ${accessTierBadge(current)} ${testGateBadge(current.test_gate)}${open ? ` <span class="chip small">${esc(open)} suggestion${open === 1 ? '' : 's'} to review</span>` : ''} <span class="muted small">${timeEl(current.requested_at, now, tz)}</span></button>`;
 }
 
-export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, loadedTicket = null, editingNext = false, tab = 'overview', expanded = false }) {
+export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, loadedTicket = null, editingNext = false, tab = 'overview', expanded = false, leases = null }) {
   if (!DETAIL_TABS.includes(tab)) tab = 'overview';
   const snapshot = normalizeSnapshot(rawSnapshot);
   const ticket = normalizeTicket(rawTicket);
@@ -149,7 +149,7 @@ ${checkpoints.length ? `<section class="latest-checkpoint"><h3>Latest checkpoint
 </div>
 <div class="detail-page" id="detail-page-runs" role="tabpanel" aria-labelledby="detail-tab-runs" ${tab !== 'runs' ? 'hidden' : ''}>
 <section class="detail-section"><h3>Runs <span class="count">${esc(ticketRuns(snapshot, t.id).length)}</span></h3>${ticketRuns(snapshot, t.id).length ? `<ul class="run-list">${ticketRuns(snapshot, t.id).map((h) => runRow(snapshot, h, { now, tz })).join('')}</ul>` : '<p class="muted small">No runs yet.</p>'}${caps.handoff && t.status !== 'done' ? `<p><button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}">${icon('play')}Run agent</button></p>` : ''}</section>
-${runNotesBlock(t, snapshot, { now, tz })}${proposalsBlock(t, snapshot, { now, pending })}${renderAgentsSection(t, snapshot, { busy: hasActiveRun(snapshot, t.id) })}
+${runNotesBlock(t, snapshot, { now, tz })}${proposalsBlock(t, snapshot, { now, pending, leases })}${renderAgentsSection(t, snapshot, { busy: hasActiveRun(snapshot, t.id) })}
 </div>
 <div class="detail-page" id="detail-page-activity" role="tabpanel" aria-labelledby="detail-tab-activity" ${tab !== 'activity' ? 'hidden' : ''}>
 <section class="detail-section"><h3>Timeline <span class="count">${esc(total)}</span></h3>${timeline.length ? `<ul class="timeline">${timeline.map((e) => timelineItem(e, { now, tz, generation: snapshot.generation_id, content, contentStatus })).join('')}</ul>${total > timeline.length ? `<button type="button" class="btn small" data-action="load-ticket" data-ticket="${attr(t.id)}" data-generation="${attr(snapshot.generation_id)}">Load all ${esc(total)} entries</button>` : ''}` : '<p class="muted small">No events yet.</p>'}</section>

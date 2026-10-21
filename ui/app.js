@@ -72,6 +72,8 @@ const appState = {
   memoryRepo: null,
   memoryEditing: null,
   memoryDrafts: {},
+  // ADR 0031: the "Valid for" choice on each critical change item, by proposal id, kept across polls.
+  leases: {},
   // Request ids whose conflict or failure the owner dismissed; syncRequests leaves them out.
   dismissedRequests: new Set(),
 };
@@ -199,7 +201,7 @@ function render() {
   setMarkup($('#filters'), renderFilterBar(s, appState.filters));
   if (filterOpen) $('#filters .filter-pop').open = true;
   const pending = [...appState.requests.values()];
-  const opts = { now, pending, selected: appState.selected };
+  const opts = { now, pending, selected: appState.selected, leases: appState.leases };
   let html = '';
   const bulk = { selecting: appState.selecting, checked: appState.checked };
   if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, { ...opts, ...bulk, blockedExpanded: appState.blockedExpanded });
@@ -400,7 +402,7 @@ function renderDetailPanel(now, pending) {
   if (editing) return; // never clobber an in-progress edit on poll
   const key = ticket ? ticket.id : `run:${runId}`;
   const html = ticket
-    ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded })
+    ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded, leases: appState.leases })
     : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, memory: appState.memory, ...runRecordFor(run, s) }) : renderRunNotFound(runId);
   setMarkup(panel, html);
   // A different ticket or run starts at its title, not at the previous one's scroll offset.
@@ -737,7 +739,13 @@ function handleAction(el) {
       submit({ kind: el.dataset.action, target_id: el.dataset.ticket, expected_revision: accept ? ticketRevision(el.dataset.ticket) : null, payload: { handoff_id: el.dataset.handoff, suggestion_id: el.dataset.suggestion } }, { announceText: accept ? 'Accepting the suggestion; undo within 10 seconds' : 'Dismissing the suggestion; undo within 10 seconds' });
       break;
     }
-    case 'approve-run': submit({ kind: 'approve-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Approving the proposed run; it is queued as an ordinary run' }); break;
+    case 'approve-run': {
+      // ADR 0031: a critical change's "Valid for" choice travels as ttl_minutes; Whole run sends none.
+      const lease = el.closest('li') ? el.closest('li').querySelector('select[data-lease]') : null;
+      const ttl = lease && lease.value ? Number(lease.value) : null;
+      submit({ kind: 'approve-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal, ...(ttl ? { ttl_minutes: ttl } : {}) } }, { announceText: ttl ? `Approving the critical change, valid for ${ttl === 60 ? '1 hour' : `${ttl} minutes`} from when the run starts; it is queued, not run yet` : 'Approving the proposed run; it is queued as an ordinary run' });
+      break;
+    }
     case 'dismiss-run': submit({ kind: 'dismiss-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Dismissing the proposed run; undo within 10 seconds' }); break;
     // Spec §5.4: a new run that continues the interrupted run's session, with the same access.
     case 'resume-run': submit({ kind: 'resume-run', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff } }, { announceText: 'Resume requested; it is queued as a new run, not finished' }); break;
@@ -1068,6 +1076,7 @@ function scopeBlockers(form, scoped) {
 
 function onChange(e) {
   const el = e.target;
+  if (el.dataset && el.dataset.lease !== undefined) { appState.leases[el.dataset.lease] = el.value; return; }
   if (el.dataset && el.dataset.memoryRepo !== undefined) { appState.memoryRepo = el.value || null; appState.memoryEditing = null; render(); $('#memory-repo')?.focus(); return; }
   if (el.dataset.filter) {
     appState.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;

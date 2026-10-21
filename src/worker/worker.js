@@ -13,7 +13,7 @@ import { ensureDir, writeJsonAtomic, readJsonIfExists, listFiles, removeIfExists
 import { toIso, SECOND } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
 import { storeLayout } from '../config/store.js';
-import { loadUserConfig } from '../config/config.js';
+import { loadUserConfig, criticalSettings } from '../config/config.js';
 import { buildRuntimeIdentity, identityStamp } from '../config/runtime.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { keyExample } from '../core/external-keys.js';
@@ -511,6 +511,7 @@ export class Worker {
       publishers: this.publishInfo ? this.publishInfo() : [],
       handoff_limits: this.handoffLimits ? this.handoffLimits() : null,
       autonomy: this.autonomyInfo ? this.autonomyInfo() : null,
+      critical_dry_run: criticalSettings(this.config ?? {}).requireDryRun,
       onboarding: (({ clone_hosts, auto_clone_dir, import_assigned }) => ({ clone_hosts, auto_clone_dir, import_assigned }))(onboardSettings(this.config.tracker)),
     };
   }
