@@ -486,6 +486,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       const dir = handoffRunDir(worker.env, id);
       for (const name of fs.readdirSync(dir)) if (name !== 'ledger.jsonl') fs.rmSync(path.join(dir, name), { recursive: true, force: true });
     } catch { /* no run dir */ }
+    // A critic stopped mid-review (ADR 0040) may leave its own directory beside the run's.
+    try { fs.rmSync(handoffRunDir(worker.env, `${id}-critic`), { recursive: true, force: true }); } catch { /* none */ }
     if (!isFix(h)) await dropWorktree(worker, h);
     pruneRetention(Date.parse(worker.now()));
   }
@@ -648,8 +650,24 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
   async function reviewRun(worker, entry, h, gate) {
     const repo = ctx.config.repos[h.repo_id];
     if (!criticSettings(repo).enabled) return null;
+    // An autonomous run's critic runs under the guard like every turn of the run, but with a grant
+    // of its own: read-only, no scopes, no action pins, in an autonomous environment built without
+    // the run's scope credentials (or the push tokens its permissions kept). Its own directory
+    // holds that grant, its guard lines and its MCP inventory, so nothing it does lands in the
+    // run's ledger or replaces the run's inventory; the directory goes when the critic ends.
+    let guarded = null;
+    const criticId = `${h.id}-critic`;
+    if (entry.access === 'autonomous') {
+      try {
+        fs.rmSync(handoffRunDir(worker.env, criticId), { recursive: true, force: true });
+        guarded = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: { id: criticId, permissions: { read_source: true }, access: 'autonomous', planned_paths: null, action_pins: [], lease_minutes: null }, cwd: entry.cwd, checkout: h.worktree_path ?? null, repoCfg: repo ? { id: h.repo_id, ...repo } : null, scopes: [], env: { ...entry.env, QUILL_HANDOFF_ID: criticId }, startedAt: worker.now() });
+      } catch (err) {
+        return { status: 'failed', reason: `the critic's guard could not be prepared: ${err.message}`, findings: [], ms: null, outcome: null };
+      }
+    }
     const spawn = (prompt, { maxTurns, maxBudgetUsd }) => {
-      const run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools: selfCheckTools({ read_source: true }), env: entry.env, childEnv: (entry.spawnExtras && entry.spawnExtras.childEnv) ?? null, permissions: { read_source: true }, logPath: entry.logPath, model, maxTurns, maxBudgetUsd, permissionMode: 'dontAsk', keepCredentials: false });
+      const extras = guarded ? { childEnv: guarded.childEnv, settingsPath: guarded.settingsPath, mcpServersPath: guarded.mcpServersPath } : {};
+      const run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools: selfCheckTools({ read_source: true }), env: guarded ? { ...entry.env, QUILL_HANDOFF_ID: criticId } : entry.env, childEnv: null, permissions: { read_source: true }, logPath: entry.logPath, model, maxTurns, maxBudgetUsd, permissionMode: 'dontAsk', keepCredentials: false, ...extras });
       // Tracked like any turn of the run, so a cancel or a stop also stops the critic.
       Object.assign(entry, { child: run.child, kill: null, done: run.done });
       return run;
@@ -659,6 +677,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     try {
       result = await runCritic({ run: worker.state.handoffs.get(h.id) ?? h, ticket: worker.state.tickets.get(h.ticket_id) ?? { key: '', title: '' }, repo, gate, recipe: catalogFor(worker).builtin('critic-review'), budgetUsd: remainingUsd(entry), timeLeftMs, spawn, kill: killTree });
     } catch (err) { result = { status: 'failed', reason: `the critic step failed: ${err.message}`, findings: [], ms: null, outcome: null }; }
+    finally { if (guarded) { try { fs.rmSync(handoffRunDir(worker.env, criticId), { recursive: true, force: true }); } catch { /* removed with the run */ } } }
     addUsage(entry, result.outcome);
     return result;
   }
@@ -731,7 +750,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
           updateHandoff(worker, h.id, { worktree_path: worktreePath });
         } finally { timings.worktree_ms = Math.round(performance.now() - worktreeStarted); }
       } catch (err) {
-        return fail(worker, h, ['worktree-failed', 'ci-head-changed', 'branch-protected'].includes(err.code) ? err.code : 'source-failed', err.message);
+        return fail(worker, h, ['worktree-failed', 'ci-head-changed', 'ci-branch-missing', 'branch-protected'].includes(err.code) ? err.code : 'source-failed', err.message);
       }
       cwd = worktreePath;
       await takeSnapshot(worker, h.id, 'start');

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { newState, createTicket, ev } from './helpers.js';
 import { applyEvent } from '../../src/core/reducer.js';
 import { makeEvent } from '../../src/core/events.js';
+import { deterministicId } from '../../src/lib/ids.js';
 import { ciProposalId, ciProposalsOf, CI_PERMISSIONS } from '../../src/core/reduce/ci.js';
 import { proposalState } from '../../src/publish/run-proposals.js';
 
@@ -135,4 +136,34 @@ test('no proposal on a done ticket; replay of the same events gives the same sta
   for (const e of events) assert.equal(applyEvent(a, e).duplicate, true, 'a duplicate has no second effect');
   assert.deepEqual(a.handoffs.get(HID).ci, b.handoffs.get(HID).ci);
   assert.deepEqual(a.runProposals.get(ciProposalId(HID, SHA1)), b.runProposals.get(ciProposalId(HID, SHA1)));
+});
+
+test('an open proposal lapses when the reconciler records the pull request merged or closed, on the ticket or on the run', () => {
+  for (const [upd, reason] of [[{ ticket_id: TID, url: PR, state: 'merged', merged_at: '2026-10-02T09:00:00Z' }, 'pr-merged'], [{ ticket_id: TID, url: PR, state: 'closed' }, 'pr-closed'], [{ handoff_id: HID, url: PR, state: 'merged', merged_at: '2026-10-02T09:00:00Z' }, 'pr-merged']]) {
+    const state = setup();
+    state.tickets.get(TID).prs.push({ id: 'pr1', provider: 'github', url: PR, state: 'draft', opened_at: T0, merged_at: null, base_branch: 'main', head_branch: BRANCH, observed_at: T0, error: null, evidence_id: null });
+    obs(state);
+    propose(state);
+    const p = state.runProposals.get(ciProposalId(HID, SHA1));
+    // A failed poll records nothing about the pull request's state.
+    worker(state, 'reconcile', { pr_updates: [{ ...upd, state: undefined, error: 'gh offline' }] });
+    assert.equal(p.lapsed_at, null);
+    worker(state, 'reconcile', { pr_updates: [upd] }, { occurred_at: '2026-10-02T09:01:00Z' });
+    assert.deepEqual([p.lapse_reason, p.lapsed_at], [reason, '2026-10-02T09:01:00Z'], JSON.stringify(upd));
+    assert.equal(proposalState(p, state.tickets.get(TID), '2026-10-02T09:01:00Z'), 'expired');
+  }
+});
+
+test('a page run-proposal cannot take a worker-only proposal id (CI fix or critical change) first', () => {
+  const state = setup();
+  obs(state);
+  const ciId = ciProposalId(HID, SHA1);
+  const page = (id) => ev(state, 'run-proposal', { id, ticket_id: TID, publisher: 'board', editor: 'ann', recipe: { name: 'analyse', source: 'builtin', hash: null }, mode: 'analyse', permissions: {} }, { producer: 'cli' });
+  assert.equal(page(ciId).rejected, 'proposal-id-reserved');
+  assert.equal(page(deterministicId(`${HID}:critical:0`)).rejected, 'proposal-id-reserved');
+  assert.equal(state.runProposals.has(ciId), false);
+  assert.equal(propose(state).rejected, undefined, 'the CI proposal is still staged');
+  assert.equal(state.runProposals.get(ciId).origin, 'ci');
+  // A page pick's own id (editRequestId: version-4 shaped) is accepted.
+  assert.equal(page('44444444-0000-4000-8000-000000000001').rejected, undefined);
 });

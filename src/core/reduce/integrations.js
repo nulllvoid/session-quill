@@ -90,12 +90,19 @@ export function applyArtifactComment(state, ev, result) {
 const PERMISSION_KEYS = ['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'];
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
+const WORKER_PROPOSAL_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function applyRunProposal(state, ev, result) {
   const p = ev.payload;
   if (!p || typeof p.id !== 'string' || !p.recipe || typeof p.recipe.name !== 'string' || !NAME_RE.test(p.recipe.name) || typeof p.publisher !== 'string' || !NAME_RE.test(p.publisher)) return { rejected: 'proposal-invalid' };
   // A run-origin proposal (ADR 0028) comes only from a validated critical-proposal event
   // (reduce/critical.js); a page proposal can never carry a run origin, scopes or an action pin.
   if ((p.origin !== undefined && p.origin !== 'page') || p.from_handoff_id !== undefined || p.action_pin !== undefined || p.scopes !== undefined) return { rejected: 'proposal-origin-invalid' };
+  // Worker-only proposals (a CI fix, ADR 0039; a critical change, ADR 0028) take deterministicId
+  // ids, which are version-5 shaped; a page pick's id (editRequestId) is version-4 shaped. A
+  // run-proposal can therefore never claim an id a worker-only proposal would use and make it a
+  // duplicate before the worker stages it.
+  if (WORKER_PROPOSAL_ID_RE.test(p.id)) return { rejected: 'proposal-id-reserved' };
   const t = state.tickets.get(p.ticket_id);
   if (!t) return { rejected: 'ticket-unknown' };
   if (state.runProposals.has(p.id)) return { duplicate: true };

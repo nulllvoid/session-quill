@@ -16,10 +16,11 @@ import { catalogFor } from '../agents/recipes.js';
 import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
 import { DISMISS_REASON_CHARS } from '../core/reduce/requests.js';
+import { ciPrEnded } from '../core/reduce/ci.js';
 import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
-import { resumeProblem, resumeFields } from '../handoff/resume.js';
+import { resumeProblem, resumeFields, isCiFix } from '../handoff/resume.js';
 import { restoreTarget, evaluateRestore } from '../handoff/snapshots.js';
 
 export const EDIT_DELAY_MS = 10_000;
@@ -120,12 +121,20 @@ function findSuggestion(state, ticket, payload) {
   return { h, sug };
 }
 
+// Why a CI fix proposal lapsed (ADR 0039), in the owner's words.
+const LAPSED = Object.freeze({
+  'pr-merged': 'the pull request was merged, so this CI fix proposal lapsed',
+  'pr-closed': 'the pull request was closed, so this CI fix proposal lapsed',
+  'head-changed': 'the pull request has a newer commit, so this CI fix proposal lapsed',
+  'ci-passed': 'CI passed on this commit, so this CI fix proposal lapsed',
+});
+
 // A run proposed from a shared page (ADR 0025), still open: not approved, dismissed or lapsed.
 function findProposal(state, ticket, payload, now) {
   const p = typeof payload.proposal_id === 'string' && state.runProposals ? state.runProposals.get(payload.proposal_id) : null;
   if (!p || p.ticket_id !== ticket.id) throw new TrackerError('proposal-unknown', 'proposal_id must name a proposed run of the target ticket');
   const st = proposalState(p, ticket, now);
-  if (st === 'expired') throw new TrackerError('proposal-expired', ticket.status === 'done' ? `${ticket.key} is done, so this proposed run lapsed` : 'this proposed run is more than 7 days old and lapsed; ask for it again on the page');
+  if (st === 'expired') throw new TrackerError('proposal-expired', ticket.status === 'done' ? `${ticket.key} is done, so this proposed run lapsed` : LAPSED[p.lapse_reason] ?? 'this proposed run is more than 7 days old and lapsed; ask for it again on the page');
   if (st !== 'proposed') throw new TrackerError('proposal-resolved', `this proposed run was already ${st}`);
   return p;
 }
@@ -192,6 +201,20 @@ function approveCritical(worker, req, ticket, p) {
   return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote, leaseMinutes: lease });
 }
 
+// Why a CI fix for `ci` ({ pr_url, head_sha, head_branch }) of run `rootId` would be stale now, or
+// null: the pull request is recorded merged or closed (ci-pr-closed), the run no longer records CI
+// failing on that commit of that pull request (ci-proposal-stale), or the branch is not the one the
+// run pushed (ci-branch-mismatch). Checked at approval and again when a CI fix is resumed.
+function ciFixStale(state, ci, rootId = ci && ci.root_handoff_id) {
+  const h = typeof rootId === 'string' ? state.handoffs.get(rootId) : null;
+  const c = ci && typeof ci === 'object' ? ci : {};
+  const ended = ciPrEnded(state, h);
+  if (ended) return { code: 'ci-pr-closed', message: `the pull request is recorded ${ended}, so a CI fix is not queued` };
+  if (!h || !h.ci || h.ci.state !== 'failing' || h.ci.head_sha !== c.head_sha || h.ci.pr_url !== c.pr_url) return { code: 'ci-proposal-stale', message: 'CI on this pull request changed since the fix was proposed (a new commit, a pass or a merge), so nothing was queued' };
+  if (!h.pushed_branch || h.pushed_branch !== c.head_branch || h.ci.head_branch !== c.head_branch) return { code: 'ci-branch-mismatch', message: `the pull request's branch is not the branch run ${String(h.id).slice(0, 8)} pushed, so a CI fix is not queued` };
+  return null;
+}
+
 // Approval of a CI fix proposal (ADR 0039). The run that opened the pull request must still record
 // CI failing on the very commit the proposal names, on the branch it pushed; otherwise the proposal
 // is stale (it lapses in state at the next observation anyway). The queued run is an ordinary
@@ -203,8 +226,8 @@ function approveCi(worker, req, ticket, p) {
   const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
   const ci = p.ci && typeof p.ci === 'object' ? p.ci : {};
   const h = worker.state.handoffs.get(p.from_handoff_id);
-  if (!h || !h.ci || h.ci.state !== 'failing' || h.ci.head_sha !== ci.head_sha || h.ci.pr_url !== ci.pr_url) return fail('ci-proposal-stale', 'CI on this pull request changed since the fix was proposed (a new commit, a pass or a merge), so nothing was queued');
-  if (!h.pushed_branch || h.pushed_branch !== ci.head_branch || h.ci.head_branch !== ci.head_branch) return fail('ci-branch-mismatch', `the pull request's branch is not the branch run ${String(h.id).slice(0, 8)} pushed, so a CI fix is not queued`);
+  const stale = ciFixStale(worker.state, ci, p.from_handoff_id);
+  if (stale) return fail(stale.code, stale.message);
   const evaluation = evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: p.access === 'autonomous' ? 'autonomous' : 'standard', branch: ci.head_branch, suggest: true });
   if (evaluation.outcome !== 'applied') return evaluation;
   Object.assign(evaluation.mutation.handoff, {
@@ -248,6 +271,13 @@ function evaluateResume(worker, req, ticket) {
   if ((fields.scopes && fields.scopes.length) || fields.action_pins) {
     if (!fromOwnerDashboard(req)) return fail('resume-dashboard-only', 'resuming a run with write scopes grants production write access again, so it is a dashboard action by the owner: open the run in Runs with quill ui');
   }
+  // ADR 0039: a CI fix pushes to a shared branch, so it is resumed as it was approved: by the owner
+  // on the dashboard, and only while CI still fails on its commit of a pull request that is open.
+  if (isCiFix(orig)) {
+    if (!fromOwnerDashboard(req)) return fail('resume-dashboard-only', 'resuming a CI fix pushes to the branch of its pull request again, so it is a dashboard action by the owner: open the run in Runs with quill ui');
+    const problem = ciFixStale(state, fields.ci_fix);
+    if (problem) return fail(problem.code, problem.message);
+  }
   const id8 = orig.id.slice(0, 8);
   if (fields.scope_fingerprints) {
     let catalog;
@@ -270,6 +300,7 @@ function evaluateResume(worker, req, ticket) {
   if (fields.scope_fingerprints) h.scope_fingerprints = { ...fields.scope_fingerprints };
   if (fields.proposal_id) h.proposal_id = fields.proposal_id;
   if (fields.proposal) h.proposal = fields.proposal;
+  if (fields.origin === 'ci') Object.assign(h, { origin: 'ci', ci_fix: fields.ci_fix });
   evaluation.result.resumed = orig.id;
   return evaluation;
 }

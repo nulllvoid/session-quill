@@ -36,10 +36,13 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
 
    It polls at most 50 a sweep, newest first. The repository's provider must be GitHub. Bitbucket CI is deferred. `fetchChecks(url)` is one `gh pr view --json state,isDraft,headRefName,headRefOid,statusCheckRollup`. Each check becomes a word: failed (failure, timed out, startup failure, action required, error), pending (not completed), passed, or skipped (neutral, skipped, cancelled, stale). A cancelled check is neither a pass nor a failure of the code, so it counts as skipped. The rollup state is failing when any check failed, else pending while any runs, else passing when one passed, else none.
 
-5. **`ci-observation` (worker only).** The payload is `{ handoff_id, n, pr_url, head_sha, head_branch, pr_state, state, checks[≤30] }`, with source identity `ci-observation:<handoff_id>:<n>`.
+5. **`ci-observation` (worker only).** The payload is `{ handoff_id, n, pr_url, head_sha, head_branch, pr_state, state, checks[≤30] }`, with source identity `ci-observation:<handoff_id>:<n>:<digest>` (16 hex of sha256 over the observed facts).
    - The watch emits an observation only when the head commit, the rollup state, the PR state, the branch or the failing check names changed. An unchanged poll journals nothing.
+   - A refused observation does not advance the run's `ci`, so the next sweep would see the same change again. The watch therefore checks the journal for the source identity before it emits, and remembers in memory which observation was refused for each run. The same facts are skipped without a journal line until what the watch sees changes; the digest gives the changed facts a new identity, since the reducer marks a refused event's identity applied too. A refused or duplicate observation is never counted observed, and is logged once.
+   - `head_branch` is any branch git accepts (`git check-ref-format --branch` rules, at most 255 characters, no Unicode control, format or separator character), so a GitHub branch such as `fix/#123` is observed. The CI fix's checkout uses the same rule.
    - The reducer applies each run's observations in order (`n` = the previous one plus 1), keeps check names to one line of at most 120 characters, and sets the run's local `ci` record.
    - It lapses an open CI fix proposal of that run when the pull request is merged (`pr-merged`) or closed (`pr-closed`), when the head commit changed (`head-changed`), or when CI passed (`ci-passed`). A rerun on the same commit (pending) keeps the proposal open.
+   - The watch stops polling a pull request once anything records it merged or closed, so a reconcile event lapses the open CI proposals too: when the ticket's PR record of the run's `pr_url`, or the run's own `pr_observed`, is merged or closed, the proposal lapses with `pr-merged` or `pr-closed` (`lapseCiProposalsOnEndedPr`).
    - CI data never goes on `ticket.prs`: `sanitizePr` copies every PR field to exports.
 
 6. **`ci-proposal` (worker only): one per failing commit, two per pull request.**
@@ -49,15 +52,17 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
      - the ticket is open;
      - no proposal exists for that commit;
      - fewer than two exist for that pull request.
-   - The id is `deterministicId("<handoff_id>:ci:<head_sha>")`. The reducer checks it again, along with the producer, the caps, that the observation it names is the run's latest failing one on that branch, and the limit (`ci-proposal-limit`).
+   - The id is `deterministicId("<handoff_id>:ci:<head_sha>")`. A page `run-proposal` with an id of that (version-5) shape is refused (`proposal-id-reserved`), so it cannot claim the id first. The reducer checks it again, along with the producer, the caps, that the observation it names is the run's latest failing one on that branch, and the limit (`ci-proposal-limit`).
    - The proposal is a run proposal with `origin: 'ci'`, the built-in `attempt-fix` recipe, and permissions read, edit, commit and push. It never gets `open_draft_pr`, scopes or an action pin.
    - Its access is `autonomous` when the run that opened the pull request was autonomous, otherwise `standard`. A full or settings run's fix never inherits that access.
-   - Its timeline line names only the commit and the run. Check names and log text never reach the timeline, which reaches prompts.
+   - Its timeline line names only the commit and the run. Check names and log text never reach the timeline, which reaches prompts. The line is marked `local_only`: exports, the mirror and vault notes leave it out, as they leave out a CI fix run's `proposal` and `proposal_id` (the run then shows as an ordinary run there). Exports gain nothing from the CI watch.
 
 7. **The log tail.** For the first failed GitHub Actions check, the watch reads `gh run view --job <id> --repo <owner/repo> --log-failed` (only a numeric id reaches `gh`). `ciLogTail` then:
-   - strips colour codes and control characters;
-   - keeps the last 16 KB on a line boundary;
-   - redacts with the run ledger's `redactLog` (`src/handoff/stream.js`; Task 1 moves it to `src/lib/redact.js` and re-exports it there);
+   - keeps at most the last 1 MB of the fetched log, on a line boundary;
+   - strips colour codes;
+   - when the log starts inside a private key (an `-----END … PRIVATE KEY-----` line with no BEGIN before it), replaces everything up to that END with the redaction token;
+   - redacts the whole bounded log with the run ledger's `redactLog` (`src/handoff/stream.js`, patterns in `src/lib/redact.js`) before any other cut, so a key whose BEGIN lies far before the tail is still recognised, and an unterminated key is redacted to the end;
+   - strips control characters;
    - replaces every line the memory instruction filter flags with `[line withheld: instruction-like text]`;
    - cuts the result to its last 4096 characters on a line boundary.
 
@@ -65,14 +70,15 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
 
 8. **Approval is the owner's, on the dashboard.**
    - `approve-run` and `dismiss-run` of a CI proposal need `fromOwnerDashboard` (ruling R59). The CLI, an ingress request claiming the owner, a schedule or a page fail with `ci-fix-dashboard-only`. This is stricter than a critical change, whose dismissal the CLI may send, because the plan makes both CI actions dashboard-only.
-   - Approval fails with `ci-proposal-stale` unless the opening run still records CI failing on the proposal's commit. It fails with `ci-branch-mismatch` when the branch is not the run's pushed branch.
+   - Approval fails with `ci-pr-closed` when the pull request is recorded merged or closed (by the watch, the run's `pr_observed` or the ticket's PR record). It fails with `ci-proposal-stale` unless the opening run still records CI failing on the proposal's commit. It fails with `ci-branch-mismatch` when the branch is not the run's pushed branch.
    - Approval then queues an ordinary `attempt-fix` through `evaluateHandoff`: the same validation, reservation and protected-branch refusal (`branch-protected`) as the Run dialog. There is no "Valid for": `ttl_minutes` is refused (`invalid-ttl`).
    - The queued run carries `origin: 'ci'`, `ci_fix` { proposal_id, root_handoff_id, pr_url, head_sha, head_branch, failing, log_tail, log_withheld } and `proposal` { id, origin: 'ci', from_handoff_id, recipe }. Memory therefore treats it as a proposed run (ADR 0027): its learnings wait for the owner, and its Run note is never given to other runs.
 
 9. **The fix run.**
-   - Dispatch checks the run out at exactly the commit CI failed on: `worktreeBase(ticket, repo, { ci: { branch, commit } })`. It first fetches the branch. If origin's tip is another commit, the run fails with `ci-head-changed` before anything starts, and nothing changes; the next observation of the new commit decides again.
+   - Dispatch checks the run out at exactly the commit CI failed on: `worktreeBase(ticket, repo, { ci: { branch, commit } })`. It first fetches the branch. If origin's tip is another commit, the run fails with `ci-head-changed` before anything starts, and nothing changes; the next observation of the new commit decides again. If the repository has no origin, the fetch fails (the branch was deleted there, or origin is unreachable) or origin has no such branch, the run fails with `ci-branch-missing`: a remote-tracking ref left from an earlier fetch may be stale, so it is never used in its place.
    - The worker commits the change and pushes it with the existing `git push origin HEAD:refs/heads/<branch>`. The refspec has no `+` and there is no `--force`, so git accepts only a fast-forward of the same branch. `pushBranch` refuses a protected branch, and the runtime's deny list keeps `git push --force*` away from the agent.
    - No pull request is opened.
+   - **Resume.** An interrupted CI fix (`origin: 'ci'`, or a `proposal.origin` of `ci`) is resumed as a CI fix: the new run keeps `origin: 'ci'` and `ci_fix`, so dispatch checks out the failing commit again and the fix still never supersedes. Like the approval, the resume is the owner's on the dashboard (`fromOwnerDashboard`; else `resume-dashboard-only`), and it repeats the approval's checks: `ci-pr-closed`, `ci-proposal-stale` and `ci-branch-mismatch`.
 
 10. **UI.**
     - The CI failed item (design system §5) shows:
@@ -85,6 +91,7 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
       - "Approve and queue CI fix" and Dismiss, with Approval sent, or Dismissal queued with Undo, while a request is in flight.
     - Without an open proposal, it says "No fix proposed for this commit", with "2 of 2 fix proposals for this PR used" when that is the reason. While CI reruns on the proposal's commit it offers no approval.
     - All the text is escaped. The open proposal is carried by its CI item and is not listed again on its own.
+    - A run with an open CI proposal always has its CI item in Needs you: also when the run has suggestions to decide or is Ready to review (its own row is then a separate item in its own group), when it finished more than 7 days ago, when a later run superseded it, while CI reruns on the commit, and when the run is no longer in the snapshot. Each item is counted once, so the groups still add up to the tab count and the dot.
     - Once the owner approves or dismisses the proposal for that commit, the item leaves Needs you. The run is not Ready to review while CI is recorded failing.
     - A lapsed proposal shows in All as "Expired · PR head changed", "CI passed" or "PR merged or closed".
     - Run detail says "CI fix of run <id8>: commit … on branch …" on a fix, and "CI failing on commit … (seen by the CI watch)" on a watched run. Run rows add "CI failing", "CI pending", "CI passing" or "no CI checks": CI's word, never the test gate's.

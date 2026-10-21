@@ -50,6 +50,15 @@ test(`removed holds at most ${MAX_REMOVED} names`, (t) => {
   assert.equal(report.removed[0], 'SVC_000_TOKEN');
 });
 
+test('envFingerprint: on win32 variable names count in any case (keep_env, removed names, read-only table variables)', () => {
+  const report = { kubernetes: 'stub' };
+  const a = { removed: ['A_TOKEN'], keepEnv: ['Cre_Jenkins_Token'], report, readonlyKeys: ['argocd_env', 'argocd_env.ArgoCD_Server'] };
+  const b = { removed: ['a_token'], keepEnv: ['CRE_JENKINS_TOKEN'], report, readonlyKeys: ['argocd_env', 'argocd_env.ARGOCD_SERVER'] };
+  assert.equal(envFingerprint(a, { platform: 'win32' }), envFingerprint(b, { platform: 'win32' }));
+  assert.notEqual(envFingerprint(a, { platform: 'linux' }), envFingerprint(b, { platform: 'linux' }), 'case still counts where the OS keeps it');
+  assert.equal(envFingerprint(b, { platform: 'linux' }), envFingerprint({ ...b, keepEnv: ['CRE_JENKINS_TOKEN', 'CRE_JENKINS_TOKEN'] }, { platform: 'linux' }));
+});
+
 test('envFingerprint: 16 hex, stable under reordering, changed by keep_env, a read-only key, a report word or a removed name', () => {
   const report = { kubernetes: 'stub', aws: 'readonly', gcp: 'stub', azure: 'stub', databases: 'stub', argo: 'readonly', git: 'stub', netrc: 'stub', registries: 'stub', residual: ['ignored'] };
   const base = { removed: ['B_TOKEN', 'A_TOKEN'], keepEnv: ['X', 'Y'], report, readonlyKeys: ['kubeconfig', 'argocd_env.ARGOCD_SERVER'] };

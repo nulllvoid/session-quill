@@ -37,6 +37,7 @@ The credential boundary is right and stays as it is. What was missing:
   - each `CRED_SYSTEMS` report word, in order;
   - the sorted `[prod.readonly]` key names (`readonlyKeyNames`: each key, and `<table>.<NAME>` for `db_env` and `argocd_env`).
 - Values never enter it. Residual sentences and scope errors do not count.
+- On win32 variable names count in any case, as `buildChildEnv` matches them: removed names, `keep_env` names and the variable part of `<table>.<NAME>` are compared upper-cased, so `keep_env = ["Cre_Token"]` and `["CRE_TOKEN"]` give one fingerprint.
 - `prepareAutonomous` stores it as `cred_report.env_fingerprint` beside `removed`.
 
 ### Disclosure

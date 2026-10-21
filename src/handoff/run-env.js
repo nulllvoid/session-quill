@@ -55,11 +55,18 @@ export function readonlyKeyNames(readonly = {}) {
 /**
  * 16 hex of sha256 over the sorted removed names, the sorted `keep_env` names, each CRED_SYSTEMS
  * report word (in CRED_SYSTEMS order) and the sorted read-only key names. Order and duplicates in
- * the inputs do not matter; residual sentences and scope errors do not count.
+ * the inputs do not matter; residual sentences and scope errors do not count. On win32 variable
+ * names count in any case.
  */
-export function envFingerprint({ removed = [], keepEnv = [], report = {}, readonlyKeys = [] } = {}) {
+export function envFingerprint({ removed = [], keepEnv = [], report = {}, readonlyKeys = [] } = {}, { platform = process.platform } = {}) {
   const words = CRED_SYSTEMS.map((s) => (report && typeof report[s] === 'string' ? report[s] : null));
-  const body = JSON.stringify({ removed: sorted(removed), keep_env: sorted(keepEnv), report: words, readonly: sorted(readonlyKeys) });
+  // Windows environment names match in any case (as buildChildEnv matches them): `Cre_Token` and
+  // `CRE_TOKEN` are one variable there, so they are one name here. The table part of a read-only
+  // key (`argocd_env.`) is a config key and keeps its case.
+  const win = platform === 'win32';
+  const name = (n) => (win ? n.toUpperCase() : n);
+  const key = (k) => { const i = k.indexOf('.'); return win && i >= 0 ? `${k.slice(0, i)}.${k.slice(i + 1).toUpperCase()}` : k; };
+  const body = JSON.stringify({ removed: sorted(strings(removed).map(name)), keep_env: sorted(strings(keepEnv).map(name)), report: words, readonly: sorted(strings(readonlyKeys).map(key)) });
   return createHash('sha256').update(body).digest('hex').slice(0, 16);
 }
 

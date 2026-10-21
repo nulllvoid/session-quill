@@ -9,13 +9,15 @@
 // ledger's redaction, every instruction-like line is withheld, and it is cut to 4096 characters
 // before it reaches the journal. It stays local (the proposal and the fix run's record) and reaches
 // the fix run's prompt only as labelled data inside the data fence.
+import { createHash } from 'node:crypto';
 import { MINUTE } from '../lib/time.js';
 import { repoFor } from '../core/state.js';
 import { ciSettings } from '../config/config.js';
 import { defaultProviders } from '../reconcile/providers/index.js';
-import { ciProposalId, ciProposalsOf, ciCheckName, CI_LOG_MAX, CI_PROPOSALS_PER_PR } from '../core/reduce/ci.js';
+import { ciProposalId, ciProposalsOf, ciPrEnded, ciCheckName, CI_LOG_MAX, CI_PROPOSALS_PER_PR } from '../core/reduce/ci.js';
 import { isProtectedBranch } from './permissions.js';
 import { redactLog } from './stream.js';
+import { REDACTED } from '../lib/redact.js';
 import { instructionLike } from '../memory/instructions.js';
 
 export const CI_WATCH_WINDOW_MS = 7 * 24 * 60 * MINUTE;
@@ -24,36 +26,45 @@ export const WITHHELD_LINE = '[line withheld: instruction-like text]';
 // A check name reaches the fix run's prompt too, so it passes the same filter.
 export const WITHHELD_NAME = '[name withheld: instruction-like text]';
 const GITHUB_PR_URL = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/;
-const PRE_CUT = 16 * 1024;
+// The most of a fetched log the tail is redacted from (gh's own buffer is 16 MB).
+const RAW_MAX = 1024 * 1024;
+const PEM_END = /-----END ([A-Z ]{0,40})PRIVATE KEY-----/;
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[@-_]/g;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
-const TERMINAL_PR = new Set(['merged', 'closed']);
+
+// A log that starts inside a private key (GitHub's own log, or the bound below, kept only its end)
+// has an END line with no BEGIN before it: everything up to that END is the key's body.
+function orphanKeyBody(text) {
+  const end = PEM_END.exec(text);
+  if (!end) return text;
+  const begin = text.indexOf(`-----BEGIN ${end[1]}PRIVATE KEY-----`);
+  if (begin >= 0 && begin < end.index) return text;
+  return `${REDACTED}${text.slice(end.index + end[0].length)}`;
+}
 
 /**
  * The redacted, filtered last part of a CI log: `{ text, withheld }`, text at most `max` characters
  * (null when nothing is left), withheld the number of instruction-like lines replaced by a marker.
- * Cuts fall on line boundaries, so no cut splits a secret the redaction would have recognised.
+ * The bounded log is redacted whole before the tail is cut (an unterminated key is redacted to the
+ * end), and a log that starts inside a private key loses everything up to the key's END line, so
+ * no cut leaves a key body behind.
  */
 export function ciLogTail(raw, max = CI_LOG_MAX) {
-  let s = String(raw ?? '').replace(/\r\n?/g, '\n').replace(ANSI, '');
-  if (s.length > PRE_CUT) { s = s.slice(-PRE_CUT); const i = s.indexOf('\n'); s = i >= 0 ? s.slice(i + 1) : ''; }
-  s = redactLog(s);
+  let s = String(raw ?? '');
+  if (s.length > RAW_MAX) { s = s.slice(-RAW_MAX); const i = s.indexOf('\n'); s = i >= 0 ? s.slice(i + 1) : ''; }
+  s = redactLog(orphanKeyBody(s.replace(/\r\n?/g, '\n').replace(ANSI, '')));
   s = s.split('\n').map((line) => (instructionLike(line) ? WITHHELD_LINE : line.replace(CONTROL, ''))).join('\n').replace(/^\n+|\s+$/g, '');
   if (s.length > max) { s = s.slice(-max); const i = s.indexOf('\n'); s = i >= 0 ? s.slice(i + 1) : ''; }
   const withheld = s.split('\n').filter((l) => l === WITHHELD_LINE).length;
   return { text: s || null, withheld };
 }
 
-const prRecord = (state, h) => {
-  const t = state.tickets.get(h.ticket_id);
-  return t ? (t.prs ?? []).find((p) => p.url === h.pr_url) ?? null : null;
-};
-
 /**
  * Runs whose pull request the watch polls: done, opened a GitHub PR, finished in the last 7 days,
- * not themselves a CI fix, on an open ticket, and whose PR is not known to be merged or closed.
+ * not themselves a CI fix, on an open ticket, and whose PR is not recorded merged or closed (by the
+ * watch, on the run's own PR observation or on the ticket's PR record).
  * Newest first, at most CI_WATCH_MAX_PRS.
  */
 export function watchedRuns(state, nowIso) {
@@ -65,13 +76,14 @@ export function watchedRuns(state, nowIso) {
     if (!Number.isFinite(at) || now - at > CI_WATCH_WINDOW_MS) continue;
     const t = state.tickets.get(h.ticket_id);
     if (!t || t.status === 'done') continue;
-    if (h.ci && TERMINAL_PR.has(h.ci.pr_state)) continue;
-    const pr = prRecord(state, h);
-    if (pr && TERMINAL_PR.has(pr.state)) continue;
+    if (ciPrEnded(state, h)) continue;
     out.push(h);
   }
   return out.sort((a, b) => String(b.finished_at ?? '').localeCompare(String(a.finished_at ?? ''))).slice(0, CI_WATCH_MAX_PRS);
 }
+
+// 16 hex of the observation's facts (never a log: the payload holds only states and check names).
+const observationDigest = (payload) => createHash('sha256').update(JSON.stringify([payload.pr_url, payload.head_sha, payload.head_branch, payload.pr_state, payload.state, payload.checks])).digest('hex').slice(0, 16);
 
 const failingNames = (checks) => checks.filter((c) => c.state === 'failed').map((c) => c.name);
 const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -84,7 +96,7 @@ function changed(prev, seen) {
 // Why the watch stages no fix for this failing commit, or null when it may.
 export function proposalBlocker(state, h, repo) {
   const ci = h.ci;
-  if (!ci || ci.state !== 'failing' || TERMINAL_PR.has(ci.pr_state)) return 'not-failing';
+  if (!ci || ci.state !== 'failing' || ciPrEnded(state, h)) return 'not-failing';
   if (state.runProposals.has(ciProposalId(h.id, ci.head_sha))) return 'already-proposed';
   if (ciProposalsOf(state, h.id).length >= CI_PROPOSALS_PER_PR) return 'limit';
   if (!h.pushed_branch || ci.head_branch !== h.pushed_branch) return 'branch-mismatch';
@@ -95,7 +107,7 @@ export function proposalBlocker(state, h, repo) {
 }
 
 /** One pass over the watched pull requests; returns what it did, for logs and tests. */
-export async function sweepCi(worker, config, { providerFor = null } = {}) {
+export async function sweepCi(worker, config, { providerFor = null, refused = new Map() } = {}) {
   const out = { polled: 0, observed: 0, proposed: 0, errors: [] };
   if (!ciSettings(config).watch) return out;
   const providers = providerFor ? { for: providerFor } : defaultProviders(config, worker.env);
@@ -120,9 +132,20 @@ export async function sweepCi(worker, config, { providerFor = null } = {}) {
     if (changed(h.ci, seen)) {
       const n = (h.ci ? h.ci.n : 0) + 1;
       const payload = { handoff_id: h.id, n, pr_url: h.pr_url, head_sha: seen.head_sha, head_branch: seen.head_branch, pr_state: seen.pr_state, state: seen.state, checks: seen.checks.map((c) => ({ name: c.name, state: c.state })) };
+      // The source identity names the observed facts too: a refused observation is journaled once
+      // and never re-sent while the facts stay the same, and a later, different one is not taken
+      // for a duplicate of it (the reducer marks a refused event's identity applied as well).
+      const sourceIdentity = `ci-observation:${h.id}:${n}:${observationDigest(payload)}`;
+      if (refused.get(h.id) === sourceIdentity) continue;
+      if (worker.journal && worker.journal.hasSource(sourceIdentity)) {
+        refused.set(h.id, sourceIdentity);
+        out.errors.push({ handoff_id: h.id, error: 'ci-observation-refused-before' });
+        continue;
+      }
       try {
-        const { result } = worker.emit('ci-observation', payload, { ticket_id: h.ticket_id, source_identity: `ci-observation:${h.id}:${n}` });
-        if (result.rejected) { out.errors.push({ handoff_id: h.id, error: result.rejected }); continue; }
+        const { result } = worker.emit('ci-observation', payload, { ticket_id: h.ticket_id, source_identity: sourceIdentity });
+        if (result.rejected || result.duplicate) { refused.set(h.id, sourceIdentity); out.errors.push({ handoff_id: h.id, error: result.rejected ?? 'ci-observation-duplicate' }); continue; }
+        refused.delete(h.id);
         out.observed += 1;
       } catch (err) { out.errors.push({ handoff_id: h.id, error: err.message }); continue; }
     }
@@ -149,10 +172,13 @@ export async function sweepCi(worker, config, { providerFor = null } = {}) {
 export function createCiWatch({ providerFor = null } = {}) {
   let last = -Infinity;
   let inFlight = null;
+  // handoff id -> the source identity of the observation the reducer last refused for it: skipped,
+  // without a journal line or a log, until what the watch sees changes.
+  const refused = new Map();
   const run = (worker, config) => {
     if (inFlight) return inFlight;
     last = Date.parse(worker.now());
-    inFlight = sweepCi(worker, config, { providerFor })
+    inFlight = sweepCi(worker, config, { providerFor, refused })
       .then((r) => { if (r.errors.length) worker.log(`CI watch: ${r.errors.length} pull request(s) not observed (${r.errors[0].error})`); return r; })
       .catch((err) => { worker.log(`CI watch failed: ${err.message}`); return null; })
       .finally(() => { inFlight = null; });
