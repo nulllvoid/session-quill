@@ -417,7 +417,25 @@ _Not yet filled._
 
 ### Task 12 Diff review and critic
 
-_Not yet filled._
+ADR 0040. No new event kind or request; the fields below ride on the existing `handoff-tx` record update. Every field is local: in the owner's snapshot only, on no export, sanitize, mirror, publisher, tracker or vault-note allow-list (`tests/export/privacy-sentinel.test.js`).
+
+- Config `[repos.<id>]`: `critic` (boolean; only `true` turns the critic on) and `review_docs` (list of up to 5 repository-relative paths, default `["CLAUDE.md"]`). An entry is dropped when it is absolute, home- or drive-relative, holds a colon, a `..` or empty segment, starts with `-`, or exceeds 200 characters. The documents are read at the run's `base_commit`.
+- Handoff fields, set by `fixExtras` on every run that collects a diff (done, failed, cancelled or timed out):
+  - `patch_ref`: the 64-hex content hash of the patch blob (the same text as `patch_path`), when the patch is non-empty and at most 1,048,576 UTF-8 bytes.
+  - `patch_too_large: true` instead of `patch_ref` above that size.
+- Handoff fields, set only when the repository has `critic = true` and the run reached the test gate without being stopped:
+  - `critic_status`: `clean`, `warnings`, `not-run` or `failed`.
+  - `critic_count`: whole number of findings (0 unless `warnings`).
+  - `critic_reason`: worker-written text, at most 300 characters, for `not-run` and `failed`.
+  - `critic_ref`: hash of the findings blob, for `clean` and `warnings`.
+  - `timings.critic_ms`: measured critic time. `agent_ms` excludes it. It travels with `timings` like `test_ms`.
+- Findings blob (`critic_ref`, JSON): `{ format: 1, run_id, status, summary (string|null, at most 2,000), findings: [...], problems: string[] }`. Each finding is `{ file (≤300), line (positive integer|null), hunk (≤120), severity: high|medium|low, category: bug|test|security|docs|style|other, text (≤1,000, required), suggestion (≤500), instruction_like? (the `instructionLike` pattern name) }`. There are at most 30 findings. `problems` names dropped (`review_findings[i]-dropped`), capped or invalid input. Every string is agent text.
+- Recipes:
+  - Requirement `run_diff` (`REQUIREMENTS`), with error code `recipe-needs-run-diff` from `validateHandoffRequest`. Such a recipe is never queued, scheduled, offered on a page or listed in the Run dialog.
+  - Output `review_findings` (`OUTPUTS`).
+  - Built-in recipe `critic-review` (mode `analyse`, `read_source`, `requires: [run_diff]`, `timeout_min` 10, `max_turns` 20, `quill_min_version` 2.0.0). Only the built-in is used.
+- The critic process: a fresh `claude -p` (no `--resume`) in the run's checkout with the read-only self-check profile and `--permission-mode dontAsk`. Its spend is capped by `--max-budget-usd` = what is left of the run's cap, and its usage is added to the run's `num_turns` and `cost_usd`. It writes to the run's log and to no ledger.
+- UI (owner dashboard): Changes shows the grouped diff ("Grouped by file path"; groups Core logic, Schema and state, CLI, routes and UI, Tests) from `patch_ref`, with per-hunk "Retry as new run" (`retry_of`, pre-filled note ≤ 280 characters naming the file and hunk range). "Review notes (n)", "The critic agent's opinion, not Quill's check", is shown from `critic_ref`. Neither appears in an export.
 
 ### Task 14 Run environment disclosure
 
