@@ -76,6 +76,7 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
    - Dispatch checks the run out at exactly the commit CI failed on: `worktreeBase(ticket, repo, { ci: { branch, commit } })`. It first fetches the branch. If origin's tip is another commit, the run fails with `ci-head-changed` before anything starts, and nothing changes; the next observation of the new commit decides again. If the repository has no origin, the fetch fails (the branch was deleted there, or origin is unreachable) or origin has no such branch, the run fails with `ci-branch-missing`: a remote-tracking ref left from an earlier fetch may be stale, so it is never used in its place.
    - The worker commits the change and pushes it with the existing `git push origin HEAD:refs/heads/<branch>`. The refspec has no `+` and there is no `--force`, so git accepts only a fast-forward of the same branch. `pushBranch` refuses a protected branch, and the runtime's deny list keeps `git push --force*` away from the agent.
    - No pull request is opened.
+   - **Resume.** An interrupted CI fix (`origin: 'ci'`, or a `proposal.origin` of `ci`) is resumed as a CI fix: the new run keeps `origin: 'ci'` and `ci_fix`, so dispatch checks out the failing commit again and the fix still never supersedes. Like the approval, the resume is the owner's on the dashboard (`fromOwnerDashboard`; else `resume-dashboard-only`), and it repeats the approval's checks: `ci-pr-closed`, `ci-proposal-stale` and `ci-branch-mismatch`.
 
 10. **UI.**
     - The CI failed item (design system §5) shows:

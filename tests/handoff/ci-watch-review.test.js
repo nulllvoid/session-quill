@@ -12,6 +12,8 @@ import { bootWorker, makeRepo, git, until, T1 } from './helpers.js';
 import { updateHandoff } from '../../src/handoff/results.js';
 import { submitRequest } from '../../src/server/requests.js';
 import { ciProposalId } from '../../src/core/reduce/ci.js';
+import { writeIngress } from '../../src/core/ingress.js';
+import { resumeFields } from '../../src/handoff/resume.js';
 
 const NONE = { read_source: false, edit_source: false, commit: false, push_branch: false, open_draft_pr: false };
 const FIX = { read_source: true, edit_source: true, commit: true, push_branch: true, open_draft_pr: true };
@@ -131,5 +133,55 @@ test('a CI fix whose branch is gone from origin does not start, even with a remo
     const failed = await settle(b, fixId);
     assert.deepEqual([failed.state, failed.error.code], ['failed', 'ci-branch-missing'], JSON.stringify(failed.error));
     assert.throws(() => git(origin, 'rev-parse', '--verify', `refs/heads/${BRANCH}`), 'nothing pushed');
+  } finally { await b.w.stop(); }
+});
+
+const SESSION = '5e551011-0000-4000-8000-000000000001';
+const resume = (b, h) => submitRequest(b.w, { id: randomUUID(), kind: 'resume-run', target_id: h.ticket_id, expected_revision: null, payload: { handoff_id: h.id } });
+function resumeViaIngress(b, h) {
+  const id = randomUUID();
+  writeIngress(b.mk('request', { id, kind: 'resume-run', target_id: h.ticket_id, expected_revision: null, payload: { handoff_id: h.id }, created_at: b.iso(), not_before: b.iso(), actor_id: 'owner', body_hash: 'x' }, { source_identity: `request:${id}`, producer: 'cli' }), b.env);
+  b.w.tick();
+  b.w.tick();
+  return b.w.state.requests.get(id);
+}
+const outcome = (b, request) => { b.w.tick(); const r = b.w.state.requests.get(request.id); return [r.state, r.error ? r.error.code : null]; };
+
+test('a CI fix is resumed as a CI fix, by the owner on the dashboard only, and only while CI still fails on its commit', async () => {
+  const { repo, head } = repoWithOrigin();
+  const gh = github(failing(head));
+  const b = await bootWorker({ repo, runtimeAvailable: true, repoExtra: { provider: 'github' }, ciProviderFor: () => gh });
+  try {
+    const root = await rootRun(b, BRANCH);
+    await b.hext.sweepCi();
+    const p = b.w.state.runProposals.get(ciProposalId(root, head));
+    b.hext.pause();
+    const { request } = approve(b, p);
+    b.w.tick();
+    const fixId = b.w.state.requests.get(request.id).result.handoff_id;
+    updateHandoff(b.w, fixId, { state: 'failed', finished_at: b.iso(), session_id: SESSION, error: { code: 'interrupted', message: 'the worker stopped' } });
+    b.hext.resume();
+    const fix = b.w.state.handoffs.get(fixId);
+    const fields = resumeFields(fix);
+    assert.deepEqual([fields.origin, fields.ci_fix.head_sha, fields.ci_fix.root_handoff_id, fields.proposal.origin], ['ci', head, root, 'ci']);
+
+    // The CLI (anything through ingress, whatever actor it claims) never resumes a CI fix.
+    const cli = resumeViaIngress(b, fix);
+    assert.deepEqual([cli.state, cli.error.code], ['failed', 'resume-dashboard-only']);
+    // The pull request is recorded closed: refused.
+    b.w.state.handoffs.get(root).pr_observed = { state: 'closed' };
+    assert.deepEqual(outcome(b, resume(b, fix).request), ['failed', 'ci-pr-closed']);
+    delete b.w.state.handoffs.get(root).pr_observed;
+    // The pull request has a newer commit: stale.
+    gh.seen = failing('b'.repeat(40));
+    await b.hext.sweepCi();
+    assert.deepEqual(outcome(b, resume(b, fix).request), ['failed', 'ci-proposal-stale']);
+    // CI fails on the fix's commit again: the owner on the dashboard resumes it, as a CI fix.
+    gh.seen = failing(head);
+    await b.hext.sweepCi();
+    const ok = resume(b, fix).request;
+    assert.deepEqual(outcome(b, ok), ['applied', null]);
+    const resumed = b.w.state.handoffs.get(b.w.state.requests.get(ok.id).result.handoff_id);
+    assert.deepEqual([resumed.retry_of, resumed.origin, resumed.ci_fix.head_sha, resumed.ci_fix.root_handoff_id, resumed.branch, resumed.permissions.open_draft_pr], [fixId, 'ci', head, root, BRANCH, false]);
   } finally { await b.w.stop(); }
 });

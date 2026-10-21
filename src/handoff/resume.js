@@ -112,14 +112,17 @@ export function resumeProblem(h) {
   return null;
 }
 
+/** Whether a run is a CI fix (ADR 0039): its own origin, or the proposal it came from. */
+export const isCiFix = (h) => !!h && (h.origin === 'ci' || (isPlainObject(h.proposal) && h.proposal.origin === 'ci'));
+
 const refuse = (message) => { throw new TrackerError('resume-refused', message); };
 const specOf = (s) => (typeof s === 'string' ? s : '');
 
 /**
  * What a resumed run copies from the run it resumes: the same mode, note, permissions, access,
  * branch, recipe, scopes and limits; for an approved critical change (ADR 0028) also the action pin
- * of every scope, the fingerprints dispatch checks again, and the proposal it came from. Never a
- * batch id. Throws `resume-refused` when a critical run's pins or fingerprints do not cover every
+ * of every scope, the fingerprints dispatch checks again, and the proposal it came from; for a CI
+ * fix (ADR 0039) its `origin` and `ci_fix`. Never a batch id. Throws `resume-refused` when a critical run's pins or fingerprints do not cover every
  * one of its scopes: a scope grant is never resumed without its pin.
  */
 export function resumeFields(h) {
@@ -135,6 +138,9 @@ export function resumeFields(h) {
     ...(Array.isArray(h.planned_paths) && h.planned_paths.length ? { planned_paths: [...h.planned_paths] } : {}),
     ...(h.proposal_id ? { proposal_id: h.proposal_id } : {}),
     ...(isPlainObject(h.proposal) ? { proposal: { ...h.proposal } } : {}),
+    // ADR 0039: a CI fix stays a CI fix: dispatch checks out the commit CI failed on again, it never
+    // supersedes the run whose pull request it pushes to, and the owner resumes it on the dashboard.
+    ...(isCiFix(h) ? { origin: 'ci', ci_fix: isPlainObject(h.ci_fix) ? { ...h.ci_fix, failing: Array.isArray(h.ci_fix.failing) ? [...h.ci_fix.failing] : [] } : null } : {}),
   };
   if (!critical) {
     if (!scopes.length) return out;
