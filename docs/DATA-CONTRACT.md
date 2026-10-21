@@ -374,3 +374,7 @@ _Not yet filled._
 ### Task 12 Diff review and critic
 
 _Not yet filled._
+
+### Task 14 Run environment disclosure
+
+_Not yet filled._

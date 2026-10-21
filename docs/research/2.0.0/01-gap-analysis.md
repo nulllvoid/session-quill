@@ -50,6 +50,7 @@ Status is what exists today. "Adopted as" is the 2.0.0 design; the task number r
 | 5.2 Autonomy score, recipe CFR | Partial data | Per-recipe counts in `quill doctor` (runs, done, first-time test pass, owner interventions) and "reverted within 48 h of merge" from merge commits and revert detection. Counts, not an opaque score | 5 |
 | §4 Daemon socket IPC | Missing; conflicts with ADR 0022 | Deferred with reasons (ADR 0034). Instead: p99 and a statusline case in `bench-hooks.mjs`, a lean statusline entry, lazy loading on the hook path | 6 |
 | §4 Snapshot compaction | Missing | A worker state checkpoint with reducer and package versions; `Journal.open` resumes from an offset; worker start hydrates and replays the tail; any mismatch falls back to a full replay | 2 |
+| Issue: MCP credentials in runs (`02-issue-mcp-credentials.md`) | Stripping is by design; no disclosure; memory never invalidated | Removed variable names in the credential report, Run dialog, run detail and prompt; `run-env` memory anchors on an environment fingerprint, stale when it changes | 14 |
 | §5 New events | — | `worktree` (ingress), `snapshot-tx`, `ci-observation`, `ci-proposal` (worker-only). Everything else is a field or op on an existing kind | 2–12 |
 
 ## Safety contracts kept
