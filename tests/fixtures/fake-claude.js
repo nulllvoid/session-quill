@@ -91,7 +91,18 @@ function transcript() {
 // The critic (ADR 0040): a fresh process with its own prompt; it never edits and never resumes.
 function critic() {
   const capture = process.env.FAKE_CLAUDE_CAPTURE;
-  if (capture) fs.writeFileSync(`${capture}.critic`, JSON.stringify({ prompt, args }));
+  if (capture) {
+    // As the run's capture: the --settings file and the grant beside it, and the probed variables.
+    const out = { prompt, args };
+    const settingsAt = args.indexOf('--settings');
+    if (settingsAt >= 0) {
+      const file = args[settingsAt + 1];
+      try { out.settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { out.settings = null; }
+      try { out.grant_text = fs.readFileSync(path.join(path.dirname(file), 'grant.json'), 'utf8'); } catch { out.grant_text = null; }
+    }
+    if (process.env.FAKE_CLAUDE_ENV_PROBE) out.env_probe = Object.fromEntries(process.env.FAKE_CLAUDE_ENV_PROBE.split(',').map((k) => [k, process.env[k] ?? null]));
+    fs.writeFileSync(`${capture}.critic`, JSON.stringify(out));
+  }
   process.stdout.write(line({ type: 'system', subtype: 'init', session_id: 'fake-critic-session', tools: ['Read'], mcp_servers: [] }));
   const how = process.env.FAKE_CLAUDE_CRITIC_MODE ?? 'ok';
   if (how === 'hang') { setTimeout(() => {}, 600_000); return; }
