@@ -151,15 +151,32 @@ export function runTabs(snapshot, filters, now, { memory = null } = {}) {
   const runs = (snapshot.handoffs ?? []).filter((h) => keep(h.ticket_id)).map((h) => ({ kind: 'run', id: h.id, at: h.requested_at ?? '', run: h }));
   const proposals = (snapshot.run_proposals ?? []).filter((p) => (p.state === 'proposed' || p.state === 'expired') && keep(p.ticket_id)).map((p) => ({ kind: 'proposal', id: p.id, at: p.proposed_at ?? '', proposal: p }));
   const nowMs = Date.parse(now);
-  // Each run needs the owner at most once (ADR 0039): as its own row, or as the CI failed item that
-  // carries its open fix proposal (so that proposal is not listed again on its own).
+  // Each run needs the owner at most once as its own row, and at most once as the CI failed item
+  // (ADR 0039). An open CI fix proposal is always carried by its run's CI item, whatever else the
+  // run needs and however old or superseded the run is, so it is never hidden and never listed
+  // again on its own; one whose run is not in the snapshot gets a CI item without the run.
   const runNeeds = [];
   if (!isStaticSnapshot(snapshot)) {
+    const openCi = new Map();
+    for (const x of proposals) {
+      const p = x.proposal;
+      if (p.origin !== 'ci' || p.state !== 'proposed') continue;
+      const prev = openCi.get(p.from_handoff_id);
+      if (!prev || String(p.proposed_at ?? '') > String(prev.proposed_at ?? '')) openCi.set(p.from_handoff_id, p);
+    }
+    const ciNeed = (h, id, proposal, at) => ({ kind: 'ci', id: `ci:${id}`, at, run: h, proposal, group: 'tests' });
     for (const x of runs) {
       const group = attentionOf(snapshot, x.run, now);
-      if (group === 'ci') runNeeds.push({ kind: 'ci', id: `ci:${x.run.id}`, at: x.run.ci.observed_at ?? x.at, run: x.run, proposal: ciAttention(snapshot, x.run, now).proposal, group: 'tests' });
-      else if (group) runNeeds.push({ ...x, group });
+      const open = openCi.get(x.run.id) ?? null;
+      openCi.delete(x.run.id);
+      const at = (x.run.ci && x.run.ci.observed_at) || (open && open.proposed_at) || x.at;
+      if (group === 'ci') runNeeds.push(ciNeed(x.run, x.run.id, ciAttention(snapshot, x.run, now).proposal ?? open, at));
+      else {
+        if (group) runNeeds.push({ ...x, group });
+        if (open) runNeeds.push(ciNeed(x.run, x.run.id, open, at));
+      }
     }
+    for (const [id, p] of openCi) runNeeds.push(ciNeed((snapshot.handoffs ?? []).find((h) => h.id === id) ?? null, id, p, p.proposed_at ?? ''));
   }
   const tabs = {
     needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed' && x.proposal.origin !== 'ci').map((x) => ({ ...x, group: 'decision' })), ...runNeeds, ...memoryNeeds(memory, filters).map((x) => ({ ...x, group: 'decision' }))],

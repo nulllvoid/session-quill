@@ -89,6 +89,7 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
       - "Approve and queue CI fix" and Dismiss, with Approval sent, or Dismissal queued with Undo, while a request is in flight.
     - Without an open proposal, it says "No fix proposed for this commit", with "2 of 2 fix proposals for this PR used" when that is the reason. While CI reruns on the proposal's commit it offers no approval.
     - All the text is escaped. The open proposal is carried by its CI item and is not listed again on its own.
+    - A run with an open CI proposal always has its CI item in Needs you: also when the run has suggestions to decide or is Ready to review (its own row is then a separate item in its own group), when it finished more than 7 days ago, when a later run superseded it, while CI reruns on the commit, and when the run is no longer in the snapshot. Each item is counted once, so the groups still add up to the tab count and the dot.
     - Once the owner approves or dismisses the proposal for that commit, the item leaves Needs you. The run is not Ready to review while CI is recorded failing.
     - A lapsed proposal shows in All as "Expired · PR head changed", "CI passed" or "PR merged or closed".
     - Run detail says "CI fix of run <id8>: commit … on branch …" on a fix, and "CI failing on commit … (seen by the CI watch)" on a watched run. Run rows add "CI failing", "CI pending", "CI passing" or "no CI checks": CI's word, never the test gate's.
