@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { symbolAt, declaredName, splitLines, changedRatio, anchorStaleRatio, staledEvent, anchorCandidates, makeAnchor, validAnchors, fileAnchors, SYMBOL_WINDOW, DEFAULT_ANCHOR_STALE_RATIO } from '../../src/memory/anchors.js';
+import { anchorCheckKey, symbolAt, declaredName, splitLines, changedRatio, anchorStaleRatio, staledEvent, anchorCandidates, makeAnchor, validAnchors, fileAnchors, SYMBOL_WINDOW, DEFAULT_ANCHOR_STALE_RATIO } from '../../src/memory/anchors.js';
 import { fileLearnings, blobSha } from '../../src/memory/file.js';
 import { anchorVerdicts, gatherMemory, SOURCE_CHANGED_HEADING, RECHECK_SUFFIX } from '../../src/memory/deliver.js';
 import { memoryListing } from '../../src/core/memory.js';
@@ -225,4 +225,29 @@ test('a run-env anchor is kept beside the file anchors, one per entry; file chec
   const moved = { ...fileA, line: 35 };
   ev(s, 'memory-tx', { op: 'confirmed', entry: { id: 'both', anchors: [moved] } }, { occurred_at: AT });
   assert.deepEqual(s.memory.entries.get('both').anchors, [moved, envA]);
+});
+
+test('the worker re-checks when one anchored entry is swapped for another at the same HEAD', async () => {
+  const repo = anchoredRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  try {
+    const original = fs.readFileSync(path.join(repo.dir, 'retry.js'), 'utf8');
+    const head = commitFile(repo.dir, 'retry.js', original.replace(/ {2}step(\d)\(\);/g, '  other$1(await x);'));
+    const old = git(repo.dir, 'rev-parse', `${repo.base}:retry.js`);
+    const now = git(repo.dir, 'rev-parse', `${head}:retry.js`);
+    const file = (id, blob) => b.w.emit('memory-tx', { op: 'filed', entry: { id, scope: 'repo', repo_id: 'demo', section: 'pitfalls', kind: 'pitfall', text: `anchored ${id}`, evidence: [`retry.js:34 @blob:${blob}`], derived_from: 'repo-file', trust: 'sourced', anchors: [{ file_path: 'retry.js', blob_sha: blob, line: 34, symbol_name: 'retry' }] } }, { source_identity: `test:${id}` });
+    file('current', now);
+    await b.hext.checkAnchors();
+    assert.equal(b.w.state.memory.entries.get('current').state, 'active');
+    // Same HEAD, same number of candidates, a different entry anchored to the old version.
+    b.w.emit('memory-tx', { op: 'retired', entry: { id: 'current' } }, { source_identity: 'test:retire' });
+    file('older', old);
+    assert.deepEqual(anchorCandidates(b.w.state, 'demo').map((e) => e.id), ['older']);
+    await b.hext.checkAnchors();
+    assert.equal(b.w.state.memory.entries.get('older').state, 'stale', 'the swapped-in entry was checked');
+    // A confirmation that re-anchors the same entry at the same HEAD is a new check too; order does not matter.
+    const at = (id, blob) => ({ id, anchors: [{ file_path: 'retry.js', blob_sha: blob, line: 34, symbol_name: 'retry' }] });
+    assert.notEqual(anchorCheckKey(head, [at('x', old)]), anchorCheckKey(head, [at('x', now)]));
+    assert.equal(anchorCheckKey(head, [at('x', old), at('y', now)]), anchorCheckKey(head, [at('y', now), at('x', old)]));
+  } finally { await b.w.stop(); }
 });

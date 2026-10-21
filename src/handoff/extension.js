@@ -24,7 +24,7 @@ import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js'
 import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSources } from '../memory/file.js';
 import { writeDocsProjection } from '../memory/project.js';
 import { failureRecord, repeatNotice } from '../memory/failure.js';
-import { anchorStaleRatio, anchorCandidates, staledEvent } from '../memory/anchors.js';
+import { anchorStaleRatio, anchorCandidates, anchorCheckKey, staledEvent } from '../memory/anchors.js';
 import { runEnvForFiling, runEnvStaleEvents } from './run-env.js';
 import { anchorVerdicts } from '../memory/deliver.js';
 import { addMs, MINUTE } from '../lib/time.js';
@@ -132,7 +132,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
   const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
   const dispatches = new Map(); // handoff id -> its dispatch promise, until it settles (M7: onStop waits)
   const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
-  const anchorSeen = new Map(); // repo id -> HEAD and candidate count at its last anchor check
+  const anchorSeen = new Map(); // repo id -> anchorCheckKey (HEAD and the candidates) of its last anchor check
   let anchorCheckAt = null;
   let anchorCheck = null; // the anchor check in flight
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
@@ -872,8 +872,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     return !batchBudgetReached(members, batchId, budget);
   }
 
-  // ADR 0032: anchored memory against each registered repository's HEAD. Only when HEAD (or the set
-  // of anchored entries) changed since the last check; an anchored region that changed by at least
+  // ADR 0032: anchored memory against each registered repository's HEAD. Only when HEAD or the set
+  // of anchored entries (their ids and anchor blobs) changed since the last check; an anchored region that changed by at least
   // `[memory] anchor_stale_ratio` is journaled as a `staled` memory-tx (deterministic source
   // identity, so a repeated check never journals twice). Pinned and owner entries are never
   // candidates (R27); a git failure stales nothing.
@@ -885,7 +885,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       if (!entries.length) continue;
       let head;
       try { head = await headCommit(cfg.canonical_path); } catch { continue; }
-      const seen = `${head}:${entries.length}`;
+      const seen = anchorCheckKey(head, entries);
       if (anchorSeen.get(repoId) === seen) continue;
       const verdicts = await anchorVerdicts(entries, { checkout: cfg.canonical_path, commit: head, ratio, log: (line) => worker.log(`${line} (anchor check of ${repoId})`) });
       if (stopping) return;
