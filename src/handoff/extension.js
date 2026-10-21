@@ -25,6 +25,7 @@ import { getBlob } from '../core/blobs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
 import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, prodEffects } from './autonomous.js';
 import { interruptedEffects, batchBudgetUsd, batchBudgetReached, resumePrompt, carrySession, claudeConfigRoot } from './resume.js';
+import { createTicketWorktreeSweep } from './ticket-worktrees.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -112,6 +113,8 @@ function grantedFingerprints(scopes) {
 }
 
 export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
+  // Ticket worktree teardown (ADR 0036): at start, then at most hourly from the tick.
+  const ticketWorktrees = createTicketWorktreeSweep();
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   const finishing = new Set(); // finish() promises, until memory filing has landed
   const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
@@ -789,6 +792,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     pruneOldWorktrees,
     pruneRetention,
     cleanupRun: (id) => cleanupRun(currentWorker, id),
+    sweepTicketWorktrees: () => ticketWorktrees.run(currentWorker, ctx.config),
     async onStart(worker) {
       // Each recipe carries its time cap per access level, from the same budget dispatch uses.
       worker.recipeInfo = () => catalogFor(worker).list().map((r) => (r.error ? r : { ...r, caps: recipeCaps(r, ctx.config) }));
@@ -809,9 +813,11 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       try { reemitMissingCriticalProposals(worker); } catch (err) { worker.log(`critical proposals not re-emitted: ${err.message}`); }
       // Housekeeping at start: checkouts past their keep time, stale registrations, old ledgers and logs.
       try { await pruneOldWorktrees(); pruneRetention(); } catch (err) { worker.log(`handoff housekeeping failed: ${err.message}`); }
+      await ticketWorktrees.run(worker, ctx.config);
     },
     tick(worker) {
       if (paused) return;
+      ticketWorktrees.tick(worker, ctx.config);
       const now = worker.now();
       for (const h of worker.state.handoffs.values()) {
         if (h.cancel_requested && h.state === 'running' && running.has(h.id) && running.get(h.id).reason === null) killWithReason(h.id, 'cancel');
@@ -833,6 +839,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     async onStop(worker, { abandonRuns = false } = {}) {
       // A run still waiting in dispatch for an earlier filing must not start once a stop began.
       stopping = true;
+      await ticketWorktrees.idle();
       if (abandonRuns) { running.clear(); return; }
       // M7: a dispatch still setting up (no process yet) returns once it sees `stopping`, or has just
       // spawned: wait for it, bounded, so no run starts after the stop and a fresh child is stopped below.

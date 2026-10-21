@@ -174,3 +174,115 @@ test('a spawn that throws after the checkout was made leaves no checkout behind'
     assert.doesNotMatch(git(repo.dir, 'worktree', 'list'), /worktrees/);
   } finally { await b.w.stop(); }
 });
+
+// ---- Ticket worktree teardown (ADR 0036, FR-1.3)
+import { writeIngress } from '../../src/core/ingress.js';
+import { createBranchWorktree } from '../../src/handoff/worktree.js';
+import { worktreeIdentity } from '../../src/core/worktrees.js';
+
+const MOUNT = (n) => `66666666-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+// A ticket with a real worktree under <home>/worktrees/demo/<KEY>, recorded as the CLI records it.
+async function mounted(b, repo, { tid = T1, key = 'LOCAL-a-00000001', n = 1, dir } = {}) {
+  b.ticket(tid, key);
+  const wt = dir ?? path.join(b.home, 'worktrees', 'demo', key);
+  const made = dir ? { base_sha: repo.head } : await createBranchWorktree({ repoPath: repo.dir, dir: wt, branch: `quill/${key}` });
+  const payload = { op: 'mounted', mount_id: MOUNT(n), ticket_id: tid, repo_id: 'demo', path: wt, branch: `quill/${key}`, base_sha: made.base_sha };
+  writeIngress(b.mk('worktree', payload, { ticket_id: tid, source_identity: worktreeIdentity(payload) }), b.env);
+  b.w.tick();
+  return { wt, payload, ticket: b.w.state.tickets.get(tid) };
+}
+const setStatus = (b, tid, status) => { writeIngress(b.mk('ticket-update', { ticket_id: tid, fields: { status }, source: 'manual' }), b.env); b.w.tick(); };
+const worktreeEvents = (b, op) => [...b.w.journal.read()].filter((e) => e.kind === 'worktree' && e.payload.op === op);
+
+test('the sweep removes a clean worktree of a ticket done for keep_days and keeps the branch', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  try {
+    const { wt, ticket } = await mounted(b, repo);
+    assert.equal(ticket.worktrees[0].state, 'mounted');
+    await b.hext.sweepTicketWorktrees();
+    assert.ok(fs.existsSync(wt), 'an open ticket keeps its worktree');
+    setStatus(b, T1, 'done');
+    b.advance(6 * DAY);
+    await b.hext.sweepTicketWorktrees();
+    assert.ok(fs.existsSync(wt), 'done for less than keep_days');
+    b.advance(1 * DAY);
+    await b.hext.sweepTicketWorktrees();
+    assert.equal(fs.existsSync(wt), false);
+    assert.equal(b.w.state.tickets.get(T1).worktrees[0].state, 'pruned');
+    assert.equal(worktreeEvents(b, 'pruned')[0].producer, 'worker');
+    assert.equal(git(repo.dir, 'rev-parse', '--verify', 'refs/heads/quill/LOCAL-a-00000001'), repo.head, 'the branch stays (ADR 0021)');
+    assert.doesNotMatch(git(repo.dir, 'worktree', 'list'), /LOCAL-a-00000001/);
+    // Reopening the ticket afterwards starts nothing.
+    setStatus(b, T1, 'active');
+    await b.hext.sweepTicketWorktrees();
+    assert.equal(fs.existsSync(wt), false);
+    assert.equal(worktreeEvents(b, 'mounted').length, 1);
+  } finally { await b.w.stop(); }
+});
+
+test('a dirty worktree is kept and reported once, and goes once it is clean', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true, configExtra: { worktree: { keep_days: 2 } } });
+  try {
+    const { wt } = await mounted(b, repo);
+    fs.writeFileSync(path.join(wt, 'draft.txt'), 'unsaved thoughts');
+    setStatus(b, T1, 'done');
+    b.advance(2 * DAY);
+    for (let i = 0; i < 3; i += 1) { await b.hext.sweepTicketWorktrees(); b.advance(DAY); }
+    assert.equal(fs.readFileSync(path.join(wt, 'draft.txt'), 'utf8'), 'unsaved thoughts', 'uncommitted work is never deleted');
+    const kept = worktreeEvents(b, 'kept');
+    assert.equal(kept.length, 1, 'reported once');
+    assert.equal(kept[0].payload.reason, 'uncommitted-changes');
+    assert.deepEqual([b.w.state.tickets.get(T1).worktrees[0].state, b.w.state.tickets.get(T1).worktrees[0].kept_reason], ['kept', 'uncommitted-changes']);
+    fs.rmSync(path.join(wt, 'draft.txt'));
+    await b.hext.sweepTicketWorktrees();
+    assert.equal(fs.existsSync(wt), false);
+    assert.equal(b.w.state.tickets.get(T1).worktrees[0].state, 'pruned');
+  } finally { await b.w.stop(); }
+});
+
+test('a live session that started in the worktree, or is bound to the ticket, holds it', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  const ingest = (kind, payload, extra = {}) => { writeIngress(b.mk(kind, payload, extra), b.env); b.w.tick(); };
+  try {
+    const { wt } = await mounted(b, repo);
+    setStatus(b, T1, 'done');
+    b.advance(8 * DAY);
+    ingest('session-start', { source: 'startup', cwd: path.join(wt, 'src') }, { session_id: 'sess-in-wt' });
+    await b.hext.sweepTicketWorktrees();
+    assert.ok(fs.existsSync(wt));
+    ingest('session-end', {}, { session_id: 'sess-in-wt' });
+    ingest('session-start', { source: 'startup', cwd: repo.dir }, { session_id: 'sess-bound' });
+    ingest('bind', { ticket_id: T1, project_id: 'demo' }, { session_id: 'sess-bound', ticket_id: T1 });
+    b.advance(8 * DAY); // past keep_days again (the binding touched the ticket); the session is still live
+    ingest('prompt', { title_candidate: 'still here', length: 10 }, { session_id: 'sess-bound' });
+    await b.hext.sweepTicketWorktrees();
+    assert.ok(fs.existsSync(wt), 'a session bound to the ticket holds it too');
+    b.advance(3 * DAY); // the bound session is extinct by now
+    await b.hext.sweepTicketWorktrees();
+    assert.equal(fs.existsSync(wt), false);
+  } finally { await b.w.stop(); }
+});
+
+test('a recorded path outside the worktrees root, or a folder git does not list, is never removed', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  try {
+    // A forged mount naming the repository checkout itself, and a plain folder inside the root.
+    await mounted(b, repo, { dir: repo.dir });
+    const plain = path.join(b.home, 'worktrees', 'demo', 'LOCAL-b-00000002');
+    fs.mkdirSync(plain, { recursive: true });
+    fs.writeFileSync(path.join(plain, 'keep.txt'), 'k');
+    await mounted(b, repo, { tid: T2, key: 'LOCAL-b-00000002', n: 2, dir: plain });
+    setStatus(b, T1, 'done');
+    setStatus(b, T2, 'done');
+    b.advance(30 * DAY);
+    await b.hext.sweepTicketWorktrees();
+    assert.ok(fs.existsSync(path.join(repo.dir, 'README.md')));
+    assert.ok(fs.existsSync(path.join(plain, 'keep.txt')));
+    assert.equal(worktreeEvents(b, 'pruned').length + worktreeEvents(b, 'kept').length, 0);
+  } finally { await b.w.stop(); }
+});

@@ -19,7 +19,21 @@ const USER_ONLY_FIELDS = new Set([
   'approval_phrases_enabled', 'handoff_permissions', 'repos', 'projects', 'key_prefix',
   // Run credentials and limits (spec §4.4): a repository must never widen what a run can reach.
   'handoff', 'prod', 'mcp_policy', 'scopes', 'memory',
+  // 2.0.0: which files reach a ticket worktree and when it goes (ADR 0036).
+  'worktree',
 ]);
+
+// `[worktree]` (ADR 0036), user config only: `auto` makes `ticket work|bind` mount a ticket worktree
+// without `--worktree`; `copy` lists repository-relative ignored files copied into a new one;
+// `keep_days` is how long a done ticket's clean worktree stays. Invalid values keep the default.
+export function worktreeConfig(config = {}) {
+  const w = config && config.worktree && typeof config.worktree === 'object' && !Array.isArray(config.worktree) ? config.worktree : {};
+  return {
+    auto: w.auto === true,
+    copy: Array.isArray(w.copy) ? w.copy.filter((x) => typeof x === 'string' && x.trim()).slice(0, 50) : ['.env', '.env.local'],
+    keep_days: Number.isInteger(w.keep_days) && w.keep_days >= 1 ? w.keep_days : 7,
+  };
+}
 
 export function defaultUserConfig() {
   return {

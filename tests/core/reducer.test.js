@@ -249,3 +249,83 @@ test('children_ids is derived from parent links and children_done_count counts d
   assert.deepEqual(parent.children_ids, [T2]);
   assert.equal(parent.children_done_count, 1);
 });
+
+// ---- Ticket worktrees (ADR 0036)
+import { makeEvent } from '../../src/core/events.js';
+import { applyEvent } from '../../src/core/reducer.js';
+import { worktreeIdentity, teardownPlan, ticketWorktreeDir } from '../../src/core/worktrees.js';
+import { STORE, MACHINE } from './helpers.js';
+
+const WT = 'C:/quill-home/worktrees/demo/LOCAL-demo-ticket-00000001';
+const SHA = 'a'.repeat(40);
+const M1 = '11111111-0000-4000-8000-000000000001';
+const M2 = '11111111-0000-4000-8000-000000000002';
+const M3 = '11111111-0000-4000-8000-000000000003';
+const wtPayload = (op, extra = {}) => ({ op, mount_id: M1, ticket_id: T1, repo_id: 'demo', path: WT, branch: 'quill/LOCAL-demo-ticket-00000001', base_sha: SHA, ...extra });
+const wtEvent = (payload, at = '2026-10-02T09:00:00Z', producer = 'cli') => {
+  const e = makeEvent({ kind: 'worktree', payload, store_id: STORE, machine_id: MACHINE, producer, occurred_at: at, ticket_id: payload.ticket_id, source_identity: worktreeIdentity(payload) });
+  e.sequence = 1; e.ingested_at = at;
+  return e;
+};
+
+test('worktree events record mounted, kept and pruned on the ticket without bumping its revision; replay is idempotent', () => {
+  const state = newState();
+  const t = createTicket(state);
+  const revision = t.revision;
+  const mounted = wtEvent(wtPayload('mounted'));
+  assert.equal(applyEvent(state, mounted).rejected, undefined);
+  assert.deepEqual(t.worktrees.map((w) => [w.id, w.state, w.path, w.mounted_at]), [[M1, 'mounted', WT, '2026-10-02T09:00:00Z']]);
+  assert.equal(t.revision, revision, 'machine state, not an owner edit');
+  assert.equal(applyEvent(state, mounted).duplicate, true);
+  assert.equal(applyEvent(state, wtEvent(wtPayload('mounted', { mount_id: M2 }))).rejected, undefined, 'the same folder mounted again is one record');
+  assert.equal(t.worktrees.length, 1);
+  const kept = wtEvent(wtPayload('kept', { reason: 'uncommitted-changes' }), '2026-10-10T09:00:00Z', 'worker');
+  assert.ok(applyEvent(state, kept).changed.has(T1));
+  assert.deepEqual([t.worktrees[0].state, t.worktrees[0].kept_reason], ['kept', 'uncommitted-changes']);
+  assert.equal(applyEvent(state, { ...kept, event_id: '33333333-0000-4000-8000-000000000001' }).duplicate, true, 'kept is reported once (source identity)');
+  applyEvent(state, wtEvent(wtPayload('pruned'), '2026-10-11T09:00:00Z', 'worker'));
+  assert.deepEqual([t.worktrees[0].state, t.worktrees[0].pruned_at], ['pruned', '2026-10-11T09:00:00Z']);
+  assert.equal(applyEvent(state, wtEvent(wtPayload('pruned', { mount_id: M2 }))).rejected, 'worktree-unknown');
+  // A remount of the same folder after teardown is a new record with its own identities.
+  applyEvent(state, wtEvent(wtPayload('mounted', { mount_id: M3 }), '2026-10-12T09:00:00Z'));
+  assert.deepEqual(t.worktrees.map((w) => [w.id, w.state]), [[M1, 'pruned'], [M3, 'mounted']]);
+  // Replaying the same journal into a fresh state gives the same records.
+  const again = newState();
+  createTicket(again);
+  for (const e of [mounted, kept, wtEvent(wtPayload('pruned'), '2026-10-11T09:00:00Z', 'worker'), wtEvent(wtPayload('mounted', { mount_id: M3 }), '2026-10-12T09:00:00Z')]) applyEvent(again, e);
+  assert.deepEqual(again.tickets.get(T1).worktrees, t.worktrees);
+});
+
+test('malformed worktree events are rejected and change nothing', () => {
+  const state = newState();
+  const t = createTicket(state);
+  const bads = [{ path: 'relative/dir' }, { base_sha: 'HEAD' }, { repo_id: '../x' }, { op: 'removed' }, { op: 'kept', reason: 'because' }, { mount_id: 'x' }];
+  bads.forEach((extra, i) => {
+    const bad = wtPayload('mounted', { mount_id: `22222222-0000-4000-8000-00000000000${i}`, ...extra });
+    assert.equal(applyEvent(state, wtEvent(bad)).rejected, 'worktree-invalid', JSON.stringify(bad));
+  });
+  assert.equal(applyEvent(state, wtEvent(wtPayload('mounted', { ticket_id: T2 }))).rejected, 'ticket-unknown');
+  assert.equal(t.worktrees, undefined);
+});
+
+test('teardownPlan: a done ticket worktree is due after keep_days with no live session in it or bound to it', () => {
+  const now = '2026-10-20T00:00:00Z';
+  const rec = (extra = {}) => ({ id: M1, path: WT, repo_id: 'demo', branch: 'b', base_sha: SHA, state: 'mounted', mounted_at: '2026-10-01T00:00:00Z', ...extra });
+  const done = (extra = {}) => ({ id: T1, key: 'K-1', status: 'done', updated_at: '2026-10-10T00:00:00Z', worktrees: [rec()], ...extra });
+  const plan = (tickets, sessions = [], keepDays = 7) => teardownPlan(tickets, sessions, { nowIso: now, keepDays }).map((p) => [p.due, p.hold]);
+  assert.deepEqual(plan([done()]), [[true, null]]);
+  assert.deepEqual(plan([done({ updated_at: '2026-10-15T00:00:00Z' })]), [[false, 'recent']], 'measured from the last change of the ticket');
+  assert.deepEqual(plan([done({ worktrees: [rec({ mounted_at: '2026-10-18T00:00:00Z' })] })]), [[false, 'recent']], 'or from the mount, whichever is later');
+  assert.deepEqual(plan([done()], [], 14), [[false, 'recent']]);
+  assert.deepEqual(plan([done({ status: 'review' })]), [[false, null]], 'only done tickets');
+  assert.deepEqual(plan([done({ worktrees: [rec({ state: 'pruned' })] })]), [], 'pruned records are gone');
+  assert.deepEqual(plan([done({ worktrees: [rec({ state: 'kept' })] })]), [[true, null]], 'a kept worktree is checked again');
+  const session = (extra) => ({ id: 's', cwd: 'C:/elsewhere', current_ticket_id: null, ended_at: null, last_event_at: '2026-10-19T23:50:00Z', ...extra });
+  assert.deepEqual(plan([done()], [session({ cwd: `${WT}/sub` })]), [[false, 'session']]);
+  assert.deepEqual(plan([done()], [session({ current_ticket_id: T1 })]), [[false, 'session']]);
+  assert.deepEqual(plan([done()], [session({ cwd: `${WT}/sub`, ended_at: '2026-10-19T23:55:00Z' })]), [[true, null]], 'an ended session holds nothing');
+  assert.deepEqual(plan([done()], [session({ cwd: WT, last_event_at: '2026-10-15T00:00:00Z' })]), [[true, null]], 'nor an extinct one');
+  assert.deepEqual(plan([done()], [session({ cwd: `${WT}-other` })]), [[true, null]], 'a sibling folder is not inside');
+  assert.throws(() => ticketWorktreeDir('/h/worktrees', '..', 'K-1'));
+  assert.throws(() => ticketWorktreeDir('/h/worktrees', 'demo', '../K'));
+});

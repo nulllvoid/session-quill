@@ -33,6 +33,8 @@ function frontmatterFor(ticket, state) {
   // Owner-only run data never goes into a note, even in the owner's vault.
   delete fm.run_notes;
   delete fm.critical_spec;
+  // Ticket worktree records hold local paths (ADR 0036).
+  delete fm.worktrees;
   fm.plans = ticket.plans.map(({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }));
   fm.conclusions = ticket.conclusions.map(({ id, session_id, checkpoint_id, content_ref, recorded_at, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, recorded_at, approved_at, provenance }));
   return fm;

@@ -13,9 +13,24 @@ import { sessionKey, TICKET_STATUSES } from '../../core/state.js';
 import { TrackerError } from '../../lib/errors.js';
 import { cleanupSuggestions, IDLE_DAYS } from '../../core/cleanup.js';
 import { descriptionProblems, descriptionHelp, normalizeDescription } from '../../core/description.js';
+import { worktreeWanted, mountTicketWorktree } from './worktree.js';
 
 function timeout(flags) {
   return flags.timeout ? Number(flags.timeout) : 10_000;
+}
+
+// `--worktree` / `[worktree] auto` (ADR 0036): after the binding, mount the ticket's worktree. An
+// explicit flag that cannot be honoured fails the command; the auto setting only says why not.
+async function maybeWorktree(ctx, io, ticket, session, flags) {
+  const wanted = worktreeWanted(ctx, flags);
+  if (!wanted) return null;
+  try {
+    return await mountTicketWorktree(ctx, io, ticket, { session, flags });
+  } catch (err) {
+    if (wanted === 'explicit') throw new TrackerError(err.code ?? 'worktree-failed', `the session is bound to ${ticket.key}, but no worktree was made: ${err.message}`);
+    io.println(`No worktree for ${ticket.key}: ${err.message}`);
+    return null;
+  }
 }
 
 async function bind(ctx, io, session, ticket, flags) {
@@ -82,7 +97,8 @@ async function create(ctx, io, args, flags, { work = false } = {}) {
   }
   else if (flags.bind) await bind(ctx, io, session, ticket, flags);
   else io.println(`Bind with: ${commandName('ticket')} bind ${ticket.key}`);
-  if (flags.json) io.json({ ticket });
+  const worktree = work || flags.bind ? await maybeWorktree(ctx, io, ticket, session, flags) : null;
+  if (flags.json) io.json(worktree ? { ticket, worktree } : { ticket });
   return 0;
 }
 
@@ -289,6 +305,10 @@ function children(ctx, io, args, flags) {
 
 export async function run({ args, flags, io, env }) {
   const [verb, ...rest] = args;
+  // `--worktree` and `--no-worktree` take no value: a word parsed as their value is a positional.
+  for (const name of ['worktree', 'no-worktree']) {
+    if (typeof flags[name] === 'string') { rest.unshift(flags[name]); flags[name] = true; }
+  }
   const ctx = loadContext(env);
   switch (verb) {
     case 'create': return create(ctx, io, rest, flags);
@@ -301,6 +321,7 @@ export async function run({ args, flags, io, env }) {
       const ticket = findTicketByKey(ctx, key);
       if (!ticket) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
       await bind(ctx, io, session, ticket, flags);
+      await maybeWorktree(ctx, io, ticket, session, flags);
       return 0;
     }
     case 'show': return show(ctx, io, flags);
