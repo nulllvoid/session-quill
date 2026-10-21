@@ -16,13 +16,14 @@ import { applyMemoryTx } from './reduce/memory.js';
 import { applyCriticalProposal } from './reduce/critical.js';
 import { applyWorktree } from './reduce/worktrees.js';
 import { applySnapshotTx } from './reduce/snapshots.js';
+import { applyCiObservation, applyCiProposal } from './reduce/ci.js';
 
 export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 
 // The shape and meaning of reduced state (ADR 0030). A state checkpoint written under another value
 // is ignored and the journal replays in full, so bump it in any change that makes existing events
 // reduce differently or adds, removes or reshapes a state field.
-export const REDUCER_VERSION = 1;
+export const REDUCER_VERSION = 2;
 
 function replayDeferred(state, key, toolCallId, result) {
   if (!state.deferredResults) return;
@@ -249,8 +250,8 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     // 2.0.0 kinds reserved as no-ops; each task replaces its own line with its handler.
     case 'worktree': Object.assign(result, applyWorktree(state, ev, result)); break;
     case 'snapshot-tx': Object.assign(result, applySnapshotTx(state, ev, result)); break;
-    case 'ci-observation': break;
-    case 'ci-proposal': break;
+    case 'ci-observation': Object.assign(result, applyCiObservation(state, ev, result)); break;
+    case 'ci-proposal': Object.assign(result, applyCiProposal(state, ev, result)); break;
     case 'schedule-run':
       Object.assign(result, applyScheduleRun(state, ev));
       break;

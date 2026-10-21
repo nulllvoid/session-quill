@@ -33,7 +33,7 @@ export function makeRepo() {
   return { dir, head: git(dir, 'rev-parse', 'HEAD') };
 }
 
-export async function bootWorker({ repo, fakeEnv = {}, deadlineMs, withServer = true, claudePath = process.execPath, claudeArgs = [FAKE_CLAUDE], runtimeAvailable, maxConcurrent = 4, handoff = null, repoExtra = {}, removeWorktreeFn, configExtra = {} } = {}) {
+export async function bootWorker({ repo, fakeEnv = {}, deadlineMs, withServer = true, claudePath = process.execPath, claudeArgs = [FAKE_CLAUDE], runtimeAvailable, maxConcurrent = 4, handoff = null, repoExtra = {}, removeWorktreeFn, configExtra = {}, ciProviderFor = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'st-ho-'));
   const storePath = path.join(home, 'Quill');
   fs.mkdirSync(storePath, { recursive: true });
@@ -46,7 +46,7 @@ export async function bootWorker({ repo, fakeEnv = {}, deadlineMs, withServer = 
   const iso = () => new Date(nowMs).toISOString().replace(/\.\d{3}Z$/, 'Z');
   const w = new Worker({ config, storeMeta: meta, env, clock, derive });
   const ctx = { env, config, storeMeta: meta };
-  const hext = handoffExt(ctx, { claudePath, claudeArgs, spawnEnv: fakeEnv, deadlineMs, ...(removeWorktreeFn ? { removeWorktreeFn } : {}), ...(maxConcurrent === null ? {} : { maxConcurrent }), runtimeAvailable });
+  const hext = handoffExt(ctx, { claudePath, claudeArgs, spawnEnv: fakeEnv, deadlineMs, ...(removeWorktreeFn ? { removeWorktreeFn } : {}), ...(maxConcurrent === null ? {} : { maxConcurrent }), runtimeAvailable, ...(ciProviderFor ? { ciProviderFor } : {}) });
   if (withServer) w.use(serverExt(ctx, { port: 0 }));
   w.use(hext);
   await w.start();

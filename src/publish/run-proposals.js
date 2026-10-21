@@ -102,5 +102,7 @@ export function proposalState(p, ticket, now) {
 // critical-change proposal (ADR 0028) names the run that proposed it instead of a page.
 export function proposalProvenance(p) {
   if (p.origin === 'run') return { id: p.id, origin: 'run', from_handoff_id: p.from_handoff_id, recipe: p.recipe.name };
+  // ADR 0039: a CI fix names the run whose pull request's CI failed.
+  if (p.origin === 'ci') return { id: p.id, origin: 'ci', from_handoff_id: p.from_handoff_id, recipe: p.recipe.name };
   return { id: p.id, publisher: p.publisher, editor: p.editor ?? null, recipe: p.recipe.name };
 }
