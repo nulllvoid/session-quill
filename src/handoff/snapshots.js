@@ -99,7 +99,15 @@ function* snapshotSteps(dir, { handoffId, step, n, indexPath = null, against = n
     if (!atHead) {
       // A copy of the real index lends its stat cache, so `add -A` hashes only what changed; the
       // entries themselves are reset to HEAD's tree, as a plain `read-tree HEAD` would.
-      try { fs.copyFileSync(path.resolve(dir, realIndex), tmp); } catch { /* no index yet */ }
+      // The copy keeps the real index's mtime: git treats entries no older than the index file as
+      // racily clean and re-checks their content, and a fresh mtime would hide a same-size rewrite
+      // made within the same second (macOS CI, whose git compares whole seconds).
+      try {
+        const src = path.resolve(dir, realIndex);
+        fs.copyFileSync(src, tmp);
+        const st = fs.statSync(src);
+        fs.utimesSync(tmp, st.atime, st.mtime);
+      } catch { /* no index yet */ }
       try { yield { args: ['read-tree', '-m', head], env: idx }; } catch { dropIndex(tmp); yield { args: ['read-tree', head], env: idx }; }
       yield { args: ['add', '-A'], env: idx };
       tree = yield { args: ['write-tree'], env: idx };
