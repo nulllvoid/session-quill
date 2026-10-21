@@ -58,10 +58,12 @@ Run: https://github.com/nulllvoid/session-quill/actions/runs/37018025766 (296 te
 
 ### A19 measurements (this machine, warm)
 
-| Profile | Replay on start | Hook p50 | Hook p95 | Hook max | Ingest 1,000 events | Publish generation |
+| Profile | Whole worker start | Hook p50 | Hook p95 | Hook max | Ingest 1,000 events | Publish generation |
 | --- | --- | --- | --- | --- | --- | --- |
 | 2,000 tickets / 20,000 events (default `npm test`) | 3.9 s | 1.4 ms | 1.7 ms | 13.2 ms | 648 ms | 18 ms |
 | 10,000 tickets / 100,000 events (`QUILL_PERF_FULL=1`) | 12.9 s | 1.5 ms | 1.7 ms | 4.7 ms | 673 ms | 63 ms |
+
+The "Whole worker start" column was first labelled "Replay on start". [ADR 0030](decisions/0030-state-checkpoint.md) split it and found it measures the whole `start()`: journal open, replay, binding publish and the first projection generation, which writes every ticket's detail file and takes most of the time. The reducer replay itself was about 0.2 s at 20k events and about 1 s at 100k; see "2.0.0 measurements" below.
 
 Hook timings are in-process (`runHook`) and exclude Node process start-up (~40–80 ms on this machine), which the host incurs per hook invocation; the 200 ms budget still holds with margin.
 
@@ -74,6 +76,49 @@ Whole-process numbers, as the host sees them, come from `node scripts/bench-hook
 | `bin/quill-hook.js PreToolUse` (plugin hooks from 0.6.1) | 94 ms | 104 ms | 106 ms |
 
 The rest is module loading on the hook path (about 34 ms, mostly `node:crypto` and event validation). Node's compile cache made no measurable difference. macOS and Linux numbers remain to be recorded.
+
+**Correction (2.0.0, [ADR 0034](decisions/0034-hook-latency-and-daemon-ipc.md)).** The benchmark of that time passed `hook <Event>` to `bin/quill-hook.js`, which takes the event name alone. So the `bin/quill-hook.js PreToolUse` row measured an "unsupported hook event" early return plus module loading, not a full PreToolUse. The 2.0.0 benchmark below measures the real paths.
+
+### 2.0.0 measurements
+
+All on Windows 11 with Node 24.19.0, on a machine shared with other test runs (up to ten agents, CPU often at 88–99%), so absolute numbers run high and tails are noisy.
+
+**Worker start split** ([ADR 0030](decisions/0030-state-checkpoint.md)), A19 journal shape, before the state checkpoint:
+
+| Phase | 20k events | 100k events |
+| --- | --- | --- |
+| `Journal.open` (read, parse, sequence and id check) | 49 ms | 263 ms |
+| Replay: read and parse again | 47 ms | 228 ms |
+| Replay: reducer apply | 126 ms | 473 ms |
+| `publishAllBindings` (200 sessions) | 510 ms | 580 ms |
+| First `publishGeneration` (every ticket detail written) | 6.4 s | 25.3 s |
+
+**State checkpoint** (ADR 0030): building state at worker start, from `stateLoad`.
+
+| Journal | Full replay | From checkpoint | Speed-up |
+| --- | --- | --- | --- |
+| 20k events (acceptance, best of three) | 212 ms | 42 ms | 5.0× |
+| 100k events (one run, machine heavily loaded) | 4.2 s | 0.29 s | 15× |
+
+`tests/acceptance/perf.test.js` asserts at least 3× at 20k events and that the hydrated state deep-equals the replayed state. The first projection generation, which dominates whole worker start, is unchanged.
+
+**Hooks and the status line** ([ADR 0034](decisions/0034-hook-latency-and-daemon-ipc.md)). Command: `node scripts/bench-hooks.mjs --json --baseline <1.1.1 checkout>`, 200 calls per case, alternating call by call with the 1.1.1 checkout. The least loaded of three runs is shown, with the p95 change of all three runs:
+
+| Case | 1.1.1 p50 / p95 / p99 | 2.0.0 p50 / p95 / p99 | p95 change, runs 1 / 2 / 3 |
+| --- | --- | --- | --- |
+| bare `node -e ""` | 50.8 / 62.1 / 68.8 ms | (same series) | |
+| `quill-hook PreToolUse` | 129.9 / 176.1 / 208.2 ms | 131.1 / 178.5 / 207.5 ms | −8 / −30 / +2 ms (noise) |
+| `quill-hook PostToolUse` | 118.6 / 132.2 / 146.1 ms | 118.5 / 131.7 / 143.2 ms | +13 / +33 / −0.5 ms (noise) |
+| `quill-hook SessionStart` | 220.8 / 322.3 / 628.2 ms | 149.3 / 228.8 / 496.6 ms | −441 / −108 / −94 ms |
+| `scripts/statusline.js` | 192.3 / 223.6 / 242.3 ms | 112.0 / 132.0 / 140.4 ms | −217 / −92 / −92 ms |
+| in-process `runHook` PreToolUse | | 5.5 / 6.8 / 10.8 ms | |
+| in-process `runHook` PostToolUse | | 6.4 / 7.8 / 12.1 ms | |
+
+The KPI is restated in ADR 0034: in-process hook logic p99 under 15 ms, met on the least loaded run (the in-process rows include each ingress file's fsync; on the more loaded runs their p99 reached 19–31 ms, which is disk contention). The second target is whole-process hook p95 within 15 ms of a bare Node start. It is **not met**: PreToolUse and PostToolUse sit about 70–115 ms above bare Node at p95 here, almost all of it loading the hook's roughly 30 modules. The TRD's 200 ms p95 hook budget still holds.
+
+**Ingress redaction** ([ADR 0029](decisions/0029-ingress-redaction.md)): the hook p95 stayed within the machine's noise and the plan's 10 ms. Back to back at the same load, `bin/quill-hook.js` Pre p95 was 122 ms against 127 ms unchanged, and Post 120 ms against 125 ms. In process, a `pre-tool` `redactEvent` takes about 0.007 ms and redacting a 5 KB Stop message about 0.15 ms.
+
+**Context card** ([ADR 0038](decisions/0038-context-card.md)): 300 in-process SessionStart calls with and without a card measured p50 6.4 ms and p95 13–17 ms in both cases.
 
 ## Phase 2 — migration
 

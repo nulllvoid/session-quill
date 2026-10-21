@@ -10,6 +10,7 @@ import { renderHelpDialog } from '../../ui/views/dialogs.js';
 import { buildStaticHtml } from '../../src/export/static.js';
 import { buildSnapshot } from '../../src/worker/projections.js';
 import { newState, ev } from '../core/helpers.js';
+import { memoryListing } from '../../src/core/memory.js';
 import { snapshot } from './fixtures.js';
 
 const NOW = '2026-10-02T12:00:00Z';
@@ -33,6 +34,13 @@ function memory() {
 test('trust chips carry their meaning in words: Verified, Sourced, Observed, Quarantined, Owner', () => {
   assert.deepEqual(TRUST_LABELS, { owner: 'Owner', verified: 'Verified', sourced: 'Sourced', observed: 'Observed', quarantined: 'Quarantined' });
   for (const [trust, label] of Object.entries(TRUST_LABELS)) assert.match(trustChip(trust), new RegExp(`class="chip trust[^"]*" data-trust="${trust}"[^>]*>[\\s\\S]*${label}</span>`));
+});
+
+test('ADR 0032: a stale entry whose cited source changed says so; one stale by age keeps the plain chip', () => {
+  const html = renderMemory({ entries: [entry('a1', { staleness: 'stale', stale_reason: 'anchor-changed' }), entry('a2', { staleness: 'stale', stale_reason: null })], conflicts: [] }, snapshot(), { now: NOW, tab: 'repo' });
+  assert.match(html, /data-stale="anchor-changed"[^>]*>[\s\S]*?Source changed · not delivered to runs<\/span>/);
+  assert.equal((html.match(/Source changed · not delivered to runs/g) ?? []).length, 1);
+  assert.equal((html.match(/Stale · not delivered to runs/g) ?? []).length, 1);
 });
 
 test('the Memory page has Repo, Machine and Quarantine tabs with roving tabindex and counts', () => {
@@ -186,4 +194,20 @@ test('a static export has no Memory nav item and no memory text', () => {
   assert.equal(html.includes('MEMPAGE-SENTINEL-9a1'), false);
   assert.equal(html.includes('MEMPAGE-REASON-9a1'), false);
   assert.equal(html.includes('/v1/memory'), false, 'the export bundles no memory endpoint');
+});
+
+// ADR 0041: what an autonomous run learned about its own environment says so, and goes stale with it.
+test('an entry learned in an autonomous run is marked; one staled by a changed run environment says why', () => {
+  const s = newState();
+  const base = { scope: 'machine', section: 'pitfalls', kind: 'pitfall', evidence: [], derived_from: 'own-command', trust: 'observed', created_at: NOW, observed_in: 'autonomous', anchors: [{ kind: 'run-env', env_fingerprint: 'a'.repeat(16) }] };
+  ev(s, 'memory-tx', { op: 'filed', entry: { ...base, id: 'e1', text: 'BITBUCKET_API_TOKEN is <not> set' } }, { occurred_at: NOW });
+  ev(s, 'memory-tx', { op: 'filed', entry: { ...base, id: 'e2', text: 'plain', observed_in: undefined, anchors: undefined } }, { occurred_at: NOW });
+  ev(s, 'memory-tx', { op: 'staled', entry: { id: 'e1' }, reason: 'run-env-changed', anchor: { kind: 'run-env', env_fingerprint: 'a'.repeat(16), current_env_fingerprint: 'b'.repeat(16) } }, { occurred_at: NOW });
+  const listing = memoryListing(s, Date.parse(NOW));
+  const e1 = listing.entries.find((e) => e.id === 'e1');
+  assert.deepEqual([e1.observed_in, e1.staleness, e1.stale_reason], ['autonomous', 'stale', 'run-env-changed']);
+  const html = renderMemory(listing, snapshot(), { now: NOW, tab: 'machine' });
+  assert.equal((html.match(/data-observed="autonomous"[^>]*>[\s\S]*?Seen in autonomous runs<\/span>/g) ?? []).length, 1);
+  assert.match(html, /data-stale="run-env-changed"[^>]*>[\s\S]*?Run environment changed · not delivered to runs<\/span>/);
+  assert.match(html, /BITBUCKET_API_TOKEN is &lt;not&gt; set/);
 });

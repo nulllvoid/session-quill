@@ -5,6 +5,7 @@ import { stateDir } from '../lib/paths.js';
 import { readJsonIfExists, writeJsonAtomic } from '../lib/atomic-fs.js';
 import { snapshotFileName } from './binding-snapshot.js';
 import { keyExample } from '../core/external-keys.js';
+import { outsidePlan } from '../core/planned-paths.js';
 
 export function nudgePath(sessionKey, env = process.env) {
   return path.join(stateDir(env), 'nudge', snapshotFileName(sessionKey));
@@ -75,4 +76,44 @@ export function markDoneChecked(sessionKey, env, ticketId, at) {
 export function doneCheckReason({ key, doneWhen }, cli) {
   const items = doneWhen.map((d) => `- ${d}`).join('\n');
   return `Session Quill: ${key} has no repository, so its status only moves when someone sets it. Check its Done when items against what has actually been done:\n${items}\nIf every item is met, set it to review with node ${JSON.stringify(cli)} ticket set ${key} --status review and tell the user in one line (use --status done instead only if the user has already confirmed the work). If not, say in one line which items remain. Do not change anything else and do not ask the user to run commands.`;
+}
+
+// Plan drift (ADR 0037): the planned files of the session's latest approved plan, kept beside the
+// session so a write can be checked without the worker. A write outside them arms one Stop nudge
+// per session in nudge mode; it never denies or delays the write.
+export function driftMarkerPath(sessionKey, env = process.env) {
+  return path.join(stateDir(env), 'drift', snapshotFileName(sessionKey));
+}
+
+function readDrift(sessionKey, env) {
+  try { return readJsonIfExists(driftMarkerPath(sessionKey, env)); } catch { return null; }
+}
+
+// A new plan replaces the planned files and disarms a pending nudge; a nudge already given stays given.
+export function recordPlanFiles(sessionKey, env, planned) {
+  const prior = readDrift(sessionKey, env) ?? {};
+  writeJsonAtomic(driftMarkerPath(sessionKey, env), { schema_version: 1, session_key: sessionKey, planned_paths: planned, pending: false, last_path: null, nudged_at: prior.nudged_at ?? null });
+}
+
+export function markDrift(sessionKey, env, writePaths, at) {
+  const marker = readDrift(sessionKey, env);
+  if (!marker || marker.nudged_at || !Array.isArray(marker.planned_paths) || !marker.planned_paths.length) return;
+  const out = outsidePlan(writePaths, marker.planned_paths);
+  if (!out.length) return;
+  writeJsonAtomic(driftMarkerPath(sessionKey, env), { ...marker, pending: true, last_path: out[out.length - 1], at });
+}
+
+// The path to name in the nudge, or null when none is due.
+export function driftToNudge(sessionKey, env) {
+  const marker = readDrift(sessionKey, env);
+  return marker && marker.pending === true && !marker.nudged_at && typeof marker.last_path === 'string' ? marker.last_path : null;
+}
+
+export function markDriftNudged(sessionKey, env, at) {
+  const prior = readDrift(sessionKey, env) ?? {};
+  writeJsonAtomic(driftMarkerPath(sessionKey, env), { ...prior, schema_version: 1, session_key: sessionKey, pending: false, nudged_at: at });
+}
+
+export function driftReason(file) {
+  return `Session Quill: You changed ${JSON.stringify(String(file).slice(0, 200))} outside your plan. Update the plan or carry on.`;
 }

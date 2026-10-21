@@ -111,6 +111,19 @@ test('ExitPlanMode success stores the plan blob and references it; rejected plan
   const env2 = setup({ bound: true });
   run('post-tool-use-exit-plan-mode-rejected', env2);
   assert.equal(events(env2)[0].payload.plan_ref, null);
+  assert.equal('planned_paths' in events(env2)[0].payload, false, 'a rejected plan plans no files');
+});
+
+test('an approved plan carries the repo-relative files it names as planned_paths (ADR 0037)', () => {
+  const env = setup({ bound: true });
+  const input = { ...fixture('post-tool-use-exit-plan-mode'), tool_input: { plan: '# Plan\n1. Change `src/core/x.js` and tests/core/x.test.js\n2. Not /etc/hosts or https://example.com/a.js' } };
+  runHook('PostToolUse', input, { env, now: NOW });
+  const [ev] = events(env);
+  assert.deepEqual(ev.payload.planned_paths, ['src/core/x.js', 'tests/core/x.test.js']);
+  assert.ok(ev.payload.plan_ref, 'the plan blob is stored as before');
+  const other = setup({ bound: true });
+  run('post-tool-use-exit-plan-mode', other);
+  assert.deepEqual(events(other)[0].payload.planned_paths, [], 'a plan that names no files plans none');
 });
 
 test('Stop persists the full checkpoint blob before the event and extracts conclusions; a missing message is an incomplete capture', () => {
@@ -254,4 +267,71 @@ test('without QUILL_HANDOFF_GUARD (or with it empty) the handoff PreToolUse outp
     assert.match(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason, /worker unavailable/);
     assert.equal(events(env)[0].payload.denied, true);
   }
+});
+
+// The context card (ADR 0038): SessionStart reads the worker's projection, never git, and the hook
+// stays within its budget with the extra file read.
+test('a bound SessionStart appends the context card the worker wrote, within the hook budget', () => {
+  const env = setup({ bound: true });
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const home = env.QUILL_HOME;
+  fs.mkdirSync(path.join(home, 'projections', 'tickets'), { recursive: true });
+  fs.mkdirSync(path.join(home, 'projections', 'context'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'projections', 'tickets', `${id}.json`), JSON.stringify({ id, key: 'LOCAL-x-00000001', status: 'active', summary: '', next_action: 'Finish the retry loop', files_touched: [{ relative_path: 'src/a.js', last_seen: NOW }], last_activity: NOW }));
+  fs.writeFileSync(path.join(home, 'projections', 'context', `${id}.json`), JSON.stringify({ format: 1, ticket_id: id, co_change: [{ file: 'src/a.js', partner: 'src/b.js', n: 3 }], related: [], guard: [] }));
+  const input = fixture('session-start');
+  const r = runHook('SessionStart', input, { env, now: NOW });
+  assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /Next action: Finish the retry loop\. Recently changed: src\/a\.js\. Context: Often changed together: src\/b\.js with src\/a\.js \(3 commits\)\./);
+  // A card written for another ticket id is ignored.
+  fs.writeFileSync(path.join(home, 'projections', 'context', `${id}.json`), JSON.stringify({ ticket_id: 'other', co_change: [{ file: 'x', partner: 'y', n: 9 }] }));
+  assert.doesNotMatch(JSON.parse(runHook('SessionStart', input, { env, now: NOW }).stdout).hookSpecificOutput.additionalContext, / Context: Often/);
+  const durations = [];
+  for (let i = 0; i < 50; i += 1) {
+    const started = process.hrtime.bigint();
+    runHook('SessionStart', { ...input, source: `resume-${i}` }, { env, now: NOW });
+    durations.push(Number(process.hrtime.bigint() - started) / 1e6);
+  }
+  durations.sort((a, b) => a - b);
+  const p95 = durations[Math.floor(durations.length * 0.95)];
+  assert.ok(p95 < 200, `SessionStart p95 was ${p95.toFixed(1)} ms`);
+});
+
+// ADR 0029: free text is redacted before it is cut, so no cut leaves a token's prefix behind, and
+// blobs are stored redacted (their hash, and so the event's source identity, stays deterministic).
+test('hook text is redacted before blobs, previews, conclusions, targets, errors, titles and commit messages', () => {
+  const env = setup({ bound: true });
+  const token = `${'gh' + 'p_'}${'aB3'.repeat(12)}`;
+  const leaks = (v) => JSON.stringify(v).includes('gh' + 'p_');
+  const pad = (n) => 'x '.repeat(n / 2);
+  const stop = { ...fixture('stop'), last_assistant_message: `${pad(1490)}${token}\n\nConclusion: pushed with ${token}\n` };
+  runHook('Stop', stop, { env, now: NOW });
+  runHook('Stop', stop, { env, now: NOW });
+  const plan = fixture('post-tool-use-exit-plan-mode');
+  plan.tool_input.plan = `# Plan\n\n1. export GH_TOKEN=${token}`;
+  runHook('PostToolUse', plan, { env, now: NOW });
+  const commit = fixture('post-tool-use-bash-commit');
+  commit.tool_response.stdout = `[main 1a2b3c4d] fix: use ${token}\n 1 file changed`;
+  runHook('PostToolUse', commit, { env, now: NOW });
+  const pre = fixture('pre-tool-use-bash-npm');
+  pre.tool_input = { command: `${pad(110)}${token}` };
+  runHook('PreToolUse', pre, { env, now: NOW });
+  const failure = { ...fixture('post-tool-use-failure'), error: `${pad(290)}${token}` };
+  runHook('PostToolUseFailure', failure, { env, now: NOW });
+  runHook('UserPromptSubmit', { ...fixture('user-prompt-submit'), prompt: `Push ${pad(66)}${token}` }, { env, now: NOW });
+  const evs = events(env);
+  assert.equal(evs.length, 7);
+  for (const ev of evs) assert.ok(!leaks(ev), `${ev.kind}: ${JSON.stringify(ev.payload)}`);
+  const [s1, s2] = evs.filter((e) => e.kind === 'stop');
+  assert.ok(!leaks(getBlob(s1.payload.content_ref, env)), 'the checkpoint blob is redacted');
+  assert.match(getBlob(s1.payload.content_ref, env), /\[secret redacted\]/);
+  assert.equal(s1.payload.content_ref, s2.payload.content_ref, 'redaction is deterministic');
+  assert.deepEqual(s1.payload.conclusions, ['pushed with [secret redacted]']);
+  const p = evs.find((e) => e.payload.plan_ref);
+  assert.equal(getBlob(p.payload.plan_ref, env), '# Plan\n\n1. export GH_TOKEN=[secret redacted]');
+  const c = evs.find((e) => e.payload.commit);
+  assert.equal(c.payload.commit.sha, '1a2b3c4d');
+  assert.equal(c.payload.commit.message, 'fix: use [secret redacted]');
+  assert.ok(evs.find((e) => e.kind === 'pre-tool').payload.write_target.length <= 120);
+  assert.ok(evs.find((e) => e.kind === 'tool-failure').payload.error.length <= 300);
+  assert.ok(evs.find((e) => e.kind === 'prompt').payload.title_candidate.startsWith('Push x'));
 });

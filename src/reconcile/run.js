@@ -58,7 +58,56 @@ async function pollProviders(worker, providers, now) {
     }
   }
   await linkBranchPrs(worker, providers, now, updates, health);
+  await pollRunPrs(worker, providers, now, updates, health);
   return { updates, provider_health: [...health.values()] };
+}
+
+export const REVERT_WINDOW_MS = 48 * HOUR;
+export const MAX_RUN_PR_POLLS_PER_RUN = 50;
+const RUN_PR_MAX_AGE_MS = 30 * 24 * HOUR;
+
+// A run's draft PR whose outcome is settled (ADR 0033): closed unmerged, reverted, or merged and
+// checked for a revert at or after the end of the 48-hour window.
+export function runPrSettled(obs) {
+  if (!obs || typeof obs !== 'object' || !obs.state) return false;
+  if (obs.state === 'closed') return true;
+  if (obs.state !== 'merged') return false;
+  if (obs.reverted_by) return true;
+  return !!(obs.merged_at && obs.revert_checked_at && Date.parse(obs.revert_checked_at) >= Date.parse(obs.merged_at) + REVERT_WINDOW_MS);
+}
+
+// The PR a run opened (ADR 0033): observed on the run itself, never as ticket evidence, so a run's
+// PR never moves its ticket's status by this path. A merged one is checked for a revert until its
+// 48-hour window closes. Runs finished in the last 30 days, at most 50 polls per reconciliation.
+async function pollRunPrs(worker, providers, now, updates, health) {
+  const { state } = worker;
+  let polled = 0;
+  for (const h of state.handoffs.values()) {
+    if (polled >= MAX_RUN_PR_POLLS_PER_RUN) break;
+    if (typeof h.pr_url !== 'string' || !h.pr_url.startsWith('https://') || !h.finished_at) continue;
+    if (Date.parse(now) - Date.parse(h.finished_at) > RUN_PR_MAX_AGE_MS || runPrSettled(h.pr_observed)) continue;
+    const provider = providers.for(repoFor(state, h.repo_id));
+    if (!provider || provider.name === 'none' || typeof provider.fetchPr !== 'function') continue;
+    polled += 1;
+    const entry = health.get(provider.name) ?? { provider: provider.name, last_success_at: null, last_attempt_at: null, error: null };
+    entry.last_attempt_at = now;
+    try {
+      const r = await provider.fetchPr(h.pr_url);
+      const upd = { handoff_id: h.id, url: h.pr_url, state: r.state, merged_at: r.merged_at ?? null, merge_commit: r.merge_commit ?? null, observed_at: now, error: null };
+      if (r.state === 'merged' && typeof provider.findRevert === 'function') {
+        const rv = await provider.findRevert({ url: h.pr_url, merged_at: r.merged_at ?? null, merge_commit: r.merge_commit ?? null });
+        Object.assign(upd, { reverted_by: rv.reverted_by ?? null, reverted_at: rv.reverted_at ?? null, revert_checked_at: now });
+        if (!upd.merge_commit && rv.merge_commit) upd.merge_commit = rv.merge_commit;
+      }
+      entry.last_success_at = now;
+      entry.error = null;
+      updates.push(upd);
+    } catch (err) {
+      entry.error = err.message;
+      updates.push({ handoff_id: h.id, url: h.pr_url, error: err.message });
+    }
+    health.set(provider.name, entry);
+  }
 }
 
 // The environments and the repository's deploy_on travel with merge evidence, so replay builds

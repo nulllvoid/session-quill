@@ -32,8 +32,10 @@ async function proposedRun(ctx, command, flags, io) {
     if (!open.length) { io.println('No proposed runs. A Run agent pick on a two-way page appears here after its next publish.'); return 0; }
     for (const p of open) io.println(p.origin === 'run'
       ? `${p.id.slice(0, 8)}  ${String(p.ticket_key ?? '?').padEnd(12)} ${p.recipe.name.padEnd(18)} ${p.access.padEnd(9)} critical change proposed by run ${String(p.from_handoff_id ?? '').slice(0, 8)}; approve it on the dashboard  ${p.proposed_at}`
-      : `${p.id.slice(0, 8)}  ${String(p.ticket_key ?? '?').padEnd(12)} ${p.recipe.name.padEnd(18)} ${p.access.padEnd(9)} ${String(p.editor ?? 'unknown editor').padEnd(16)} ${p.publisher}  ${p.proposed_at}`);
-    io.println('Approve with `quill approve --run <id>`, or dismiss with `quill dismiss --run <id>`. A critical change is approved only on the dashboard (Runs → Needs you).');
+      : p.origin === 'ci'
+        ? `${p.id.slice(0, 8)}  ${String(p.ticket_key ?? '?').padEnd(12)} ${p.recipe.name.padEnd(18)} ${p.access.padEnd(9)} CI fix for the pull request of run ${String(p.from_handoff_id ?? '').slice(0, 8)}; approve or dismiss it on the dashboard  ${p.proposed_at}`
+        : `${p.id.slice(0, 8)}  ${String(p.ticket_key ?? '?').padEnd(12)} ${p.recipe.name.padEnd(18)} ${p.access.padEnd(9)} ${String(p.editor ?? 'unknown editor').padEnd(16)} ${p.publisher}  ${p.proposed_at}`);
+    io.println('Approve with `quill approve --run <id>`, or dismiss with `quill dismiss --run <id>`. A critical change is approved only on the dashboard, and a CI fix is approved or dismissed only there (Runs → Needs you).');
     return 0;
   }
   const prefix = String(flags.run).toLowerCase();

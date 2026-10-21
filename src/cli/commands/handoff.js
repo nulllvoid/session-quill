@@ -43,6 +43,12 @@ export function runOptions(flags) {
     if (list.some((x) => typeof x !== 'string')) throw new TrackerError('usage', '--scope needs a scope name, such as jira.write or k8s.write:staging');
     out.scopes = list.flatMap((x) => x.split(',')).map((x) => x.trim()).filter(Boolean);
   }
+  // Planned files (ADR 0037): repeat --planned or separate with commas; writes outside are counted as drift.
+  if (flags.planned !== undefined) {
+    const list = Array.isArray(flags.planned) ? flags.planned : [flags.planned];
+    if (list.some((x) => typeof x !== 'string')) throw new TrackerError('usage', '--planned needs a repository path or glob, such as src/core/** or README.md');
+    out.planned_paths = list.flatMap((x) => x.split(',')).map((x) => x.trim()).filter(Boolean);
+  }
   if (flags['max-turns'] !== undefined) {
     if (typeof flags['max-turns'] !== 'string' || !/^\d{1,6}$/.test(flags['max-turns'])) throw new TrackerError('budget-invalid', '--max-turns must be a whole number of turns');
     out.max_turns = Number(flags['max-turns']);
@@ -63,7 +69,7 @@ export function accessNotice(access) {
 
 async function queue(ctx, io, args, flags) {
   const [key] = args;
-  if (!key) throw new TrackerError('usage', 'usage: handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <branch>] [--draft-pr] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <handoff-id>]');
+  if (!key) throw new TrackerError('usage', 'usage: handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <branch>] [--draft-pr] [--access autonomous|standard|settings|full] [--scope s]... [--planned glob]... [--max-turns n] [--budget usd] [--retry-of <handoff-id>]');
   const ticket = findTicketByKey(ctx, key);
   if (!ticket) throw new TrackerError('ticket-unknown', `unknown ticket key ${key}`);
   const repo = ticket.repo_id && ctx.config.repos[ticket.repo_id] ? { id: ticket.repo_id, ...ctx.config.repos[ticket.repo_id] } : null;

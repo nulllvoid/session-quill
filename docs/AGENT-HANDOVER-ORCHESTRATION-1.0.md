@@ -1,5 +1,120 @@
 # Agent handover: Quill UI and orchestration-first 1.0
 
+## 2.0.0
+
+Added 21 October 2026 at the end of the 2.0.0 plan (`docs/superpowers/plans/2026-10-21-quill-2.0.0.md`, version 2.0.0). This section describes what is implemented on the integration branch. Everything under "Deferred" and "Known gaps" is not implemented. The sections after this one are the 1.1 and 1.0 handovers, kept as written.
+
+### Where to read
+
+- **Scope.**
+  - The PRD is `docs/research/2.0.0/00-prd.md`. The gap analysis `docs/research/2.0.0/01-gap-analysis.md` corrects its premises and says how each requirement was adopted; where they differ, the gap analysis wins.
+  - The MCP credentials issue review is `docs/research/2.0.0/02-issue-mcp-credentials.md`. Its fixes 2 and 4 became Task 14.
+- **Decisions.** ADRs [0029](decisions/0029-ingress-redaction.md) to [0041](decisions/0041-run-environment-disclosure.md), one per task, including their amendments (0031 has three).
+- **Data.** `docs/DATA-CONTRACT.md`, section "2.0.0 index": every event kind, request kind, field (with its export status), config key, error code and UI surface.
+- **UI.** Design system 1.2, §5–§7.
+- **Setup.** README, "What's new in 2.0" and the sections it links.
+
+### What shipped, and where the code is
+
+| Task | Feature | Code |
+| --- | --- | --- |
+| 1 | Ingress secret redaction (ADR 0029) | `src/lib/redact.js`; `writeIngress` in `src/core/ingress.js`; worker re-check in `src/worker/worker.js`; the hook adapter and `src/hooks/payload.js`; `quill tracker push` |
+| 2 | State checkpoint (ADR 0030) | `src/core/checkpoint.js`; `Journal.open({ resume })` in `src/core/journal.js`; `Worker.loadState`; `REDUCER_VERSION` in `src/core/reducer.js` |
+| 3 | Dry-run preflight and approval leases (ADR 0031) | `src/gate/dry-run.js`, `src/gate/run-guard.js`, `bin/quill-guard.js` (`argv_sha`), `src/handoff/grant.js`, `src/server/requests.js` (`ttl_minutes`), `recipes/critical-change.md`, `criticalItem` in `ui/components.js` |
+| 4 | Anchored memory and the failure ledger (ADR 0032) | `src/memory/anchors.js`, `src/memory/failure.js`, `src/memory/file.js`, `src/memory/deliver.js`, `src/core/reduce/memory.js` (`staled`), `src/core/reduce/requests.js` (`dismissals`), `src/core/brief.js`, `ui/views/memory.js`, `ui/views/detail.js` (Run notes) |
+| 5 | Evidence receipts and recipe stats (ADR 0033) | `src/handoff/receipt.js`, `src/cli/commands/receipt.js`, `src/handoff/test-gate.js`, `src/core/usage.js` (`recipeStats`), `src/cli/commands/doctor.js`, `src/reconcile/providers/github.js`, `src/reconcile/run.js` |
+| 6 | Hook latency (ADR 0034) | `scripts/bench-hooks.mjs`, `scripts/statusline.js` and `src/cli/statusline.js` (lean status line), the lazy worker import in `src/runtime/readiness.js` |
+| 7 | Run snapshots and restore (ADR 0035) | `src/handoff/snapshots.js`, `src/core/reduce/snapshots.js`, `restore-snapshot` in `src/server/requests.js`, Snapshots in `ui/views/run-detail.js` |
+| 8 | Ticket worktrees (ADR 0036) | `src/handoff/worktree.js` (`createBranchWorktree`, `copyIgnoredFiles`, `removeCleanWorktree`), `src/handoff/ticket-worktrees.js` (sweep), `src/core/worktrees.js`, `src/cli/commands/worktree.js`, `src/cli/commands/ticket.js`, `commands/ticket.md` |
+| 9 | Planned files and drift (ADR 0037) | `src/core/planned-paths.js`, `src/hooks/adapter.js`, `src/hooks/nudge.js`, the session reducer, `src/hooks/binding-snapshot.js`, `src/cli/statusline.js`, `bin/quill-guard.js` (`drift: true`), the drift chip in `ui/views/run-detail.js` |
+| 10 | Context card (ADR 0038) | `src/memory/blast-radius.js`, `src/worker/projections.js`, `readContextCard` in `src/hooks/binding-snapshot.js`, `src/core/brief.js`, `src/handoff/context.js` |
+| 11 | Attention groups and the CI watch (ADR 0039) | `attentionOf`/`attentionGroups` in `ui/lib/runs.js`, `ui/views/runs.js`, `ciItem` in `ui/components.js`, `src/handoff/ci-watch.js`, `src/core/reduce/ci.js`, `fetchChecks` in `src/reconcile/providers/github.js`, `src/lib/git-ref.js` |
+| 12 | Diff review and the critic (ADR 0040) | `src/handoff/critic.js`, `recipes/critic-review.md`, `fixExtras` in `src/handoff/extension.js` (`patch_ref`), `src/agents/recipes.js` (`run_diff`), `ui/lib/diff.js`, Changes and Review notes in `ui/views/run-detail.js` |
+| 14 | Run environment disclosure (ADR 0041) | `src/handoff/run-env.js`, `buildChildEnv` in `src/handoff/cred-env.js` (`removed`), `src/handoff/autonomous.js`, `src/handoff/runner.js` (prompt), `src/memory/file.js` and `src/memory/anchors.js` (run-env anchor), Run dialog in `ui/components.js`, Environment in `ui/views/run-detail.js` |
+| 13 | Release documentation and version 2.0.0 | This section, DATA-CONTRACT "2.0.0 index", design system 1.2, README, CHANGELOG `[2.0.0]`, `package.json` and `.claude-plugin/plugin.json` |
+
+New event kinds are limited to `worktree` (ingress), and `snapshot-tx`, `ci-observation` and `ci-proposal` (worker only, quarantined through ingress). Everything else is a field or an op on an existing kind. `REDUCER_VERSION` is 2.
+
+### Deliberate deviations from the PRD
+
+These are recorded in the gap analysis and the ADRs. Keep them unless the owner decides otherwise.
+
+- **No daemon socket IPC** (ADR 0034). ADR 0022 rejected a separate daemon. Per-caller environment would become a forgeable protocol field. Retried sends would duplicate events. A busy worker would delay hooks. Node cannot set a Windows named-pipe ACL. And a fresh `node` per hook already costs more than the PRD's 5 ms. The KPI is restated: in-process hook p99 under 15 ms, and whole-process p95 within 15 ms of a bare Node start.
+- **Leases on the dashboard, not `quill approve --ttl`** (ADR 0031). Critical approval is a dashboard action (ADR 0028 §4, R59), and the grant is frozen by its hash. Nothing can extend a lease.
+- **Dry runs are enforced for kubectl and psql pins only** (ADR 0031, amendment 1). A pin without a twin decides as in 1.1, so 1.1-approvable changes stay approvable.
+- **"Snapshots", not "checkpoints"** (ADR 0035). "Checkpoint" already names a captured turn, and the state checkpoint (ADR 0030) is a third thing. Snapshot trees are git refs, not `blobs.js` content.
+- **Ticket worktrees from `quill ticket work|bind --worktree`**, not `quill start <ticket>` (ADR 0036). They live under the Quill home, not inside the repository. Env files are copied, never linked. The worktree's source identity includes a `mount_id`.
+- **Planned files only flag** (ADR 0037). They never pause or refuse anything, and runs need a guard to measure drift.
+- **A digest, not a "cryptographic" receipt** (ADR 0033). It is appended to the fix run's draft PR, not by `quill publish`. Recipe stats are counts, not an autonomy score, and a matching PR title alone never counts as a revert.
+- **The CI watch is an extension tick, not a schedule job** (ADR 0039). A schedule job would journal 576 events a day. It covers GitHub only, and approval, dismissal and resume of a CI fix are stricter than for critical changes: dashboard only, all three.
+- **The critic is opt-in and never blocks** (ADR 0040). It runs only after a passing test gate, and the diff groups by a fixed path table, not by intent.
+- **The state checkpoint is written on idle ticks and on stop** (ADR 0030), not every 500th event inside ingestion. ADR 0030 found the old A19 "replay on start" figure measures the whole worker start, dominated by the first projection generation, which this release leaves alone.
+- **The context card is a projection, never journaled** (ADR 0038), and it never uses a run's `changed_files` for overlap.
+
+### Review-fix waves
+
+After the feature merges, three review waves landed on the integration branch:
+- **A, security** (dd7f863).
+  - The lease is checked only for writes a scope or pin covers (ADR 0031, amendment 2).
+  - The Needs you dry-run note uses the guard's own `pinnedTwin` (amendment 3).
+  - Tool names and planned paths are identifier keys for redaction.
+  - Planned-path extraction and glob matching are linear, with at most 4 wildcards.
+- **B, worker and git** (6694115).
+  - A snapshot restore never unlinks an unsaved file or link on the way to a restored path.
+  - A revert PR counts only for the PR it names.
+  - A ticket worktree whose copied ignored files changed is kept.
+  - The worktree sweep no longer holds up worker start.
+  - The anchor check is keyed on its candidates.
+  - A dismissal never evicts a real Run note.
+- **C, CI watch and critic** (43fe313).
+  - A refused CI observation is journaled once.
+  - Any branch name git accepts is observed.
+  - CI proposals lapse when the PR ends, and a fix is never based on a missing branch.
+  - A CI fix resumes as a CI fix, from the dashboard owner, while CI still fails.
+  - An open CI fix proposal is never hidden from Needs you.
+  - An autonomous run's critic runs under the guard without scope credentials.
+  - A page run-proposal cannot claim a worker-only proposal id.
+  - The CI proposal line and a CI fix's provenance stay off exports.
+  - The whole fetched CI log is redacted before its tail is cut.
+  - On Windows, environment variable names count in any case.
+
+### Deferred
+
+From the plan's Deferred list and the ADRs:
+- daemon socket IPC (ADR 0034);
+- per-tool-call and interactive-session snapshots, restoring an archived snapshot into a new checkout, pruning archive refs with log retention, and snapshots of ticket worktrees (ADR 0035);
+- symlinked env files (ADR 0036);
+- dry-run enforcement for terraform, gh and aws, twins for helm, mysql, redis-cli and MCP tools, server dry runs the classifier would have to be widened to read, and a lease countdown on a running run (ADR 0031);
+- CLI lease grants, by design (ADR 0031);
+- intent (LLM) grouping of the diff and per-hunk revert (ADR 0040);
+- Bitbucket CI and logs from CI systems other than GitHub Actions, `ci-watch` as a schedulable job, projecting `ci_checked` as a recorded stage, and the live phase and verify outcome of an approved CI fix on its item (ADR 0039);
+- enforced (denying) planned files, a planned-files field in the Run dialog, and drift for standard and settings runs (ADR 0037);
+- tree-sitter symbol anchors (ADR 0032);
+- in the adapter, lazy-loading event-specific modules, moving `sessionKey` out of the reducer module, and bundling the hook path (ADR 0034);
+- the first projection generation, which dominates worker start (ADR 0030);
+- from the MCP credentials issue, fix 1 (a `quill doctor` warning about likely-missing worker variables and an opt-in `[worker] env_passthrough` in the LaunchAgent or systemd unit) and fix 3 (a `[prod.readonly.git_env]` slot for provider API reads without push). Both are 1.1.x/2.0.x candidates. Its fix 5, naming the literal-path alternative in guard refusals, is not done either.
+
+### Known gaps
+
+The task reports noted these; none of them is a defect in what shipped:
+- **No dashboard UI for ticket worktrees.** `quill worktree list|remove` only. The owner snapshot carries `ticket.worktrees[]`, but no view renders it.
+- **The dismissal reason is CLI-only.** `quill agent dismiss … --reason`. The dashboard's Dismiss sends none, though the ticket Runs tab shows recorded reasons.
+- **No "Mark reviewed".** A Ready to review item clears when its ticket is done, its PR merges or closes, a later run supersedes it, or 7 days pass.
+- **Bitbucket CI** is not watched, and Bitbucket run PRs have no revert check, so recipe stats show them as "not yet known".
+- **The receipt is not shown on the dashboard.** It is in the draft PR body and `quill receipt <run>`.
+- **The whole-process Pre/PostToolUse latency KPI is not met.** Whole-process p95 sits about 70–115 ms above a bare Node start on the loaded reference machine (about 53 ms on the unloaded 0.6.1 run), against a target of 15 ms. In-process `runHook` meets its p99 target on the least loaded run. Reaching it needs fewer modules on the per-call path (ADR 0034, Alternatives).
+- **The run-env fingerprint includes per-run grants.** Push or a draft PR keeps the git system's tokens, and scopes and Bedrock/Vertex sign-in change report words. So a run with different grants stales entries learned under others. This conservative staling is intended (ADR 0041, residual risks).
+- **A variable the worker never inherited is not "removed".** For example, `CRE_JENKINS_HOST` under a macOS LaunchAgent. The Environment section cannot list it; that is issue fix 1.
+- **Browser check on the integrated branch (43fe313 / docs head).** Headless Edge with DevTools viewport emulation against isolated temporary stores (fake CI provider, fake agent runtime), never live data: Runs → Needs you (all five groups, the CI failed item with its log open) and run detail of a critic-reviewed fix run (grouped diff, Review notes (3), Snapshots (3), binary file, long paths and lines) at 390×844 and 1280×720 showed no document overflow and no element wider than the viewport; the Needs you group counts equal the tab count. The critical change item (Valid for, dry-run note) was checked by Task 3 on its branch at 390 px and desktop width, not again on the integrated branch.
+
+### Verified in Task 13
+
+On the integration head plus the documentation commits, Windows 11, Node 24.19.0:
+- `node scripts/build-ui-assets.mjs --check`: 50 assets verified;
+- `node --test "tests/ui/*.test.js" "tests/export/*.test.js"`: 251 passed;
+- `tests/plugin/manifest.test.js`, `tests/core/checkpoint.test.js` and `tests/handoff/receipt.test.js` (the tests that read versions): 25 passed;
+- `npm test`, which includes the acceptance and scaled performance suites: 5,010 tests, 5,004 passed, 6 skipped, 0 failed.
+
 ## Status (runs-first dashboard)
 
 The sections below are the original handover and are kept as written. The `feat/runs-first-dashboard` branch resolved these items:

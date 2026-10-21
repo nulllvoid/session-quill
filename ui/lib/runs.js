@@ -35,9 +35,10 @@ export function ticketRuns(snapshot, ticketId) {
   return (snapshot.handoffs ?? []).filter((h) => h.ticket_id === ticketId).sort((a, b) => (a.requested_at < b.requested_at ? 1 : a.requested_at > b.requested_at ? -1 : 0));
 }
 
-// The run that retried this one (Retry as new run), else the next run on the same ticket.
+// The run that retried this one (Retry as new run), else the next run on the same ticket. A CI fix
+// (ADR 0039) pushes to the same pull request as the run it fixes, so it never supersedes one.
 export function supersededBy(snapshot, h) {
-  const later = (snapshot.handoffs ?? []).filter((x) => x.id !== h.id && x.ticket_id === h.ticket_id && x.requested_at > h.requested_at);
+  const later = (snapshot.handoffs ?? []).filter((x) => x.id !== h.id && x.ticket_id === h.ticket_id && x.requested_at > h.requested_at && x.origin !== 'ci');
   const retry = later.find((x) => x.retry_of && (x.retry_of === h.id || x.retry_of === h.request_id));
   if (retry) return { run: retry, retried: true };
   const next = later.sort((a, b) => (a.requested_at < b.requested_at ? -1 : 1))[0];
@@ -48,16 +49,81 @@ export function openSuggestions(h) {
   return (h.suggestions ?? []).filter((s) => s.state === 'proposed');
 }
 
-// A finished run needs the owner while it has suggestions to decide on; a failure does for 7 days,
-// on a ticket that is still open, until any later run on that ticket supersedes it. Cancelled runs
-// never do: the owner cancelled them.
-export function needsYou(snapshot, h, now) {
-  if (h.state === 'done') return openSuggestions(h).length > 0;
-  if (h.state !== 'failed' && h.state !== 'timed-out') return false;
+const within7Days = (h, now) => Date.parse(now) - Date.parse(h.finished_at ?? h.requested_at) <= NEEDS_WINDOW_MS;
+const openTicket = (snapshot, h) => { const t = ticketById(snapshot, h.ticket_id); return !!t && t.status !== 'done'; };
+const TERMINAL_PR = new Set(['merged', 'closed']);
+// Failures that wait on a setting or an approval rather than on a retry (ADR 0039).
+const DECISION_CODES = new Set(['scope-changed', 'scope-credentials-missing']);
+const isDecisionFailure = (code) => typeof code === 'string' && (DECISION_CODES.has(code) || code.startsWith('recipe-needs-'));
+const TEST_CODES = new Set(['tests-failed', 'tests-timeout']);
+// The worker's test gate failed or timed out, and nothing else is recorded as the run's error.
+const isTestFailure = (h) => {
+  const code = h.error && h.error.code;
+  if (code) return TEST_CODES.has(code);
+  return !!h.test_gate && ['failed', 'timeout'].includes(h.test_gate.status);
+};
+
+// The run's CI fix proposals (ADR 0039), newest first.
+export function ciProposalsOf(snapshot, handoffId) {
+  return (snapshot.run_proposals ?? []).filter((p) => p.origin === 'ci' && p.from_handoff_id === handoffId).sort((a, b) => (a.proposed_at < b.proposed_at ? 1 : a.proposed_at > b.proposed_at ? -1 : 0));
+}
+
+// Whether the run's pull request is recorded merged or closed (on the ticket, or by the CI watch).
+function prClosed(snapshot, h) {
+  if (h.ci && TERMINAL_PR.has(h.ci.pr_state)) return true;
   const t = ticketById(snapshot, h.ticket_id);
-  if (!t || t.status === 'done') return false;
-  if (Date.parse(now) - Date.parse(h.finished_at ?? h.requested_at) > NEEDS_WINDOW_MS) return false;
-  return !supersededBy(snapshot, h);
+  const pr = t && h.pr_url ? (t.prs ?? []).find((x) => x.url === h.pr_url) : null;
+  return !!(pr && TERMINAL_PR.has(pr.state));
+}
+
+/**
+ * A Quill-opened pull request whose latest CI observation is failing (ADR 0039): the CI failed item,
+ * while the owner has not yet approved or dismissed a fix for that commit. Returns { proposal } (the
+ * open proposal for the commit, or null when none was staged), else null.
+ */
+export function ciAttention(snapshot, h, now) {
+  if (h.state !== 'done' || h.origin === 'ci' || !h.ci || h.ci.state !== 'failing' || prClosed(snapshot, h)) return null;
+  if (!openTicket(snapshot, h) || !within7Days(h, now) || supersededBy(snapshot, h)) return null;
+  const forHead = ciProposalsOf(snapshot, h.id).find((p) => p.ci && p.ci.head_sha === h.ci.head_sha) ?? null;
+  if (forHead && forHead.state !== 'proposed') return null;
+  return { proposal: forHead };
+}
+
+/**
+ * A finished fix waiting for the owner's review (ADR 0039): it edited source and changed files, in
+ * the last 7 days, on an open ticket, no later run superseded it, its pull request is not recorded
+ * merged or closed, and CI is not recorded failing on it. A CI fix run is reviewed through the run
+ * whose pull request it pushed to.
+ */
+export function readyToReview(snapshot, h, now) {
+  if (h.state !== 'done' || h.origin === 'ci' || !(h.permissions && h.permissions.edit_source) || !(h.changed_files ?? []).length) return false;
+  if (!openTicket(snapshot, h) || !within7Days(h, now) || supersededBy(snapshot, h) || prClosed(snapshot, h)) return false;
+  return !(h.ci && h.ci.state === 'failing');
+}
+
+/**
+ * Which Needs you group a run belongs to, or null when it does not need the owner (ADR 0039):
+ * 'decision', 'tests', 'failed' or 'ready' for its own row, 'ci' for the CI failed item. A finished
+ * run needs the owner while it has suggestions to decide on, while CI fails on its pull request, or
+ * while it is ready to review; a failure does for 7 days, on a ticket that is still open, until a
+ * later run on that ticket supersedes it. Cancelled runs never do: the owner cancelled them.
+ */
+export function attentionOf(snapshot, h, now) {
+  if (h.state === 'done') {
+    if (openSuggestions(h).length) return 'decision';
+    if (ciAttention(snapshot, h, now)) return 'ci';
+    if (readyToReview(snapshot, h, now)) return Number.isInteger(h.scope_drift) && h.scope_drift > 0 ? 'decision' : 'ready';
+    return null;
+  }
+  if (h.state !== 'failed' && h.state !== 'timed-out') return null;
+  if (!openTicket(snapshot, h) || !within7Days(h, now) || supersededBy(snapshot, h)) return null;
+  if (isDecisionFailure(h.error && h.error.code)) return 'decision';
+  if (isTestFailure(h)) return 'tests';
+  return 'failed';
+}
+
+export function needsYou(snapshot, h, now) {
+  return attentionOf(snapshot, h, now) !== null;
 }
 
 // Mirrors the ticket filters matchesFilters applies (machine is Sessions-only, so it is not one here).
@@ -85,14 +151,61 @@ export function runTabs(snapshot, filters, now, { memory = null } = {}) {
   const runs = (snapshot.handoffs ?? []).filter((h) => keep(h.ticket_id)).map((h) => ({ kind: 'run', id: h.id, at: h.requested_at ?? '', run: h }));
   const proposals = (snapshot.run_proposals ?? []).filter((p) => (p.state === 'proposed' || p.state === 'expired') && keep(p.ticket_id)).map((p) => ({ kind: 'proposal', id: p.id, at: p.proposed_at ?? '', proposal: p }));
   const nowMs = Date.parse(now);
+  // Each run needs the owner at most once as its own row, and at most once as the CI failed item
+  // (ADR 0039). An open CI fix proposal is always carried by its run's CI item, whatever else the
+  // run needs and however old or superseded the run is, so it is never hidden and never listed
+  // again on its own; one whose run is not in the snapshot gets a CI item without the run.
+  const runNeeds = [];
+  if (!isStaticSnapshot(snapshot)) {
+    const openCi = new Map();
+    for (const x of proposals) {
+      const p = x.proposal;
+      if (p.origin !== 'ci' || p.state !== 'proposed') continue;
+      const prev = openCi.get(p.from_handoff_id);
+      if (!prev || String(p.proposed_at ?? '') > String(prev.proposed_at ?? '')) openCi.set(p.from_handoff_id, p);
+    }
+    const ciNeed = (h, id, proposal, at) => ({ kind: 'ci', id: `ci:${id}`, at, run: h, proposal, group: 'tests' });
+    for (const x of runs) {
+      const group = attentionOf(snapshot, x.run, now);
+      const open = openCi.get(x.run.id) ?? null;
+      openCi.delete(x.run.id);
+      const at = (x.run.ci && x.run.ci.observed_at) || (open && open.proposed_at) || x.at;
+      if (group === 'ci') runNeeds.push(ciNeed(x.run, x.run.id, ciAttention(snapshot, x.run, now).proposal ?? open, at));
+      else {
+        if (group) runNeeds.push({ ...x, group });
+        if (open) runNeeds.push(ciNeed(x.run, x.run.id, open, at));
+      }
+    }
+    for (const [id, p] of openCi) runNeeds.push(ciNeed((snapshot.handoffs ?? []).find((h) => h.id === id) ?? null, id, p, p.proposed_at ?? ''));
+  }
   const tabs = {
-    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed'), ...runs.filter((x) => needsYou(snapshot, x.run, now)), ...memoryNeeds(memory, filters)],
+    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed' && x.proposal.origin !== 'ci').map((x) => ({ ...x, group: 'decision' })), ...runNeeds, ...memoryNeeds(memory, filters).map((x) => ({ ...x, group: 'decision' }))],
     live: runs.filter((x) => LIVE.has(x.run.state)),
     failed: runs.filter((x) => FAILED.has(x.run.state)),
     all: [...proposals, ...runs.filter((x) => !Number.isFinite(Date.parse(x.at)) || nowMs - Date.parse(x.at) <= ALL_WINDOW_MS)],
   };
   for (const k of RUN_TABS) tabs[k].sort(newestFirst);
   return tabs;
+}
+
+// Needs you groups (ADR 0039, design system §5), in order. Live is shown inside Needs you but is
+// never counted: the tab count and the attention dot count the other groups only.
+export const ATTENTION_GROUPS = [
+  { key: 'decision', label: 'Needs your decision', counted: true },
+  { key: 'tests', label: 'Tests or CI failed', counted: true },
+  { key: 'failed', label: 'Other failures', counted: true },
+  { key: 'ready', label: 'Ready to review', counted: true },
+  { key: 'live', label: 'Live', counted: false },
+];
+
+/** The Needs you items split into their groups, then Live; empty groups are left out. */
+export function attentionGroups(tabs) {
+  const out = [];
+  for (const g of ATTENTION_GROUPS) {
+    const items = g.key === 'live' ? tabs.live : tabs.needs.filter((x) => x.group === g.key);
+    if (items.length) out.push({ ...g, items });
+  }
+  return out;
 }
 
 export function defaultRunTab(tabs, names) {
@@ -115,6 +228,7 @@ export function groupRuns(items) {
 }
 
 const FINISHED = new Set(['done', 'failed', 'timed-out', 'cancelled']);
+const CI_FACTS = { failing: 'CI failing', pending: 'CI pending', passing: 'CI passing', none: 'no CI checks' };
 
 // A batch's recorded spend against its budget (spec §5.2), as the worker counts it
 // (src/handoff/resume.js): the cost each finished member recorded, estimates included. Null when
@@ -154,6 +268,8 @@ export function runFacts(snapshot, h, now) {
     if (open) facts.push(`${plural(open, 'suggestion')} to review`);
     if ((h.changed_files ?? []).length) facts.push(`${plural(h.changed_files.length, 'file')} changed`);
     if (h.pr_url) facts.push('draft PR opened');
+    // What the CI watch last recorded on the run's pull request (ADR 0039): CI's word, not the test gate's.
+    if (h.ci && CI_FACTS[h.ci.state]) facts.push(CI_FACTS[h.ci.state]);
     if (!facts.length) facts.push('Finished');
   } else {
     const gate = h.test_gate && h.test_gate.status;

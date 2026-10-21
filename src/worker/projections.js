@@ -1,6 +1,7 @@
 // Dashboard projections: one complete generation at a time, published through MANIFEST.json so
 // readers never see a half-written generation (TRD §Durability 4, DATA-CONTRACT §Dashboard projection).
 import { proposalState } from '../publish/run-proposals.js';
+import { runEnvSummary } from '../handoff/run-env.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { projectionsDir } from '../lib/paths.js';
@@ -8,6 +9,7 @@ import { ensureDir, writeJsonAtomic, readJsonIfExists } from '../lib/atomic-fs.j
 import { addMs, HOUR } from '../lib/time.js';
 import { environmentStatus } from '../deploy/environments.js';
 import { descriptionProblems, parseDescription } from '../core/description.js';
+import { pinnedTwin, DRY_RUN_SCOPES } from '../gate/dry-run.js';
 
 export const SNAPSHOT_TIMELINE_LIMIT = 20;
 
@@ -73,7 +75,19 @@ export function buildMeta(state, { now, capture, worker_seen_at, active_sync_req
   };
 }
 
-export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [], handoff_limits = null, onboarding = null, autonomy = null }) {
+// ADR 0031: what the Needs you item says about a run-origin proposal whose pinned shell action is
+// a k8s.write or db.write while [critical] require_dry_run is on: the dry-run twin the approved run
+// must pass first, or null when it has none (the run will then refuse the action). Owner snapshot
+// only: run proposals never reach an export.
+function dryRunNote(p, on) {
+  if (!on || p.origin !== 'run' || !(Array.isArray(p.scopes) && p.scopes.some((s) => s && DRY_RUN_SCOPES.has(s.name)))) return null;
+  const pin = p.action_pin && typeof p.action_pin.guard === 'string' && p.action_pin.kind !== 'mcp' ? p.action_pin.guard : null;
+  // The guard's own derivation (pinnedTwin), so the item names the twin the run will need, or none.
+  const twin = pin ? pinnedTwin({ tool_name: 'Bash', tool_input: { command: pin } }) : null;
+  return { twin: twin ? twin.text : null };
+}
+
+export function buildSnapshot(state, { generation_id, generated_at, derived = {}, capture = { health: { status: 'ok', reason: null, observed_at: generated_at } }, worker_seen_at = generated_at, active_sync_request_id = null, capabilities, key_example, schedules = [], next_sync_due, recipes = [], environmentsFor = null, publishers = [], handoff_limits = null, onboarding = null, autonomy = null, critical_dry_run = true }) {
   const dayAgo = addMs(generated_at, -24 * HOUR);
   // Memory requests keep their kind and state but not their text: memory never reaches a snapshot (spec §9).
   const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo)
@@ -89,13 +103,15 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     checkpoints: [...state.checkpoints.values()],
     // A run's init inventory and credential report stay on its record; the dashboard reads only the
     // latest of each (meta.autonomy), so the snapshot does not grow with them per run (ADR 0026).
-    handoffs: [...state.handoffs.values()].map(({ inventory, cred_report, ...h }) => h),
+    // ADR 0041: only the run environment's removed names and fingerprint (`run_env`) leave the
+    // credential report, for the owner's run detail; no export allow-list names it.
+    handoffs: [...state.handoffs.values()].map(({ inventory, cred_report, ...h }) => { const env = runEnvSummary(cred_report); return env ? { ...h, run_env: env } : h; }),
     requests,
     schedules,
     recipes,
     publishers,
     // Runs proposed from shared pages (ADR 0025), with their state as of this snapshot.
-    run_proposals: [...(state.runProposals ?? new Map()).values()].map((p) => { const t = state.tickets.get(p.ticket_id); return { ...p, state: proposalState(p, t, generated_at), ticket_key: t ? t.key : null }; }),
+    run_proposals: [...(state.runProposals ?? new Map()).values()].map((p) => { const t = state.tickets.get(p.ticket_id); const dry = dryRunNote(p, critical_dry_run); return { ...p, state: proposalState(p, t, generated_at), ticket_key: t ? t.key : null, ...(dry ? { dry_run: dry } : {}) }; }),
     picknext: derived.picknext ?? [],
     blocked: derived.blocked ?? [],
     deployments_outstanding: derived.deployments_outstanding ?? [],
@@ -108,6 +124,17 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
 
 export function ticketDetailPath(env, ticketId) {
   return path.join(projectionsDir(env), 'tickets', `${ticketId}.json`);
+}
+
+// The context card of a ticket (ADR 0038): derived from git and state, so it is a projection of its
+// own, never journaled and never part of snapshot.json, an export or the mirror. Hooks read it.
+export function contextCardPath(env, ticketId) {
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(String(ticketId ?? ''))) throw new Error(`invalid ticket id: ${ticketId}`);
+  return path.join(projectionsDir(env), 'context', `${ticketId}.json`);
+}
+
+export function writeContextCard(env, ticketId, card) {
+  writeJsonAtomic(contextCardPath(env, ticketId), card);
 }
 
 // Ticket detail files live in a stable directory and are rewritten only when the ticket changed;

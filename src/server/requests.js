@@ -7,7 +7,7 @@ import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
 import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
 import { budgetFor } from '../handoff/runner.js';
-import { scopeValidator, loadScopeCatalog, resolveScopes } from '../handoff/scopes.js';
+import { scopeValidator, loadScopeCatalog, resolveScopes, leaseMinutes } from '../handoff/scopes.js';
 import { attachedFiles, undoFileEffect } from '../handoff/files.js';
 import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
@@ -15,10 +15,13 @@ import { scopeFor } from '../hooks/scope.js';
 import { catalogFor } from '../agents/recipes.js';
 import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
+import { DISMISS_REASON_CHARS } from '../core/reduce/requests.js';
+import { ciPrEnded } from '../core/reduce/ci.js';
 import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
-import { resumeProblem, resumeFields } from '../handoff/resume.js';
+import { resumeProblem, resumeFields, isCiFix } from '../handoff/resume.js';
+import { restoreTarget, evaluateRestore } from '../handoff/snapshots.js';
 
 export const EDIT_DELAY_MS = 10_000;
 export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run', 'memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note', 'resume-run'];
@@ -40,6 +43,10 @@ const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
 const REVISION_OPTIONAL = new Set(['handoff-cancel', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run', 'resume-run']);
 const DELAYED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'attach-unbound', 'dismiss-unbound', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'dismiss-run', 'memory-forget']);
 const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
+// Run snapshots (ADR 0035): restore one into the run's checkout. A ticket request without a
+// revision check, with the 10 s undo; applied on the owner's dashboard only (evaluateRestore).
+KINDS.push('restore-snapshot');
+for (const set of [TICKET_KINDS, REVISION_OPTIONAL, DELAYED_KINDS]) set.add('restore-snapshot');
 
 // Tracker keys are uppercase (PROJ-123). Requests normalize them, and lookups also match legacy
 // keys that differ only in case, so "proj-42" can never become a second ticket beside PROJ-42.
@@ -114,12 +121,20 @@ function findSuggestion(state, ticket, payload) {
   return { h, sug };
 }
 
+// Why a CI fix proposal lapsed (ADR 0039), in the owner's words.
+const LAPSED = Object.freeze({
+  'pr-merged': 'the pull request was merged, so this CI fix proposal lapsed',
+  'pr-closed': 'the pull request was closed, so this CI fix proposal lapsed',
+  'head-changed': 'the pull request has a newer commit, so this CI fix proposal lapsed',
+  'ci-passed': 'CI passed on this commit, so this CI fix proposal lapsed',
+});
+
 // A run proposed from a shared page (ADR 0025), still open: not approved, dismissed or lapsed.
 function findProposal(state, ticket, payload, now) {
   const p = typeof payload.proposal_id === 'string' && state.runProposals ? state.runProposals.get(payload.proposal_id) : null;
   if (!p || p.ticket_id !== ticket.id) throw new TrackerError('proposal-unknown', 'proposal_id must name a proposed run of the target ticket');
   const st = proposalState(p, ticket, now);
-  if (st === 'expired') throw new TrackerError('proposal-expired', ticket.status === 'done' ? `${ticket.key} is done, so this proposed run lapsed` : 'this proposed run is more than 7 days old and lapsed; ask for it again on the page');
+  if (st === 'expired') throw new TrackerError('proposal-expired', ticket.status === 'done' ? `${ticket.key} is done, so this proposed run lapsed` : LAPSED[p.lapse_reason] ?? 'this proposed run is more than 7 days old and lapsed; ask for it again on the page');
   if (st !== 'proposed') throw new TrackerError('proposal-resolved', `this proposed run was already ${st}`);
   return p;
 }
@@ -140,6 +155,11 @@ export function fromOwnerDashboard(req) {
 // CLI, an ingress request claiming the owner, a schedule or a page never approve one.
 function approvalRefusal(req, p, kind) {
   const actor = req.actor_id ?? 'owner';
+  // ADR 0039: a CI fix proposal is approved and dismissed on the dashboard alone, like a scope grant.
+  if (p.origin === 'ci') {
+    if (fromOwnerDashboard(req)) return null;
+    return { code: 'ci-fix-dashboard-only', message: `${kind === 'approve-run' ? 'approving' : 'dismissing'} a CI fix proposal is a dashboard action by the owner: open Runs → Needs you with quill ui` };
+  }
   if (kind === 'approve-run' && p.origin === 'run') {
     if (fromOwnerDashboard(req)) return null;
     return { code: 'critical-approve-dashboard-only', message: 'approving a critical change is a dashboard action by the owner: open Runs → Needs you with quill ui' };
@@ -156,6 +176,9 @@ function approvalRefusal(req, p, kind) {
 // pin object's guard string, ruling R43), so the guard allows only that action (R48).
 function approveCritical(worker, req, ticket, p) {
   const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
+  // ADR 0031: checked again here, since a request may reach the worker without submit validation.
+  let lease;
+  try { lease = leaseMinutes((req.payload ?? {}).ttl_minutes); } catch (err) { return fail(err.code, err.message); }
   const id8 = String(p.from_handoff_id ?? '').slice(0, 8);
   const pin = p.action_pin && typeof p.action_pin.guard === 'string' && p.action_pin.guard.trim() ? p.action_pin.guard : null;
   const listed = Array.isArray(p.scopes) ? p.scopes : [];
@@ -175,7 +198,43 @@ function approveCritical(worker, req, ticket, p) {
   const builtin = catalogFor(worker).builtin(p.recipe.name);
   const recipeNote = builtin && p.recipe.hash && builtin.hash !== p.recipe.hash ? 'recipe updated since proposed' : null;
   const actionPins = specs.map((scope) => ({ scope, pin }));
-  return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote });
+  return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote, leaseMinutes: lease });
+}
+
+// Why a CI fix for `ci` ({ pr_url, head_sha, head_branch }) of run `rootId` would be stale now, or
+// null: the pull request is recorded merged or closed (ci-pr-closed), the run no longer records CI
+// failing on that commit of that pull request (ci-proposal-stale), or the branch is not the one the
+// run pushed (ci-branch-mismatch). Checked at approval and again when a CI fix is resumed.
+function ciFixStale(state, ci, rootId = ci && ci.root_handoff_id) {
+  const h = typeof rootId === 'string' ? state.handoffs.get(rootId) : null;
+  const c = ci && typeof ci === 'object' ? ci : {};
+  const ended = ciPrEnded(state, h);
+  if (ended) return { code: 'ci-pr-closed', message: `the pull request is recorded ${ended}, so a CI fix is not queued` };
+  if (!h || !h.ci || h.ci.state !== 'failing' || h.ci.head_sha !== c.head_sha || h.ci.pr_url !== c.pr_url) return { code: 'ci-proposal-stale', message: 'CI on this pull request changed since the fix was proposed (a new commit, a pass or a merge), so nothing was queued' };
+  if (!h.pushed_branch || h.pushed_branch !== c.head_branch || h.ci.head_branch !== c.head_branch) return { code: 'ci-branch-mismatch', message: `the pull request's branch is not the branch run ${String(h.id).slice(0, 8)} pushed, so a CI fix is not queued` };
+  return null;
+}
+
+// Approval of a CI fix proposal (ADR 0039). The run that opened the pull request must still record
+// CI failing on the very commit the proposal names, on the branch it pushed; otherwise the proposal
+// is stale (it lapses in state at the next observation anyway). The queued run is an ordinary
+// attempt-fix of the built-in recipe with the proposal's permissions (edit, commit, push to that
+// branch; never a new pull request) and access (never wider than the original run's, never scopes),
+// through the same validation and reservation as any run; validateHandoffRequest refuses a
+// protected branch. The failing log tail travels on the run as `ci_fix`, local only.
+function approveCi(worker, req, ticket, p) {
+  const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
+  const ci = p.ci && typeof p.ci === 'object' ? p.ci : {};
+  const h = worker.state.handoffs.get(p.from_handoff_id);
+  const stale = ciFixStale(worker.state, ci, p.from_handoff_id);
+  if (stale) return fail(stale.code, stale.message);
+  const evaluation = evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: p.access === 'autonomous' ? 'autonomous' : 'standard', branch: ci.head_branch, suggest: true });
+  if (evaluation.outcome !== 'applied') return evaluation;
+  Object.assign(evaluation.mutation.handoff, {
+    origin: 'ci',
+    ci_fix: { proposal_id: p.id, root_handoff_id: h.id, pr_url: ci.pr_url, head_sha: ci.head_sha, head_branch: ci.head_branch, failing: Array.isArray(ci.failing) ? [...ci.failing] : [], log_tail: typeof ci.log_tail === 'string' ? ci.log_tail : null, log_withheld: Number.isInteger(ci.log_withheld) ? ci.log_withheld : 0 },
+  });
+  return evaluation;
 }
 
 // The interrupted run a resume-run request names (spec §5.4, Task 19): a run of the target ticket
@@ -212,6 +271,13 @@ function evaluateResume(worker, req, ticket) {
   if ((fields.scopes && fields.scopes.length) || fields.action_pins) {
     if (!fromOwnerDashboard(req)) return fail('resume-dashboard-only', 'resuming a run with write scopes grants production write access again, so it is a dashboard action by the owner: open the run in Runs with quill ui');
   }
+  // ADR 0039: a CI fix pushes to a shared branch, so it is resumed as it was approved: by the owner
+  // on the dashboard, and only while CI still fails on its commit of a pull request that is open.
+  if (isCiFix(orig)) {
+    if (!fromOwnerDashboard(req)) return fail('resume-dashboard-only', 'resuming a CI fix pushes to the branch of its pull request again, so it is a dashboard action by the owner: open the run in Runs with quill ui');
+    const problem = ciFixStale(state, fields.ci_fix);
+    if (problem) return fail(problem.code, problem.message);
+  }
   const id8 = orig.id.slice(0, 8);
   if (fields.scope_fingerprints) {
     let catalog;
@@ -225,8 +291,8 @@ function evaluateResume(worker, req, ticket) {
   // A built-in is pinned by name and source (an upgrade may change its text); any other recipe
   // must still have the reviewed hash.
   const ref = fields.recipe ? { name: fields.recipe.name, source: fields.recipe.source, hash: fields.recipe.source === 'builtin' ? null : fields.recipe.hash } : undefined;
-  const payload = { ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
-  const critical = fields.action_pins ? { actionPins: fields.action_pins, scopeFingerprints: fields.scope_fingerprints, originProposalId: fields.origin_proposal_id } : null;
+  const payload = { ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.planned_paths ? { planned_paths: fields.planned_paths } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
+  const critical = fields.action_pins ? { actionPins: fields.action_pins, scopeFingerprints: fields.scope_fingerprints, originProposalId: fields.origin_proposal_id, leaseMinutes: fields.lease_minutes ?? null } : null;
   const evaluation = evaluateHandoff(worker, req, ticket, payload, critical);
   if (evaluation.outcome !== 'applied') return evaluation;
   const h = evaluation.mutation.handoff;
@@ -234,6 +300,7 @@ function evaluateResume(worker, req, ticket) {
   if (fields.scope_fingerprints) h.scope_fingerprints = { ...fields.scope_fingerprints };
   if (fields.proposal_id) h.proposal_id = fields.proposal_id;
   if (fields.proposal) h.proposal = fields.proposal;
+  if (fields.origin === 'ci') Object.assign(h, { origin: 'ci', ci_fix: fields.ci_fix });
   evaluation.result.resumed = orig.id;
   return evaluation;
 }
@@ -330,6 +397,13 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'dismiss-suggestion': {
       const { h, sug } = findSuggestion(state, target, payload);
       normalized = { handoff_id: h.id, suggestion_id: sug.id };
+      // ADR 0032: an optional reason for a dismissal, kept on the run's local Run note.
+      if (body.kind === 'dismiss-suggestion' && payload.reason !== undefined && payload.reason !== null) {
+        if (typeof payload.reason !== 'string') throw new TrackerError('request-invalid', 'reason must be a string');
+        const reason = payload.reason.trim();
+        if (reason.length > DISMISS_REASON_CHARS) throw new TrackerError('request-invalid', `reason must be at most ${DISMISS_REASON_CHARS} characters`);
+        if (reason) normalized.reason = reason;
+      }
       break;
     }
     case 'undo-file-effect': {
@@ -337,10 +411,22 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       normalized = { handoff_id: h.id, effect_id: effect.id };
       break;
     }
-    case 'approve-run':
-    case 'dismiss-run':
-      normalized = { proposal_id: findProposal(state, target, payload, nowIso).id };
+    case 'restore-snapshot': {
+      const { h, snap } = restoreTarget(state, target, payload);
+      normalized = { handoff_id: h.id, snapshot_id: snap.id };
       break;
+    }
+    case 'approve-run':
+    case 'dismiss-run': {
+      const p = findProposal(state, target, payload, nowIso);
+      normalized = { proposal_id: p.id };
+      // ADR 0031: a critical approval may be valid for 5, 15 or 60 minutes instead of the whole run.
+      if (body.kind === 'approve-run' && payload.ttl_minutes !== undefined && payload.ttl_minutes !== null) {
+        if (p.origin !== 'run') throw new TrackerError('invalid-ttl', 'only the approval of a critical change takes ttl_minutes');
+        normalized.ttl_minutes = leaseMinutes(payload.ttl_minutes);
+      }
+      break;
+    }
     case 'handoff-cancel': {
       const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
       if (!h || h.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
@@ -551,9 +637,13 @@ function evaluateHandoff(worker, req, ticket, payload, critical = null) {
     ...(checked.scopes ? { scopes: checked.scopes } : {}),
     ...(checked.max_turns !== undefined ? { max_turns: checked.max_turns } : {}),
     ...(checked.max_budget_usd !== undefined ? { max_budget_usd: checked.max_budget_usd } : {}),
+    // Planned files (ADR 0037): frozen into the grant; writes outside them are counted, never refused. Local only.
+    ...(checked.planned_paths ? { planned_paths: checked.planned_paths } : {}),
     // An approved critical change (ADR 0028): its pinned action per scope, the fingerprints dispatch
     // checks again before the grant is frozen, and the proposal. Never exported (allow-lists).
     ...(critical ? { action_pins: critical.actionPins, scope_fingerprints: critical.scopeFingerprints, origin_proposal_id: critical.originProposalId } : {}),
+    // ADR 0031: the approval's "Valid for" minutes; dispatch freezes the end as the grant's notAfter.
+    ...(critical && critical.leaseMinutes ? { lease_minutes: critical.leaseMinutes } : {}),
   };
   return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id, ...(critical && critical.recipeNote ? { note: critical.recipeNote } : {}) } };
 }
@@ -654,6 +744,8 @@ export function evaluateRequest(worker, req) {
       return evaluateHandoff(worker, req, ticket, req.payload);
     case 'resume-run':
       return evaluateResume(worker, req, ticket);
+    case 'restore-snapshot':
+      return evaluateRestore(worker, req, ticket, { owner: fromOwnerDashboard(req) });
     case 'approve-run':
     case 'dismiss-run': {
       let p;
@@ -664,14 +756,16 @@ export function evaluateRequest(worker, req) {
       if (refusal) return { outcome: 'failed', error: { code: refusal.code, message: refusal.message, retryable: false, current_revision: ticket.revision } };
       if (req.kind === 'dismiss-run') return { outcome: 'applied', mutation: { type: 'run-proposal-dismiss', proposal_id: p.id }, result: { proposal_id: p.id } };
       const critical = p.origin === 'run';
+      const ciFix = p.origin === 'ci';
+      if (!critical && req.payload && req.payload.ttl_minutes !== undefined && req.payload.ttl_minutes !== null) return { outcome: 'failed', error: { code: 'invalid-ttl', message: 'only the approval of a critical change takes ttl_minutes', retryable: false, current_revision: ticket.revision } };
       // The recipe this ticket would run must still be the one the page offered (same layer and
       // text); a repository recipe of that name shadows it and is refused.
-      const shadow = critical ? null : shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
+      const shadow = critical || ciFix ? null : shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
       if (shadow) return { outcome: 'failed', error: { code: shadow.code, message: shadow.message, retryable: false, current_revision: ticket.revision } };
       // Approval queues an ordinary run through the same checks and reservation as the Run dialog.
       // It suggests rather than applies: whoever proposed it, the owner reviews what it found. Page
       // text never becomes the owner's note; where the run came from travels as `proposal`.
-      const evaluation = critical ? approveCritical(worker, req, ticket, p) : evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
+      const evaluation = critical ? approveCritical(worker, req, ticket, p) : ciFix ? approveCi(worker, req, ticket, p) : evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
       if (evaluation.outcome !== 'applied') {
         if (evaluation.error && evaluation.error.code === 'handoff-reserved') {
           const existing = state.handoffs.get(evaluation.result.existing_handoff_id);
@@ -701,6 +795,7 @@ export function evaluateRequest(worker, req) {
       try { mutation = suggestionMutation(state, ticket, found.h, found.sug, req.kind === 'accept-suggestion' ? 'accepted' : 'dismissed'); } catch (err) {
         return { outcome: 'failed', error: { code: err.code ?? 'suggestion-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
       }
+      if (req.kind === 'dismiss-suggestion' && typeof req.payload.reason === 'string' && req.payload.reason) mutation.reason = req.payload.reason.slice(0, DISMISS_REASON_CHARS);
       return { outcome: 'applied', mutation, result: { handoff_id: found.h.id, suggestion_id: found.sug.id, state: mutation.state } };
     }
     case 'undo-file-effect': {

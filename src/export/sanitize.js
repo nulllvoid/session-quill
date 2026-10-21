@@ -46,6 +46,17 @@ export function normalizeOptions(opts = {}) {
   };
 }
 
+// A timeline line marked local_only (the CI watch's proposal line, ADR 0039) stays on the dashboard.
+export function exportableTimeline(timeline) {
+  return (Array.isArray(timeline) ? timeline : []).filter((e) => !(e && e.local_only === true));
+}
+
+// A run's proposal provenance travels, except a CI fix's (ADR 0039: exports gain nothing from the
+// CI watch), whose run is then shown as an ordinary run.
+export function localOnlyProvenance(h) {
+  return !!(h && h.proposal && typeof h.proposal === 'object' && h.proposal.origin === 'ci');
+}
+
 function sanitizePr(pr, { includeLinks }) {
   const { url, evidence_id, ...rest } = pr;
   return includeLinks ? { ...rest, url } : rest;
@@ -61,7 +72,7 @@ function sanitizeTicket(t, o) {
       out.deployments = (t.deployments ?? []).map(({ source_event_id, evidence, ...d }) => ({ ...d, evidence: o.includeLinks ? evidence : (evidence ? '[evidence omitted]' : null) }));
       out.environments = (t.environments ?? []).map(({ evidence, ...e }) => ({ ...e, evidence: o.includeLinks ? evidence ?? null : (evidence ? '[evidence omitted]' : null) }));
     }
-    else if (f === 'timeline') out.timeline = (t.timeline ?? []).map(({ content_ref, event_id, ...e }) => e);
+    else if (f === 'timeline') out.timeline = exportableTimeline(t.timeline).map(({ content_ref, event_id, local_only, ...e }) => e);
     else if (f === 'plans') out.plans = (t.plans ?? []).map(({ content_ref, preview, ...p }) => (o.includeCheckpoints ? { ...p, preview } : p));
     else if (f === 'conclusions') out.conclusions = (t.conclusions ?? []).map(({ content_ref, preview, ...c }) => (o.includeCheckpoints ? { ...c, preview } : c));
     // The parsed description travels only with the summary it comes from (ADR 0014).
@@ -116,7 +127,7 @@ const HANDOFF_SHAPED_FIELDS = ['test_gate', 'file_effects', 'suggestions', 'pr_u
 // Counts and the recorded stage stand in for the attempt, learning and critical-change records, which stay local.
 // scope_count (R53) says how many write scopes a run had, so an export can say "Autonomous + scopes (n)"; the
 // scope names, targets and fingerprints never travel.
-const HANDOFF_COUNT_FIELDS = ['attempt_count', 'learning_count', 'critical_count', 'recorded_stage', 'scope_count'];
+const HANDOFF_COUNT_FIELDS = ['attempt_count', 'learning_count', 'critical_count', 'recorded_stage', 'scope_count', 'scope_drift'];
 export const HANDOFF_EXPORT_FIELDS = [...HANDOFF_PLAIN_FIELDS, ...HANDOFF_SHAPED_FIELDS, ...HANDOFF_COUNT_FIELDS];
 
 // R55: an interrupted run's possible_writes (prod targets, MCP tool and scope names) stay on the
@@ -149,6 +160,7 @@ function sanitizeHandoff(h, o) {
   const { result_ref, pr_url, result_summary, result_confidence, result_sources, changed_files, suggestions, files, file_effects, test_gate } = h;
   const out = {};
   for (const k of HANDOFF_PLAIN_FIELDS) if (k in h) out[k] = h[k];
+  if (localOnlyProvenance(h)) { delete out.proposal; delete out.proposal_id; }
   if ('error' in h) out.error = exportableError(h.error);
   const possible = possibleWritesLine(h);
   if (possible) out.uncertain_effects = [...(Array.isArray(h.uncertain_effects) ? h.uncertain_effects : []), possible];
@@ -175,6 +187,8 @@ function sanitizeHandoff(h, o) {
   if (typeof h.recorded_stage === 'string') out.recorded_stage = h.recorded_stage;
   const scopes = countOf(h, 'scopes', 'scope_count');
   if (scopes) out.scope_count = scopes;
+  // ADR 0037: how many writes fell outside the run's planned files; the paths never travel.
+  if (Number.isInteger(h.scope_drift) && h.scope_drift >= 0) out.scope_drift = h.scope_drift;
   return out;
 }
 

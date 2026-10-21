@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resumeBrief, BRIEF_MAX } from '../../src/core/brief.js';
+import { resumeBrief, BRIEF_MAX, CONTEXT_MAX } from '../../src/core/brief.js';
 import { runHook } from '../../src/hooks/adapter.js';
 import { writeRuntimeIdentity, writeBindingSnapshot, writeHeartbeat } from '../../src/hooks/binding-snapshot.js';
 
@@ -51,4 +51,54 @@ test('a bound SessionStart carries the brief from the ticket projection', () => 
   const r = runHook('SessionStart', { session_id: 's1', source: 'resume', cwd: home }, { env, now: NOW });
   const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
   assert.match(ctx, /Bound to FIX-7.*Where FIX-7 stands.*Next action: Fix the loop bound\..*tickets represent tasks/s);
+});
+
+// The context card (ADR 0038): a "Context:" block after the brief, at most CONTEXT_MAX characters.
+const CARD = {
+  ticket_id: ID,
+  co_change: [{ file: 'src/retry.js', partner: 'src/backoff.js', n: 4 }, { file: 'src/retry.js', partner: 'test/retry.test.js', n: 3 }],
+  related: [{ key: 'FIX-3', title: 'Retry budget', status: 'done', files: ['src/retry.js'], live_run: false }, { key: 'FIX-9', title: null, status: 'active', files: ['src/retry.js'], live_run: true }],
+  guard: ['Critical change FIX-7.1 is proposed and waits for the owner\'s decision; it has not run'],
+};
+
+test('the brief appends the context card after the existing brief', () => {
+  const t = ticket({ next_action: 'Fix the loop bound', files_touched: [{ relative_path: 'src/retry.js', last_seen: NOW }] });
+  const plain = resumeBrief(t, { nowIso: NOW });
+  const b = resumeBrief(t, { nowIso: NOW, card: CARD });
+  assert.ok(b.startsWith(plain), 'the existing brief is unchanged');
+  const block = b.slice(plain.length);
+  assert.match(block, /^ Context: /);
+  assert.match(block, /Often changed together: src\/backoff\.js with src\/retry\.js \(4 commits\), test\/retry\.test\.js with src\/retry\.js \(3 commits\)\./);
+  assert.match(block, /Other tickets on these files: FIX-3 "Retry budget" \(done\): src\/retry\.js; FIX-9 \(active, a run is live\): src\/retry\.js\./);
+  assert.match(block, /Guard: Critical change FIX-7\.1 is proposed and waits for the owner's decision; it has not run\./);
+  assert.equal(resumeBrief(t, { nowIso: NOW, card: { co_change: [], related: [], guard: [] } }), plain, 'an empty card adds nothing');
+  assert.equal(resumeBrief(ticket(), { nowIso: NOW, card: CARD }), null, 'no brief, no card');
+});
+
+test('the context block is bounded and one line', () => {
+  const long = (n) => Array.from({ length: n }, (_, i) => `src/${'deep/'.repeat(20)}f${i}.js`);
+  const card = { co_change: long(5).map((f) => ({ file: f, partner: `${f}x`, n: 9 })), related: long(5).map((f, i) => ({ key: `K-${i}`, title: 't\n'.repeat(80), status: 'todo', files: [f], live_run: false })), guard: long(5) };
+  const t = ticket({ next_action: 'x'.repeat(5000) });
+  const b = resumeBrief(t, { nowIso: NOW, card });
+  const block = b.slice(b.indexOf(' Context: '));
+  assert.ok(block.length <= CONTEXT_MAX + 1, `${block.length}`);
+  assert.ok(b.length <= BRIEF_MAX + CONTEXT_MAX + 1, `${b.length}`);
+  assert.doesNotMatch(b, /\n/);
+});
+
+test('ADR 0032: "Failed before" lists the last two worker test-gate failures from the Run notes, never a page-proposed run\'s', () => {
+  const f = (sig, extra = {}) => ({ kind: 'test-gate', status: 'failed', command: 'npm test', exit_code: 1, signature: sig, files_touched: ['src/retry.js', 'src/a.js', 'src/b.js', 'src/c.js'], ...extra });
+  const notes = [
+    { run_id: '11111111aaaa', at: '2026-10-08T00:00:00Z', attempts: [], lessons: [], failure: f('1111111111111111') },
+    { run_id: '22222222bbbb', at: '2026-10-09T00:00:00Z', attempts: [], lessons: [], failure: f('2222222222222222', { status: 'timeout', exit_code: null }) },
+    { run_id: '33333333cccc', at: '2026-10-10T00:00:00Z', attempts: [], lessons: [], failure: f('3333333333333333') },
+    { run_id: '44444444dddd', at: '2026-10-11T00:00:00Z', attempts: [], lessons: [], failure: f('4444444444444444'), origin: 'page' },
+    { run_id: '55555555eeee', at: '2026-10-11T01:00:00Z', attempts: [{ route: 'x' }], lessons: [] },
+  ];
+  const b = resumeBrief(ticket({ run_notes: notes }), { nowIso: NOW });
+  assert.match(b, /Failed before: run 33333333 tests failed \(exit 1\), signature 3333333333333333 running npm test, changed src\/retry\.js, src\/a\.js, src\/b\.js and 1 more \| run 22222222 tests timed out, signature 2222222222222222 running npm test, changed /);
+  assert.doesNotMatch(b, /44444444|11111111/);
+  // A failure alone is history enough for a brief.
+  assert.match(resumeBrief(ticket({ run_notes: [notes[0]] }), { nowIso: NOW }), /^Where FIX-7 stands .*Failed before: run 11111111/);
+  assert.equal(resumeBrief(ticket({ run_notes: [notes[3]] }), { nowIso: NOW }), null, 'a page-proposed run\'s failure is not shown');
 });

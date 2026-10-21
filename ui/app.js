@@ -32,6 +32,8 @@ const appState = {
   filters: { ...EMPTY_FILTERS },
   selected: null,
   runTab: null,
+  // Needs you grouping (ADR 0039): 'attention' (default) or 'none' (one list); `group=` in the hash.
+  runGroup: 'attention',
   selectedRun: null,
   detailTab: 'overview',
   detailExpanded: false,
@@ -50,6 +52,10 @@ const appState = {
   contentStatus: {},
   // Result blobs read as run records (run detail sections), by content hash: { status: 'loading' } | { data } | { error }.
   runRecords: {},
+  // ADR 0040: a run's patch and critic notes, by content hash: { status: 'loading' } | { text } | { error }.
+  runBlobs: {},
+  // Diff files the owner opened or closed in run detail, by `<patch_ref>:<path>`.
+  diffOpen: {},
   loadedTicket: null,
   lastFocus: null,
   error: null,
@@ -72,6 +78,8 @@ const appState = {
   memoryRepo: null,
   memoryEditing: null,
   memoryDrafts: {},
+  // ADR 0031: the "Valid for" choice on each critical change item, by proposal id, kept across polls.
+  leases: {},
   // Request ids whose conflict or failure the owner dismissed; syncRequests leaves them out.
   dismissedRequests: new Set(),
 };
@@ -119,6 +127,7 @@ function readHash() {
   appState.selected = params.get('ticket') || null;
   appState.treeRoot = params.get('root') || null;
   appState.runTab = params.get('tab') || null;
+  appState.runGroup = params.get('group') === 'none' ? 'none' : 'attention';
   appState.selectedRun = appState.view === 'runs' ? params.get('run') || null : null;
   appState.memoryTab = appState.view === 'memory' && MEMORY_TABS.includes(params.get('mtab')) ? params.get('mtab') : null;
   appState.memoryRepo = appState.view === 'memory' ? params.get('mrepo') || null : null;
@@ -152,6 +161,7 @@ function writeHash() {
   if (appState.selected && appState.detailTab !== 'overview') params.set('section', appState.detailTab);
   if (appState.treeRoot) params.set('root', appState.treeRoot);
   if (appState.view === 'runs' && appState.runTab) params.set('tab', appState.runTab);
+  if (appState.view === 'runs' && appState.runGroup === 'none') params.set('group', 'none');
   if (appState.view === 'runs' && appState.selectedRun) params.set('run', appState.selectedRun);
   if (appState.view === 'memory' && appState.memoryTab) params.set('mtab', appState.memoryTab);
   if (appState.view === 'memory' && appState.memoryRepo) params.set('mrepo', appState.memoryRepo);
@@ -199,7 +209,7 @@ function render() {
   setMarkup($('#filters'), renderFilterBar(s, appState.filters));
   if (filterOpen) $('#filters .filter-pop').open = true;
   const pending = [...appState.requests.values()];
-  const opts = { now, pending, selected: appState.selected };
+  const opts = { now, pending, selected: appState.selected, leases: appState.leases };
   let html = '';
   const bulk = { selecting: appState.selecting, checked: appState.checked };
   if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, { ...opts, ...bulk, blockedExpanded: appState.blockedExpanded });
@@ -208,7 +218,7 @@ function render() {
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
-  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun, memory: appState.memory });
+  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun, memory: appState.memory, group: appState.runGroup });
   else if (appState.view === 'memory') html = renderMemory(appState.memory, s, { now, pending, tab: appState.memoryTab, repo: appState.memoryRepo, editing: appState.memoryEditing, status: appState.memoryStatus, filters: appState.filters, online: appState.online });
   if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
   renderBulkBar(s);
@@ -375,6 +385,31 @@ function runRecordFor(run, s) {
   return { record: r.data ?? null, recordStatus: r.status === 'loading' ? 'loading' : r.error ? { error: r.error } : null };
 }
 
+// A run's patch and critic notes (ADR 0040), owner dashboard only, fetched once per content hash
+// like the run record; `text` null means the blob is no longer stored.
+function loadRunBlob(hash, generation, retried = false) {
+  appState.runBlobs[hash] = { status: 'loading' };
+  api.getContent(hash, generation).then((text) => {
+    appState.runBlobs[hash] = { text: typeof text === 'string' ? text : null };
+    render();
+  }).catch(async (err) => {
+    if (err.code === 'generation-expired' && !retried) { await poll(); return loadRunBlob(hash, appState.snapshot.generation_id, true); }
+    appState.runBlobs[hash] = { error: err.message || 'the request failed' };
+    render();
+  });
+}
+
+function runBlobsFor(run, s) {
+  if (!run || api.static || !(s.capabilities ?? {}).handoff) return {};
+  const refs = [run.patch_ref, ['clean', 'warnings'].includes(run.critic_status) ? run.critic_ref : null].filter((r) => typeof r === 'string' && /^[0-9a-f]{64}$/.test(r));
+  const blobs = {};
+  for (const ref of refs) {
+    if (!Object.hasOwn(appState.runBlobs, ref)) loadRunBlob(ref, s.generation_id);
+    blobs[ref] = appState.runBlobs[ref];
+  }
+  return { blobs, diffOpen: appState.diffOpen };
+}
+
 function renderDetailPanel(now, pending) {
   const panel = $('#detail');
   const s = appState.snapshot;
@@ -400,8 +435,8 @@ function renderDetailPanel(now, pending) {
   if (editing) return; // never clobber an in-progress edit on poll
   const key = ticket ? ticket.id : `run:${runId}`;
   const html = ticket
-    ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded })
-    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, memory: appState.memory, ...runRecordFor(run, s) }) : renderRunNotFound(runId);
+    ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded, leases: appState.leases })
+    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, memory: appState.memory, ...runRecordFor(run, s), ...runBlobsFor(run, s) }) : renderRunNotFound(runId);
   setMarkup(panel, html);
   // A different ticket or run starts at its title, not at the previous one's scroll offset.
   if (renderedDetail !== key) { panel.scrollTop = 0; renderedDetail = key; }
@@ -431,7 +466,7 @@ function renderDialog() {
   else if (d.type === 'run-agent') {
     const t = ticketById(s, d.ticket);
     if (!t) { appState.dialog = null; return renderDialog(); }
-    html = renderRunAgentDialog(t, s, { recipe: d.recipe, retryOf: d.retryOf });
+    html = renderRunAgentDialog(t, s, { recipe: d.recipe, retryOf: d.retryOf, note: d.note });
   } else if (d.type === 'bulk-handoff') html = renderBulkHandoffForm(s, d.ids, { mode: d.mode });
   else if (d.type === 'bulk-results') html = renderBulkResults(s, { batchId: d.batchId, rows: d.rows, requests: [...appState.requests.values()] });
   else if (d.type === 'bulk-status') html = renderBulkStatusDialog(appState.checked.size);
@@ -632,6 +667,7 @@ function handleAction(el) {
     }
     case 'review-proposals': appState.filters = { ...EMPTY_FILTERS }; setView('runs'); appState.runTab = 'needs'; render(); break;
     case 'run-tab': appState.runTab = el.dataset.tab; render(); document.querySelector(`#run-tab-${CSS.escape(appState.runTab)}`)?.focus(); break;
+    case 'run-group': appState.runGroup = el.dataset.group === 'none' ? 'none' : 'attention'; render(); document.querySelector('#main [data-action="run-group"]')?.focus(); break;
     case 'open-run': openRun(el.dataset.run, el); break;
     case 'close-run': closeRun(); break;
     case 'run-prev': stepRun(-1); break;
@@ -687,7 +723,7 @@ function handleAction(el) {
     case 'toggle-blocked': appState.blockedExpanded = !appState.blockedExpanded; render(); break;
     case 'close-dialog': closeDialog(); break;
     case 'handoff':
-    case 'run-agent': appState.dialog = { type: 'run-agent', ticket: el.dataset.ticket, recipe: el.dataset.recipe ?? null, retryOf: el.dataset.retryOf ?? null }; render(); break;
+    case 'run-agent': appState.dialog = { type: 'run-agent', ticket: el.dataset.ticket, recipe: el.dataset.recipe ?? null, retryOf: el.dataset.retryOf ?? null, note: el.dataset.note ?? null }; render(); break;
     case 'run-agent-pick': appState.dialog = { ...appState.dialog, recipe: el.dataset.recipe }; render(); break;
     case 'run-agent-back': appState.dialog = { ...appState.dialog, recipe: null }; render(); break;
     case 'record-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'record', deploymentId: el.dataset.deployment ?? null }; render(); break;
@@ -730,6 +766,8 @@ function handleAction(el) {
       submit({ kind: r.kind, target_id: r.target_id, expected_revision: targetRevision(r), payload: r.original }, { announceText: 'Reversal queued as a new revision-checked edit' });
       break;
     }
+    // Run snapshots (ADR 0035): a ticket request with the 10 s undo; only the checkout changes.
+    case 'restore-snapshot': submit({ kind: 'restore-snapshot', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff, snapshot_id: el.dataset.snapshot } }, { announceText: 'Restore queued; undo within 10 seconds. Only the run checkout changes' }); break;
     case 'undo-file-effect': submit({ kind: 'undo-file-effect', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff, effect_id: el.dataset.effect } }, { announceText: 'Undo queued; the file is restored within 10 seconds' }); break;
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
@@ -737,7 +775,13 @@ function handleAction(el) {
       submit({ kind: el.dataset.action, target_id: el.dataset.ticket, expected_revision: accept ? ticketRevision(el.dataset.ticket) : null, payload: { handoff_id: el.dataset.handoff, suggestion_id: el.dataset.suggestion } }, { announceText: accept ? 'Accepting the suggestion; undo within 10 seconds' : 'Dismissing the suggestion; undo within 10 seconds' });
       break;
     }
-    case 'approve-run': submit({ kind: 'approve-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Approving the proposed run; it is queued as an ordinary run' }); break;
+    case 'approve-run': {
+      // ADR 0031: a critical change's "Valid for" choice travels as ttl_minutes; Whole run sends none.
+      const lease = el.closest('li') ? el.closest('li').querySelector('select[data-lease]') : null;
+      const ttl = lease && lease.value ? Number(lease.value) : null;
+      submit({ kind: 'approve-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal, ...(ttl ? { ttl_minutes: ttl } : {}) } }, { announceText: ttl ? `Approving the critical change, valid for ${ttl === 60 ? '1 hour' : `${ttl} minutes`} from when the run starts; it is queued, not run yet` : 'Approving the proposed run; it is queued as an ordinary run' });
+      break;
+    }
     case 'dismiss-run': submit({ kind: 'dismiss-run', target_id: el.dataset.ticket, expected_revision: null, payload: { proposal_id: el.dataset.proposal } }, { announceText: 'Dismissing the proposed run; undo within 10 seconds' }); break;
     // Spec §5.4: a new run that continues the interrupted run's session, with the same access.
     case 'resume-run': submit({ kind: 'resume-run', target_id: el.dataset.ticket, expected_revision: null, payload: { handoff_id: el.dataset.handoff } }, { announceText: 'Resume requested; it is queued as a new run, not finished' }); break;
@@ -767,6 +811,7 @@ function handleAction(el) {
     case 'load-content': loadContent(el.dataset.hash, el.dataset.generation); break;
     case 'hide-content': delete appState.content[el.dataset.hash]; render(); break;
     case 'load-run-record': loadRunRecord(el.dataset.hash, appState.snapshot.generation_id); render(); break;
+    case 'load-run-blob': loadRunBlob(el.dataset.hash, appState.snapshot.generation_id); render(); break;
     case 'load-ticket': {
       api.getTicket(el.dataset.ticket, el.dataset.generation).then((t) => { appState.loadedTicket = t; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
       break;
@@ -1068,6 +1113,7 @@ function scopeBlockers(form, scoped) {
 
 function onChange(e) {
   const el = e.target;
+  if (el.dataset && el.dataset.lease !== undefined) { appState.leases[el.dataset.lease] = el.value; return; }
   if (el.dataset && el.dataset.memoryRepo !== undefined) { appState.memoryRepo = el.value || null; appState.memoryEditing = null; render(); $('#memory-repo')?.focus(); return; }
   if (el.dataset.filter) {
     appState.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
@@ -1144,6 +1190,8 @@ export function startApp() {
   document.addEventListener('toggle', (e) => {
     const d = e.target;
     if (d instanceof HTMLDetailsElement && d.classList.contains('access-advanced') && !d.open && d.querySelector('input[name="access"]:checked')) d.open = true;
+    // A run's diff file stays open or closed as the owner left it across polls (ADR 0040).
+    if (d instanceof HTMLDetailsElement && d.dataset.diffFile) appState.diffOpen[d.dataset.diffFile] = d.open;
   }, true);
   // Typing a scope's target ticks its box (review M5), so a typed target is never silently dropped.
   document.addEventListener('input', (e) => {

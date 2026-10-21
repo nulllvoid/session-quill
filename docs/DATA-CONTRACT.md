@@ -311,3 +311,407 @@ Provider health includes provider, last_success_at (nullable), last_attempt_at (
 Repository registry: id, project_id, display_name, canonical_path (local-only), default_branch, deployment_environments[], provider_config_ref (local-only), test_command (nullable, ADR 0023; in the owner snapshot, never in an export), test_timeout_ms (config only). Configuration secrets and canonical paths are never serialized to a shared snapshot.
 
 Freshness: never-synced when last_sync is null; fresh < 2 h; ageing >= 2 h and <= 6 h; stale > 6 h. Show absolute age even outside working hours. Worker connection and capture health are independent indicators. Offline snapshots show exported_at and their fixed last_sync; they do not pretend to reconnect.
+
+## 2.0.0 index
+
+What 2.0.0 added to this contract, in one place. The list below names every new item; the subsections after it define each one. Decisions: [ADR 0029](decisions/0029-ingress-redaction.md) to [ADR 0041](decisions/0041-run-environment-disclosure.md); how each PRD requirement was adopted: `docs/research/2.0.0/01-gap-analysis.md`.
+
+Unless a line says otherwise, every field below is local: it is on no static export, `src/export/sanitize.js`, mirror, publisher, tracker push or vault-note allow-list, and `tests/export/privacy-sentinel.test.js` and `tests/export/memory-sentinel.test.js` enforce it.
+
+- **Event kinds.**
+  - `worktree` is an ingress kind ([ADR 0036](decisions/0036-ticket-worktrees.md)).
+  - `snapshot-tx` ([ADR 0035](decisions/0035-run-snapshots.md)), `ci-observation` and `ci-proposal` ([ADR 0039](decisions/0039-attention-groups-and-ci-watch.md)) are worker only. Through ingress they are quarantined as `ingress-forged` (R59), like the worker-only kinds of the 1.1.0 index.
+- **Ops and payload fields on existing kinds.**
+  - `memory-tx`: op `staled` (worker only), with reason `anchor-changed` ([ADR 0032](decisions/0032-anchored-memory-and-failure-ledger.md)) or `run-env-changed` ([ADR 0041](decisions/0041-run-environment-disclosure.md)). `filed` and `confirmed` may carry `anchors` and `observed_in`.
+  - `post-tool`: `planned_paths` on an approved `ExitPlanMode`. `stop`: `drift_nudged` ([ADR 0037](decisions/0037-planned-files-drift.md)).
+  - `reconcile`: `pr_updates[]` gains `merge_commit`, and run PR observations that carry `handoff_id` ([ADR 0033](decisions/0033-evidence-receipts-and-recipe-stats.md)).
+  - `handoff-tx`: a committed fix run journals its evidence in one update before its push and draft PR (ADR 0033).
+  - `run-proposal`: an id of the version-5 `deterministicId` shape is refused (`proposal-id-reserved`, ADR 0039).
+  - Timeline entries: optional `local_only: true`, dropped by exports and vault notes (ADR 0039).
+- **Request kinds.**
+  - New: `restore-snapshot`, applied as the request-tx mutation `snapshot-restore`. Dashboard only (ADR 0035).
+  - Payload additions: `approve-run` `ttl_minutes` (critical changes only, [ADR 0031](decisions/0031-dry-run-preflight-and-leases.md)); `dismiss-suggestion` `reason` (ADR 0032); handoff requests `planned_paths` (ADR 0037).
+  - `approve-run`, `dismiss-run` and `resume-run` of a CI fix are dashboard only (ADR 0039).
+- **Run (handoff) fields.**
+  - Leases and drift: `lease_minutes` (ADR 0031); `planned_paths`, and `scope_drift`, which exports carry as a whole number (ADR 0037).
+  - Snapshots: `snapshots[]` (ADR 0035).
+  - Evidence: `test_gate.runs[]`, `tested_tree`, `commit_tree`, `guard_summary`, `change_summary`, `receipt`, `pr_observed` (ADR 0033).
+  - CI: `ci`, `origin: 'ci'`, `ci_fix` (ADR 0039).
+  - Diff and critic: `patch_ref`, `patch_too_large`, `critic_status`, `critic_count`, `critic_reason`, `critic_ref`, and `timings.critic_ms`, which exports carry with `timings` ([ADR 0040](decisions/0040-diff-review-and-critic.md)).
+  - Environment: `cred_report.removed` and `cred_report.env_fingerprint` (ADR 0041).
+- **Owner snapshot projections.** `handoffs[].run_env` (ADR 0041); `run_proposals[].dry_run` (ADR 0031); `run_proposals[]` with `origin: 'ci'`, `ci`, `lapsed_at` and `lapse_reason` (ADR 0039); `meta.autonomy.credentials.report.removed` and `env_fingerprint` (ADR 0041). Run proposals and `meta.autonomy` never reach an export.
+- **Ticket fields.** `worktrees[]` (ADR 0036). Run note `failure` and `dismissals` (ADR 0032); `run_notes` never leave the machine.
+- **Session fields.** `planned_paths` and `drift`; the binding snapshot gains `drift_count` (ADR 0037).
+- **Memory entry fields.** `anchors` (file anchors and at most one run-env anchor), `observed_in`, `stale_reason` and `stale_anchor`. `memoryListing` adds `stale_reason` and `observed_in` (ADR 0032, ADR 0041). Memory never leaves the machine (ADR 0027).
+- **Run grant and ledger.** `grant.json` gains `requireDryRun`, `notAfter` (ADR 0031) and `plannedPaths` (ADR 0037), all frozen by the grant hash. Ledger `guard` lines gain `argv_sha` (ADR 0031) and `drift: true` (ADR 0037).
+- **Local files and refs** (generated state, never exported): `state/state.checkpoint.json` ([ADR 0030](decisions/0030-state-checkpoint.md)); `projections/context/<ticketId>.json` and `memory/cache/<repoStem>.cochange.json` ([ADR 0038](decisions/0038-context-card.md)); the hook's `state/drift/<session>.json` (ADR 0037); `handoffs/runs/<id>-critic/` while a critic runs (ADR 0040); ticket worktrees under `worktrees/<repo_id>/<KEY>` (ADR 0036); git refs `refs/quill/snapshots/<run>/` and `refs/quill/archive/<run>/` in the run's repository (ADR 0035).
+- **Configuration.** Every key is user config only (`~/.claude/quill/config.toml`); a repository's `.quill.toml` cannot set any of them.
+
+  | Key | Default | ADR |
+  | --- | --- | --- |
+  | `[worker] checkpoint_every` | 500 (a positive integer, else the default) | 0030 |
+  | `[critical] require_dry_run` | `true` (only `false` turns it off) | 0031 |
+  | `[memory] anchor_stale_ratio` | 0.3 (above 0, at most 1) | 0032 |
+  | `[repos.<id>] critical_paths`, `config_globs` | none; a built-in list for `config_globs` | 0033 |
+  | `[worktree] auto`, `copy`, `keep_days` | `false`, `[".env", ".env.local"]`, 7 | 0036 |
+  | `[ci] watch`, `interval_minutes` | `true` (only `false` turns it off), 5 (1–60) | 0039 |
+  | `[repos.<id>] critic`, `review_docs` | off (only `true` turns it on), `["CLAUDE.md"]` | 0040 |
+
+- **Health error kinds.** `state-checkpoint` ("state checkpoint ignored: <reason>", "state checkpoint not written: …", ADR 0030) and `worktree-sweep` (ADR 0036).
+- **Error codes**, by where they arise:
+  - request submission and apply: `invalid-ttl` (ADR 0031); `planned-invalid`, `planned-needs-guard`, `permission-dependency` (ADR 0037); `request-invalid` for a dismissal reason over 280 characters (ADR 0032); `handoff-unknown`, `snapshot-unknown`, `run-active`, `checkout-removed`, `snapshot-limit`, `snapshot-restore-dashboard-only`, `snapshot-failed` (ADR 0035); `recipe-needs-run-diff` (ADR 0040); `ci-fix-dashboard-only`, `ci-pr-closed`, `ci-proposal-stale`, `ci-branch-mismatch`, and for a CI fix's resume `resume-dashboard-only` (ADR 0039);
+  - dispatch and the run itself: `invalid-ttl` (a run holding any other `lease_minutes`), `ci-head-changed`, `ci-branch-missing`, `ci-branch-mismatch`, `branch-protected`;
+  - the CLI: `worktree-no-repo`, `worktree-exists`, `worktree-failed`, `branch-invalid`, `branch-protected`, `worktree-unknown`, `worktree-dirty`, `worktree-not-removed`, `worktree-in-use` (ADR 0036); `quill receipt` exits 1 when the rebuilt digest differs (ADR 0033); every `worktree` and `receipt` command and `ticket work|bind` exit 2 with `cli-in-run` inside an agent run;
+  - the reducer (recorded as problems, never applied): `memory-stale-exempt`, `memory-stale-invalid` (ADR 0032, 0041); `snapshot-op-unknown`, `snapshot-invalid`, `snapshot-limit`, `snapshot-unknown`, `handoff-unknown` (ADR 0035); `worktree-invalid`, `ticket-unknown`, `worktree-unknown` (ADR 0036); `ci-observation-source`, `ci-observation-invalid`, `ci-pr-mismatch`, `ci-observation-out-of-order`, `ci-proposal-source`, `ci-proposal-invalid`, `ci-id-mismatch`, `ci-not-failing`, `ci-branch-mismatch`, `ci-proposal-limit`, `ticket-done`, `proposal-id-reserved` (ADR 0039).
+- **Guard refusals the agent sees.** `QUILL_DENIED dry-run-required: run <twin> first, …` and `QUILL_DENIED lease-expired: …` (ADR 0031). Nothing in 2.0.0 lets the guard allow a call the 1.1 guard refused.
+- **CLI.** `quill ticket work|bind … --worktree|--no-worktree`, `quill worktree list [--all] [--json]`, `quill worktree remove <KEY>` (ADR 0036); `quill agent run|handoff … --planned <glob>…` (ADR 0037); `quill agent dismiss <run> <id> --reason text` (ADR 0032); `quill receipt <run-id> [--json]` and the Recipes section of `quill doctor` (ADR 0033); `quill status` "Plan drift" line (ADR 0037).
+- **UI surfaces** (owner dashboard; design system §5–§7): Runs → Needs you groups (`group=`), the CI failed item and Ready to review; run row CI words and drift facts; run detail's grouped diff with per-hunk "Retry as new run", "Review notes (n)", "Environment", "Snapshots (n)", the drift chip and the CI line; the critical change item's "Valid for" select and dry-run note; the Run dialog's "Removed from autonomous runs"; the Memory page's "Source changed", "Run environment changed" and "Seen in autonomous runs" chips; the ticket Runs tab's failure records and dismissal reasons. Outside the dashboard: the status line's ` ⚠ drift N`, and the resume brief's "Failed before:" and "Context:" lines.
+- **Reducer version.** `REDUCER_VERSION` is 2 (`src/core/reducer.js`). A state checkpoint of another version is ignored.
+- **Deliberate deviations from the PRD**, recorded in the gap analysis and the ADRs:
+  - no daemon socket IPC (ADR 0034);
+  - leases are chosen on the dashboard approval, never with `quill approve --ttl` (ADR 0031);
+  - dry runs are enforced for kubectl and psql pins only (ADR 0031);
+  - planned files only flag, never refuse (ADR 0037);
+  - the receipt carries a digest, never a signature or "proof" (ADR 0033);
+  - recipe stats are counts, not an autonomy score (ADR 0033);
+  - the CI watch runs in the handoff extension's tick, not as a schedule job, and covers GitHub only (ADR 0039);
+  - the critic is opt-in and never blocks (ADR 0040);
+  - the diff is grouped by file path, not by intent (ADR 0040);
+  - the state checkpoint is written on idle ticks and on stop, not every 500th event inside ingestion (ADR 0030);
+  - no new event kinds beyond the four above: receipts, anchors, failures and staling are fields and ops on existing kinds (plan Global Constraints).
+
+### Ingress redaction (ADR 0029)
+
+No new event kind, field or export: the rule changes what free text an ingress event may hold.
+
+- **Where.**
+  - `writeIngress` (`src/core/ingress.js`) stores `redactEvent(ev)`, so every hook and CLI event reaches the ingress folder redacted.
+  - The worker applies `redactEvent` again before it journals an ingress file, so a file written past `writeIngress` (an older producer, anything that can write the folder) is journaled redacted too.
+  - Worker-emitted events (`Worker.emit`) and dashboard requests the server journals are not passed through it. Run text is redacted by the run ledger rules, which share the same patterns.
+- **What.** `redactEvent` copies the event and redacts every string leaf of `payload` at any depth, except under identifier keys:
+  - `id`, `ids`, `key`, `sha`, `hash`, `ref`, `write_paths`, `paths`, `files`, `source_identity`, `cwd`, `branch`, `url`, `pr_url`, the tool names `tool_name` and `tool`, and names ending `_id`, `_ids`, `_key`, `_sha`, `_hash`, `_ref` or `_paths` (`planned_paths`);
+  - unless the name says it holds a credential (`token`, `secret`, `password`, `passwd`, `api_key`, `credential`, `access_key`, `private_key`): those are redacted like text;
+  - the user-info part of a `url` or `pr_url` (`https://user:token@host`) is replaced; the rest of the URL is kept.
+
+  The envelope (event_id, session_id, agent_id, tool_call_id, ticket_id, source_identity, occurred_at) is never changed, so dedupe by event_id and source identity holds.
+- **Rules** (`redactText`, `src/lib/redact.js`):
+  - provider tokens (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`, `github_pat_`, `glpat-`, `xox[abprs]-`, `xapp-`, `npm_`, `sk-`) and AWS `AKIA`/`ASIA` key ids;
+  - `Bearer`/`Basic` credentials (a plain word after the scheme is kept) and URL userinfo;
+  - `password|passwd|secret|token|api_key|access_key…` followed by `=` or `:` (numeric values kept);
+  - PEM private key blocks (a block with no END loses the rest of the text);
+  - `.env` lines (`NAME=value`, optionally `export`ed, upper-case NAME matching the secret-name rule shared with `cred-env.js`; numeric values kept);
+  - high-entropy strings: 32 or more base64/base64url characters with a part between separators holding upper case, lower case and a digit and an entropy above a length-dependent bar, or more than 64 hex characters. UUIDs and hex of 7–64 characters (SHAs, sha256) are kept.
+
+  The replacement is `[secret redacted]`, the run ledger's existing token. Redaction is deterministic and idempotent.
+- **Guard ledger tool names.** `bin/quill-guard.js` writes a ledger line's `tool_name` as given when it matches `^[\w.:-]{1,200}$`, and `[invalid tool name]` otherwise. It is not passed through the secret rules, so reconcile and the production-effects list match it by name.
+- **Hook text.** The adapter redacts before it cuts or stores:
+  - the Stop/SubagentStop message before its blob is written, so `content_ref` and the stop event's source identity are the hash of the redacted text; `preview` and `conclusions` come from that text;
+  - the ExitPlanMode plan before its blob and `plan_preview`;
+  - `pre-tool` `write_target`, `tool-failure` `error`, the prompt's `title_candidate`, and a post-tool commit `message` (`src/hooks/payload.js`).
+
+  `length` on a stop event is still the original message length. `write_target` and `error` are capped at 120 and 300 UTF-8 bytes (previously characters).
+- **CLI.** `quill tracker push --comment` redacts the comment before the preview, the JSON preview and the request body, so what is shown is what is sent.
+- **Not changed.** Journals, blobs and ingress files written before 2.0.0 are not rewritten. Path redaction (`src/export/sanitize.js`) stays export-only and is never applied to the journal.
+
+### State checkpoint (ADR 0030)
+
+`quillHome()/state/state.checkpoint.json` is local generated state: the reduced state at a journal position, so worker start hydrates it and replays only the journal after it.
+
+- **Who writes it.** Only the worker: on stop when anything was journaled since the last one, and on an idle tick once `[worker] checkpoint_every` events (default 500) were journaled since the last one. After a live change to the configuration the reducer reads, it writes none until a restart.
+- **Who reads it.** Worker start; `quill memory list|show` may read it and never write it. A rebuild replays the whole journal.
+- **Privacy.** It is never exported, published, mirrored, copied to a run or written to the vault. Nothing in it reaches the dashboard snapshot except through the state it rebuilds.
+
+Fields:
+- format (1), reducer_version (`REDUCER_VERSION` in `src/core/reducer.js`), package_version;
+- code_fingerprint (sha256 of the reducer's source and the modules it imports);
+- meta_fingerprint (sha256 of the meta the reducer reads: store_id, machine_id, machine_name, approval_phrases_enabled, projects, repos);
+- sequence, byte_offset (just past the line of `last_event_id`), last_event_id;
+- state (every state field except meta; Maps, Sets, `undefined`, non-finite numbers and shared or repeated objects as tagged values `$m`, `$s`, `$u`, `$n`, `$o`, `$r`).
+
+A checkpoint is used only when format, reducer_version, package_version, code_fingerprint and meta_fingerprint all match and the journal line ending at byte_offset is the event with last_event_id and sequence. Otherwise the whole journal replays and the worker records a `state-checkpoint` health error "state checkpoint ignored: <reason>"; a missing file records nothing. A write failure is recorded as "state checkpoint not written: …". `meta` is always built from current configuration after hydration. Hydrating at any position and replaying the rest equals a full replay with the same configuration.
+
+The worker's `stateLoad` records how start built state: source (`checkpoint` or `journal`), events_replayed, checkpoint_ignored, ms.
+
+### Dry-run preflight and leases (ADR 0031)
+
+FR-3.2 and FR-3.4. No new event kind.
+
+- **Config.** `[critical] require_dry_run` (boolean, default `true`; only an explicit `false` turns it off).
+- **Request** `approve-run` payload: optional `ttl_minutes` ∈ {5, 15, 60}. Leaving it out, or `null`, means the whole run. Only a run-origin (critical) proposal takes it. Any other value, or any value on a page proposal or a CI proposal, fails with `invalid-ttl`, at submit and again when the worker evaluates the request. The request record keeps the normalised `ttl_minutes`.
+- **Handoff field** `lease_minutes` (5, 15 or 60; absent for a whole-run approval). It is set when a critical approval is queued and copied by a resume of that run. Dispatch fails the run with `invalid-ttl` if it holds any other value.
+- **Grant** (`<runDir>/grant.json`, hashed at dispatch):
+  - `requireDryRun` (boolean): on every run with action pins, from `[critical] require_dry_run` at dispatch;
+  - `notAfter`: ISO time = dispatch time + `lease_minutes`; absent without a lease.
+
+  A grant without either decides as in 1.1.
+- **Run ledger** (`<runDir>/ledger.jsonl`). In a run whose grant has `requireDryRun: true`, each `guard` line of a shell call holding one plain command carries `argv_sha`: the SHA-256 hex of the canonical JSON of `{ tool, argv, redirects, stdin }` as the guard parses the command. The stream collector's `tool_result` lines (with `tool_use_id` and `exit_code`) are unchanged.
+- **Dry-run twin of a pinned action** (`src/gate/dry-run.js`):
+  - kubectl: the same words, with `--dry-run`/`--dry-run=*` removed and `--dry-run=server` added (before a `--`);
+  - psql: the same words, with `EXPLAIN ` before its single `-c`/`--command` statement, which must start with INSERT, UPDATE, DELETE, MERGE, SELECT, WITH or VALUES;
+  - a twin exists only when the guard reads it as a read. Other tools, MCP pins and other verbs have none.
+- **Owner snapshot** `run_proposals[].dry_run` = `{ twin }`: the twin's command text, or `null` when the guard's preflight requires none. `pinnedTwin` in `src/gate/dry-run.js`, the derivation the guard uses, gives a twin only for a pin the guard classifies as a k8s.write or db.write write and that has one. It is present only on a run-origin proposal with a `k8s.write` or `db.write` scope while `[critical] require_dry_run` is on.
+- **Guard refusals the agent sees.**
+  - `QUILL_DENIED dry-run-required: run <twin> first, …`: a pinned `k8s.write`/`db.write` call in a grant with `requireDryRun`, until the ledger holds an allowed guard line with the twin's `argv_sha` and, after it, the latest `tool_result` of the same `tool_use_id` with `exit_code` 0. A pin without a twin decides as in 1.1. An unreadable ledger refuses.
+  - `QUILL_DENIED lease-expired: …`: every write a granted scope or pin covers once the clock is past the grant's `notAfter`, or when `notAfter` does not parse. A write nothing covers is still refused as a critical change (`QUILL_CRITICAL_CHANGE`) and recorded for a proposal, as in 1.1. Reads, git under its per-run permissions and the run's scratch files still pass.
+- **UI** (critical change item, owner dashboard): a "Valid for" select (Whole run, 5 min, 15 min, 1 h) before Approve and queue, sent as `ttl_minutes`. When `dry_run` is projected it shows "Dry run required in run" with the twin as escaped code, or, with no twin, a "No dry run" warning chip saying the approved run makes the action as pinned, without one.
+
+### Anchored memory and the failure ledger (ADR 0032)
+
+FR-2.2 and FR-2.3. No new event kind.
+
+| Where | Field or op | Shape and rules |
+| --- | --- | --- |
+| Memory entry | `anchors` | `[{ file_path, blob_sha, line, symbol_name \| null }]`, at most 10; present only on entries filed anchored (sourced learnings), so older entries reduce unchanged. `file_path` is checkout-relative with `/`; `blob_sha` the cited file's git blob at the run's base commit; `symbol_name` the nearest declaration within ±5 lines (text heuristic). A run-env anchor may sit beside them (ADR 0041, below) |
+| `memory-tx` | op `confirmed` | May carry `entry.anchors`; a sourced entry takes the file anchors (re-anchored at the confirming run's version) |
+| `memory-tx` | op `staled` (worker only) | `{ op: 'staled', entry: { id }, reason: 'anchor-changed', anchor: { file_path, blob_sha, current_blob_sha \| null, changed_ratio } }`; source identity `memory-tx:anchor:<id>:<current_blob_sha \| missing>`. Sets `state: 'stale'`, `stale_reason: 'anchor-changed'`, `stale_anchor`. Problems: `memory-stale-exempt` (pinned or owner, R27), `memory-entry-retired`, `memory-stale-invalid`. Revived (state active, reason cleared) by `confirmed`, `edited`, an owner note on the id, `pinned` and `approved` |
+| `memoryListing` (`GET /v1/memory`, `quill memory list --json`) | `stale_reason` | `'anchor-changed'` or `'run-env-changed'` for an entry staled by the worker, else `null` |
+| Config | `[memory] anchor_stale_ratio` | Share (0 < r ≤ 1, default 0.3) of the anchored region's meaningful lines no longer in the file at which an entry is stale |
+| Run note | `failure` | `{ kind: 'test-gate', status: 'failed' \| 'timeout', command \| null, exit_code \| null, signature, files_touched: string[≤ 20] }`; `signature` is 16 hex characters (`failureSignature`). Written for a failed or timed-out worker test gate, even with no attempts. Never the output tail or test names; a file name the instruction filter flags is `[withheld: instruction-like file name]` |
+| Run note | `dismissals` | `[{ suggestion_id, type, reason, at, by }]`, at most 20 per note: the reasons given with `dismiss-suggestion`; `by` is the request's actor. A dismissal attaches to the run's existing note; a run without one gets a dismissal-only note (no attempts, lessons or failure). Those are capped on their own (the newest 10) and never evict a real note, which keeps the last 20; when the run's own note arrives later it takes the dismissals and counts as a real note |
+| Request `dismiss-suggestion` | `payload.reason` | Optional string, trimmed, at most 280 characters (`request-invalid` otherwise); the request-tx mutation carries it as `reason`. Sent by `quill agent dismiss <run> <id> --reason text`; the dashboard's Dismiss sends none |
+
+- **Worker check.** From the handoff extension's tick, at most every 5 minutes, per registered repository with a `canonical_path`, when its HEAD or its anchored candidates changed since the last check. For each stale verdict at HEAD it journals `staled`; the same file version never stales an entry twice.
+- **Delivery.** An entry whose anchored source changed by at least the ratio at the run's base commit is not inlined. The "Left out" line counts it, with the entries already staled, under "Source changed since recorded, not delivered". Smaller changes keep the re-check suffix.
+- **Failure lines.** A Run note's failure is delivered as one line of worker fields. Dismissal reasons are delivered only when `by` is `owner` or `cli`, instruction-like text withheld.
+- **Repeat detection.** Before a test-repair turn, a matching signature in an earlier deliverable Run note of the ticket adds one fenced data line naming that run and its attempts.
+- **Resume brief.** It adds "Failed before:" with the last two failures, never from an `origin: 'page'` note.
+- **Owner view.** The ticket's Runs tab shows each note's failure record and its dismissal reasons, escaped.
+
+### Evidence receipts and recipe stats (ADR 0033)
+
+FR-5.1 and FR-5.2. No new event kind.
+
+Run record (handoff) fields:
+- `test_gate.runs[]`: `{ status (passed, failed, timeout), exit_code (nullable), ms }` for every attempt of the worker's test gate, in order. `test_gate.tail` stays the last attempt's output only. Exports keep `test_gate` as before (status, exit_code, ms, attempts, repaired).
+- `tested_tree` (nullable): the 40-hex tree id the final passing test run saw, written with `git write-tree` on a temporary index.
+- `commit_tree` (nullable): the tree of `commit_sha`.
+- `guard_summary` (nullable): `{ allow, deny, critical, by_class: { <class>: n } }`, counts of the guard hook's `guard` ledger lines; autonomous and full-access runs only. Classes: local, read, external.write, write, unknown-prod, unparseable, privileged, other.
+- `change_summary` (nullable): `{ files, config, tests, code, docs, critical_paths (null when the repository configures none) }`, counts of `changed_files`.
+- `receipt` (nullable): `{ sha256, through_sequence }` of the receipt appended to the run's draft PR body.
+- `pr_observed` (nullable): `{ state, merged_at, merge_commit, reverted_by, reverted_at, revert_checked_at, observed_at, error }`, what reconciliation saw of the run's own `pr_url`. Never ticket evidence.
+
+**Journaling.** A committed fix run journals `test_gate`, `tested_tree`, `commit_sha`, `commit_tree`, `guard_summary`, `change_summary` and `changed_files` in one `handoff-tx` update before its push and draft PR; the terminal `handoff-tx` repeats them.
+
+**Receipt** (`buildReceipt(state, handoffId) -> { markdown, sha256, through_sequence }`, pure):
+- Markdown under `### Session Quill evidence receipt`, ending with the line `Not a deployment.`
+- `sha256` is over canonical JSON (sorted keys) of `{ v: 1, run, ticket, recipe, access, scopes (count), test_gate { status, command, runs, repaired }, tested_tree, commit_sha, commit_tree, guard, approvals, changes }`. `through_sequence` is the state's last applied journal sequence. A digest, never proof.
+- The Markdown leaves the machine in the PR body. It holds no scope names, targets, local paths (absolute paths in the test command read `<local path>`, in the receipt and the gate line), test output or agent text.
+
+**`reconcile` payload.**
+- `pr_updates[]` entries for a ticket PR may carry `merge_commit`; the reducer does not store it on the ticket PR.
+- An entry with `handoff_id` (and `url` equal to the run's `pr_url`) is a run PR observation: `state`, `merged_at`, `merge_commit`, `reverted_by`, `reverted_at`, `revert_checked_at`, `observed_at`, or `error`. The reducer stores it as the run's `pr_observed` and never touches the ticket.
+- `reverted_by` is the sha of a default-branch commit whose message has `This reverts commit <merge_commit>`, or the merge commit of a merged PR that names this PR the way GitHub's Revert button does (`Reverts <owner>/<repo>#<n>` in its body, or a head branch `revert-<n>-…`), within 48 h of `merged_at`. A matching title alone never counts: a bulk dispatch gives many runs' PRs the same title. Bitbucket has no revert check yet.
+
+**Configuration.** `[repos.<id>] critical_paths` and `config_globs`, lists of globs (`*`, `**`, `?`; case-insensitive; at most 100). A value that is not a list of non-empty strings is ignored.
+
+**CLI.**
+- `quill receipt <run-id> [--json]` prints the receipt rebuilt from the journal (through the recorded `through_sequence` when the run has a `receipt`) and says on stderr whether the digest matches; exit 1 when it differs. Refused inside an agent run.
+- `quill doctor` prints a Recipes section. `--json` adds `recipes: { days: 30, recipes: [{ recipe, runs, done, failed, tests_first_pass, tests_after_repair, interventions, merged, reverted_48h, pending_48h, median_done_to_merge_ms }] }` (and `error` when the journal could not be read). Counts only.
+
+### Hook latency (ADR 0034)
+
+No contract change ([ADR 0034](decisions/0034-hook-latency-and-daemon-ipc.md)): no event kind, field, file or projection is added or changed by it. Hooks still write one ingress file per event. The status line still reads only the binding snapshot, `state/heartbeat.json` and `state/ui-endpoint.json`, and its output is byte for byte what 1.1.1 printed, plus the drift suffix of ADR 0037.
+
+`node scripts/bench-hooks.mjs --json` prints one object, for tooling and release notes only (not a stored record):
+- `node` (version string), `platform`, `calls` (per case);
+- `cases[]`, each with `name`, `p50_ms`, `p95_ms`, `p99_ms` and `max_ms` (milliseconds, one decimal).
+
+Case names: `bare node start`, `quill-hook PreToolUse`, `quill-hook PostToolUse`, `quill-hook SessionStart`, `statusline`, `in-process runHook PreToolUse`, `in-process runHook PostToolUse`, plus `<entry> hook PreToolUse|PostToolUse` with `--entry`.
+
+### Run snapshots (ADR 0035)
+
+FR-1.2. A fix run's checkout is snapshotted at step boundaries; the owner restores one from run detail.
+
+- **Event `snapshot-tx`** (worker only). Payload { op, id, handoff_id, ticket_id, … } with op:
+  - `created` { step, label, tree, commit, ref, files_changed, request_id?, restores? }.
+    - step is one of start, agent, before-repair, before-self-check, before-tests, before-test-repair, before-commit, pre-restore.
+    - tree and commit are full object ids; ref is `refs/quill/snapshots/<handoff_id>/<nn>-<step>[-k]`.
+    - Source identity `snapshot-tx:<handoff_id>:<n>`; id = deterministicId(`<handoff_id>:snapshot:<n>`), n the snapshot's index in the run.
+    - A pre-restore snapshot carries the restore's request_id and the id of the snapshot it restores.
+  - `restored` { request_id, pre_restore_id, restored, removed, skipped } (counts). Source identity `snapshot-tx:restored:<request id>`.
+  - `archived` { ref } (a ref under `refs/quill/archive/<handoff_id>/`). Source identity `snapshot-tx:<snapshot id>:archived`.
+  - Reducer refusals (not applied): `snapshot-op-unknown`, `handoff-unknown`, `snapshot-invalid` (unknown step, a tree or commit that is not a full id, a ref outside the run's own folder), `snapshot-limit` (the run already has 20), `snapshot-unknown`. The same id again is a duplicate.
+- **Handoff field `snapshots[]`** (the owner dashboard snapshot carries it; nothing else does): { id, n, step, label, tree, commit, ref, files_changed (vs the previous snapshot; the first vs the base commit), at, restored_at, archived_at, request_id?, restores?, restore? { request_id, pre_restore_id, restored, removed, skipped } }. At most 20 per run, restores' own snapshots included.
+- **Request kind `restore-snapshot`.** It targets a ticket, payload { handoff_id, snapshot_id }, expected_revision optional, with the 10 s undo window.
+  - Submit and apply refuse `handoff-unknown`, `snapshot-unknown`, `run-active` (the run is queued or running), `checkout-removed` (the checkout was removed, its snapshots archived, or its path is not under `<quillHome>/handoffs/worktrees/`) and `snapshot-limit` (no room for the pre-restore snapshot).
+  - Apply refuses `snapshot-restore-dashboard-only` unless the dashboard server journaled it (producer `worker`, actor `owner`; ruling R59), and `snapshot-failed` when git fails.
+  - Applying it snapshots the checkout (`created`, step pre-restore) before any file changes, restores, records `restored`, then the request transaction with mutation `snapshot-restore` { handoff_id, snapshot_id, pre_restore_id }. The mutation adds a ticket timeline line naming the run's id8 and the snapshot's number and label, saying the commit, branch and pull request are unchanged; it is an ordinary timeline entry.
+  - result { snapshot_id, pre_restore_id, restored, removed, skipped }. A request left applying whose `restored` event exists finishes as applied without restoring again.
+- **Restore semantics.**
+  - Only the checkout's files change; HEAD, the run's commit, branch, pull request and the real index do not.
+  - Files of the target are written; files the pre-restore snapshot holds that the target lacks are deleted.
+  - Ignored files are never captured, deleted or overwritten. Deletions run first. Then a target path still taken by a file or directory the pre-restore snapshot could not hold (an ignored file, a folder that still holds ignored files), or one with a folder on its way that exists as a file or symlink, is skipped, so nothing unsaved is unlinked to make room.
+- **Git refs.** `refs/quill/snapshots/<run id>/` in the run's repository while the checkout exists; moved to `refs/quill/archive/<run id>/` when the checkout is removed (`archived`). Archived snapshots cannot be restored from the dashboard.
+
+### Ticket worktrees (ADR 0036)
+
+FR-1.1 and FR-1.3. Interactive sessions only; worker runs keep their detached checkouts under `<quillHome>/handoffs/worktrees/`.
+
+- **Event kind `worktree`** (ingress). The CLI emits `mounted`, and `pruned` for `quill worktree remove`; the worker's sweep emits `pruned` and `kept` with `Worker.emit`.
+  - Payload `{ op: 'mounted'|'pruned'|'kept', mount_id (UUID, one per mount), ticket_id, repo_id, path (absolute), branch, base_sha (40 or 64 hex), reason? }`.
+  - `reason` is required for `kept` (`uncommitted-changes`, `detached-head` or `ignored-files-changed`) and is `missing` on a `pruned` whose folder was already gone.
+  - Source identity `worktree:<ticket_id>:<op>:<path>:<mount_id>`.
+  - The reducer rejects a malformed payload (`worktree-invalid`), an unknown ticket (`ticket-unknown`) and a `pruned`/`kept` naming no active mount (`worktree-unknown`). A second `mounted` for a folder that already has an active record is a no-op. Worktree events do not bump the ticket's revision.
+- **Ticket field `worktrees[]`** (created on the first mount): `{ id (= mount_id), repo_id, path, branch, base_sha, state ('mounted'|'kept'|'pruned'), mounted_at, kept_at, kept_reason, pruned_at }`, at most 10 records, pruned ones dropped first. It is in the owner snapshot and ticket detail. The dashboard shows no view of it yet.
+- **Location and branch.** `<quillHome>/worktrees/<repo_id>/<KEY>`; branch `quill/<KEY>` (never a protected branch). Base: an existing `quill/<KEY>` as it is, else the ticket's latest recorded branch, else the repository's HEAD.
+- **Config `[worktree]`.** `auto` (boolean, default false), `copy` (repository-relative ignored files copied into a new worktree, at most 50, default `[".env", ".env.local"]`), `keep_days` (whole days a done ticket's clean worktree stays, default 7).
+- **Teardown.**
+  - Due when the ticket is done, neither the ticket's `updated_at` nor `mounted_at` is newer than `keep_days`, and no session that is not ended or extinct has its start `cwd` inside the worktree or is bound to the ticket.
+  - Removed only when the path is inside `<quillHome>/worktrees`, git lists it as a worktree of the repository, `git status --porcelain` is empty, and every `[worktree] copy` entry present in the worktree as an ignored file matches the repository's copy byte for byte. One that differs, or whose original is gone, keeps it with `ignored-files-changed`.
+  - Removal is `git worktree remove`, never `--force`; the branch is kept. `quill worktree remove` applies the same checks.
+- **CLI.**
+  - `quill ticket work|bind ... --worktree|--no-worktree`.
+  - `quill worktree list [--all] [--json]`; each row: key, ticket_status, state, kept_reason, branch, path, repo_id, base_sha, mounted_at, pruned_at, disk (`clean`, `uncommitted changes`, `detached HEAD`, `missing` or `unreadable`).
+  - `quill worktree remove <KEY>`.
+  - Error codes: `worktree-no-repo`, `worktree-exists`, `worktree-failed`, `branch-invalid`, `branch-protected`, `worktree-unknown`, `worktree-dirty`, `worktree-not-removed`, `worktree-in-use`. Inside an agent run every `worktree` command and `ticket work|bind` exit 2 (`cli-in-run`).
+
+### Planned files and drift (ADR 0037)
+
+FR-3.1. Observe only: no field here allows, refuses or pauses anything.
+
+A planned entry is a repo-relative path or glob, normalised to forward slashes with no leading `./` or trailing `/`. It may not:
+- be absolute, drive- or home-relative, or a URL;
+- hold a colon, a `..` segment or a control character;
+- exceed 200 characters;
+- hold more than 4 wildcards (`*`, `**`, `?`; a run of three or more `*` is collapsed to `**` first).
+
+Lists hold at most 50 entries. Rules: `src/core/planned-paths.js`.
+
+- **`post-tool` payload** (ingress, `ExitPlanMode` approved only): `planned_paths[]`, the entries `extractPlannedPaths` found in the first 65,536 characters of the plan text (possibly empty). Absent on every other post-tool event and on a rejected plan. The reducer normalises it again.
+- **`stop` payload** (ingress, optional): `drift_nudged: true` when this Stop carried the once-per-session drift nudge (nudge mode only).
+- **Session fields** `planned_paths[]` (the latest approved plan's entries; a new plan replaces them) and `drift` (nullable: `{ count, last_path, at }`).
+  - `count` is the number of repo-relative write paths outside the planned entries since that plan.
+  - `last_path` is the latest such path, capped at 400 characters; `at` is its event time.
+  - A new plan resets `drift` to null. Absolute write paths are never drift.
+  - Both fields are set lazily and stay off exports, mirrors, publishers and vault session notes.
+- **Binding snapshot** (worker → hooks): `drift_count` (integer, 0 when none), read by the status line (` ⚠ drift N`) and `quill status` ("Plan drift: N writes outside the files the latest plan names (observed, nothing was blocked)").
+- **Hook state** (local, not journaled): `state/drift/<session>.json` `{ planned_paths, pending, last_path, at, nudged_at }`, written only by the hook for the nudge-mode Stop nudge.
+- **Handoff request and record** `planned_paths[]` (optional). Set by `--planned`; needs autonomous or full access (`planned-needs-guard`) and `edit_source` (`permission-dependency`). An invalid entry fails with `planned-invalid`. Resume carries it over.
+- **Grant** `plannedPaths[]` when the record has planned files, frozen with the grant hash.
+- **Guard ledger line** (`kind: "guard"`): `drift: true` on an allowed `Edit`, `Write`, `MultiEdit` or `NotebookEdit` call whose target lies inside the checkout but outside `plannedPaths`. Set after the decision; never present on a denied call.
+- **Handoff field `scope_drift`** (integer, nullable/absent): the number of allowed calls the guard marked `drift`, counted once per `tool_use_id` when the run finishes. Absent when the run had no planned files or ran unobserved. Exports carry it as a whole number (`HANDOFF_COUNT_FIELDS`); `planned_paths` never travels.
+
+### Context card (ADR 0038)
+
+FR-2.1. No new event kind, record field or request.
+
+- **Context card projection** `projections/context/<ticketId>.json`, written by the worker and read by hooks and the CLI. The file holds `{ format: 1, ticket_id, repo_id, head, computed_at, co_change, related, guard }`:
+  - `head` is the HEAD the co-change index was built from, or null when the repository has no registered checkout or no commits.
+  - `co_change` is `[{ file, partner, n }]`, at most 5, with `n` ≥ 2.
+  - `related` is `[{ key, title, status, files, live_run }]`, at most 5. `title` is null when withheld, `files` holds at most 3 entries, and `live_run` is true for a queued or running run that no shared page proposed.
+  - `guard` is `string[]`, at most 5: open critical children, protected checkout paths among the touched files, and the worker's `denied:*` memory facts.
+
+  The card is derived from git and state, so it is never journaled. It is never in `snapshot.json`, ticket detail files, exports, the mirror, publishers, tracker pushes or vault notes. A reader ignores a card whose `ticket_id` differs from the file name. Local-only tickets never appear in `related`.
+- **Co-change cache** `<quillHome>/memory/cache/<repoStem>.cochange.json` holds `{ format: 1, head, repo_path, max_commits, max_files_per_commit, partners: { [file]: [[partner, n]] } }`. It is rebuilt when HEAD or a limit changes. It is local generated state, never exported and never copied to a run's `context/` folder.
+- **Resume brief.** `resumeBrief(ticket, { nowIso, card })` appends one "Context:" block of at most 600 characters after the brief, which stays at most 1,200 characters. SessionStart, the prompt-time auto-bind, `ticket bind` and `ticket work` pass the card.
+- **Run context.** `gatherContext()` returns `blast_radius: string[] | null`, rebuilt from state and the cached index with no git. The prompt shows it inside the data fence under the `work` input.
+
+### Attention groups and the CI watch (ADR 0039)
+
+FR-4.1 and FR-4.4. None of the fields below is on `ticket.prs` either: `sanitizePr` copies every PR field to exports.
+
+- **Event `ci-observation`** (worker only). Payload `{ handoff_id, n, pr_url, head_sha, head_branch, pr_state, state, checks[] }`:
+  - `n` is 1 for a run's first observation, then the previous one plus 1.
+  - `pr_url` is the run's own GitHub PR URL.
+  - `head_sha` is 40 or 64 hex characters. `head_branch` is a branch name git accepts (`git check-ref-format --branch` rules, `branchNameOk` in `src/lib/git-ref.js`), at most 255 characters, with no Unicode control, format or separator character.
+  - `pr_state` is open, draft, merged, closed or unknown.
+  - `state` is failing, pending, passing or none.
+  - `checks` holds at most 30 entries `{ name, state }`, where `state` is failed, pending, passed or skipped.
+
+  Source identity `ci-observation:<handoff_id>:<n>:<digest>`, where `digest` is 16 hex of sha256 over the observed facts (`pr_url`, `head_sha`, `head_branch`, `pr_state`, `state`, `checks`). Refusals (not applied): `ci-observation-source`, `ci-observation-invalid`, `handoff-unknown`, `ci-pr-mismatch`, `ci-observation-out-of-order`. The watch checks the journal for the source identity before it emits, so a refused observation is journaled once and not again while the same facts are seen; a refused or duplicate observation is not counted observed.
+- **Handoff field `ci`** (on the run that opened the pull request): `{ n, pr_url, head_sha, head_branch, pr_state, state, checks[], failing[], observed_at, since }`.
+  - Check names are one line of at most 120 characters.
+  - `failing` holds the names of the failed checks.
+  - `since` is when this commit's current state was first observed.
+- **Lapsing.**
+  - Applying an observation lapses each open CI proposal of the run. It sets the proposal's `lapsed_at` and its `lapse_reason`: `pr-merged`, `pr-closed`, `head-changed` (another commit) or `ci-passed`.
+  - A `reconcile` event lapses each open CI proposal whose run's pull request it leaves recorded merged or closed (the ticket's PR record of the run's `pr_url`, or the run's `pr_observed`), with `pr-merged` or `pr-closed`.
+- **Event `ci-proposal`** (worker only). Payload `{ id, handoff_id, pr_url, head_sha, head_branch, failing[≤10], log_tail (≤ 4096 characters, or null), log_withheld }`. `id` = deterministicId(`<handoff_id>:ci:<head_sha>`). Source identity `ci-proposal:<id>`. The same id again is a duplicate. Refusals:
+  - `ci-proposal-source`, `ci-proposal-invalid` and `ci-id-mismatch` (the event itself);
+  - `handoff-unknown`, `ci-not-failing` (the run's latest observation is not failing on that commit and URL) and `ci-branch-mismatch` (not the observed branch, or not the run's `pushed_branch`);
+  - `ci-proposal-limit` (the run already has 2), `ticket-unknown` and `ticket-done`.
+- **Reserved proposal ids.** Event `run-proposal` (a page pick) is refused with `proposal-id-reserved` when its `id` has the version-5 shape of `deterministicId`, the id space of worker-only proposals (CI fixes and critical changes); a page pick's id (`editRequestId`) is version-4 shaped. So no run-proposal can take a CI or critical proposal's id first and make the worker's event a duplicate.
+- **Local timeline lines.** Timeline entries gain an optional `local_only: true`. The CI proposal's line ("CI failed on commit … a fix run is proposed …") carries it, and `sanitizeSnapshot` and vault notes (`exportableTimeline`) drop such entries. A CI fix run's `proposal` and `proposal_id` are dropped from exports and vault-note front matter too, so it shows there as an ordinary run.
+- **Run proposal `origin: 'ci'`** (in `run_proposals[]` on the owner snapshot): `{ id, ticket_id, origin, from_handoff_id, recipe: { name: 'attempt-fix', source: 'builtin', hash: null }, mode: 'attempt-fix', permissions, access, ci, lapse_reason, … }`.
+  - `permissions`: read_source, edit_source, commit and push_branch are true; open_draft_pr, edit_files and delete_files are false.
+  - `access` is `autonomous` if the opening run was autonomous, else `standard`.
+  - `ci` is `{ pr_url, head_sha, head_branch, observation_n, failing[], log_tail, log_withheld }`. `failing[]` holds check names with each instruction-like name replaced by `[name withheld: instruction-like text]`.
+  - It never has scopes or an action pin. Its state follows `proposalState`, with the 7-day expiry and `lapsed_at`.
+- **Log tail.** The last part of `gh run view --job <id> --log-failed` for the first failed GitHub Actions check:
+  - at most the last 1 MB of the fetched log is read;
+  - a log that starts inside a private key loses everything up to the key's END line;
+  - the whole bounded log is redacted with `redactLog` before it is cut;
+  - colour codes and control characters are removed;
+  - each instruction-like line is replaced by `[line withheld: instruction-like text]` (`log_withheld` counts them);
+  - it is cut to its last 4096 characters on a line boundary.
+- **Request `approve-run` / `dismiss-run` of a CI proposal.** Only a request the dashboard server journaled (producer `worker`, actor `owner`); anything else fails with `ci-fix-dashboard-only`. `ttl_minutes` is refused (`invalid-ttl`). Approve also fails with:
+  - `ci-pr-closed`: the pull request is recorded merged or closed;
+  - `ci-proposal-stale`: the opening run's `ci` is no longer failing on the proposal's commit;
+  - `ci-branch-mismatch`;
+  - any `evaluateHandoff` refusal: `branch-protected`, `handoff-reserved`, ….
+- **Handoff fields of an approved CI fix.** `origin: 'ci'`, `ci_fix` `{ proposal_id, root_handoff_id, pr_url, head_sha, head_branch, failing[], log_tail, log_withheld }`, `branch` (the PR's branch), `proposal` `{ id, origin: 'ci', from_handoff_id, recipe }`.
+- **Request `resume-run` of a CI fix** (`origin: 'ci'` or `proposal.origin: 'ci'`): only from the dashboard owner (else `resume-dashboard-only`), and refused with `ci-pr-closed`, `ci-proposal-stale` or `ci-branch-mismatch` as an approval would be. The resumed run carries `origin: 'ci'`, `ci_fix` and `proposal` from the run it resumes.
+- **Dispatch of a CI fix** checks out exactly `ci_fix.head_sha`. It fails the run with:
+  - `ci-head-changed` when origin's tip of the branch is another commit;
+  - `ci-branch-missing` when there is no origin, the branch cannot be fetched or origin does not have it (a stale remote-tracking ref is never used);
+  - `ci-branch-mismatch` when `branch` differs from `ci_fix.head_branch`;
+  - `branch-protected` for a protected branch.
+
+  The push is the ordinary fast-forward-only `git push origin HEAD:refs/heads/<branch>`. No pull request is opened.
+- **Config `[ci]`.** `watch` (boolean, default true; only `false` turns it off) and `interval_minutes` (whole minutes 1–60, default 5).
+- **Watched runs.** Done, a GitHub `pr_url`, finished in the last 7 days, not `origin: 'ci'`, on an open ticket, and with a pull request not recorded merged or closed. At most 50 per sweep. The repository provider must be `github`.
+- **Dashboard.** Needs you groups and `group=` (`attention` by default, or `none`); the counting rules and wording are in design system §5–§7.
+  - `supersededBy` ignores runs with `origin: 'ci'`.
+  - The Needs you count and the attention dot count the decision, tests or CI, other failures and ready-to-review items. They never count Live.
+  - Ready to review is derived from run records (a done run that edited source with changed files, not itself a CI fix, in the last 7 days, on an open ticket, not superseded, its PR not recorded merged or closed, its latest CI observation not failing). It adds no field, and there is no request to mark a run reviewed.
+- `REDUCER_VERSION` became 2 with this change.
+
+### Diff review and the critic (ADR 0040)
+
+FR-4.3 and FR-4.2. No new event kind or request; the fields below ride on the existing `handoff-tx` record update. They are in the owner's snapshot only.
+
+- **Config `[repos.<id>]`.** `critic` (boolean; only `true` turns the critic on) and `review_docs` (list of up to 5 repository-relative paths, default `["CLAUDE.md"]`). An entry is dropped when it is absolute, home- or drive-relative, holds a colon, a `..` or empty segment, starts with `-`, or exceeds 200 characters. The documents are read at the run's `base_commit`.
+- **Patch fields**, set by `fixExtras` on every run that collects a diff (done, failed, cancelled or timed out):
+  - `patch_ref`: the 64-hex content hash of the patch blob (the same text as `patch_path`), when the patch is non-empty and at most 1,048,576 UTF-8 bytes.
+  - `patch_too_large: true` instead of `patch_ref` above that size.
+- **Critic fields**, set only when the repository has `critic = true` and the run reached the test gate without being stopped:
+  - `critic_status`: `clean`, `warnings`, `not-run` or `failed`.
+  - `critic_count`: whole number of findings (0 unless `warnings`).
+  - `critic_reason`: worker-written text, at most 300 characters, for `not-run` and `failed`.
+  - `critic_ref`: hash of the findings blob, for `clean` and `warnings`.
+  - `timings.critic_ms`: measured critic time. `agent_ms` excludes it. It travels with `timings` like `test_ms`: a duration, not text.
+- **Findings blob** (`critic_ref`, JSON): `{ format: 1, run_id, status, summary (string|null, at most 2,000), findings: [...], problems: string[] }`.
+  - Each finding is `{ file (≤300), line (positive integer|null), hunk (≤120), severity: high|medium|low, category: bug|test|security|docs|style|other, text (≤1,000, required), suggestion (≤500), instruction_like? (the `instructionLike` pattern name) }`. There are at most 30 findings.
+  - `problems` names dropped (`review_findings[i]-dropped`), capped or invalid input. Every string is agent text.
+  - Findings never cross into another run: they are not in run history, Run notes, memory filing or the context card.
+- **Recipes.**
+  - Requirement `run_diff` (`REQUIREMENTS`), with error code `recipe-needs-run-diff` from `validateHandoffRequest`. Such a recipe is never queued, scheduled, offered on a page or listed in the Run dialog.
+  - Output `review_findings` (`OUTPUTS`).
+  - Built-in recipe `critic-review` (mode `analyse`, `read_source`, `requires: [run_diff]`, `timeout_min` 10, `max_turns` 20, `quill_min_version` 2.0.0). Only the built-in is used.
+- **The critic process.** A fresh `claude -p` (no `--resume`) in the run's checkout with the read-only self-check profile and `--permission-mode dontAsk`.
+  - For an autonomous run it also gets the guard (`--settings`) with its own grant (autonomous, `read_source` only, no scopes or pins) and a fresh autonomous environment without scope credentials, in `handoffs/runs/<id>-critic/` (`QUILL_HANDOFF_ID=<id>-critic`), removed when it ends.
+  - Its spend is capped by `--max-budget-usd` = what is left of the run's cap, and its usage is added to the run's `num_turns` and `cost_usd`.
+  - It writes to the run's log and to no ledger.
+- **UI** (owner dashboard).
+  - Changes shows the grouped diff ("Grouped by file path"; groups Core logic, Schema and state, CLI, routes and UI, Tests) from `patch_ref`, with per-hunk "Retry as new run" (`retry_of`, pre-filled note ≤ 280 characters naming the file and hunk range).
+  - "Review notes (n)", "The critic agent's opinion, not Quill's check", is shown from `critic_ref`.
+  - Neither appears in an export.
+
+### Run environment disclosure (ADR 0041)
+
+Source: `docs/research/2.0.0/02-issue-mcp-credentials.md`, fixes 2 and 4. No new event kind or request. Every field below holds variable or key names, never a value. `cred_report` was never exported, the snapshot's `run_env` reaches only the owner's dashboard (no export allow-list names it), and memory never leaves the machine. Rules: `src/handoff/run-env.js`.
+
+| Where | Field or op | Shape and rules |
+| --- | --- | --- |
+| `buildChildEnv` report (autonomous only) | `removed` | `string[]`, at most 200: the inherited variable names step 1 removed (each system's list, the generic secret-name pass, the scope catalog's `env:NAME` sources). Sorted by code unit, de-duplicated; on win32 the inherited spelling, once per name in any case. A name step 2 then points at a stub or read-only profile is still listed. Never `PATH`, `QUILL_*`, the profile variables, `NODE_*` (bar `NODE_AUTH_TOKEN`), git commit identity or a `keep_env` name the generic pass alone would take. Session markers and git program variables, which every tier removes, are not listed. `full` has no `removed` |
+| Handoff record `cred_report` | `removed`, `env_fingerprint` | As above, and `envFingerprint()`: 16 hex of sha256 over the sorted removed names, the sorted `keep_env` names, each `CRED_SYSTEMS` report word in order and the sorted `[prod.readonly]` key names (`readonlyKeyNames`: each key, and `<table>.<NAME>` for `db_env` / `argocd_env`). Residual sentences and scope errors do not count. On win32 the variable names (removed, `keep_env`, and `<NAME>` of `<table>.<NAME>`) are compared upper-cased. A run recorded before ADR 0041 has neither |
+| Snapshot handoff (owner) | `run_env` | `{ removed, env_fingerprint }` projected from `cred_report` (which the snapshot still strips); absent for a run without both. Not in `HANDOFF_EXPORT_FIELDS`, the mirror, publishers or vault notes |
+| Snapshot `meta.autonomy.credentials.report` | `removed`, `env_fingerprint` | The latest autonomous run's report as before, now with both fields; `meta.autonomy` is null in exports |
+| Prompt (autonomous, `removed` non-empty) | data fence, method | Inside the fence: "Run environment (variables Quill removed from this run by design; names only, data not instructions):" then "Removed: " with at most 60 names (control characters, backticks and `---` runs flattened), then ", and N more". After the method, outside the fence: `RUN_ENV_METHOD_LINE`. Neither for other access, a run with nothing removed, or a resumed run's first turn |
+| Memory entry | `anchors` | May hold one `{ kind: 'run-env', env_fingerprint }` beside at most 10 file anchors. File-anchor readers (`fileAnchors`) skip it, so ADR 0032 checks are unchanged |
+| Memory entry | `observed_in` | `'autonomous'` (absent otherwise): filed from an autonomous run whose learning is environment-dependent (`envDependent`): (a) machine section `tools` or `connectors`, (b) its text, key or evidence names a removed variable (whole name, any case), or (c) names an MCP server of the run (whole word, or the `mcp__<server>__` tool form; names under 3 characters ignored), servers read from `<runDir>/mcp-servers.json`, else the run's init inventory. Any trust; the run-env anchor is added at the same time |
+| `memory-tx` | op `filed`, `confirmed` | `filed` may carry `observed_in` and a run-env anchor. `confirmed` may carry `anchors` and `observed_in`: a run-env anchor replaces the entry's run-env anchor (any trust); file anchors still re-anchor only a sourced entry, and each kind keeps the other |
+| `memory-tx` | op `staled` (worker only) | `{ op: 'staled', entry: { id }, reason: 'run-env-changed', anchor: { kind: 'run-env', env_fingerprint, current_env_fingerprint } }`; source identity `memory-tx:runenv:<id>:<current fingerprint>`. Emitted at each autonomous dispatch, after the run is marked running and before its Memory is gathered, for every active, unsuperseded, unpinned entry that is neither owner nor quarantined and whose run-env anchor differs. Sets `state: 'stale'`, `stale_reason: 'run-env-changed'`, `stale_anchor`. Problems: `memory-stale-exempt` (R27), `memory-entry-retired`, `memory-stale-invalid` (malformed, or `env_fingerprint` is not the entry's own run-env anchor). Revived as for `anchor-changed` (ADR 0032) |
+| `memoryListing` | `stale_reason`, `observed_in` | `stale_reason` may be `'run-env-changed'`; `observed_in` is `'autonomous'` or `null` |
+
+Delivery: an entry staled by `run-env-changed` is not delivered; the "Left out" line counts it under "Run environment changed since recorded, not delivered". The projection's `## Stale` list says "run environment changed since recorded"; `quill memory list` labels it "Stale (run environment changed)".

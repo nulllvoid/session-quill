@@ -15,6 +15,7 @@ import { handoffRunDir, stateDir } from '../../src/lib/paths.js';
 import { writeIngress } from '../../src/core/ingress.js';
 import { decide } from '../../src/gate/run-guard.js';
 import { replayToStaging } from '../../src/cli/commands/sync.js';
+import { resumeFields } from '../../src/handoff/resume.js';
 import { bootWorker, until, T1 } from '../handoff/helpers.js';
 
 const RID = '77777777-0000-4000-8000-000000000001';
@@ -245,4 +246,61 @@ test('R49: an approved critical run leaves nothing in the vault; a stale note fo
     assert.equal(fs.existsSync(path.join(into, 'handoffs', `${h.id}.md`)), false);
     for (const f of vaultFiles(into)) for (const needle of [h.id, MARK, PINNED]) assert.equal(fs.readFileSync(f, 'utf8').includes(needle), false, `${path.basename(f)} names ${needle}`);
   } finally { if (!stopped) await b.w.stop(); }
+});
+
+// ADR 0031 (FR-3.4): "Valid for" on the dashboard approval: 5, 15 or 60 minutes, or the whole run.
+const approveFor = (b, p, ttl) => submitRequest(b.w, { id: randomUUID(), kind: 'approve-run', target_id: p.ticket_id, expected_revision: null, payload: { proposal_id: p.id, ttl_minutes: ttl } });
+const grantOf = async (b, h) => {
+  await until(() => { b.w.tick(); return b.w.state.handoffs.get(h.id).state === 'running'; }, { timeoutMs: 15000 });
+  const file = path.join(handoffRunDir(b.env, h.id), 'grant.json');
+  await until(() => fs.existsSync(file));
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+};
+
+test('an approval valid for anything but 5, 15 or 60 minutes is refused with invalid-ttl and queues nothing', async () => {
+  const b = await bootWorker({ runtimeAvailable: false });
+  try {
+    const { p } = proposeCritical(b);
+    for (const ttl of [7, 0, -15, 1440, '15', 15.5, true]) assert.throws(() => approveFor(b, p, ttl), (e) => e.code === 'invalid-ttl', String(ttl));
+    assert.equal(b.w.state.runProposals.get(p.id).state, 'proposed');
+    assert.equal([...b.w.state.handoffs.values()].filter((h) => h.ticket_id === p.ticket_id).length, 0);
+  } finally { await b.w.stop(); }
+});
+
+test('an approval valid for 15 minutes freezes notAfter = dispatch + 15 min and requireDryRun in the hashed grant', async () => {
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '1500' } });
+  try {
+    const { p } = proposeCritical(b);
+    const req = applied(b, approveFor(b, p, 15).request);
+    assert.equal(req.state, 'applied', JSON.stringify(req.error));
+    const h = b.w.state.handoffs.get(req.result.handoff_id);
+    assert.equal(h.lease_minutes, 15);
+    const grant = await grantOf(b, h);
+    const started = b.w.state.handoffs.get(h.id).started_at;
+    assert.equal(grant.notAfter, new Date(Date.parse(started) + 15 * 60_000).toISOString());
+    assert.equal(grant.requireDryRun, true, 'on by default');
+    await settle(b, h.id);
+  } finally { await b.w.stop(); }
+});
+
+test('a whole-run approval has no lease; [critical] require_dry_run = false is frozen as false', async () => {
+  const b = await bootWorker({ runtimeAvailable: true, fakeEnv: { FAKE_CLAUDE_SLEEP_MS: '1500' } });
+  try {
+    b.config.critical = { require_dry_run: false };
+    const { p } = proposeCritical(b);
+    const req = applied(b, approveFor(b, p, null).request);
+    assert.equal(req.state, 'applied', JSON.stringify(req.error));
+    const h = b.w.state.handoffs.get(req.result.handoff_id);
+    assert.equal(h.lease_minutes, undefined);
+    const grant = await grantOf(b, h);
+    assert.equal(grant.notAfter, undefined);
+    assert.equal(grant.requireDryRun, false);
+    await settle(b, h.id);
+  } finally { await b.w.stop(); }
+});
+
+test('a lease survives into a resume: the resumed run is held to the same minutes', () => {
+  const h = { id: 'r1', mode: 'analyse', access: 'autonomous', scopes: ['argo.sync:pay-stg'], action_pins: [{ scope: 'argo.sync:pay-stg', pin: PINNED }], scope_fingerprints: { 'argo.sync:pay-stg': 'f'.repeat(64) }, origin_proposal_id: 'p1', proposal: { id: 'p1', origin: 'run' }, lease_minutes: 5 };
+  assert.equal(resumeFields(h).lease_minutes, 5);
+  assert.equal(resumeFields({ ...h, lease_minutes: undefined }).lease_minutes, undefined);
 });

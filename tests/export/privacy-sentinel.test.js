@@ -27,16 +27,37 @@ function fixture() {
   Object.assign(h, {
     attempts: [{ n: 1, note: S }], learnings: [{ text: S }], critical_changes: [{ path: S }], tool_ledger: [{ tool: S }],
     prod_effects: [{ what: S }], scopes: ['k8s.write:prod', S], action_pin: { sha: S }, inventory: { items: [S] }, recorded_stage: 'attempt',
-    cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S] }, max_turns: 7, max_budget_usd: 1,
+    cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S], removed: [`${S}_TOKEN`], env_fingerprint: S }, max_turns: 7, max_budget_usd: 1,
+    // ADR 0041: the run environment's removed names and fingerprint, as the owner's snapshot carries them.
+    run_env: { removed: [`${S}_TOKEN`], env_fingerprint: S },
     memory_filing: { filed: 1, problems: [{ code: S, count: 1 }] },
     critical_notes: [{ index: 0, reason: S }],
+    // ADR 0031: a critical approval's "Valid for" minutes stay on the run record.
+    lease_minutes: 15,
+    // ADR 0037: planned files are local; only the drift count travels.
+    planned_paths: [`src/${S}.js`], scope_drift: 3,
     // R55: what an interrupted run's ledger shows may have run (prod target, MCP tool, scope name).
     possible_writes: [`kubectl apply on ${S}-ctx may have run`, `mcp__${S}__editIssue on X-1 may have run`, `a ${S}.write call may have run`],
+    // Run snapshots (ADR 0035): refs, trees, commits and labels stay on the owner's dashboard.
+    // CI watch (ADR 0039): the PR's branch, commit, check names and the redacted log tail stay local.
+    ci: { n: 1, pr_url: `https://github.com/acme/${S}/pull/1`, head_sha: 'a'.repeat(40), head_branch: `quill/${S}`, pr_state: 'open', state: 'failing', checks: [{ name: S, state: 'failed' }], failing: [S], observed_at: 'T', since: 'T' },
+    ci_fix: { proposal_id: S, root_handoff_id: S, pr_url: `https://github.com/acme/${S}/pull/1`, head_sha: 'a'.repeat(40), head_branch: `quill/${S}`, failing: [S], log_tail: `Error ${S}`, log_withheld: 1 },
+    origin: 'ci',
+    snapshots: [{ id: `snap-${S}`, n: 0, step: 'agent', label: S, tree: S, commit: S, ref: `refs/quill/snapshots/${S}/00-agent`, files_changed: 1, at: 'T', restored_at: 'T', archived_at: null, request_id: S, restores: S, restore: { request_id: S, pre_restore_id: S, restored: 1, removed: 0, skipped: 0 } }],
+    // ADR 0033: the evidence receipt's local fields (refs, counts keyed by class) and the run's own PR observation.
+    tested_tree: S, commit_tree: S, guard_summary: { allow: 1, deny: 0, critical: 0, by_class: { [S]: 1 } }, change_summary: { files: 1, [S]: 1 },
+    receipt: { sha256: S, through_sequence: 1 }, pr_observed: { state: 'merged', merge_commit: S, reverted_by: S, error: S },
+    // ADR 0040: the patch and the critic's notes are blobs on the owner's dashboard; refs, status and reason stay local.
+    patch_ref: S, patch_too_large: true, critic_ref: S, critic_status: 'warnings', critic_count: 2, critic_reason: S,
   });
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
-  s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
+  s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S], removed: [`${S}_TOKEN`], env_fingerprint: S } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
   s.tickets[0].run_notes = [S];
+  // ADR 0037: a session's planned files and its last drifting path stay local.
+  Object.assign(s.sessions[0], { planned_paths: [`src/${S}.js`], drift: { count: 2, last_path: `src/${S}/x.js`, at: '2026-10-12T00:00:00Z' } });
   s.tickets[0].critical_spec = { rule: S };
+  // Ticket worktrees (ADR 0036): local paths and branch names stay on the machine.
+  s.tickets[0].worktrees = [{ id: '66666666-0000-4000-8000-000000000001', repo_id: 'demo', path: `C:/Users/me/.claude/quill/worktrees/demo/${S}`, branch: `quill/${S}`, base_sha: 'a'.repeat(40), state: 'kept', mounted_at: '2026-10-01T00:00:00Z', kept_at: '2026-10-09T00:00:00Z', kept_reason: 'uncommitted-changes', pruned_at: null }];
   const local = { ...s.tickets[1], id: TID(40), key: `LOCAL-${S}`, title: `Secret ${S}`, local_only: true };
   s.tickets.push(local);
   s.tickets[2].children_ids = [...(s.tickets[2].children_ids ?? []), local.id];
@@ -47,7 +68,8 @@ function fixture() {
   s.sessions[0].ticket_ids = [s.sessions[0].ticket_ids[0], local.id];
   // A critical-change proposal (spec §7.3): its action pin, scopes and local-only child stay on the dashboard.
   local.critical_spec = { action: S, action_pin: { guard: S, normalized: S }, scopes: [{ name: 'argo.sync', target: S, fingerprint: S }] };
-  s.run_proposals = [{ id: 'p-critical', ticket_id: local.id, origin: 'run', from_handoff_id: h.id, recipe: { name: 'critical-change', source: 'builtin', hash: null }, access: 'autonomous', scopes: [{ name: 'argo.sync', target: S, fingerprint: S }], action_pin: { guard: S, normalized: S }, state: 'proposed', ticket_key: local.key }];
+  s.run_proposals = [{ id: 'p-critical', ticket_id: local.id, origin: 'run', from_handoff_id: h.id, recipe: { name: 'critical-change', source: 'builtin', hash: null }, access: 'autonomous', scopes: [{ name: 'argo.sync', target: S, fingerprint: S }], action_pin: { guard: S, normalized: S }, dry_run: { twin: `${S} --dry-run=server` }, state: 'proposed', ticket_key: local.key },
+    { id: 'p-ci', ticket_id: s.tickets[0].id, origin: 'ci', from_handoff_id: h.id, recipe: { name: 'attempt-fix', source: 'builtin', hash: null }, access: 'standard', ci: { pr_url: `https://github.com/acme/${S}/pull/1`, head_sha: 'a'.repeat(40), head_branch: `quill/${S}`, failing: [S], log_tail: `Error ${S}`, log_withheld: 0 }, state: 'proposed', ticket_key: s.tickets[0].key }];
   return s;
 }
 
@@ -74,8 +96,15 @@ test('exported handoffs carry counts and the stage, not the records', () => {
   delete forged.handoffs[0].scopes;
   forged.handoffs[0].scope_count = 'k8s.write:prod';
   assert.equal('scope_count' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a numeric count travels');
-  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report']) assert.equal(k in out, false, k);
+  assert.equal(out.scope_drift, 3, 'a run exports how many writes fell outside its planned files (ADR 0037), never which');
+  forged.handoffs[0].scope_drift = `src/${S}.js`;
+  assert.equal('scope_drift' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a whole-number drift count travels');
+  for (const k of ['planned_paths', 'drift']) assert.equal(k in sanitizeSnapshot(fixture(), ALL).sessions[0], false, k);
+  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes', 'planned_paths', 'tested_tree', 'commit_tree', 'guard_summary', 'change_summary', 'receipt', 'pr_observed', 'patch_ref', 'patch_too_large', 'critic_ref', 'critic_status', 'critic_count', 'critic_reason', 'run_env', 'ci', 'ci_fix', 'origin']) assert.equal(k in out, false, k);
   assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
+  const gated = fixture();
+  gated.handoffs[0].test_gate = { status: 'passed', exit_code: 0, ms: 5, attempts: 2, repaired: true, command: S, tail: S, runs: [{ status: S, exit_code: 1, ms: 3 }] };
+  assert.deepEqual(sanitizeSnapshot(gated, ALL).handoffs[0].test_gate, { status: 'passed', exit_code: 0, ms: 5, attempts: 2, repaired: true }, 'every attempt stays local (ADR 0033)');
   assert.ok(Object.keys(out).every((k) => HANDOFF_EXPORT_FIELDS.includes(k)));
 });
 
@@ -277,4 +306,53 @@ test('M1: scope errors reach exports, the mirror and vault notes without scope n
   const other = fixture();
   other.handoffs[0].error = { code: 'agent-exit', message: 'agent exited with exit code 1' };
   assert.equal(sanitizeSnapshot(other, ALL).handoffs[0].error.message, 'agent exited with exit code 1');
+});
+
+test('ticket worktree records never reach an export, the mirror, a publisher or a vault note (ADR 0036)', () => {
+  const s = fixture();
+  for (const opts of [{ exportedAt: ALL.exportedAt }, ALL, { ...ALL, fields: [...SELECTABLE_FIELDS, 'worktrees'] }]) {
+    for (const t of sanitizeSnapshot(s, opts).tickets) assert.equal('worktrees' in t, false);
+  }
+  assert.equal(SELECTABLE_FIELDS.includes('worktrees'), false);
+  assert.equal(Object.keys(PUBLISH_FIELDS).includes('worktrees'), false);
+  const base = { plans: [], conclusions: [], timeline: [], files_touched: [], prs: [], deployments: [], children_ids: [], handoff_ids: [], tags: [] };
+  const state = { tickets: new Map(s.tickets.map((t) => [t.id, t])), handoffs: new Map() };
+  const note = renderTicketNote({ ...base, ...s.tickets[0] }, { state });
+  assert.equal(note.includes(S), false);
+  assert.equal(note.includes('worktrees'), false);
+});
+
+// ADR 0039: a CI fix run's provenance and the CI proposal's timeline line stay on the owner's
+// dashboard; exports, the mirror and vault notes gain nothing from the CI watch.
+test('a CI fix run\'s proposal provenance and the CI proposal timeline line never leave the dashboard', async () => {
+  const { newState, createTicket, ev } = await import('../core/helpers.js');
+  const { ciProposalId } = await import('../../src/core/reduce/ci.js');
+  const st = newState();
+  const tid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const hid = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const pr = 'https://github.com/acme/app/pull/12';
+  createTicket(st, { id: tid, key: 'PMO-7', title: 'x' });
+  st.handoffs.set(hid, { id: hid, ticket_id: tid, state: 'done', access: 'standard', permissions: {}, pr_url: pr, branch: 'quill/x', pushed_branch: 'quill/x', revision: 1 });
+  const w = (kind, payload) => ev(st, kind, payload, { producer: 'worker' });
+  w('ci-observation', { handoff_id: hid, n: 1, pr_url: pr, head_sha: 'a'.repeat(40), head_branch: 'quill/x', pr_state: 'open', state: 'failing', checks: [{ name: 't', state: 'failed' }] });
+  assert.equal(w('ci-proposal', { id: ciProposalId(hid, 'a'.repeat(40)), handoff_id: hid, pr_url: pr, head_sha: 'a'.repeat(40), head_branch: 'quill/x', failing: ['t'], log_tail: null, log_withheld: 0 }).rejected, undefined);
+  const line = st.tickets.get(tid).timeline.at(-1);
+  assert.match(line.text, /^CI failed on commit/);
+
+  const s = fixture();
+  s.tickets[0].timeline = [...(s.tickets[0].timeline ?? []), { ...line, text: `${line.text} ${S}` }];
+  Object.assign(s.handoffs[0], { proposal_id: 'p-ci', proposal: { id: 'p-ci', origin: 'ci', from_handoff_id: `${S}-root`, recipe: 'attempt-fix' } });
+  for (const opts of [{ exportedAt: ALL.exportedAt }, ALL]) {
+    const out = sanitizeSnapshot(s, opts);
+    assert.equal(JSON.stringify(out).includes(S), false);
+    assert.equal(JSON.stringify(out).includes('CI failed on commit'), false, 'the CI proposal line stays local');
+    assert.equal('proposal' in out.handoffs[0], false, 'no CI provenance on an exported run');
+    assert.equal(buildStaticHtml(s, opts).includes(S), false);
+  }
+  const state = { tickets: new Map(s.tickets.map((t) => [t.id, t])), handoffs: new Map(s.handoffs.map((h) => [h.id, h])) };
+  const base = { plans: [], conclusions: [], timeline: [], files_touched: [], prs: [], deployments: [], children_ids: [], handoff_ids: [], tags: [] };
+  assert.equal(renderTicketNote({ ...base, ...s.tickets[0] }, { state }).includes('CI failed on commit'), false);
+  const note = renderHandoffNote(s.handoffs[0], { state });
+  assert.equal(note.includes(S), false);
+  assert.doesNotMatch(note, /origin: ci/);
 });

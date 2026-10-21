@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { makeEvent } from '../core/events.js';
 import { writeIngress } from '../core/ingress.js';
 import { putBlob } from '../core/blobs.js';
+import { redactText, redactCapped } from '../lib/redact.js';
 import { sessionKey } from '../core/state.js';
 import { matchApprovalPhrase } from '../core/approval.js';
 import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } from '../gate/decide.js';
-import { readTicketProjection, readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
+import { readTicketProjection, readContextCard, readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
 import { scopeFor } from './scope.js';
 import { planAutoBind } from './autobind.js';
-import { markUnboundWork, shouldNudge, markNudged, nudgeReason, isWorkTool, markTicketWork, shouldCheckDone, markDoneChecked, doneCheckReason } from './nudge.js';
+import { markUnboundWork, shouldNudge, markNudged, nudgeReason, isWorkTool, markTicketWork, shouldCheckDone, markDoneChecked, doneCheckReason, recordPlanFiles, markDrift, driftToNudge, markDriftNudged, driftReason } from './nudge.js';
+import { extractPlannedPaths } from '../core/planned-paths.js';
 import { keyExample, renderUrl, externalTicketId, branchTitle } from '../core/external-keys.js';
 import { currentBranch } from '../lib/git-head.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
@@ -27,6 +29,8 @@ import {
 export const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Stop', 'SubagentStart', 'SubagentStop', 'PreCompact', 'SessionEnd'];
 
 const SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+// A title candidate is cut from at most this much of the prompt, redacted.
+const PROMPT_TITLE_BYTES = 8192;
 const bundledCli = fileURLToPath(new URL('../../bin/quill.js', import.meta.url)).replaceAll('\\', '/');
 
 const DESCRIPTION_FORMAT = '"**Goal:** <one sentence: what the task achieves>\\n\\n**Context:** <why it matters and where: files, components, constraints>\\n\\n**Done when:**\\n- <a checkable condition>\\n- <another, such as the test that must pass>"';
@@ -192,17 +196,20 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
         const plan = branch ? planAutoBind({ source: 'branch', text: branch, snapshot: current, tracker: scope.tracker }) : null;
         if (plan && autoBind({ plan, source: 'branch', titleHint: branchTitle(branch, plan.key), base, key, snapshot: current, scope, identity, env, result, occurred_at })) current = readBindingSnapshot(key, env);
       }
-      const brief = current && current.ticket_id ? resumeBrief(readTicketProjection(current.ticket_id, env), { nowIso: occurred_at }) : null;
+      const brief = current && current.ticket_id ? resumeBrief(readTicketProjection(current.ticket_id, env), { nowIso: occurred_at, card: readContextCard(current.ticket_id, env) }) : null;
       result.stdout = contextOutput('SessionStart', [bindingContext(current, session_id, mode, scope.tracker), brief, taskContext(session_id)].filter(Boolean).join(' '));
       return result;
     }
     case 'UserPromptSubmit': {
       const prompt = typeof input.prompt === 'string' ? input.prompt : '';
       // Only the first prompt of a session contributes a title; later prompts are inspected for
-      // approval matching only and no text is retained (TRD §Capture and approval).
+      // approval matching only and no text is retained (TRD §Capture and approval). A title is cut
+      // from redacted text (ADR 0029), so the cut never keeps a secret's prefix.
       const needsTitle = !(snapshot && snapshot.has_title);
+      let title;
+      const titleOf = () => (title ??= sanitizeTitle(redactCapped(prompt, PROMPT_TITLE_BYTES)));
       const ev = makeEvent({ ...base, kind: 'prompt', payload: {
-        title_candidate: needsTitle ? (sanitizeTitle(prompt) || null) : null,
+        title_candidate: needsTitle ? (titleOf() || null) : null,
         approval_candidate: identity.approval_phrases_enabled === true && matchApprovalPhrase(prompt),
         length: prompt.length,
       } });
@@ -212,12 +219,12 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
       if (!snapshot) context.push(bindingContext(null, session_id, mode, scope.tracker));
       if (!handoff) {
         const plan = planAutoBind({ source: 'prompt', text: prompt, snapshot, tracker: scope.tracker });
-        if (plan && autoBind({ plan, source: 'prompt', titleHint: sanitizeTitle(prompt), base, key, snapshot, scope, identity, env, result, occurred_at }) && !plan.ensure_only) {
+        if (plan && autoBind({ plan, source: 'prompt', titleHint: titleOf(), base, key, snapshot, scope, identity, env, result, occurred_at }) && !plan.ensure_only) {
           const was = snapshot && snapshot.ticket_id ? ` (previously ${snapshot.ticket_key})` : '';
           context.length = 0;
           context.push(`Session Quill session: ${session_id}. Linked to ${plan.key}${was} because the prompt mentions it; captured work is attributed to it from now on.`);
           const linked = readBindingSnapshot(key, env);
-          const brief = linked && linked.ticket_id ? resumeBrief(readTicketProjection(linked.ticket_id, env), { nowIso: occurred_at }) : null;
+          const brief = linked && linked.ticket_id ? resumeBrief(readTicketProjection(linked.ticket_id, env), { nowIso: occurred_at, card: readContextCard(linked.ticket_id, env) }) : null;
           if (brief) context.push(brief);
         }
       }
@@ -272,7 +279,9 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
         payload.pr = prFromBash(tool_input.command, response);
       }
       if (tool_name === 'ExitPlanMode') {
-        const plan = planFromExitPlanMode(tool_input, response);
+        // Redacted before it is stored, so the blob, its hash and the preview agree (ADR 0029).
+        const found = planFromExitPlanMode(tool_input, response);
+        const plan = found === null ? null : redactText(found);
         if (plan) {
           try {
             payload.plan_ref = putBlob(plan, env).hash;
@@ -280,6 +289,9 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
           } catch (err) {
             result.stderr += `Session Quill: capture gap — plan blob not stored (${err.message})\n`;
           }
+          // The files the approved plan names (ADR 0037); later writes outside them are drift.
+          payload.planned_paths = extractPlannedPaths(plan);
+          if (!handoff) { try { recordPlanFiles(key, env, payload.planned_paths); } catch { /* best effort */ } }
         }
       }
       // The branch the work landed on, so a PR from that branch can be linked to this ticket even
@@ -290,6 +302,9 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
       }
       if (mode === 'nudge' && !(snapshot && snapshot.ticket_id) && (payload.write_paths.length || payload.commit)) {
         try { markUnboundWork(key, env, occurred_at); } catch { /* best effort; never blocks capture */ }
+      }
+      if (mode === 'nudge' && !handoff && payload.write_paths.length) {
+        try { markDrift(key, env, payload.write_paths, occurred_at); } catch { /* observe only; never blocks capture */ }
       }
       // Work on a bound ticket arms the end-of-turn Done when check (ADR 0016).
       if (!handoff && snapshot && snapshot.ticket_id && isWorkTool(tool_name)) {
@@ -302,7 +317,7 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
     }
     case 'PostToolUseFailure': {
       const tool_call_id = typeof input.tool_use_id === 'string' ? input.tool_use_id : null;
-      const ev = makeEvent({ ...base, kind: 'tool-failure', tool_call_id, payload: { tool_name: input.tool_name, error: typeof input.error === 'string' ? input.error.slice(0, 300) : null, write_paths: writePathsFor(input.tool_name, input.tool_input ?? {}, input.cwd) }, source_identity: tool_call_id ? `tool-failure:${key}:${tool_call_id}` : undefined });
+      const ev = makeEvent({ ...base, kind: 'tool-failure', tool_call_id, payload: { tool_name: input.tool_name, error: typeof input.error === 'string' ? redactCapped(input.error, 300) : null, write_paths: writePathsFor(input.tool_name, input.tool_input ?? {}, input.cwd) }, source_identity: tool_call_id ? `tool-failure:${key}:${tool_call_id}` : undefined });
       persist(ev, env, result);
       return result;
     }
@@ -312,7 +327,10 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
       // agent_type and never start as subagents; their text is not the session's work. Observed
       // on Claude Code 2.1 (ACCEPTANCE-RESULTS A04).
       if (eventName === 'SubagentStop' && input.agent_type === '') return result;
-      const message = typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null;
+      // The checkpoint is redacted before the blob is written (ADR 0029): the blob, its hash (and so
+      // the source identity), the preview and the conclusions all come from the same redacted text.
+      const raw = typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null;
+      const message = raw === null ? null : redactText(raw);
       let content_ref = null;
       let complete = false;
       if (message !== null) {
@@ -328,13 +346,18 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
         try { usage = collectTurnUsage(input.transcript_path, key, env); } catch { usage = null; /* effort is best effort; capture never fails on it */ }
       }
       const nudge = eventName === 'Stop' && mode === 'nudge' && !(snapshot && snapshot.ticket_id) && input.stop_hook_active !== true && shouldNudge(key, env);
+      // Plan drift (ADR 0037): once per session, in nudge mode, never in a run.
+      const drifted = !nudge && eventName === 'Stop' && mode === 'nudge' && !handoff && input.stop_hook_active !== true ? driftToNudge(key, env) : null;
       const ev = makeEvent({ ...base, kind: eventName === 'Stop' ? 'stop' : 'subagent-stop', payload: {
-        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge, ...(usage ? { usage } : {}),
+        content_ref, preview: preview(message ?? ''), length: raw ? raw.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge, ...(drifted ? { drift_nudged: true } : {}), ...(usage ? { usage } : {}),
       }, source_identity: `${eventName === 'Stop' ? 'stop' : 'subagent-stop'}:${key}:${content_ref ?? 'missing'}:${occurred_at}` });
       persist(ev, env, result);
       if (nudge) {
         try { markNudged(key, env, occurred_at); } catch { /* stop_hook_active still prevents a loop */ }
         result.stdout = JSON.stringify({ decision: 'block', reason: nudgeReason(scope.tracker) });
+      } else if (drifted) {
+        try { markDriftNudged(key, env, occurred_at); } catch { /* stop_hook_active still prevents a loop */ }
+        result.stdout = JSON.stringify({ decision: 'block', reason: driftReason(drifted) });
       } else if (eventName === 'Stop' && !handoff && input.stop_hook_active !== true && snapshot && snapshot.ticket_id
         && snapshot.ticket_repo_id === null && ['todo', 'active'].includes(snapshot.ticket_status)
         && Array.isArray(snapshot.ticket_done_when) && snapshot.ticket_done_when.length
@@ -367,11 +390,12 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
   }
 }
 
+// Redacted, then cut (ADR 0029): a command often carries a token, and a cut first could keep its prefix.
 function summarizeTarget(tool_name, tool_input) {
   if (!tool_input) return null;
-  if (tool_input.file_path) return String(tool_input.file_path).slice(0, 300);
-  if (tool_input.notebook_path) return String(tool_input.notebook_path).slice(0, 300);
-  if (typeof tool_input.command === 'string') return tool_input.command.slice(0, 120);
+  if (tool_input.file_path) return redactCapped(String(tool_input.file_path), 300);
+  if (tool_input.notebook_path) return redactCapped(String(tool_input.notebook_path), 300);
+  if (typeof tool_input.command === 'string') return redactCapped(tool_input.command, 120);
   return null;
 }
 

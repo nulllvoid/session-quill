@@ -96,3 +96,27 @@ test('handoff scopes: refused with standard access, unknown scopes refused, the 
     for (const d of [b.home, repo.dir]) fs.rmSync(d, { recursive: true, force: true });
   }
 });
+
+test('restore-snapshot names a snapshot of a finished run of the ticket, with the 10 s undo window', () => {
+  const { state } = stateWithTicket();
+  const hid = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const snap = { id: 'snap-1', n: 0, step: 'agent', label: "After the agent's turn", tree: 'a'.repeat(40), commit: 'b'.repeat(40), ref: `refs/quill/snapshots/${hid}/00-agent`, files_changed: 1, at: NOW, restored_at: null, archived_at: null };
+  const h = { id: hid, ticket_id: T1, state: 'done', permissions: { read_source: true, edit_source: true }, worktree_path: 'C:/q/handoffs/worktrees/x', snapshots: [snap] };
+  state.handoffs.set(hid, h);
+  const body = (payload) => ({ id, kind: 'restore-snapshot', target_id: T1, expected_revision: null, payload });
+  const ok = validateRequestBody(body({ handoff_id: hid, snapshot_id: 'snap-1', extra: 'dropped' }), state, NOW);
+  assert.deepEqual(ok.payload, { handoff_id: hid, snapshot_id: 'snap-1' });
+  assert.equal(ok.not_before, '2026-10-02T08:00:10Z');
+  assert.throws(() => validateRequestBody(body({ handoff_id: 'nope', snapshot_id: 'snap-1' }), state, NOW), (e) => e.code === 'handoff-unknown');
+  assert.throws(() => validateRequestBody(body({ handoff_id: hid, snapshot_id: 'snap-9' }), state, NOW), (e) => e.code === 'snapshot-unknown');
+  for (const st of ['queued', 'running']) {
+    h.state = st;
+    assert.throws(() => validateRequestBody(body({ handoff_id: hid, snapshot_id: 'snap-1' }), state, NOW), (e) => e.code === 'run-active', st);
+  }
+  h.state = 'failed';
+  h.worktree_removed_at = NOW;
+  assert.throws(() => validateRequestBody(body({ handoff_id: hid, snapshot_id: 'snap-1' }), state, NOW), (e) => e.code === 'checkout-removed');
+  delete h.worktree_removed_at;
+  h.snapshots = Array.from({ length: 20 }, (_, i) => ({ ...snap, id: `snap-${i + 1}`, n: i }));
+  assert.throws(() => validateRequestBody(body({ handoff_id: hid, snapshot_id: 'snap-1' }), state, NOW), (e) => e.code === 'snapshot-limit');
+});

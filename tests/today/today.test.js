@@ -82,3 +82,14 @@ test('digest schedules name targets; unknown targets and a file target without a
   const text = warnings.join('\n');
   for (const re of [/slack.*to may contain vault-daily, file/, /no-path.*needs path/, /bad-day.*day must be today or yesterday/]) assert.match(text, re);
 });
+
+test('a local-only timeline line (the CI watch proposal, ADR 0039) stays on the dashboard feed and never reaches the vault digest', () => {
+  const s = state();
+  s.tickets.set('t3', { id: 't3', key: 'PROJ-3', title: 'Fix', status: 'review', timeline: [
+    { ...tl('2026-10-03T06:00:00Z', 'proposal', 'CI failed on commit abc1234; a fix run is proposed'), local_only: true },
+  ], deployments: [] });
+  const owner = buildToday(s, { nowIso: '2026-10-03T12:00:00Z' });
+  assert.ok(owner.days[0].tickets.some((t) => t.key === 'PROJ-3'), 'the owner feed shows it');
+  const vault = buildToday(s, { nowIso: '2026-10-03T12:00:00Z', vault: true });
+  assert.ok(!vault.days[0].tickets.some((t) => t.key === 'PROJ-3'), 'the vault digest leaves it out');
+});

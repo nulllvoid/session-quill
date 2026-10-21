@@ -76,8 +76,8 @@ function sectionedBody(scope, entries, nowMs, conflictIds, extra = {}) {
     out.push(`## ${s.title}`, '', ...lead, ...items.map((e) => entryLine(e, conflictIds)), '');
   }
   if (stale.length) {
-    out.push('## Stale', '', 'Unconfirmed for 90 days: not delivered to runs until a run confirms them again.', '');
-    for (const { e, section } of stale) out.push(`${entryLine(e, conflictIds)} (section: ${titles.get(section) ?? section})`);
+    out.push('## Stale', '', 'Unconfirmed for 90 days, or their cited source changed (ADR 0032): not delivered to runs until a run confirms them again.', '');
+    for (const { e, section } of stale) out.push(`${entryLine(e, conflictIds)} (section: ${titles.get(section) ?? section}${e.state === 'stale' && e.stale_reason === 'anchor-changed' ? '; source changed since recorded' : e.state === 'stale' && e.stale_reason === 'run-env-changed' ? '; run environment changed since recorded' : ''})`);
     out.push('');
   }
   return out;

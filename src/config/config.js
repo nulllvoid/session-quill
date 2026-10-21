@@ -19,7 +19,25 @@ const USER_ONLY_FIELDS = new Set([
   'approval_phrases_enabled', 'handoff_permissions', 'repos', 'projects', 'key_prefix',
   // Run credentials and limits (spec §4.4): a repository must never widen what a run can reach.
   'handoff', 'prod', 'mcp_policy', 'scopes', 'memory',
+  // 2.0.0: which files reach a ticket worktree and when it goes (ADR 0036).
+  'worktree',
+  // ADR 0031: whether an approved critical run must dry-run its pinned writes first.
+  'critical',
+  // ADR 0039: whether the worker polls CI of Quill-opened pull requests, and how often.
+  'ci',
 ]);
+
+// `[worktree]` (ADR 0036), user config only: `auto` makes `ticket work|bind` mount a ticket worktree
+// without `--worktree`; `copy` lists repository-relative ignored files copied into a new one;
+// `keep_days` is how long a done ticket's clean worktree stays. Invalid values keep the default.
+export function worktreeConfig(config = {}) {
+  const w = config && config.worktree && typeof config.worktree === 'object' && !Array.isArray(config.worktree) ? config.worktree : {};
+  return {
+    auto: w.auto === true,
+    copy: Array.isArray(w.copy) ? w.copy.filter((x) => typeof x === 'string' && x.trim()).slice(0, 50) : ['.env', '.env.local'],
+    keep_days: Number.isInteger(w.keep_days) && w.keep_days >= 1 ? w.keep_days : 7,
+  };
+}
 
 export function defaultUserConfig() {
   return {
@@ -127,6 +145,27 @@ export function resolveConfig({ cli = {}, session = {}, repo = {}, user = {} } =
   };
 }
 
+/**
+ * `[critical]` (ADR 0031): `require_dry_run` (default true) makes an approved critical run's pinned
+ * k8s.write or db.write action wait for its server-side dry run. Only an explicit `false` turns it
+ * off; any other value keeps it on. User config only.
+ */
+export function criticalSettings(config = {}) {
+  const c = config && typeof config.critical === 'object' && config.critical !== null ? config.critical : {};
+  return { requireDryRun: c.require_dry_run !== false };
+}
+
+/**
+ * `[ci]` (ADR 0039), user config only: `watch` (default true; only an explicit `false` turns it
+ * off) polls the CI checks of pull requests Quill runs opened on GitHub; `interval_minutes` (whole
+ * minutes from 1 to 60, default 5) is how often. Invalid values keep the default.
+ */
+export function ciSettings(config = {}) {
+  const c = config && typeof config.ci === 'object' && config.ci !== null && !Array.isArray(config.ci) ? config.ci : {};
+  const m = c.interval_minutes;
+  return { watch: c.watch !== false, intervalMinutes: Number.isInteger(m) && m >= 1 && m <= 60 ? m : 5 };
+}
+
 export const GATE_MODES = ['off', 'nudge', 'strict'];
 const GATE_RANK = { off: 0, nudge: 1, strict: 2 };
 
@@ -180,6 +219,15 @@ export function resolveTracker(user = {}, repo = null, { warnings = [] } = {}) {
     }
   }
   return merged;
+}
+
+// `[repos.<id>] critical_paths` and `config_globs` (ADR 0033): glob lists that only count a run's
+// changed files on its evidence receipt. A value that is not a list of non-empty strings is
+// ignored: `critical_paths` then means "none configured" and `config_globs` the built-in list.
+export const MAX_CHANGE_GLOBS = 100;
+export function changeGlobs(repo) {
+  const list = (v) => (Array.isArray(v) && v.length && v.every((g) => typeof g === 'string' && g.trim() && g.length <= 300) ? v.slice(0, MAX_CHANGE_GLOBS).map((g) => g.trim()) : null);
+  return { critical_paths: list(repo && repo.critical_paths), config_globs: list(repo && repo.config_globs) };
 }
 
 export function findRepoByPath(cfg, cwd) {

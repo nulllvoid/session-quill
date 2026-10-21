@@ -570,6 +570,11 @@ table.sessions th { font-size: 12px; color: var(--text-faint); font-weight: 500;
 /* "Approve and queue (scopes: …)" names each scope target, which may be long: the button wraps. */
 .proposal[data-kind="critical"] .proposal-actions { flex-wrap: wrap; max-width: 100%; min-width: 0; }
 .proposal[data-kind="critical"] .proposal-actions .btn { white-space: normal; overflow-wrap: anywhere; text-align: start; max-width: 100%; }
+/* ADR 0031: "Valid for" before Approve and queue; its help wraps under it on a narrow screen. */
+.proposal[data-kind="critical"] .proposal-actions { align-items: center; }
+.proposal[data-kind="critical"] .lease-field { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.proposal[data-kind="critical"] .lease-field select { min-height: 36px; }
+@media (pointer: coarse) { .proposal[data-kind="critical"] .lease-field select { min-height: 44px; } }
 .today-day { margin-bottom: 24px; max-width: 920px; }
 .today-day h3 { font-size: 16px; margin-bottom: 6px; }
 .today-tickets, .today-items { list-style: none; margin: 0; padding: 0; }
@@ -820,6 +825,12 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 .connected-tools, .cred-systems { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .connected-tools li, .autonomy-notes .issues li { overflow-wrap: anywhere; }
 .autonomy-notes .issues { margin: 0; }
+/* ADR 0041: variable names an autonomous run lost by design; any length wraps at 390px. */
+.run-env-removed summary { cursor: pointer; }
+.run-env-removed > p { margin: 6px 0; }
+.env-names { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.env-names li { min-width: 0; max-width: 100%; }
+.env-names code { overflow-wrap: anywhere; word-break: break-word; }
 /* Write scopes (spec §4.3): one option per catalog scope, with its own words and credentials. */
 .access .write-scopes { background: var(--surface); margin-top: 8px; }
 .write-scopes p { margin: 0; }
@@ -983,6 +994,18 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-facts { grid-area: facts; min-width: 0; overflow-wrap: anywhere; }
 .run-time { grid-area: time; white-space: nowrap; }
 .run-row.proposal { padding: 10px 12px; border-radius: var(--radius-ctl); box-shadow: inset 0 0 0 1px var(--hairline); }
+/* Needs you groups (ADR 0039): a heading and its list per group; Live comes last and is not counted. */
+.run-groups { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 20px; }
+.run-group-head { font-size: 15px; line-height: 1.3; font-weight: 600; margin: 0 0 8px; color: var(--text); }
+.run-group-head .count { font-family: var(--mono); font-size: 12px; color: var(--text-faint); margin-left: 4px; }
+.run-group-toggle { display: flex; justify-content: flex-end; margin: 0 0 8px; }
+/* CI failed item: check names, branch and the log are tool text of any length; they wrap, and the
+   log scrolls inside its own box. */
+.proposal[data-kind="ci"] .ci-body { flex-basis: 100%; min-width: 0; }
+.proposal[data-kind="ci"] .ci-body p { margin: 2px 0; max-width: 70ch; }
+.proposal[data-kind="ci"] code { overflow-wrap: anywhere; }
+.proposal[data-kind="ci"] .proposal-actions { flex-wrap: wrap; max-width: 100%; min-width: 0; }
+.ci-log-text { margin: 6px 0 0; padding: 8px; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; background: var(--surface-inset); border-radius: var(--radius-ctl); }
 .run-uncertain { display: flex; gap: 8px; padding: 10px 12px; border-radius: var(--radius-ctl); background: var(--status-deploy-bg); color: var(--status-deploy); }
 .run-uncertain ul { margin: 4px 0 0; padding-left: 18px; }
 .run-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 0; }
@@ -1007,6 +1030,38 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-note-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .run-note .run-attempts, .run-note .run-lessons { margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--hairline-strong); }
 .run-note p { margin: 4px 0 0; }
+/* Run snapshots (ADR 0035): one row per step boundary; labels, commits and controls wrap at 390px. */
+.run-snapshots { list-style: none; margin: 0; padding: 0; }
+.run-snapshots > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 0; border-top: 1px solid var(--hairline); min-width: 0; overflow-wrap: anywhere; }
+.run-snapshots > li:first-child { border-top: 0; }
+.run-snapshots .snapshot-commit { white-space: nowrap; }
+.run-snapshots .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
+/* Grouped diff and Review notes (ADR 0040): paths, hunk headers and lines are agent text of any
+   length, so everything wraps inside the panel; the +/- marker, not the colour, says what a line is. */
+.run-diff { min-width: 0; }
+.run-diff h4 { font-size: 13px; font-weight: 600; margin: 12px 0 2px; }
+.run-diff h5 { font-size: 12px; font-weight: 600; margin: 12px 0 4px; color: var(--text-muted); }
+.diff-files { list-style: none; margin: 0; padding: 0; }
+.diff-files > li { border-top: 1px solid var(--hairline); padding: 4px 0; min-width: 0; overflow-wrap: anywhere; }
+.diff-files > li:first-child { border-top: 0; }
+.diff-file summary { cursor: pointer; padding: 4px 0; overflow-wrap: anywhere; }
+.diff-file .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
+.diff-path { overflow-wrap: anywhere; }
+.diff-hunk { margin: 6px 0 10px; min-width: 0; }
+.diff-hunk-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; }
+.diff-hunk-head .btn { margin-left: auto; }
+.diff-section { overflow-wrap: anywhere; min-width: 0; }
+.diff-lines { margin: 4px 0 0; padding: 4px 0; font-size: 12px; line-height: 1.45; background: var(--surface-inset); border: 1px solid var(--hairline); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
+.diff-line { display: block; padding: 0 8px; min-height: 1.45em; }
+.diff-line.add { background: var(--status-done-bg); }
+.diff-line.del { background: var(--status-blocked-bg); }
+.diff-line.meta { color: var(--text-muted); font-style: italic; }
+.review-notes { list-style: none; margin: 0; padding: 0; }
+.review-notes > li { padding: 6px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; min-width: 0; }
+.review-notes > li:first-child { border-top: 0; }
+.review-notes p { margin: 4px 0 0; max-width: 70ch; }
+.review-notes code { overflow-wrap: anywhere; }
+.review-notes .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
 @media (max-width: 599px) {
   .run-open { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "state ticket" "state recipe" "state badges" "state facts" "state time"; }
   .run-badges { justify-content: flex-start; }

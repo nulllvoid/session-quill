@@ -65,7 +65,9 @@ test('autonomous with no read-only profiles redirects every credential location 
   assert.equal(env.HOME, '/home/owner', 'the profile is never redirected: Claude Code logs in from it');
   for (const s of stubs) assert.ok(under(s, runDir), 'every stub lives under <runDir>/env');
   assert.equal(stubs.length, 17);
-  assert.deepEqual(Object.keys(report).filter((k) => k !== 'residual').sort(), [...CRED_SYSTEMS].sort());
+  assert.deepEqual(Object.keys(report).filter((k) => k !== 'residual' && k !== 'removed').sort(), [...CRED_SYSTEMS].sort());
+  // ADR 0041: the inherited names removed, sorted; names only (tests/handoff/run-env.test.js has every path).
+  assert.deepEqual(report.removed, ['ANTHROPIC_API_KEY', 'AWS_ACCESS_KEY_ID', 'AWS_PROFILE', 'DATABASE_URL', 'GH_TOKEN', 'GOOGLE_APPLICATION_CREDENTIALS', 'KUBECONFIG', 'MY_SERVICE_API_KEY', 'NPM_TOKEN', 'PGPASSWORD']);
   assert.deepEqual(report.residual, [], 'nothing residual when the profile holds none of the known locations');
   for (const sys of CRED_SYSTEMS) assert.equal(report[sys], 'stub', sys);
   assert.equal(has(report, 'provider'), false);

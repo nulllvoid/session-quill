@@ -12,11 +12,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { decide, readableUnder } from '../src/gate/run-guard.js';
+import { commandSha } from '../src/gate/dry-run.js';
 import { readGrant, GRANT_FILE } from '../src/handoff/grant.js';
 import { redactCapped, summarizeInput } from '../src/handoff/stream.js';
 import { handoffRunDir } from '../src/lib/paths.js';
 import { currentBranch } from '../src/lib/git-head.js';
 import { sourceOfTool, MCP_SERVERS_FILE } from '../src/handoff/mcp-sources.js';
+import { driftOfCall } from '../src/core/planned-paths.js';
 
 const MAX_STDIN_BYTES = 4 * 1024 * 1024;
 const EXCERPT_BYTES = 2048;
@@ -24,6 +26,12 @@ const LEDGER_FILE = 'ledger.jsonl';
 const FALLBACK_TOOLS = new Set(['Read', 'Glob', 'Grep']);
 const OVERSIZE = Symbol('oversize');
 const TOOL_USE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+// A tool name is an identifier the host chose (`Bash`, `mcp__server__tool`). It is kept by its shape,
+// not passed through the secret rules, whose entropy rule mistakes long MCP names for secrets and
+// would break reconcile's and prodEffects' matching by name; any other shape is a fixed placeholder.
+const TOOL_NAME = /^[\w.:-]{1,200}$/;
+const INVALID_TOOL_NAME = '[invalid tool name]';
+const toolNameField = (v) => (v === undefined || v === null ? null : typeof v === 'string' && TOOL_NAME.test(v) ? v : INVALID_TOOL_NAME);
 
 const REASONS = {
   error: 'QUILL_DENIED guard-error: the guard could not check this call, so it is refused. Try a simpler form of the call once; if that is refused too, record the step in attempts and continue with the rest of the task.',
@@ -123,8 +131,13 @@ function check(raw, env) {
     const change = isPlainObject(r.criticalChange) ? r.criticalChange : null;
     const scope = change ? change.scope : cls.scope;
     const target = change ? change.target : cls.target ?? cls.host;
+    // ADR 0031: in a run that must dry-run its pinned writes, each shell call's line names the one
+    // plain command it ran by hash, so the guard can find a pinned write's dry-run twin later.
+    let argvSha = null;
+    if (s.grant && s.grant.requireDryRun === true) { try { argvSha = commandSha(call); } catch { argvSha = null; } }
     Object.assign(line, {
       ...callFields(s),
+      ...(argvSha ? { argv_sha: argvSha } : {}),
       decision: r.decision,
       reason: summary(r.reason, EXCERPT_BYTES),
       class: summary(cls.class, 40),
@@ -133,6 +146,8 @@ function check(raw, env) {
       ...(change ? { critical: true } : {}),
       ...(change && change.ambiguous === true ? { ambiguous: true } : {}),
       ...(enforced ? { enforce_decision: enforced.decision, enforce_reason: summary(enforced.reason, EXCERPT_BYTES) } : {}),
+      // Planned files (ADR 0037): marked after the decision and never fed back into it.
+      ...(r.decision === 'allow' && plannedDrift(input, s) ? { drift: true } : {}),
     });
     return done(r.decision, r.reason);
   } catch (err) {
@@ -152,11 +167,17 @@ function callFields(s) {
   let input_summary = null;
   try { input_summary = summarizeInput(input.tool_name, input.tool_input, s.cwd); } catch { input_summary = null; }
   return {
-    tool_name: summary(input.tool_name, 200),
+    tool_name: toolNameField(input.tool_name),
     ...(typeof input.tool_use_id === 'string' && TOOL_USE_ID.test(input.tool_use_id) ? { tool_use_id: input.tool_use_id } : {}),
     input_summary,
     input_excerpt: excerpt(input.tool_input),
   };
+}
+
+// Whether an allowed file write lands outside the grant's planned files. A failure here only
+// leaves the mark off: it can never change the decision already made.
+function plannedDrift(input, s) {
+  try { return driftOfCall(input.tool_name, input.tool_input, s.grant, s.cwd); } catch { return false; }
 }
 
 function summary(v, max) {

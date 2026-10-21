@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadContext, cliEvent, submitAndWait, writeControl, findTicketByKey, latestTicketDetail, workerStatus } from '../context.js';
-import { Journal } from '../../core/journal.js';
+import { Journal, checkResumePoint } from '../../core/journal.js';
+import { readCheckpoint } from '../../core/checkpoint.js';
 import { journalPath } from '../../lib/paths.js';
 import { createState, sessionKey } from '../../core/state.js';
 import { applyEvent } from '../../core/reducer.js';
@@ -36,8 +37,13 @@ async function sync(ctx, io, flags) {
 
 // The state the journal replays to. readOnly (commands that only read while the worker may be
 // appending) never opens the journal: open() would rewrite a torn last line, which may be the line
-// the worker is writing; read() stops before it instead.
-export function replayState(ctx, { readOnly = false } = {}) {
+// the worker is writing; read() stops before it instead. A read-only replay starts from the worker's
+// state checkpoint when it still matches (ADR 0030) and never writes one; a rebuild (not read-only)
+// always replays the whole journal, so it never depends on generated state.
+// `throughSequence` stops the replay after that journal sequence (ADR 0033: `quill receipt`
+// rebuilds a receipt from the facts journaled up to the sequence it was built through); it never
+// starts from a checkpoint, which may lie past that sequence.
+export function replayState(ctx, { readOnly = false, throughSequence = null } = {}) {
   const j = new Journal(journalPath(ctx.env));
   const info = readOnly || !fs.existsSync(journalPath(ctx.env)) ? { lastSequence: 0 } : j.open();
   j.close();
@@ -47,7 +53,19 @@ export function replayState(ctx, { readOnly = false } = {}) {
     timezone: ctx.storeMeta.timezone, key_prefix: ctx.config.key_prefix, stale_days: ctx.config.stale_days, sync_interval_hours: ctx.config.sync_interval_hours,
     approval_phrases_enabled: ctx.config.approval_phrases_enabled, projects: ctx.config.projects, repos: ctx.config.repos,
   });
-  for (const ev of j.read()) applyEvent(state, ev);
+  const through = Number.isInteger(throughSequence);
+  if (readOnly && !through) {
+    const checkpoint = readCheckpoint({ env: ctx.env, meta: state.meta });
+    if (checkpoint && checkResumePoint(journalPath(ctx.env), checkpoint).ok) {
+      const hydrated = { meta: state.meta, ...checkpoint.state };
+      for (const ev of j.read({ fromByte: checkpoint.byteOffset })) applyEvent(hydrated, ev);
+      return { state: hydrated, info, checkpoint: true };
+    }
+  }
+  for (const ev of j.read()) {
+    if (through && ev.sequence > throughSequence) break;
+    applyEvent(state, ev);
+  }
   return { state, info };
 }
 

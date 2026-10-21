@@ -27,13 +27,14 @@ import { quillHome, handoffRunDir } from '../lib/paths.js';
 import { isProtectedBranch } from '../handoff/permissions.js';
 import { canonicalJson } from '../handoff/grant.js';
 import { commandProblem, commandCheck, BUILTIN_COMMANDS } from './scope-commands.js';
+import { soleCommand, pinnedTwin, dryRunRecord, readLedgerText, DRY_RUN_SCOPES } from './dry-run.js';
 
 // The Quill install this guard runs from.
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
 // The guard's code and every local module it loads, relative to the install root. A run never
 // changes them, even when its checkout is the install root (Review Focus 2). A test walks the
 // guard's imports to keep this list complete.
-export const GUARD_CODE = ['src/gate', 'bin/quill-guard.js', 'src/handoff/grant.js', 'src/handoff/permissions.js', 'src/handoff/stream.js', 'src/handoff/mcp-sources.js', 'src/export/sanitize.js', 'src/lib/paths.js', 'src/lib/errors.js', 'src/lib/atomic-fs.js', 'src/lib/git-head.js'];
+export const GUARD_CODE = ['src/gate', 'bin/quill-guard.js', 'src/handoff/grant.js', 'src/handoff/permissions.js', 'src/handoff/stream.js', 'src/handoff/mcp-sources.js', 'src/export/sanitize.js', 'src/lib/redact.js', 'src/lib/paths.js', 'src/lib/errors.js', 'src/lib/atomic-fs.js', 'src/lib/git-head.js', 'src/core/planned-paths.js'];
 // A shell wildcard that can match more directory entries than this is refused rather than checked.
 export const MAX_GLOB_MATCHES = 512;
 // The worker's own files in the run dir: the rest of the run dir is scratch. mcp-servers.json
@@ -83,6 +84,8 @@ const REASONS = {
   protectedBranch: (why) => `QUILL_DENIED protected-branch: ${why}. Pushing to the default or a protected branch, force and tag pushes, deleting branches, merging into a protected branch and non-draft pull requests are never allowed in a run; push the run's own branch or open a draft PR when granted, and leave the rest to the owner.`,
   noReadonly: (system) => `QUILL_DENIED no-readonly-credentials: no read-only credentials configured for ${system} — set them in [prod.readonly] in config.toml. This run has only empty ${system} credentials, so the command could not succeed. Use a connected tool for ${system} if one is available, and record this route in attempts as unavailable.`,
   unknownProd: (why) => `QUILL_DENIED unknown-prod: ${why}; the guard cannot tell what this changes, so it is not allowed. Use a read-only form, or record the change in critical_changes with action, target, why, evidence, verify and rollback, then continue with everything else.`,
+  leaseExpired: (notAfter) => `QUILL_DENIED lease-expired: the owner approved this run's writes only until ${notAfter}, and that time has passed, so no scoped write or pinned action is allowed any more; reads still are. Do not retry or try another route: record in attempts that the approval's time ran out before the action ran, and finish. Only a new approval (a new run) gives more time.`,
+  dryRun: (twin, tool, last) => `QUILL_DENIED dry-run-required: run ${twin} first, with the ${tool} tool, exactly as written and on its own${last === undefined ? '' : last === null ? ' (its last run has no recorded exit code)' : ` (its last run exited ${last})`}. This pinned action is allowed only after that server-side dry run finished with exit 0; then run the pinned action exactly as before. Do not change the action itself.`,
   critical: (change, pins, ambiguous) => `QUILL_CRITICAL_CHANGE scope=${change.scope} target=${change.target ?? 'unknown'}: not granted for this run${pins.length ? ` (it may perform only its approved action, run exactly as written, alone and without environment changes: ${pins.join(' | ')})` : ''}${ambiguous ? `; the granted scope does not cover this command (${ambiguous}): a covered write is one plain command run by its bare name, with a listed write verb and only listed options, naming its one target once` : ''}. ${CRITICAL_TAIL}`,
 };
 
@@ -198,11 +201,24 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
     }
   }
 
-  let via = null;
+  const covered = [];
   for (const p of parts) {
     if (!(p.class === 'external.write' || (p.class === 'write' && !String(p.scope ?? '').startsWith('git.')))) continue;
     const cover = coverOf(p, g, c, e);
     if (!cover.ok) return deny(REASONS.critical(changeOf(p), cover.pins, cover.why ?? null), changeOf(p));
+    covered.push([p, cover]);
+  }
+  // ADR 0031: after the approval's lease every write a granted scope or pin covers is refused. It is
+  // checked once every write part is covered, so a write nothing covers is still refused above as a
+  // critical change and proposed, as in 1.1. Reads and the run's own files are not scoped and pass.
+  const lease = covered.length ? leaseProblem(g, e) : null;
+  if (lease) return deny(lease);
+  let via = null;
+  for (const [p, cover] of covered) {
+    if (cover.pinned) {
+      const why = dryRunProblem(p, g, c, vars, home, ctx);
+      if (why) return deny(why);
+    }
     via = via ?? cover.via;
   }
   return { decision: 'allow', reason: via ? `allowed by ${via}` : `allowed: ${cls.reason}` };
@@ -782,7 +798,7 @@ function coverOf(p, g, c, e = {}) {
     if (r !== true && typeof r === 'string') why = why ?? r;
     return r === true;
   });
-  if (pins.length) return scope ? { ok: true, via: 'the approved action pin' } : { ok: false, pins: pins.map((a) => a.pin.trim()), why: why ?? 'no granted scope covers the pinned action' };
+  if (pins.length) return scope ? { ok: true, via: 'the approved action pin', pinned: true } : { ok: false, pins: pins.map((a) => a.pin.trim()), why: why ?? 'no granted scope covers the pinned action' };
   return scope ? { ok: true, via: `scope ${scope.name}${scope.target ? `:${scope.target}` : ''}` } : { ok: false, pins: [], why };
 }
 
@@ -843,14 +859,32 @@ function pinMatches(a, p, c) {
 
 const firstWord = (text) => text.trim().split(/\s+/, 1)[0];
 
-// The one plain command a text holds, or null: exactly one segment, literal words, no environment.
-function soleCommand(text, dialect) {
-  const parsed = parseShell(text.trim(), dialect);
-  if (parsed.error || parsed.segments.length !== 1) return null;
-  const s = parsed.segments[0];
-  if (s.unparseable || !s.argv.length || s.piped || s.nested || s.stdinDyn) return null;
-  if (Object.keys(s.env ?? {}).length || (s.kinds ?? []).some((k) => k !== 'lit')) return null;
-  return { argv: s.argv, redirects: (s.redirects ?? []).map((r) => [r.op, r.target]), stdin: s.stdin ?? null };
+// ADR 0031: a grant with `notAfter` (an ISO time the worker froze at dispatch) refuses every scoped
+// write and pinned action after it. A value that does not parse counts as passed (fail closed).
+// `env.now` (ms or an ISO time) stands in for the clock in tests.
+function leaseProblem(g, e) {
+  if (g.notAfter === undefined || g.notAfter === null) return null;
+  const end = typeof g.notAfter === 'string' ? Date.parse(g.notAfter) : NaN;
+  const now = typeof e.now === 'number' ? e.now : typeof e.now === 'string' ? Date.parse(e.now) : Date.now();
+  if (Number.isFinite(end) && Number.isFinite(now) && now <= end) return null;
+  return REASONS.leaseExpired(typeof g.notAfter === 'string' ? g.notAfter.slice(0, 40) : 'an unreadable time');
+}
+
+// ADR 0031 (FR-3.2): with `requireDryRun` in the grant, a pinned k8s.write or db.write action that
+// has a dry-run twin is refused until the run ledger shows that twin allowed and finished with exit 0. The ledger
+// is read only here, for such a pinned write, so other calls keep the guard's usual cost. A ledger
+// that cannot be read refuses.
+function dryRunProblem(p, g, c, vars, home, ctx) {
+  if (g.requireDryRun !== true || !DRY_RUN_SCOPES.has(p.scope)) return null;
+  const twin = pinnedTwin(c, ctx);
+  // A pin with no twin the guard accepts decides as in 1.1 (ADR 0031, amendment of 21 October 2026).
+  if (!twin) return null;
+  let file = null;
+  try { const id = varOf(vars, 'QUILL_HANDOFF_ID'); file = id ? path.join(handoffRunDir({ QUILL_HOME: varOf(vars, 'QUILL_HOME') ?? path.join(home, '.claude', 'quill') }, id), 'ledger.jsonl') : null; } catch { file = null; }
+  const text = file ? readLedgerText(file) : null;
+  const seen = text === null ? { ran: false, exitCode: undefined } : dryRunRecord(text, twin.sha);
+  if (seen.ran && seen.exitCode === 0) return null;
+  return REASONS.dryRun(twin.text, c.tool_name, seen.ran ? seen.exitCode : undefined);
 }
 
 // Command patterns match the part's own words (I3); a `hosts` pattern covers an external write

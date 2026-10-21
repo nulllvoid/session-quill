@@ -6,7 +6,9 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
-import { git, createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
+import { git, createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr, workingTree } from './worktree.js';
+import { buildReceipt, guardSummary, changeSummary, publicCommand } from './receipt.js';
+import { changeGlobs } from '../config/config.js';
 import { buildPrompt, budgetFor, recipeCaps, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff, gatherMemory, inlineBudget, writeContext } from './context.js';
@@ -17,14 +19,23 @@ import { reemitMissingCriticalProposals } from './critical-changes.js';
 import { resultFromStream, sessionIdOf, readLedger } from './stream.js';
 import { buildDocsMap, renderDocsMap } from './docs-map.js';
 import { reconcileAttempts } from './reconcile.js';
+import { countRunDrift } from '../core/planned-paths.js';
 import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js';
 import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSources } from '../memory/file.js';
 import { writeDocsProjection } from '../memory/project.js';
+import { failureRecord, repeatNotice } from '../memory/failure.js';
+import { anchorStaleRatio, anchorCandidates, anchorCheckKey, staledEvent } from '../memory/anchors.js';
+import { runEnvForFiling, runEnvStaleEvents } from './run-env.js';
+import { anchorVerdicts } from '../memory/deliver.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { getBlob } from '../core/blobs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
 import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, prodEffects } from './autonomous.js';
 import { interruptedEffects, batchBudgetUsd, batchBudgetReached, resumePrompt, carrySession, claudeConfigRoot } from './resume.js';
+import { createTicketWorktreeSweep } from './ticket-worktrees.js';
+import { takeSnapshot, archiveSnapshots } from './snapshots.js';
+import { patchFields, criticSettings, runCritic, criticFields } from './critic.js';
+import { createCiWatch } from './ci-watch.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -41,9 +52,10 @@ export function concurrencyLimits(config = {}) {
   return { readonly: pick(h.max_concurrent_readonly, DEFAULT_CONCURRENCY.readonly), fix: pick(h.max_concurrent_fix, DEFAULT_CONCURRENCY.fix) };
 }
 
-// What a draft PR says about tests: "passed (worker)" only after a real pass of the gate.
+// What a draft PR says about tests: "passed (worker)" only after a real pass of the gate. The
+// command leaves the machine, so absolute paths in it are replaced (ADR 0033).
 export function gateLine(gate) {
-  if (gate && gate.status === 'passed') return `Tests passed (worker): \`${gate.command}\` exited 0${gate.repaired ? ' after one repair turn' : ''}.`;
+  if (gate && gate.status === 'passed') return `Tests passed (worker): \`${publicCommand(gate.command)}\` exited 0${gate.repaired ? ' after one repair turn' : ''}.`;
   return 'Not test-verified by the worker: no test command is configured for this repository.';
 }
 
@@ -57,6 +69,8 @@ export const FINISH_WAIT_MS = 20_000;
 // At start, terminal runs finished this recently that have no memory_filing are filed again.
 export const REFILE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const REFILE_MAX = 50;
+// ADR 0032: how often the worker compares anchored memory with each registered repository's HEAD.
+export const ANCHOR_CHECK_MS = 5 * MINUTE;
 const TERMINAL = new Set(['done', 'failed', 'timed-out', 'cancelled']);
 
 // `[handoff] log_retention_days`: how long a run's ledger directory and log are kept.
@@ -111,12 +125,19 @@ function grantedFingerprints(scopes) {
   } catch { return null; }
 }
 
-export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
+export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDraftPrFn = openDraftPr, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes, ciProviderFor = null, ticketWorktreeRemoveFn } = {}) {
+  // Ticket worktree teardown (ADR 0036): at start (in the background), then at most hourly from the tick.
+  const ticketWorktrees = createTicketWorktreeSweep(ticketWorktreeRemoveFn ? { removeFn: ticketWorktreeRemoveFn } : {});
+  // CI watch of Quill-opened pull requests (ADR 0039): at most every `[ci] interval_minutes` from the tick.
+  const ciWatch = createCiWatch({ providerFor: ciProviderFor });
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   const finishing = new Set(); // finish() promises, until memory filing has landed
   const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
   const dispatches = new Map(); // handoff id -> its dispatch promise, until it settles (M7: onStop waits)
   const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
+  const anchorSeen = new Map(); // repo id -> anchorCheckKey (HEAD and the candidates) of its last anchor check
+  let anchorCheckAt = null;
+  let anchorCheck = null; // the anchor check in flight
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
   const limits = { readonly: maxReadonly ?? maxConcurrent ?? configured.readonly, fix: maxFix ?? maxConcurrent ?? configured.fix };
@@ -197,6 +218,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     return Math.max(0, Math.round((cap - (entry.usage ? entry.usage.cost : 0)) * 10000) / 10000);
   };
 
+  // Run snapshots (ADR 0035) before a follow-up turn: the run's id is its running entry's key.
+  const snapshotBefore = (worker, entry, step) => { for (const [id, e] of running) if (e === entry) return takeSnapshot(worker, id, step); return null; };
+
   async function followUp(entry, prompt, { tools, maxTurns, permissionMode = entry.permissionMode, label = 'follow-up' }) {
     const left = remainingUsd(entry);
     if (left <= 0) {
@@ -234,6 +258,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       return { outcome, quality };
     }
     if (parsed.problems.length && !entry.reason && timeLeft()) {
+      await snapshotBefore(worker, entry, 'before-repair');
       const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: entry.budget.repairTurns, label: 'repair' });
       const fixed = next ? parseOutcome(next, parseOpts) : null;
       if (fixed && !fixed.no_result && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
@@ -246,6 +271,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (entry.selfCheck && !parsed.problems.length && !entry.reason && timeLeft()) {
       // The check re-reads sources; it never edits, whatever the run was allowed to do. Under
       // autonomous access the guard still decides each call, with no static allow rule.
+      await snapshotBefore(worker, entry, 'before-self-check');
       const readOnly = entry.access === 'autonomous' ? { allowed: [], disallowed: [...new Set([...entry.tools.disallowed, 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Task', 'Agent'])] } : selfCheckTools(entry.permissions);
       const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: entry.budget.selfCheckTurns, permissionMode: 'dontAsk', label: 'self-check' });
       const checked = next ? parseOutcome(next, parseOpts) : null;
@@ -266,22 +292,31 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const current = worker.state.handoffs.get(h.id);
     if (!current || !['running'].includes(current.state)) { running.delete(h.id); return; }
     addUsage(entry, outcome);
+    await takeSnapshot(worker, h.id, 'agent');
     let quality = null;
     let gate = null;
+    let critic = null;
     if (entry && !entry.reason && !outcome.error && outcome.code === 0) {
       const first = outcome;
       ({ outcome, quality } = await improve(worker, entry, outcome));
       // A run that may edit source is checked by the worker's own test gate (ADR 0023).
       if (!entry.reason && entry.permissions.edit_source) ({ outcome, gate } = await testGate(worker, entry, current, outcome));
+      // ADR 0040: then, when the repository opts in, the critic reviews it (opinion, never a check).
+      if (!entry.reason && gate) critic = await reviewRun(worker, entry, current, gate);
       // A deadline or cancellation during a follow-up keeps the first reply as the partial result.
-      if (entry.reason) { outcome = first; gate = null; }
+      if (entry.reason) { outcome = first; gate = null; critic = null; }
     }
     running.delete(h.id);
     // Measured, not estimated (ADR 0022): agent time covers every turn, including the self-check
     // and the test repair turn; the gate's own test runs are test time.
     const testMs = gate && Number.isFinite(gate.total_ms) ? gate.total_ms : null;
-    const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}) } : null;
+    const criticMs = critic && Number.isFinite(critic.ms) ? critic.ms : null;
+    const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0) - (criticMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}), ...(criticMs !== null ? { critic_ms: criticMs } : {}) } : null;
+    const criticExtra = critic ? criticFields(critic, worker.env, { runId: h.id }) : {};
     if (gate) delete gate.total_ms;
+    // ADR 0033: the tested tree is its own field on the run, never inside the gate record.
+    const testedTree = gate && gate.tested_tree ? gate.tested_tree : null;
+    if (gate) delete gate.tested_tree;
     // A turn that produced no result event (killed by the deadline or a cancel) leaves usage unknown: recorded as null, not omitted.
     const usage = entry && entry.env ? { num_turns: entry.usage ? entry.usage.turns : null, cost_usd: entry.usage && entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !((entry.spawnExtras && entry.spawnExtras.childEnv) ?? { ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
     // Spec §5.4: what the agent says it tried is checked against the run's tool ledger, and calls
@@ -299,9 +334,14 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // A full-access run's writes, as its observer saw them, whatever state it ends in (spec §7).
     let effects = null;
     if ((current.access ?? 'standard') === 'full' && entry && entry.observed) { try { effects = prodEffects(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { effects = null; } }
+    // Planned files (ADR 0037): how many allowed writes the guard marked outside them, whatever state
+    // the run ends in. Observed, never refused; the export carries only this count.
+    let drift = null;
+    const guarded = current.access === 'autonomous' || (current.access === 'full' && !!(entry && entry.observed));
+    if (guarded && Array.isArray(current.planned_paths) && current.planned_paths.length) { try { drift = countRunDrift(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { drift = null; } }
     const record = async (w, id, parsed, opts) => {
       const final = withNotes(reconciled(parsed));
-      const out = recordResult(w, id, final, timings || usage || effects ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}) } } : opts);
+      const out = recordResult(w, id, final, timings || usage || effects || drift !== null ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}), ...(drift !== null ? { scope_drift: drift } : {}) } } : opts);
       // Before cleanupRun removes the checkout: repo-file learnings are checked against it.
       await fileMemory(w, id, final);
       return out;
@@ -328,14 +368,16 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
     // ticket change, only the diff for the owner to inspect and the reason (ADR 0023).
     if (gate && (gate.status === 'failed' || gate.status === 'timeout')) {
-      const extra = { ...(await fixExtras(worker, current)), test_gate: gate };
+      const extra = { ...(await fixExtras(worker, current)), test_gate: gate, ...criticExtra };
       if (quality) extra.result_quality = { ...quality, problems: parsed.problems };
       const why = gate.status === 'timeout' ? 'did not finish in time' : `exited with code ${gate.exit_code ?? 'unknown'}`;
       await record(worker, h.id, parsed, { state: 'failed', error: { code: gate.status === 'timeout' ? 'tests-timeout' : 'tests-failed', message: `the test command ${why}${gate.attempts > 1 ? ' again after one repair turn' : ' and no repair turn was possible'}; no fix is suggested` }, extra });
       return;
     }
-    const extras = await fixExtras(worker, current, { finalize: true, gate });
+    const extras = await fixExtras(worker, current, { finalize: true, gate, testedTree });
     if (gate) extras.test_gate = gate;
+    if (testedTree) extras.tested_tree = testedTree;
+    Object.assign(extras, criticExtra);
     if (quality) extras.result_quality = { ...quality, problems: parsed.problems };
     // Only a run that finished cleanly changes files; a failed, cancelled or timed-out one leaves
     // every original untouched.
@@ -366,12 +408,15 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       const learnings = h.state === 'done' ? result.learnings ?? [] : [];
       const citeSources = learnings.length ? await readCiteSources({ learnings, run: h, checkout }) : new Map();
       const workerFacts = workerLearnings({ run: h, ledger, testGate: h.test_gate ?? null, inventory: h.inventory ?? null });
-      const events = fileLearnings({ learnings, run: worker.state.handoffs.get(id) ?? h, ledger, checkout, existing, now: worker.now(), workerFacts, citeSources });
+      // ADR 0041: an autonomous run's environment-dependent learnings are anchored to its environment.
+      const runEnv = runEnvForFiling(h, { runDir: handoffRunDir(worker.env, id) });
+      const events = fileLearnings({ learnings, run: worker.state.handoffs.get(id) ?? h, ledger, checkout, existing, now: worker.now(), workerFacts, citeSources, runEnv });
       const lessons = taskLessons(events, existing);
       // Deterministic source identities: a filing redone at start never journals an event twice.
       const fresh = (e) => !(worker.journal && worker.journal.hasSource(e.source_identity));
       for (const e of events) if (fresh(e)) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
-      const note = appendRunNotes(h.ticket_id, result.attempts ?? [], lessons, { run: h, at: worker.now() });
+      // ADR 0032: a failed worker test gate leaves its worker-structured failure record on the note.
+      const note = appendRunNotes(h.ticket_id, result.attempts ?? [], lessons, { run: h, at: worker.now(), failure: failureRecord(worker.state.handoffs.get(id) ?? h) });
       if (note && fresh(note)) worker.emit(note.kind, note.payload, { source_identity: note.source_identity });
     } catch (err) {
       worker.log(`memory filing failed for ${id}: ${err.stack ?? err.message}`);
@@ -414,7 +459,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // The path comes from the store: only a directory inside this store's worktrees folder is deleted.
     if (!isUnder(path.join(handoffsDir(worker.env), 'worktrees'), dir)) { worker.log(`worktree path outside the worktrees folder, not removed: ${h.id}`); return; }
     if (!fs.existsSync(dir)) {
-      if (!h.worktree_removed_at && worker.state.handoffs.has(h.id)) { try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch { /* ignore */ } }
+      if (!h.worktree_removed_at && worker.state.handoffs.has(h.id)) { await archiveSnapshots(worker, h.id); try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch { /* ignore */ } }
       return;
     }
     const repoPath = repoPathOf(h);
@@ -425,6 +470,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // Stamped only when the directory is really gone (a lock on Windows can leave it); the next sweep retries.
     if (fs.existsSync(dir)) { worker.log(`worktree not removed yet, will retry: ${h.id}`); return; }
     if (worker.state.handoffs.has(h.id)) {
+      await archiveSnapshots(worker, h.id);
       try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch (err) { worker.log(`worktree removal not recorded: ${err.message}`); }
     }
   }
@@ -440,6 +486,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       const dir = handoffRunDir(worker.env, id);
       for (const name of fs.readdirSync(dir)) if (name !== 'ledger.jsonl') fs.rmSync(path.join(dir, name), { recursive: true, force: true });
     } catch { /* no run dir */ }
+    // A critic stopped mid-review (ADR 0040) may leave its own directory beside the run's.
+    try { fs.rmSync(handoffRunDir(worker.env, `${id}-critic`), { recursive: true, force: true }); } catch { /* none */ }
     if (!isFix(h)) await dropWorktree(worker, h);
     pruneRetention(Date.parse(worker.now()));
   }
@@ -496,16 +544,21 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
   }
 
   // For fix runs: collect changed files and a patch; perform explicitly permitted commit/push/PR.
-  async function fixExtras(worker, h, { finalize = false, gate = null } = {}) {
+  async function fixExtras(worker, h, { finalize = false, gate = null, testedTree = null } = {}) {
     const out = {};
+    // ADR 0033: counts of the guard's decisions, for a run the guard watched (autonomous, full).
+    if (['autonomous', 'full'].includes(h.access)) { try { out.guard_summary = guardSummary(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { /* no summary */ } }
     if (!h.worktree_path || !fs.existsSync(h.worktree_path)) return out;
     try {
       out.changed_files = await changedFiles(h.worktree_path);
+      out.change_summary = changeSummary(out.changed_files, changeGlobs(ctx.config.repos[h.repo_id]));
       const patch = await diffPatch(h.worktree_path);
       const patchPath = path.join(handoffsDir(worker.env), 'results', `${h.id}.patch`);
       fs.mkdirSync(path.dirname(patchPath), { recursive: true });
       fs.writeFileSync(patchPath, patch);
       out.patch_path = patchPath;
+      // ADR 0040: the patch as a blob too, so the owner's dashboard can show it grouped.
+      Object.assign(out, patchFields(patch, worker.env));
     } catch (err) {
       out.uncertain_effects = [...(h.uncertain_effects ?? []), `could not collect diff: ${err.message}`];
       return out;
@@ -513,12 +566,28 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (!finalize || !out.changed_files.length) return out;
     const p = h.permissions ?? {};
     const repo = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
+    let receipt = null;
     try {
+      if (p.commit) await takeSnapshot(worker, h.id, 'before-commit');
       if (p.commit) out.commit_sha = await commitAll(h.worktree_path, `handoff(${h.id.slice(0, 8)}): ${h.note || 'attempt fix'}`);
+      // ADR 0033: the evidence is journaled before anything leaves the machine, so the receipt a
+      // draft PR carries is built from journaled facts only.
+      if (out.commit_sha) {
+        try { out.commit_tree = await git(h.worktree_path, ['rev-parse', `${out.commit_sha}^{tree}`]); } catch { /* compared as not recorded */ }
+        // A receipt is built only from evidence that reached the journal; without it the PR has none.
+        try {
+          updateHandoff(worker, h.id, { ...(gate ? { test_gate: gate } : {}), ...(testedTree ? { tested_tree: testedTree } : {}), commit_sha: out.commit_sha, ...(out.commit_tree ? { commit_tree: out.commit_tree } : {}), ...(out.guard_summary ? { guard_summary: out.guard_summary } : {}), change_summary: out.change_summary, changed_files: out.changed_files });
+          if (p.push_branch && p.open_draft_pr) receipt = buildReceipt(worker.state, h.id);
+        } catch (err) { worker.log(`evidence receipt not built for ${h.id}: ${err.message}`); }
+      }
       if (p.push_branch && out.commit_sha) {
         try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; out.pushed_branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
         if (p.open_draft_pr) {
-          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.\n\n${gateLine(gate)}` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
+          const body = `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.\n\n${gateLine(gate)}${receipt ? `\n\n${receipt.markdown}` : ''}`;
+          try {
+            out.pr_url = await openDraftPrFn(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body });
+            if (receipt) out.receipt = { sha256: receipt.sha256, through_sequence: receipt.through_sequence };
+          } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
         }
       }
     } catch (err) {
@@ -548,21 +617,69 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     };
     let total = 0;
     let attempts = 1;
+    await takeSnapshot(worker, h.id, 'before-tests');
     let result = await once();
     total += result.ms;
+    // Every attempt's exit code and time is kept (ADR 0033); the output tail only for the last.
+    const runs = [{ status: result.status, exit_code: result.exit_code, ms: result.ms }];
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
     if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft() && remainingUsd(entry) <= 0) (entry.budgetNotes ??= []).push('test-repair-skipped-budget-spent');
     else if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
-      const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: entry.budget.maxTurns, label: 'test-repair' });
+      await takeSnapshot(worker, h.id, 'before-test-repair');
+      const next = await followUp(entry, testRepairPrompt(command, result, repeatNotice(worker.state, worker.state.handoffs.get(h.id) ?? h, result)), { tools: entry.tools, maxTurns: entry.budget.maxTurns, label: 'test-repair' });
       if (entry.reason) return { outcome, gate: null };
       const repaired = next ? parseOutcome(next, { outputs: entry.outputs }) : null;
       if (repaired && !repaired.no_result && !repaired.is_error && repaired.problems.length <= parsed.problems.length) outcome = next;
       attempts = 2;
       result = await once();
       total += result.ms;
+      runs.push({ status: result.status, exit_code: result.exit_code, ms: result.ms });
     }
     if (entry.reason) return { outcome, gate: null };
-    return { outcome, gate: { status: result.status, command, exit_code: result.exit_code, ms: result.ms, tail: result.tail, attempts, repaired: attempts > 1 && result.status === 'passed', total_ms: total } };
+    // The tree the passing run saw, written with a temporary index so the checkout's own index is
+    // untouched (ADR 0033); compared later with the commit's tree. Carried out of the gate record.
+    let testedTree = null;
+    if (result.status === 'passed') { try { testedTree = await workingTree(h.worktree_path); } catch (err) { worker.log(`tested tree not recorded for ${h.id}: ${err.message}`); } }
+    return { outcome, gate: { status: result.status, command, exit_code: result.exit_code, ms: result.ms, tail: result.tail, attempts, repaired: attempts > 1 && result.status === 'passed', runs, total_ms: total, ...(testedTree ? { tested_tree: testedTree } : {}) } };
+  }
+
+  // ADR 0040: with `[repos.<id>] critic = true`, a fresh read-only process (a new session: never a
+  // resume of the run's own) reviews a fix whose worker tests passed. It reads the run's checkout
+  // with the read-only profile and the run's own environment when it has one, its spend counts
+  // against the run's cap, and nothing it does changes how the run ends. Null when not enabled.
+  async function reviewRun(worker, entry, h, gate) {
+    const repo = ctx.config.repos[h.repo_id];
+    if (!criticSettings(repo).enabled) return null;
+    // An autonomous run's critic runs under the guard like every turn of the run, but with a grant
+    // of its own: read-only, no scopes, no action pins, in an autonomous environment built without
+    // the run's scope credentials (or the push tokens its permissions kept). Its own directory
+    // holds that grant, its guard lines and its MCP inventory, so nothing it does lands in the
+    // run's ledger or replaces the run's inventory; the directory goes when the critic ends.
+    let guarded = null;
+    const criticId = `${h.id}-critic`;
+    if (entry.access === 'autonomous') {
+      try {
+        fs.rmSync(handoffRunDir(worker.env, criticId), { recursive: true, force: true });
+        guarded = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: { id: criticId, permissions: { read_source: true }, access: 'autonomous', planned_paths: null, action_pins: [], lease_minutes: null }, cwd: entry.cwd, checkout: h.worktree_path ?? null, repoCfg: repo ? { id: h.repo_id, ...repo } : null, scopes: [], env: { ...entry.env, QUILL_HANDOFF_ID: criticId }, startedAt: worker.now() });
+      } catch (err) {
+        return { status: 'failed', reason: `the critic's guard could not be prepared: ${err.message}`, findings: [], ms: null, outcome: null };
+      }
+    }
+    const spawn = (prompt, { maxTurns, maxBudgetUsd }) => {
+      const extras = guarded ? { childEnv: guarded.childEnv, settingsPath: guarded.settingsPath, mcpServersPath: guarded.mcpServersPath } : {};
+      const run = spawnAgent({ claudePath, claudeArgs, prompt, cwd: entry.cwd, tools: selfCheckTools({ read_source: true }), env: guarded ? { ...entry.env, QUILL_HANDOFF_ID: criticId } : entry.env, childEnv: null, permissions: { read_source: true }, logPath: entry.logPath, model, maxTurns, maxBudgetUsd, permissionMode: 'dontAsk', keepCredentials: false, ...extras });
+      // Tracked like any turn of the run, so a cancel or a stop also stops the critic.
+      Object.assign(entry, { child: run.child, kill: null, done: run.done });
+      return run;
+    };
+    const timeLeftMs = entry.deadlineAt ? Date.parse(entry.deadlineAt) - Date.parse(worker.now()) : Infinity;
+    let result;
+    try {
+      result = await runCritic({ run: worker.state.handoffs.get(h.id) ?? h, ticket: worker.state.tickets.get(h.ticket_id) ?? { key: '', title: '' }, repo, gate, recipe: catalogFor(worker).builtin('critic-review'), budgetUsd: remainingUsd(entry), timeLeftMs, spawn, kill: killTree });
+    } catch (err) { result = { status: 'failed', reason: `the critic step failed: ${err.message}`, findings: [], ms: null, outcome: null }; }
+    finally { if (guarded) { try { fs.rmSync(handoffRunDir(worker.env, criticId), { recursive: true, force: true }); } catch { /* removed with the run */ } } }
+    addUsage(entry, result.outcome);
+    return result;
   }
 
   async function dispatch(worker, h) {
@@ -621,7 +738,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       if (!repoCfg || !repoCfg.canonical_path || !fs.existsSync(repoCfg.canonical_path)) return fail(worker, h, 'repo-unavailable', 'source access requires the registered repository on this owner machine; it is not available');
       try {
         // The ticket's own branch when it can be found, else HEAD (spec §10).
-        base = await worktreeBase(ticket, repoCfg);
+        // A CI fix (ADR 0039) starts from the commit CI failed on, on the branch it pushes to.
+        const ci = h.origin === 'ci' && h.ci_fix && typeof h.ci_fix === 'object' ? { branch: h.ci_fix.head_branch, commit: h.ci_fix.head_sha } : null;
+        if (ci && ci.branch !== h.branch) return fail(worker, h, 'ci-branch-mismatch', 'this CI fix pushes to a different branch than the one CI failed on, so it did not start');
+        base = await worktreeBase(ticket, repoCfg, { ci });
         baseCommit = base.ref === 'HEAD' ? await headCommit(repoCfg.canonical_path) : base.ref;
         worktreePath = path.join(handoffsDir(worker.env), 'worktrees', h.id);
         const worktreeStarted = performance.now();
@@ -630,9 +750,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
           updateHandoff(worker, h.id, { worktree_path: worktreePath });
         } finally { timings.worktree_ms = Math.round(performance.now() - worktreeStarted); }
       } catch (err) {
-        return fail(worker, h, err.code === 'worktree-failed' ? 'worktree-failed' : 'source-failed', err.message);
+        return fail(worker, h, ['worktree-failed', 'ci-head-changed', 'ci-branch-missing', 'branch-protected'].includes(err.code) ? err.code : 'source-failed', err.message);
       }
       cwd = worktreePath;
+      await takeSnapshot(worker, h.id, 'start');
     } else {
       cwd = path.join(handoffsDir(worker.env), 'sandbox', h.id);
       fs.mkdirSync(cwd, { recursive: true });
@@ -656,7 +777,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     let auto = null;
     let observe = null;
     if (access === 'autonomous') {
-      try { auto = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, scopes, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
+      try { auto = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, scopes, env, startedAt: started }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
     } else if (access === 'full' && await observerSupported()) {
       // Full access is observed, never refused (spec §3, §7): the guard records what it would have
       // refused, and the run's prod_effects come from that ledger when it finishes. A Claude Code
@@ -676,10 +797,12 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings, ...(auto ? { cred_report: auto.report } : {}), ...(prints ? { scope_fingerprints: prints } : {}) });
     const current = worker.state.handoffs.get(h.id);
     if (!current || current.state !== 'running') return undefined;
+    // ADR 0041: memory learned in another run environment goes stale before this run's Memory is gathered.
+    if (auto) staleRunEnv(worker, auto.report.env_fingerprint);
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
     const environments = worker.environmentsFor ? worker.environmentsFor(ticket.repo_id) : repoCfg ? repoCfg.deployment_environments ?? [] : [];
     const render = (r) => renderRecipe(r, { ticket, url, note: h.note, prs: ticket.prs ?? [], deployments: ticket.deployments ?? [], environments });
-    const context = gatherContext(worker.state, ticket, { env: worker.env, currentId: h.id });
+    const context = gatherContext(worker.state, ticket, { env: worker.env, currentId: h.id, now: worker.now() });
     const inputs = !recipe || recipe.legacy ? null : new Set(recipe.inputs);
     // The diff is read from the run's own checkout, so it exists only with source access.
     if (worktreePath && (!inputs || inputs.has('work'))) context.diff = await gatherDiff(worktreePath, context.commits);
@@ -701,7 +824,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     try {
       // Bring the projections up to date with the state first (a no-op when nothing changed).
       if (typeof worker.publishMemory === 'function') worker.publishMemory();
-      const mem = await gatherMemory(worker.state, worker.state.tickets.get(ticket.id) ?? ticket, { repoCfg, budgetBytes: inlineBudget(ctx.config), checkout: worktreePath, commit: baseCommit, home: quillHome(worker.env), now: worker.now(), run: current, docs: docsMap, contextDir, log: (line) => worker.log(`${line} (run ${h.id})`) });
+      const mem = await gatherMemory(worker.state, worker.state.tickets.get(ticket.id) ?? ticket, { repoCfg, budgetBytes: inlineBudget(ctx.config), anchorRatio: anchorStaleRatio(ctx.config), checkout: worktreePath, commit: baseCommit, home: quillHome(worker.env), now: worker.now(), run: current, docs: docsMap, contextDir, log: (line) => worker.log(`${line} (run ${h.id})`) });
       writeContext({ state: worker.state, home: quillHome(worker.env), paths: mem.paths, contextDir, runNotes: mem.runNotes });
       memoryDirs = [contextDir];
       context.memory = mem.inline || null;
@@ -774,6 +897,41 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     return !batchBudgetReached(members, batchId, budget);
   }
 
+  // ADR 0032: anchored memory against each registered repository's HEAD. Only when HEAD or the set
+  // of anchored entries (their ids and anchor blobs) changed since the last check; an anchored region that changed by at least
+  // `[memory] anchor_stale_ratio` is journaled as a `staled` memory-tx (deterministic source
+  // identity, so a repeated check never journals twice). Pinned and owner entries are never
+  // candidates (R27); a git failure stales nothing.
+  async function checkAnchors(worker) {
+    const ratio = anchorStaleRatio(ctx.config);
+    for (const [repoId, cfg] of Object.entries(ctx.config.repos ?? {})) {
+      if (stopping || !cfg || !cfg.canonical_path || !fs.existsSync(cfg.canonical_path)) continue;
+      const entries = anchorCandidates(worker.state, repoId);
+      if (!entries.length) continue;
+      let head;
+      try { head = await headCommit(cfg.canonical_path); } catch { continue; }
+      const seen = anchorCheckKey(head, entries);
+      if (anchorSeen.get(repoId) === seen) continue;
+      const verdicts = await anchorVerdicts(entries, { checkout: cfg.canonical_path, commit: head, ratio, log: (line) => worker.log(`${line} (anchor check of ${repoId})`) });
+      if (stopping) return;
+      for (const [id, v] of verdicts) {
+        const live = worker.state.memory.entries.get(id);
+        if (v.verdict !== 'stale' || !v.anchor || !live || live.state !== 'active' || live.pinned === true || live.trust === 'owner') continue;
+        const e = staledEvent(id, v.anchor);
+        if (!(worker.journal && worker.journal.hasSource(e.source_identity))) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
+      }
+      anchorSeen.set(repoId, seen);
+    }
+  }
+
+  // ADR 0041: at an autonomous dispatch, each live entry anchored to another run environment is
+  // journaled stale (deterministic source identity, so one environment stales an entry once).
+  function staleRunEnv(worker, fingerprint) {
+    try {
+      for (const e of runEnvStaleEvents(worker.state, fingerprint)) if (!(worker.journal && worker.journal.hasSource(e.source_identity))) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
+    } catch (err) { worker.log(`run environment check failed: ${err.message}`); }
+  }
+
   function killWithReason(id, reason) {
     const entry = running.get(id);
     if (!entry) return;
@@ -789,6 +947,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     pruneOldWorktrees,
     pruneRetention,
     cleanupRun: (id) => cleanupRun(currentWorker, id),
+    sweepTicketWorktrees: () => ticketWorktrees.run(currentWorker, ctx.config),
+    // The anchor check now, unthrottled (tests and embedders); tick runs it every ANCHOR_CHECK_MS.
+    checkAnchors: () => checkAnchors(currentWorker),
+    sweepCi: () => ciWatch.run(currentWorker, ctx.config),
     async onStart(worker) {
       // Each recipe carries its time cap per access level, from the same budget dispatch uses.
       worker.recipeInfo = () => catalogFor(worker).list().map((r) => (r.error ? r : { ...r, caps: recipeCaps(r, ctx.config) }));
@@ -809,15 +971,24 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       try { reemitMissingCriticalProposals(worker); } catch (err) { worker.log(`critical proposals not re-emitted: ${err.message}`); }
       // Housekeeping at start: checkouts past their keep time, stale registrations, old ledgers and logs.
       try { await pruneOldWorktrees(); pruneRetention(); } catch (err) { worker.log(`handoff housekeeping failed: ${err.message}`); }
+      // Not awaited (ADR 0030 fast start): the sweep runs `git status` per due worktree. It logs and
+      // records its own failure; a stop waits for it.
+      ticketWorktrees.run(worker, ctx.config);
     },
     tick(worker) {
       if (paused) return;
+      ticketWorktrees.tick(worker, ctx.config);
+      ciWatch.tick(worker, ctx.config);
       const now = worker.now();
       for (const h of worker.state.handoffs.values()) {
         if (h.cancel_requested && h.state === 'running' && running.has(h.id) && running.get(h.id).reason === null) killWithReason(h.id, 'cancel');
       }
       for (const [id, entry] of running) {
         if (entry.reason === null && entry.deadlineAt && now >= entry.deadlineAt) killWithReason(id, 'timeout');
+      }
+      if (!anchorCheck && (anchorCheckAt === null || Date.parse(now) - anchorCheckAt >= ANCHOR_CHECK_MS)) {
+        anchorCheckAt = Date.parse(now);
+        anchorCheck = checkAnchors(worker).catch((err) => worker.log(`anchor check failed: ${err.message}`)).finally(() => { anchorCheck = null; });
       }
       const batchBudget = batchBudgetUsd(ctx.config);
       for (const h of nextDispatchable(worker.state, { running: new Set(running.keys()) })) {
@@ -833,6 +1004,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     async onStop(worker, { abandonRuns = false } = {}) {
       // A run still waiting in dispatch for an earlier filing must not start once a stop began.
       stopping = true;
+      await ticketWorktrees.idle();
+      await ciWatch.idle();
       if (abandonRuns) { running.clear(); return; }
       // M7: a dispatch still setting up (no process yet) returns once it sees `stopping`, or has just
       // spawned: wait for it, bounded, so no run starts after the stop and a fresh child is stopped below.
@@ -849,6 +1022,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
         if (entry.child) { killWithReason(id, 'stopped'); pending.push(entry.done, entry.finished); }
       }
       await Promise.all(pending);
+      if (anchorCheck) await settledWithin([anchorCheck], FINISH_WAIT_MS);
       // Runs that already left `running` may still be filing their memory: wait for them, bounded.
       if (finishing.size) {
         let timer;

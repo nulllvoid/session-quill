@@ -49,10 +49,10 @@ function trackerChip(t, readOnly) {
 }
 
 // Runs proposed for this ticket from a shared page (ADR 0025), waiting for the owner.
-function proposalsBlock(t, snapshot, { now, pending }) {
+function proposalsBlock(t, snapshot, { now, pending, leases = null }) {
   const list = openProposals(snapshot, t.id);
   if (!list.length) return '';
-  return `<section class="detail-section proposals"><h3>Proposed runs <span class="count">${esc(list.length)}</span></h3><ul class="proposal-list">${list.map((p) => proposalItem(p, snapshot, { now, pending })).join('')}</ul>${hasActiveRun(snapshot, t.id) ? '<p class="muted small">A run is already queued or running on this ticket; approving now reports that instead of queueing a second one.</p>' : ''}</section>
+  return `<section class="detail-section proposals"><h3>Proposed runs <span class="count">${esc(list.length)}</span></h3><ul class="proposal-list">${list.map((p) => proposalItem(p, snapshot, { now, pending, leases })).join('')}</ul>${hasActiveRun(snapshot, t.id) ? '<p class="muted small">A run is already queued or running on this ticket; approving now reports that instead of queueing a second one.</p>' : ''}</section>
 `;
 }
 
@@ -65,11 +65,18 @@ function runNoteItem(n, snapshot, { now, tz }) {
   const id8 = String(n.run_id ?? '').slice(0, 8);
   const name = run ? (run.recipe ? run.recipe.name : run.mode) : null;
   const head = `${run ? `<button type="button" class="link" data-action="open-run" data-run="${attr(run.id)}">Run ${esc(id8)}</button>` : `Run <code>${esc(id8)}</code>`}${name ? ` <span class="muted small">${esc(name)}</span>` : ''}${typeof n.at === 'string' && n.at ? ` <span class="small">${timeEl(n.at, now, tz)}</span>` : ''}`;
-  const page = n.origin === 'page' || (run && run.proposal) ? '<p class="small muted">From a run proposed on a shared page: never given to other runs.</p>' : '';
+  const page = run && run.proposal && run.proposal.origin === 'ci' ? '<p class="small muted">From a CI fix run, which read CI output: never given to other runs.</p>'
+    : n.origin === 'page' || (run && run.proposal) ? '<p class="small muted">From a run proposed on a shared page: never given to other runs.</p>' : '';
   const withheld = Number.isInteger(n.withheld) && n.withheld > 0 ? `<p class="small muted">${esc(`${n.withheld} field${n.withheld === 1 ? '' : 's'} withheld: instruction-like text`)}</p>` : '';
   const attempts = (Array.isArray(n.attempts) ? n.attempts : []).filter((a) => a && typeof a === 'object');
   const lessons = (Array.isArray(n.lessons) ? n.lessons : []).filter((l) => l && typeof l.text === 'string' && l.text);
-  return `<li class="run-note"><div class="run-note-head">${head}</div>${page}${withheld}${attempts.length ? `<ul class="run-attempts">${attempts.map(attemptItem).join('')}</ul>` : ''}${lessons.length ? `<ul class="run-lessons">${lessons.map((l) => `<li>${trustChip(typeof l.trust === 'string' && l.trust ? l.trust : 'unknown')} ${esc(l.text)}</li>`).join('')}</ul>` : ''}</li>`;
+  // The failure ledger (ADR 0032): the worker's own fields of a failed test gate, never its output.
+  const f = n.failure && typeof n.failure === 'object' ? n.failure : null;
+  const files = f && Array.isArray(f.files_touched) ? f.files_touched.filter((x) => typeof x === 'string') : [];
+  const failure = f ? `<p class="small run-note-failure" data-level="warning">${icon('alert')}${esc(f.status === 'timeout' ? 'Tests timed out (worker)' : `Tests failed (worker)${Number.isInteger(f.exit_code) ? `, exit ${f.exit_code}` : ''}`)}${f.command ? ` · <code>${esc(f.command)}</code>` : ''}${f.signature ? ` · signature <code>${esc(f.signature)}</code>` : ''}${files.length ? ` · ${esc(`${files.length} file${files.length === 1 ? '' : 's'} changed: ${files.join(', ')}`)}` : ''}</p>` : '';
+  const dismissals = (Array.isArray(n.dismissals) ? n.dismissals : []).filter((d) => d && typeof d.reason === 'string' && d.reason);
+  const dismissed = dismissals.length ? `<ul class="run-lessons run-dismissals">${dismissals.map((d) => `<li>${esc(`Dismissed${typeof d.type === 'string' && d.type ? ` ${d.type}` : ''} suggestion: ${d.reason}`)}</li>`).join('')}</ul>` : '';
+  return `<li class="run-note"><div class="run-note-head">${head}</div>${page}${withheld}${failure}${dismissed}${attempts.length ? `<ul class="run-attempts">${attempts.map(attemptItem).join('')}</ul>` : ''}${lessons.length ? `<ul class="run-lessons">${lessons.map((l) => `<li>${trustChip(typeof l.trust === 'string' && l.trust ? l.trust : 'unknown')} ${esc(l.text)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
 function runNotesBlock(t, snapshot, { now, tz }) {
@@ -96,7 +103,7 @@ function runStrip(t, snapshot, { now, tz }) {
   return `<button type="button" class="run-strip" data-action="open-run" data-run="${attr(current.id)}" aria-label="${attr(`Open run: ${[name, current.state, ...accessWords(current).slice(1)].join(', ')}`)}">${handoffChip({ ...current, error: null })} <strong>${esc(name)}</strong> ${accessTierBadge(current)} ${testGateBadge(current.test_gate)}${open ? ` <span class="chip small">${esc(open)} suggestion${open === 1 ? '' : 's'} to review</span>` : ''} <span class="muted small">${timeEl(current.requested_at, now, tz)}</span></button>`;
 }
 
-export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, loadedTicket = null, editingNext = false, tab = 'overview', expanded = false }) {
+export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, loadedTicket = null, editingNext = false, tab = 'overview', expanded = false, leases = null }) {
   if (!DETAIL_TABS.includes(tab)) tab = 'overview';
   const snapshot = normalizeSnapshot(rawSnapshot);
   const ticket = normalizeTicket(rawTicket);
@@ -149,7 +156,7 @@ ${checkpoints.length ? `<section class="latest-checkpoint"><h3>Latest checkpoint
 </div>
 <div class="detail-page" id="detail-page-runs" role="tabpanel" aria-labelledby="detail-tab-runs" ${tab !== 'runs' ? 'hidden' : ''}>
 <section class="detail-section"><h3>Runs <span class="count">${esc(ticketRuns(snapshot, t.id).length)}</span></h3>${ticketRuns(snapshot, t.id).length ? `<ul class="run-list">${ticketRuns(snapshot, t.id).map((h) => runRow(snapshot, h, { now, tz })).join('')}</ul>` : '<p class="muted small">No runs yet.</p>'}${caps.handoff && t.status !== 'done' ? `<p><button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}">${icon('play')}Run agent</button></p>` : ''}</section>
-${runNotesBlock(t, snapshot, { now, tz })}${proposalsBlock(t, snapshot, { now, pending })}${renderAgentsSection(t, snapshot, { busy: hasActiveRun(snapshot, t.id) })}
+${runNotesBlock(t, snapshot, { now, tz })}${proposalsBlock(t, snapshot, { now, pending, leases })}${renderAgentsSection(t, snapshot, { busy: hasActiveRun(snapshot, t.id) })}
 </div>
 <div class="detail-page" id="detail-page-activity" role="tabpanel" aria-labelledby="detail-tab-activity" ${tab !== 'activity' ? 'hidden' : ''}>
 <section class="detail-section"><h3>Timeline <span class="count">${esc(total)}</span></h3>${timeline.length ? `<ul class="timeline">${timeline.map((e) => timelineItem(e, { now, tz, generation: snapshot.generation_id, content, contentStatus })).join('')}</ul>${total > timeline.length ? `<button type="button" class="btn small" data-action="load-ticket" data-ticket="${attr(t.id)}" data-generation="${attr(snapshot.generation_id)}">Load all ${esc(total)} entries</button>` : ''}` : '<p class="muted small">No events yet.</p>'}</section>

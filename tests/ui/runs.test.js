@@ -300,3 +300,19 @@ test('the ticket Runs tab shows Run notes, owner only, newest first, escaped', (
   viewer.tickets[0].run_notes = s.tickets[0].run_notes;
   assert.doesNotMatch(renderDetail(viewer.tickets[0], viewer, { now: NOW, tab: 'runs' }), /Run notes/);
 });
+
+test('ADR 0032: a Run note shows the worker test-gate failure and the owner\'s dismissal reasons, escaped', () => {
+  const r1 = run({ requested_at: '2026-10-09T10:00:00Z' });
+  const s = snap([r1]);
+  s.tickets[0].run_notes = [{
+    run_id: r1.id, at: '2026-10-09T10:05:00Z', attempts: [], lessons: [],
+    failure: { kind: 'test-gate', status: 'failed', command: 'npm test <x>', exit_code: 1, signature: '0123456789abcdef', files_touched: ['src/a.js', 'src/<b>.js'] },
+    dismissals: [{ suggestion_id: 's1', type: 'next-action', reason: 'Already <i>done</i>', at: '2026-10-09T11:00:00Z', by: 'owner' }],
+  }];
+  const html = renderDetail(s.tickets[0], s, { now: NOW, tab: 'runs' });
+  const notes = /<section class="detail-section run-notes">[\s\S]*?<\/section>/.exec(html)[0];
+  assert.match(notes, /Tests failed \(worker\), exit 1 · <code>npm test &lt;x&gt;<\/code> · signature <code>0123456789abcdef<\/code> · 2 files changed: src\/a\.js, src\/&lt;b&gt;\.js/);
+  assert.match(notes, /Dismissed next-action suggestion: Already &lt;i&gt;done&lt;\/i&gt;/);
+  s.tickets[0].run_notes[0].failure = { kind: 'test-gate', status: 'timeout', command: null, exit_code: null, signature: null, files_touched: [] };
+  assert.match(renderDetail(s.tickets[0], s, { now: NOW, tab: 'runs' }), /Tests timed out \(worker\)<\/p>/);
+});

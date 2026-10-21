@@ -112,14 +112,17 @@ export function resumeProblem(h) {
   return null;
 }
 
+/** Whether a run is a CI fix (ADR 0039): its own origin, or the proposal it came from. */
+export const isCiFix = (h) => !!h && (h.origin === 'ci' || (isPlainObject(h.proposal) && h.proposal.origin === 'ci'));
+
 const refuse = (message) => { throw new TrackerError('resume-refused', message); };
 const specOf = (s) => (typeof s === 'string' ? s : '');
 
 /**
  * What a resumed run copies from the run it resumes: the same mode, note, permissions, access,
  * branch, recipe, scopes and limits; for an approved critical change (ADR 0028) also the action pin
- * of every scope, the fingerprints dispatch checks again, and the proposal it came from. Never a
- * batch id. Throws `resume-refused` when a critical run's pins or fingerprints do not cover every
+ * of every scope, the fingerprints dispatch checks again, and the proposal it came from; for a CI
+ * fix (ADR 0039) its `origin` and `ci_fix`. Never a batch id. Throws `resume-refused` when a critical run's pins or fingerprints do not cover every
  * one of its scopes: a scope grant is never resumed without its pin.
  */
 export function resumeFields(h) {
@@ -132,8 +135,12 @@ export function resumeFields(h) {
     ...(scopes.length ? { scopes } : {}),
     ...(h.max_turns !== undefined ? { max_turns: h.max_turns } : {}),
     ...(h.max_budget_usd !== undefined ? { max_budget_usd: h.max_budget_usd } : {}),
+    ...(Array.isArray(h.planned_paths) && h.planned_paths.length ? { planned_paths: [...h.planned_paths] } : {}),
     ...(h.proposal_id ? { proposal_id: h.proposal_id } : {}),
     ...(isPlainObject(h.proposal) ? { proposal: { ...h.proposal } } : {}),
+    // ADR 0039: a CI fix stays a CI fix: dispatch checks out the commit CI failed on again, it never
+    // supersedes the run whose pull request it pushes to, and the owner resumes it on the dashboard.
+    ...(isCiFix(h) ? { origin: 'ci', ci_fix: isPlainObject(h.ci_fix) ? { ...h.ci_fix, failing: Array.isArray(h.ci_fix.failing) ? [...h.ci_fix.failing] : [] } : null } : {}),
   };
   if (!critical) {
     if (!scopes.length) return out;
@@ -152,7 +159,9 @@ export function resumeFields(h) {
     if (typeof prints[s] !== 'string' || !prints[s]) refuse(`scope ${s} of this critical change run has no recorded fingerprint; it cannot be resumed`);
   }
   if (pins.some((a) => !scopes.includes(a.scope)) || Object.keys(prints).some((s) => !scopes.includes(s))) refuse('the pins or fingerprints of this critical change run name a scope it was not granted; it cannot be resumed');
-  return { ...out, action_pins: pins.map((a) => ({ scope: a.scope, pin: a.pin })), scope_fingerprints: { ...prints }, origin_proposal_id: h.origin_proposal_id };
+  // ADR 0031: a resumed critical run is held to the same "Valid for" minutes, counted from its own
+  // dispatch; it never gets the whole run where the approval gave less.
+  return { ...out, action_pins: pins.map((a) => ({ scope: a.scope, pin: a.pin })), scope_fingerprints: { ...prints }, origin_proposal_id: h.origin_proposal_id, ...(h.lease_minutes !== undefined && h.lease_minutes !== null ? { lease_minutes: h.lease_minutes } : {}) };
 }
 
 /**

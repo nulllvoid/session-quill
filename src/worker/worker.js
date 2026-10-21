@@ -5,15 +5,17 @@ import fs from 'node:fs';
 import { Journal } from '../core/journal.js';
 import { validateEvent, makeEvent, INGRESS_KINDS } from '../core/events.js';
 import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.js';
+import { redactEvent } from '../lib/redact.js';
 import { createState, sessionKey } from '../core/state.js';
 import { applyEvent } from '../core/reducer.js';
+import { readCheckpoint, writeCheckpoint, metaFingerprint } from '../core/checkpoint.js';
 import { safeKeyFileName } from '../core/keys.js';
 import { journalPath, stateDir, requestsDir, configPath, quillHome } from '../lib/paths.js';
 import { ensureDir, writeJsonAtomic, readJsonIfExists, listFiles, removeIfExists } from '../lib/atomic-fs.js';
 import { toIso, SECOND } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
 import { storeLayout } from '../config/store.js';
-import { loadUserConfig } from '../config/config.js';
+import { loadUserConfig, criticalSettings } from '../config/config.js';
 import { buildRuntimeIdentity, identityStamp } from '../config/runtime.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { keyExample } from '../core/external-keys.js';
@@ -27,6 +29,7 @@ import { descriptionProblems, parseDescription } from '../core/description.js';
 import { writeProjections as writeMemoryProjections } from '../memory/project.js';
 import { memoryPaths } from '../memory/paths.js';
 import { latestInventory } from '../handoff/inventory.js';
+import { ContextCards } from '../memory/blast-radius.js';
 
 // What hooks need to know about a bound ticket, with a signature to tell when it changed.
 function ticketFacts(ticket) {
@@ -42,6 +45,14 @@ export const PROVISIONAL_MAX_MS = 30 * SECOND;
 // Memory projections are rewritten after memory events apply, and at least this often so entries
 // move to ## Stale as they age (unchanged files are not rewritten).
 export const MEMORY_REFRESH_MS = 60 * 60 * SECOND;
+// A state checkpoint (ADR 0030) is written on an idle tick once this many events were journaled
+// since the last one ([worker] checkpoint_every), and on stop.
+export const CHECKPOINT_EVERY = 500;
+
+function checkpointEvery(config) {
+  const n = config && config.worker ? config.worker.checkpoint_every : undefined;
+  return Number.isInteger(n) && n > 0 ? n : CHECKPOINT_EVERY;
+}
 
 export class Worker {
   constructor({ config, storeMeta, env = process.env, clock = Date.now, derive = null, log = () => {}, identityCheckMs = IDENTITY_CHECK_MS }) {
@@ -78,6 +89,12 @@ export class Worker {
     this.memoryDirty = true;
     this.lastMemoryProjectionMs = -Infinity;
     this.memoryProblems = new Set();
+    this.contextCards = new ContextCards();
+    this.checkpointEvery = checkpointEvery(config);
+    this.checkpointSequence = 0; // journal sequence of the last checkpoint written or hydrated
+    this.checkpointError = null;
+    this.loadedMetaFingerprint = null; // the reducer-visible meta state was built with
+    this.stateLoad = null; // how start() built state: { source, events_replayed, checkpoint_ignored, ms }
   }
 
   now() {
@@ -86,12 +103,45 @@ export class Worker {
 
   async start() {
     this.lock = await acquireLock(this.storeMeta.store_id, this.storeMeta.owner_machine_id, this.env);
-    this.journalInfo = this.journal.open();
-    if (this.journalInfo.corrupt) {
+    const ignored = this.loadState();
+    if (ignored === null) {
       await this.lock.release();
       throw new TrackerError('journal-corrupt', 'journal has mid-log corruption; run `quill doctor` and recover before starting the worker');
     }
-    this.state = createState({
+    this.notesIndex = readJsonIfExists(path.join(stateDir(this.env), 'notes-index.json')) ?? {};
+    const manifest = readJsonIfExists(path.join(stateDir(this.env), '..', 'projections', 'MANIFEST.json'));
+    this.generationNumber = manifest ? Number(manifest.generation_id.replace('gen-', '')) || 0 : 0;
+    ensureDir(this.layout.tickets);
+    ensureDir(this.layout.sessions);
+    ensureDir(this.layout.handoffs);
+    ensureDir(requestsDir(this.env));
+    this.publishIdentity();
+    for (const reason of ignored) {
+      this.log(`state checkpoint ignored: ${reason}`);
+      this.recordHealthError({ kind: 'state-checkpoint', error: `state checkpoint ignored: ${reason}` });
+    }
+    for (const e of this.replayErrors ?? []) this.recordHealthError({ kind: 'apply-error', phase: 'replay', ...e });
+    this.replayErrors = [];
+    this.publishAllBindings();
+    this.contextCards.noteAllBound(this);
+    this.markStaleNotesDirty();
+    this.heartbeat(true);
+    for (const ext of this.extensions) if (ext.onStart) await ext.onStart(this);
+    this.running = true;
+    this.markGenerationDirty();
+    this.publishGeneration();
+    this.publishMemory();
+    return this;
+  }
+
+  // Opens the journal and builds state: the last state checkpoint hydrated plus the journal after it
+  // (ADR 0030), else the whole journal. Any mismatch (versions, the configuration the reducer reads,
+  // a journal that no longer ends the checkpointed event at its offset) replays the whole journal;
+  // meta always comes from current configuration. Returns why a checkpoint was ignored (reasons for
+  // a health note), or null when the journal is corrupt.
+  loadState() {
+    const loadStarted = performance.now();
+    const fresh = createState({
       store_id: this.storeMeta.store_id,
       machine_id: this.storeMeta.owner_machine_id,
       machine_name: this.config.machine_name,
@@ -105,26 +155,25 @@ export class Worker {
       repos: this.config.repos,
       tracker_version: this.config.tracker_version ?? '1.0.0',
     });
-    for (const ev of this.journal.read()) this.safeApply(ev, { replay: true });
-    this.notesIndex = readJsonIfExists(path.join(stateDir(this.env), 'notes-index.json')) ?? {};
-    const manifest = readJsonIfExists(path.join(stateDir(this.env), '..', 'projections', 'MANIFEST.json'));
-    this.generationNumber = manifest ? Number(manifest.generation_id.replace('gen-', '')) || 0 : 0;
-    ensureDir(this.layout.tickets);
-    ensureDir(this.layout.sessions);
-    ensureDir(this.layout.handoffs);
-    ensureDir(requestsDir(this.env));
-    this.publishIdentity();
-    for (const e of this.replayErrors ?? []) this.recordHealthError({ kind: 'apply-error', phase: 'replay', ...e });
-    this.replayErrors = [];
-    this.publishAllBindings();
-    this.markStaleNotesDirty();
-    this.heartbeat(true);
-    for (const ext of this.extensions) if (ext.onStart) await ext.onStart(this);
-    this.running = true;
-    this.markGenerationDirty();
-    this.publishGeneration();
-    this.publishMemory();
-    return this;
+    this.loadedMetaFingerprint = metaFingerprint(fresh.meta);
+    const ignored = [];
+    const checkpoint = readCheckpoint({ env: this.env, meta: fresh.meta, onIgnore: (reason) => ignored.push(reason) });
+    this.journalInfo = this.journal.open(checkpoint ? { resume: { byteOffset: checkpoint.byteOffset, sequence: checkpoint.sequence, lastEventId: checkpoint.lastEventId, eventIds: checkpoint.state.appliedEvents, sourceIds: checkpoint.state.appliedSources } } : {});
+    if (this.journalInfo.corrupt) return null;
+    let fromByte = 0;
+    if (checkpoint && this.journalInfo.resumed) {
+      this.state = { meta: fresh.meta, ...checkpoint.state };
+      this.checkpointSequence = checkpoint.sequence;
+      fromByte = checkpoint.byteOffset;
+    } else {
+      if (checkpoint) ignored.push(this.journalInfo.resume_ignored ?? 'the journal could not be resumed');
+      this.state = fresh;
+      this.checkpointSequence = 0;
+    }
+    let replayed = 0;
+    for (const ev of this.journal.read({ fromByte })) { this.safeApply(ev, { replay: true }); replayed += 1; }
+    this.stateLoad = { source: fromByte ? 'checkpoint' : 'journal', events_replayed: replayed, checkpoint_ignored: ignored[0] ?? null, ms: Math.round(performance.now() - loadStarted) };
+    return ignored;
   }
 
   // After replay, notes whose recorded revision lags the rebuilt state (or were never written)
@@ -236,12 +285,42 @@ export class Worker {
     this.heartbeat();
     this.refreshIdentity();
     this.processControl();
-    this.ingestOnce();
+    const ingested = this.ingestOnce();
     const nowMs = this.clock();
     if (this.flushRequested || (this.firstDirtyAt !== null && nowMs >= this.firstDirtyAt + NOTE_FLUSH_MS)) this.flushNotes();
     for (const ext of this.extensions) if (ext.tick) ext.tick(this);
     this.publishMemory();
+    this.contextCards.tick(this);
     if (this.generationDirty) this.publishGeneration();
+    // Serialising state blocks the loop, so it waits for a tick with nothing to ingest.
+    if (ingested === 0 && this.journal.lastSequence - this.checkpointSequence >= this.checkpointEvery) this.writeStateCheckpoint();
+  }
+
+  // The reduced state at the journal's current position (ADR 0030). Every journaled event has been
+  // applied whenever this runs (append and apply happen together), so the two always agree. A
+  // failure is logged once per message and retried after another checkpoint_every events. After a
+  // live configuration change the reducer can see (refreshIdentity), state mixes events reduced
+  // under both configurations, which no replay reproduces: no checkpoint is written until a restart
+  // replays the journal under the new one.
+  writeStateCheckpoint() {
+    if (!this.state || this.journal.fd === null || this.journal.corrupt) return false;
+    if (metaFingerprint(this.state.meta) !== this.loadedMetaFingerprint) return false;
+    const position = this.journal.position();
+    if (position.sequence < 1 || position.sequence === this.checkpointSequence) return false;
+    try {
+      writeCheckpoint(this.state, { ...position, env: this.env });
+      this.checkpointError = null;
+      return true;
+    } catch (err) {
+      if (this.checkpointError !== err.message) {
+        this.checkpointError = err.message;
+        this.log(`state checkpoint not written: ${err.message}`);
+        this.recordHealthError({ kind: 'state-checkpoint', error: `state checkpoint not written: ${err.message}` });
+      }
+      return false;
+    } finally {
+      this.checkpointSequence = position.sequence;
+    }
   }
 
   // The Markdown projections of memory under quillHome()/memory (spec §6.1), written from state after
@@ -276,8 +355,11 @@ export class Worker {
         quarantineIngress(entry.name, this.env);
         continue;
       }
-      const ev = entry.event;
+      // Redacted again here (ADR 0029): writeIngress already did, but anything that can write the
+      // ingress folder (an older producer, an autonomous run) bypasses it.
+      let ev;
       try {
+        ev = redactEvent(entry.event);
         validateEvent(ev);
       } catch (err) {
         this.log(`quarantining ${entry.name}: ${err.message}`);
@@ -393,6 +475,7 @@ export class Worker {
         if (this.publishedTicketFacts.get(key) !== ticketFacts(this.state.tickets.get(session.current_ticket_id)).signature) this.publishBinding(key);
       }
     }
+    this.contextCards.note(this, result);
     for (const id of result.requestsChanged) this.publishRequest(id);
     if ((result.changed.size || result.handoffsChanged.size || record.session_id) && this.firstDirtyAt === null) this.firstDirtyAt = this.clock();
     for (const effect of result.effects) {
@@ -436,6 +519,8 @@ export class Worker {
       ticket_status: ticket ? ticket.status : null,
       ticket_repo_id: ticket ? ticket.repo_id ?? null : null,
       ticket_done_when: facts ? facts.done : [],
+      // Writes outside the latest plan's files (ADR 0037), for the status line.
+      drift_count: session.drift && Number.isInteger(session.drift.count) ? session.drift.count : 0,
       revision_committed_at: this.now(),
     }, this.env);
   }
@@ -511,6 +596,7 @@ export class Worker {
       publishers: this.publishInfo ? this.publishInfo() : [],
       handoff_limits: this.handoffLimits ? this.handoffLimits() : null,
       autonomy: this.autonomyInfo ? this.autonomyInfo() : null,
+      critical_dry_run: criticalSettings(this.config ?? {}).requireDryRun,
       onboarding: (({ clone_hosts, auto_clone_dir, import_assigned }) => ({ clone_hosts, auto_clone_dir, import_assigned }))(onboardSettings(this.config.tracker)),
     };
   }
@@ -536,9 +622,11 @@ export class Worker {
   async stop({ flush = true, ...extOptions } = {}) {
     this.running = false;
     for (const ext of this.extensions) if (ext.onStop) await ext.onStop(this, extOptions);
+    await this.contextCards.stop();
     if (flush && this.state) {
       try { this.flushNotes(); } catch (err) { this.log(`flush on stop failed: ${err.message}`); }
     }
+    this.writeStateCheckpoint();
     this.journal.close();
     if (this.lock) await this.lock.release();
     this.lock = null;

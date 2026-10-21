@@ -4,6 +4,86 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-21
+
+Isolation, review and evidence. A ticket can have its own worktree. A fix run's checkout is snapshotted at each step and can be restored. Its diff, an optional critic's notes and an evidence receipt are there to review. CI failures on Quill's own pull requests become fix proposals you approve. Critical approvals can expire and wait for a server-side dry run. Memory goes stale when the code or run environment it describes changes. Secrets are redacted before they reach the journal. Every PRD requirement was adopted inside the existing safety contracts: [docs/research/2.0.0/01-gap-analysis.md](docs/research/2.0.0/01-gap-analysis.md) says how, and [ADR 0029](docs/decisions/0029-ingress-redaction.md) to [ADR 0041](docs/decisions/0041-run-environment-disclosure.md) record the decisions. Every new field, event and error code is in DATA-CONTRACT, section "2.0.0 index"; README "What's new in 2.0" has the setup.
+
+### Added
+
+- **Ticket worktrees** ([ADR 0036](docs/decisions/0036-ticket-worktrees.md)). `quill ticket work|bind … --worktree` (or `[worktree] auto = true`) mounts the ticket's worktree under `~/.claude/quill/worktrees/<repo>/<KEY>` on branch `quill/<KEY>`, outside the repository. Claude is told to switch into it. Ignored files from `[worktree] copy` (default `.env`, `.env.local`) are copied in, never linked.
+  - `quill worktree list` and `quill worktree remove <KEY>` manage them.
+  - The worker removes a clean worktree `keep_days` (7) after its ticket is done. It keeps a dirty one, one on an unreachable detached HEAD, or one whose copied ignored file changed, and says why. It never uses `--force` and always keeps the branch.
+  - New ingress event kind `worktree`.
+- **Run snapshots and restore** ([ADR 0035](docs/decisions/0035-run-snapshots.md)). The worker snapshots a fix run's checkout at each step with a temporary index, so the real index, HEAD and branch are untouched. The snapshots are refs under `refs/quill/snapshots/<run>/`.
+  - Run detail → Snapshots offers **Restore checkout to this snapshot** with the 10 s undo. The restore saves the current files first, changes only the checkout and never touches ignored files.
+  - Refs move to `refs/quill/archive/<run>/` when the checkout is removed.
+  - New worker-only event `snapshot-tx` and request `restore-snapshot` (dashboard only).
+- **Grouped diff and per-hunk retry** ([ADR 0040](docs/decisions/0040-diff-review-and-critic.md)). A fix's patch (up to 1 MB) is stored as a blob, and run detail → Changes shows it "Grouped by file path" (Core logic, Schema and state, CLI, routes and UI, Tests). Each hunk has **Retry as new run**, with a pre-filled note naming the file and hunk range.
+- **The critic** (ADR 0040, opt-in per repository with `[repos.<id>] critic = true` and `review_docs`). A fresh, read-only Claude Code process reviews a fix after the worker's tests pass and before the commit.
+  - It runs under the guard for autonomous runs, without the run's scope credentials, and within the run's remaining budget and 10 minutes.
+  - Its findings show as **Review notes (n)**, "The critic agent's opinion, not Quill's check". It never blocks a run.
+  - New built-in recipe `critic-review`, which only the critic step runs (requirement `run_diff`).
+- **Evidence receipts** ([ADR 0033](docs/decisions/0033-evidence-receipts-and-recipe-stats.md)). Before its push, a committed fix run journals its test gate (every attempt), the tested tree and the commit tree, guard counts and change counts. A deterministic receipt built from those facts is appended to the draft PR body. It ends with a sha256 digest and "Not a deployment."
+  - `quill receipt <run-id>` rebuilds the receipt and checks the digest.
+  - `[repos.<id>] critical_paths` and `config_globs` drive the change counts.
+- **Recipe stats in `quill doctor`** (ADR 0033): per recipe over 30 days, runs, done, failed, tests passed first time and after a repair, owner interventions, PRs merged, reverted within 48 hours of merge, not yet known, and median time to merge. These are counts, not a score. Reconciliation now follows each run's own PR, recording its merge commit and any revert.
+- **CI watch** ([ADR 0039](docs/decisions/0039-attention-groups-and-ci-watch.md)). The worker polls GitHub checks on PRs that Quill runs opened in the last 7 days (`[ci] watch`, `interval_minutes`, default 5).
+  - A failing commit becomes a **CI failed** item in Needs you. When the branch is the one the run pushed, the item carries a fix proposal with a redacted, filtered log tail of at most 4096 characters.
+  - **Approve and queue CI fix** (dashboard only) queues an `attempt-fix` on exactly that commit. The fix pushes to the same branch, fast-forward only. There is at most one proposal per commit and two per PR. A proposal lapses when the head changes, CI passes or the PR ends.
+  - New worker-only events `ci-observation` and `ci-proposal`.
+- **Needs you groups** (ADR 0039): Needs your decision, Tests or CI failed, Other failures, Ready to review and Live (shown, never counted). "Show as one list" switches them off (`group=none`). Finished fixes with changes now appear under **Ready to review** with *Tests passed (worker)* or *Not test-verified*.
+- **Approval leases and dry-run preflight** ([ADR 0031](docs/decisions/0031-dry-run-preflight-and-leases.md)).
+  - The critical change item has **Valid for** (Whole run, 5 min, 15 min, 1 h). The choice is frozen in the run's grant; after it, covered writes are refused with `lease-expired`.
+  - With `[critical] require_dry_run` (default on), a pinned `kubectl` or `psql` write is refused (`dry-run-required`) until the same run's server-side dry run (`--dry-run=server`, `EXPLAIN`) exited 0. The item shows that dry run, or *No dry run*, before approval.
+- **Planned files and drift** ([ADR 0037](docs/decisions/0037-planned-files-drift.md)). An approved plan's paths, or `quill agent run|handoff --planned <glob>` for an autonomous or full-access fix, name the files the work expects to change. Writes outside them are counted, never refused:
+  - ` ⚠ drift N` in the status line and a "Plan drift" line in `quill status`;
+  - one end-of-turn nudge in nudge mode;
+  - "N writes outside planned files" on runs; such a finished fix is listed under Needs your decision.
+- **Anchored memory and the failure ledger** ([ADR 0032](docs/decisions/0032-anchored-memory-and-failure-ledger.md)).
+  - Sourced learnings carry file, blob and symbol anchors. The worker stales an entry when its anchored source changes beyond `[memory] anchor_stale_ratio` (0.3); it shows *Source changed · not delivered to runs*. Pinned and owner entries are exempt.
+  - A failed test gate leaves a failure record (command, exit code, signature, files; never the output) on the Run note. A later run that hits the same signature is told what was tried, and the resume brief adds "Failed before:".
+  - `quill agent dismiss … --reason` keeps the owner's reason for later runs.
+- **Context card** ([ADR 0038](docs/decisions/0038-context-card.md)). The resume brief adds a "Context:" line, computed by the worker from git history and other tickets, and runs get it in their data fence. It lists files that usually change with the ticket's files, other tickets on the same files, and guard facts.
+- **Run environment disclosure** ([ADR 0041](docs/decisions/0041-run-environment-disclosure.md), from the MCP credentials issue).
+  - An autonomous run records the names (never values) of the variables it removed. The Run dialog shows "Removed from autonomous runs: N variables", run detail shows an Environment section, and the agent is told that a tool needing one is unavailable in the run, not broken.
+  - Learnings about the run's tools, connectors, removed variables or MCP servers are marked *Seen in autonomous runs*. They go stale (*Run environment changed*) when that environment changes.
+  - README "MCP servers in autonomous runs" explains which fix applies to which variable.
+- **State checkpoint** ([ADR 0030](docs/decisions/0030-state-checkpoint.md)). The worker writes `state/state.checkpoint.json` on stop and on idle ticks (`[worker] checkpoint_every`, 500). Start hydrates it and replays only the newer events: 5× faster at 20k events and 15× at 100k on the reference machine. Any version, code, configuration or journal mismatch replays the whole journal.
+- **Hook benchmark** ([ADR 0034](docs/decisions/0034-hook-latency-and-daemon-ipc.md)). `scripts/bench-hooks.mjs` reports p50/p95/p99 for PreToolUse, PostToolUse, SessionStart, the status line and in-process `runHook`, with `--json` and `--baseline <checkout>`.
+
+### Changed
+
+- The status line runs from a lean entry that loads 18 modules instead of 67. Its output is unchanged apart from the new drift suffix. A SessionStart hook that finds the worker ready no longer loads the worker module. Both p95 times dropped by 92 ms or more in each of three runs on the (loaded) reference machine (ADR 0034).
+- The draft PR's test gate line, and the new receipt, replace absolute paths in the test command with `<local path>`.
+- `test_gate` keeps every attempt (`runs[]`); `timings.agent_ms` no longer includes critic time, which is `critic_ms`.
+- `pre-tool` `write_target` and `tool-failure` `error` are capped in UTF-8 bytes (120 and 300), not characters.
+- In the run ledger, `Bearer` or `Basic` followed by a plain word is treated as prose and kept. Tool names are written as given when they have a tool name's shape, and as `[invalid tool name]` otherwise.
+- `supersededBy` ignores CI fix runs, so the run that opened a PR stays the one to review.
+- `REDUCER_VERSION` is 2.
+
+### Security
+
+- **Ingress redaction** ([ADR 0029](docs/decisions/0029-ingress-redaction.md)). Every hook and CLI event is redacted before it reaches the journal or the blob store, and the worker redacts each ingress file again. This covers Stop messages, plans, the start of shell commands, tool errors, title candidates, commit messages and `quill tracker push --comment` (redacted before the preview). It removes known credential formats, `.env` lines and high-entropy strings, and keeps ids, hashes, paths and URLs byte for byte. Old journals are not rewritten.
+- CI log tails are bounded, redacted as a whole before they are cut, stripped of control characters, and filtered for instruction-like lines. Check names are filtered too. The tail reaches a fix run only inside its data fence.
+- CI fix approval, dismissal and resume, snapshot restore and critical leases are owner dashboard actions only. No CLI path grants or extends a lease. A page run-proposal cannot claim a worker-only proposal id (`proposal-id-reserved`).
+- The critic never gets the run's scope credentials or git tokens and never writes to the run's ledger.
+- Nothing new reaches a static export, the mirror, a publisher, a tracker push or a vault note, except two numbers: `scope_drift` and `timings.critic_ms`. Paths, refs, test output, scopes, variable names, CI data and agent text stay local. A sentinel test enforces this.
+- Restoring a snapshot and tearing down a ticket worktree never delete uncommitted work: a restore snapshots the checkout first, and teardown skips dirty worktrees and never forces.
+
+### Deferred
+
+- Daemon socket IPC for hooks: ADR 0034 gives the reasons and the restated latency KPI.
+- Per-tool-call and interactive-session snapshots, and restoring an archived snapshot.
+- Symlinked env files in ticket worktrees.
+- Dry-run enforcement for terraform, gh and aws, and twins for helm, mysql, redis-cli and MCP pins.
+- CLI lease grants (by design).
+- Intent grouping of diffs, and per-hunk revert.
+- Bitbucket CI.
+- Enforced (denying) planned files, and a planned-files field in the Run dialog.
+- Parser-based (tree-sitter) symbol anchors.
+- A dashboard view of ticket worktrees, a dismissal reason on the dashboard's Dismiss, a "Mark reviewed" action, and the receipt on the dashboard.
+- The MCP credentials issue's fixes 1 (`[worker] env_passthrough` and a doctor warning) and 3 (a read-only git-provider slot) are 1.1.x/2.0.x candidates.
+
 ## [1.1.1] - 2026-10-19
 
 ### Fixed
@@ -339,7 +419,10 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/nulllvoid/session-quill/compare/v1.1.1...v2.0.0
+[1.1.1]: https://github.com/nulllvoid/session-quill/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/nulllvoid/session-quill/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/nulllvoid/session-quill/compare/v0.7.2...v1.0.0
 [0.7.2]: https://github.com/nulllvoid/session-quill/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/nulllvoid/session-quill/compare/v0.7.0...v0.7.1

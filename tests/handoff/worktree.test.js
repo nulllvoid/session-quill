@@ -108,3 +108,121 @@ test('a failed removeWorktree never deregisters the owner\'s own missing worktre
   assert.equal(fs.existsSync(plain), false, 'the fallback still deletes the directory');
   assert.ok(git(repo.dir, 'worktree', 'list').includes(path.basename(path.dirname(ownerWt))), 'the owner registration survives');
 });
+
+// ---- Ticket worktrees (ADR 0036)
+import { createBranchWorktree, copyIgnoredFiles, removeCleanWorktree } from '../../src/handoff/worktree.js';
+
+function ticketRepo() {
+  const repo = makeRepo();
+  fs.writeFileSync(path.join(repo.dir, '.gitignore'), '.env\n.env.local\nsecrets/\n');
+  git(repo.dir, 'add', '.gitignore');
+  git(repo.dir, 'commit', '-q', '-m', 'ignore env');
+  fs.writeFileSync(path.join(repo.dir, '.env'), 'TOKEN=local\n');
+  const root = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'st-qh-')), 'worktrees');
+  return { ...repo, head: git(repo.dir, 'rev-parse', 'HEAD'), root, dir: repo.dir, wt: path.join(root, 'demo', 'FEAT-1') };
+}
+
+test('createBranchWorktree checks out quill/<KEY> from the base, reuses an existing branch and refuses unsafe ones', async () => {
+  const r = ticketRepo();
+  const made = await createBranchWorktree({ repoPath: r.dir, dir: r.wt, branch: 'quill/FEAT-1', base: 'HEAD', repo: { default_branch: 'main' } });
+  assert.deepEqual([made.branch, made.base_sha, made.created_branch], ['quill/FEAT-1', r.head, true]);
+  assert.equal(git(r.wt, 'rev-parse', '--abbrev-ref', 'HEAD'), 'quill/FEAT-1');
+  assert.equal(git(r.dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'main', 'the repository checkout stays on its branch');
+  await assert.rejects(() => createBranchWorktree({ repoPath: r.dir, dir: r.wt, branch: 'quill/FEAT-1' }), (e) => e.code === 'worktree-exists');
+  // The branch outlives its worktree; mounting again checks it out as it is.
+  fs.writeFileSync(path.join(r.wt, 'work.txt'), 'w');
+  git(r.wt, 'add', '.');
+  git(r.wt, 'commit', '-q', '-m', 'ticket work');
+  const tip = git(r.wt, 'rev-parse', 'HEAD');
+  git(r.dir, 'worktree', 'remove', r.wt);
+  const again = await createBranchWorktree({ repoPath: r.dir, dir: r.wt, branch: 'quill/FEAT-1', base: r.head });
+  assert.deepEqual([again.base_sha, again.created_branch], [tip, false]);
+  for (const branch of ['main', 'release/1.0', 'develop', '--upload-pack=x', 'quill/a..b', 'quill/x.lock', 'quill/x.']) {
+    await assert.rejects(() => createBranchWorktree({ repoPath: r.dir, dir: path.join(r.root, 'x', 'y'), branch, repo: { default_branch: 'main' } }), (e) => ['branch-protected', 'branch-invalid'].includes(e.code), branch);
+  }
+  assert.equal(fs.existsSync(path.join(r.root, 'x')), false, 'nothing is created for a refused branch');
+});
+
+test('copyIgnoredFiles copies only ignored regular files inside the repository, never links or overwrites', async () => {
+  const r = ticketRepo();
+  await createBranchWorktree({ repoPath: r.dir, dir: r.wt, branch: 'quill/FEAT-1' });
+  fs.mkdirSync(path.join(r.dir, 'secrets'));
+  fs.writeFileSync(path.join(r.dir, 'secrets', 'dev.key'), 'k');
+  const outside = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'st-out-')), 'outside.txt');
+  fs.writeFileSync(outside, 'outside');
+  let linked = false;
+  try { fs.symlinkSync(outside, path.join(r.dir, '.env.local')); linked = true; } catch { /* no symlink privilege on this machine */ }
+  const res = await copyIgnoredFiles({ repoPath: r.dir, dir: r.wt, entries: ['.env', '.env.local', 'secrets/dev.key', 'README.md', '../x', outside, 'C:\\x\\.env', '/etc/passwd', '.git/config', 'missing.env', 'secrets'] });
+  assert.deepEqual(res.copied, ['.env', 'secrets/dev.key']);
+  assert.equal(fs.readFileSync(path.join(r.wt, '.env'), 'utf8'), 'TOKEN=local\n');
+  assert.equal(fs.lstatSync(path.join(r.wt, '.env')).isSymbolicLink(), false, 'a copy, not a link');
+  const reason = (p) => res.skipped.find((s) => s.path === p)?.reason;
+  assert.equal(reason('README.md'), 'not-ignored', 'a tracked file is never copied');
+  for (const p of ['../x', '.git/config', '/etc/passwd']) assert.equal(reason(p), 'invalid-path', p);
+  assert.equal(res.skipped.filter((s) => s.reason === 'invalid-path').length, 5, 'absolute paths in any spelling are refused');
+  assert.equal(reason('missing.env'), 'missing');
+  assert.equal(reason('secrets'), 'not-a-file');
+  if (linked) assert.equal(reason('.env.local'), 'not-a-file', 'a symlink is never followed');
+  assert.equal(fs.existsSync(path.join(r.wt, '.env.local')), false);
+  // A second copy never overwrites what the worktree already has.
+  fs.writeFileSync(path.join(r.wt, '.env'), 'EDITED\n');
+  const again = await copyIgnoredFiles({ repoPath: r.dir, dir: r.wt, entries: ['.env'] });
+  assert.deepEqual([again.copied, again.skipped[0].reason], [[], 'exists']);
+  assert.equal(fs.readFileSync(path.join(r.wt, '.env'), 'utf8'), 'EDITED\n');
+});
+
+test('removeCleanWorktree removes only a clean registered worktree under the root, without --force, and keeps the branch', async () => {
+  assert.equal(removeCleanWorktree.toString().includes('--force'), false);
+  const r = ticketRepo();
+  await createBranchWorktree({ repoPath: r.dir, dir: r.wt, branch: 'quill/FEAT-1' });
+  await copyIgnoredFiles({ repoPath: r.dir, dir: r.wt, entries: ['.env'] });
+  // Untracked work and edits to tracked files are both uncommitted work.
+  fs.writeFileSync(path.join(r.wt, 'notes.txt'), 'draft');
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root }), { removed: false, reason: 'uncommitted-changes' });
+  assert.equal(fs.readFileSync(path.join(r.wt, 'notes.txt'), 'utf8'), 'draft');
+  fs.rmSync(path.join(r.wt, 'notes.txt'));
+  fs.writeFileSync(path.join(r.wt, 'src.js'), 'export const a = 9;\n');
+  assert.equal((await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root })).reason, 'uncommitted-changes');
+  git(r.wt, 'checkout', '--', 'src.js');
+  // Outside the root, or a plain folder inside it: never touched.
+  assert.equal((await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: path.join(r.root, 'other') })).reason, 'outside-worktrees-root');
+  const plain = path.join(r.root, 'demo', 'PLAIN-1');
+  fs.mkdirSync(plain, { recursive: true });
+  fs.writeFileSync(path.join(plain, 'keep.txt'), 'k');
+  assert.equal((await removeCleanWorktree({ repoPath: r.dir, dir: plain, root: r.root })).reason, 'not-a-worktree');
+  assert.equal(fs.existsSync(path.join(plain, 'keep.txt')), true);
+  // Clean apart from the ignored .env copy: removed; the branch and its commits stay.
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root }), { removed: true });
+  assert.equal(fs.existsSync(r.wt), false);
+  assert.equal(git(r.dir, 'rev-parse', '--verify', 'refs/heads/quill/FEAT-1'), r.head);
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root }), { removed: true, missing: true });
+});
+
+test('removeCleanWorktree keeps a worktree whose detached HEAD has commits no branch contains', async () => {
+  const r = ticketRepo();
+  await createBranchWorktree({ repoPath: r.dir, dir: r.wt, branch: 'quill/FEAT-1' });
+  git(r.wt, 'checkout', '-q', '--detach');
+  fs.writeFileSync(path.join(r.wt, 'lost.txt'), 'l');
+  git(r.wt, 'add', '.');
+  git(r.wt, 'commit', '-q', '-m', 'detached work');
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root }), { removed: false, reason: 'detached-head' });
+  git(r.wt, 'branch', 'keep-it');
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root }), { removed: true });
+});
+
+test('removeCleanWorktree keeps a worktree whose copied ignored file differs from the repository\'s; a tracked one never counts', async () => {
+  const r = ticketRepo();
+  await createBranchWorktree({ repoPath: r.dir, dir: r.wt, branch: 'quill/FEAT-1' });
+  await copyIgnoredFiles({ repoPath: r.dir, dir: r.wt, entries: ['.env'] });
+  const copy = ['.env', '.env.local', 'README.md', '../escape'];
+  fs.writeFileSync(path.join(r.wt, '.env'), 'TOKEN=changed\n');
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root, copy }), { removed: false, reason: 'ignored-files-changed' });
+  assert.equal(fs.readFileSync(path.join(r.wt, '.env'), 'utf8'), 'TOKEN=changed\n');
+  // An ignored file the worktree has and the repository lacks would be lost too.
+  fs.writeFileSync(path.join(r.wt, '.env'), 'TOKEN=local\n');
+  fs.writeFileSync(path.join(r.wt, '.env.local'), 'only here\n');
+  assert.equal((await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root, copy })).reason, 'ignored-files-changed');
+  fs.rmSync(path.join(r.wt, '.env.local'));
+  // README.md is tracked: git status covers it, and it differs from nothing ignored.
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root, copy }), { removed: true });
+});

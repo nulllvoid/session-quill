@@ -68,7 +68,8 @@ test('recipes: a read-only recipe may narrow its tools; git log is accepted in e
 
 test('recipes: built-ins ship the three handoff modes plus deploy-check and standup, all valid', () => {
   const { effective } = loadRecipes({ env: { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'st-rec-')) } });
-  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'critical-change', 'deploy-check', 'file-task', 'standup', 'verify-deploy', 'workspace-setup']);
+  assert.deepEqual([...effective.keys()].sort(), ['analyse', 'analyse-followups', 'attempt-fix', 'critic-review', 'critical-change', 'deploy-check', 'file-task', 'standup', 'verify-deploy', 'workspace-setup']);
+  assert.equal(effective.get('critic-review').schedulable, false, 'the critic runs only inside a fix run (ADR 0040)');
   assert.deepEqual([effective.get('file-task').mode, effective.get('file-task').schedulable], ['files', false], 'a files run is never scheduled');
   for (const r of effective.values()) assert.equal(r.error, null, r.name);
   assert.deepEqual(['analyse', 'analyse-followups', 'attempt-fix'].map((n) => effective.get(n).legacy), [true, true, true]);

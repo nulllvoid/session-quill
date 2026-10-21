@@ -4,6 +4,7 @@ import { hasValidDescription, descriptionProblems } from '../description.js';
 import { timelineEntry, touch } from './common.js';
 import { applyTicketFields, createTicket, relinkTicket } from './tickets.js';
 import { attachUnboundWork } from './capture.js';
+import { applySnapshotRestore } from './snapshots.js';
 
 export function handleRequest(state, ev, result) {
   const r = ev.payload;
@@ -69,6 +70,8 @@ export function handleRequestTx(state, ev, result) {
         if (ticket) { ticket.timeline.push(timelineEntry(ev, 'handoff', `Undid: ${effect.action === 'deleted' ? 'restored' : 'reverted'} ${effect.path}`)); touch(state, ticket, ev, result); }
         result.handoffsChanged.add(h.id);
       }
+    } else if (m.type === 'snapshot-restore') {
+      applySnapshotRestore(state, ev, m, result);
     } else if (m.type === 'handoff-cancel') {
       const h = state.handoffs.get(m.handoff_id);
       if (h && h.state === 'queued') {
@@ -128,6 +131,10 @@ export function applySuggestion(state, ev, m, req, result) {
   h.revision = (h.revision ?? 1) + 1;
   h.updated_at = ev.occurred_at;
   result.handoffsChanged.add(h.id);
+  if (m.state === 'dismissed' && typeof m.reason === 'string' && m.reason.trim()) {
+    recordDismissal(ticket, h, sug, m.reason.trim(), req, ev);
+    result.changed.add(ticket.id);
+  }
   if (m.state !== 'accepted') return;
   if (m.fields) applyTicketFields(state, ticket, m.fields, ev, 'manual', result);
   if (m.child && !state.tickets.has(m.child.id)) {
@@ -139,6 +146,24 @@ export function applySuggestion(state, ev, m, req, result) {
 
 // The last this-many Run notes are kept per ticket; an older note is dropped when a new one arrives.
 export const RUN_NOTES_MAX = 20;
+// A note holding only dismissal reasons (a run that left no note of its own, ADR 0032) is capped on
+// its own: it never pushes out a note with attempts, lessons or a failure record.
+export const DISMISSAL_NOTES_MAX = 10;
+
+const filled = (v) => Array.isArray(v) && v.length > 0;
+const dismissalOnly = (n) => !filled(n.attempts) && !filled(n.lessons) && !n.failure && !n.withheld;
+
+// The newest RUN_NOTES_MAX real notes and the newest DISMISSAL_NOTES_MAX dismissal-only ones, in
+// arrival order: each kind only ever evicts its own oldest.
+function capRunNotes(list) {
+  let real = list.filter((n) => !dismissalOnly(n)).length;
+  let quiet = list.length - real;
+  return list.filter((n) => {
+    if (dismissalOnly(n)) { if (quiet > DISMISSAL_NOTES_MAX) { quiet -= 1; return false; } return true; }
+    if (real > RUN_NOTES_MAX) { real -= 1; return false; }
+    return true;
+  });
+}
 
 function appendRunNote(ticket, note, runId) {
   const entry = {
@@ -151,9 +176,45 @@ function appendRunNote(ticket, note, runId) {
     ...(Number.isInteger(note.withheld) && note.withheld > 0 ? { withheld: note.withheld } : {}),
     ...(note.origin === 'page' ? { origin: 'page' } : {}),
   };
+  const failure = runNoteFailure(note.failure);
+  if (failure) entry.failure = failure;
+  // Dismissals of this run's suggestions recorded before its note arrived stay with the note.
+  const previous = (Array.isArray(ticket.run_notes) ? ticket.run_notes : []).find((n) => n && n.run_id === runId);
+  if (previous && Array.isArray(previous.dismissals)) entry.dismissals = previous.dismissals;
   const list = (Array.isArray(ticket.run_notes) ? ticket.run_notes : []).filter((n) => n && n.run_id !== runId);
   list.push(entry);
-  ticket.run_notes = list.slice(-RUN_NOTES_MAX);
+  ticket.run_notes = capRunNotes(list);
+}
+
+// The failure ledger (ADR 0032): only the worker-structured fields of a failed test gate, copied
+// field by field. Never test output or test names.
+const SIGNATURE = /^[0-9a-f]{16}$/;
+function runNoteFailure(f) {
+  if (!f || typeof f !== 'object' || f.kind !== 'test-gate' || (f.status !== 'failed' && f.status !== 'timeout')) return null;
+  return {
+    kind: 'test-gate',
+    status: f.status,
+    command: typeof f.command === 'string' && f.command ? f.command.slice(0, 300) : null,
+    exit_code: Number.isInteger(f.exit_code) ? f.exit_code : null,
+    signature: typeof f.signature === 'string' && SIGNATURE.test(f.signature) ? f.signature : null,
+    files_touched: (Array.isArray(f.files_touched) ? f.files_touched : []).filter((x) => typeof x === 'string' && x).slice(0, 20).map((x) => x.slice(0, 300)),
+  };
+}
+
+// An owner's reason for dismissing a run's suggestion (ADR 0032), kept on that run's Run note, which
+// stays local (exports, the mirror and vault notes drop run_notes). A run without a note gets a
+// dismissal-only one, capped apart from the real notes (capRunNotes), so it never evicts one.
+export const DISMISS_REASON_CHARS = 280;
+export const DISMISSALS_MAX = 20;
+function recordDismissal(ticket, h, sug, reason, req, ev) {
+  const list = Array.isArray(ticket.run_notes) ? ticket.run_notes : [];
+  let note = list.find((n) => n && n.run_id === h.id);
+  if (!note) {
+    note = { run_id: h.id, at: ev.occurred_at, attempts: [], lessons: [], ...(h.proposal ? { origin: 'page' } : {}) };
+    ticket.run_notes = capRunNotes([...list, note]);
+  }
+  const item = { suggestion_id: sug.id, type: typeof sug.type === 'string' ? sug.type : null, reason: reason.slice(0, DISMISS_REASON_CHARS), at: ev.occurred_at, by: req.actor_id ?? 'owner' };
+  note.dismissals = [...(Array.isArray(note.dismissals) ? note.dismissals : []).filter((d) => d && d.suggestion_id !== sug.id), item].slice(-DISMISSALS_MAX);
 }
 
 export function handleHandoffTx(state, ev, result) {

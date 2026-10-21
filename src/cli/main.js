@@ -26,6 +26,8 @@ const COMMANDS = {
   tracker: () => import('./commands/tracker.js'),
   mirror: () => import('./commands/mirror.js'),
   memory: () => import('./commands/memory.js'),
+  worktree: () => import('./commands/worktree.js'),
+  receipt: () => import('./commands/receipt.js'),
 };
 
 // Every command the dispatcher knows; tests enumerate it to check the in-run refusal.
@@ -38,13 +40,14 @@ Usage: quill <command> [options]
   start [--repo <path>] [--store <path>] [--session <id>] [--share-settings]
   init [--store <path>] [--project <id>] [--project-name <name>] [--repo <path>] [--timezone <tz>] [--yes] [--bootstrap-from-tracker]
   ticket create "<title>" --description "<Goal/Context/Done when>" [--category c] [--priority P2] [--parent KEY] [--project id] [--due YYYY-MM-DD] [--bind] --session <id>
-  ticket work "<task title>" --description "<Goal/Context/Done when>" [--category c] [--project id] [--repo id] --session <id>  (reuse or create, then bind)
-  ticket bind <KEY> --session <id>          ticket show --session <id> [--json]
+  ticket work "<task title>" --description "<Goal/Context/Done when>" [--category c] [--project id] [--repo id] [--worktree|--no-worktree] --session <id>  (reuse or create, then bind)
+  ticket bind <KEY> [--worktree|--no-worktree] --session <id>   ticket show --session <id> [--json]
   ticket off --session <id>                 ticket on --session <id>
   ticket relink <KEY> --external <EXT-KEY> [--system s] [--url <url>] --session <id>   (--jira is an alias)
   ticket children <KEY>                     ticket list [--status s] [--json]
   ticket stale [--idle-days n] [--json]     ticket stale --apply  (closes shipped and children-done tickets)
   ticket set <KEY> [--description d] [--title t] [--status s] [--blocker b] [--next text] [--priority P] [--category c] [--due D|none] [--parent KEY|none] [--repo id|none] [--no-code yes|no]
+  worktree list [--all] [--json]            worktree remove <KEY>  (ticket worktrees under <quill home>/worktrees; a dirty one is never removed)
   repo add <path> [--id id] [--project id] [--repo-file]   repo list [--json]   repo remove <id>
   repo clone <KEY> [--url <remote>] [--confirm]   (preview, then clone a ticket's repository into [tracker] auto_clone_dir)
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>
@@ -57,12 +60,13 @@ Usage: quill <command> [options]
   ui [--no-open] | ui --static <out.html> [--open] | ui --revoke  (sign every browser out)
                                             export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
   mirror status|open [--dir <folder>] [--json] | mirror write   (read-only copy for other machines)
-  handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd]
+  handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access autonomous|standard|settings|full] [--scope s]... [--planned glob]... [--max-turns n] [--budget usd]
   handoff list                              handoff cancel <run-id> | handoff cancel --batch <batch-id>  (queued runs of a batch)
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]
-  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd]
+  agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--planned glob]... [--max-turns n] [--budget usd]
   agent suggestions <KEY> [--json]          agent accept|dismiss <run-id> <suggestion-id>
   agent resume <run-id>                     (a run interrupted by a worker restart, as a new run)
+  receipt <run-id> [--json]                 (a run's evidence receipt, rebuilt from the journal; a digest, not proof)
   memory list [--repo <id>] [--machine] [--quarantine] [--json]   memory show <id> [--json]
   memory retire <id>                        memory pin <id> [--unpin]   memory note "<text>" (--repo <id> | --machine) [--section s] [--key k]
   agent install <https git URL|folder> [--ref r] [--only a,b] [--replace] [--confirm]   agent uninstall <recipe> [--force]
