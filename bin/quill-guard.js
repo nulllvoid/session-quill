@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { decide, readableUnder } from '../src/gate/run-guard.js';
+import { commandSha } from '../src/gate/dry-run.js';
 import { readGrant, GRANT_FILE } from '../src/handoff/grant.js';
 import { redactCapped, summarizeInput } from '../src/handoff/stream.js';
 import { handoffRunDir } from '../src/lib/paths.js';
@@ -123,8 +124,13 @@ function check(raw, env) {
     const change = isPlainObject(r.criticalChange) ? r.criticalChange : null;
     const scope = change ? change.scope : cls.scope;
     const target = change ? change.target : cls.target ?? cls.host;
+    // ADR 0031: in a run that must dry-run its pinned writes, each shell call's line names the one
+    // plain command it ran by hash, so the guard can find a pinned write's dry-run twin later.
+    let argvSha = null;
+    if (s.grant && s.grant.requireDryRun === true) { try { argvSha = commandSha(call); } catch { argvSha = null; } }
     Object.assign(line, {
       ...callFields(s),
+      ...(argvSha ? { argv_sha: argvSha } : {}),
       decision: r.decision,
       reason: summary(r.reason, EXCERPT_BYTES),
       class: summary(cls.class, 40),
