@@ -350,7 +350,17 @@ _Not yet filled._
 
 ### Task 9 Planned files and drift
 
-_Not yet filled._
+ADR 0037. Observe only: no field here allows, refuses or pauses anything. A planned entry is a repo-relative path or glob, normalised to forward slashes with no leading `./` or trailing `/`. It may not be absolute, drive- or home-relative, a URL, hold a colon, a `..` segment or a control character, or exceed 200 characters. Lists hold at most 50 entries. Rules: `src/core/planned-paths.js`.
+
+- `post-tool` payload (ingress, `ExitPlanMode` approved only): `planned_paths[]`, the entries `extractPlannedPaths` found in the plan text (possibly empty). Absent on every other post-tool event and on a rejected plan. The reducer normalises it again.
+- `stop` payload (ingress, optional): `drift_nudged: true` when this Stop carried the once-per-session drift nudge (nudge mode only).
+- Session (local): `planned_paths[]` (the latest approved plan's entries; a new plan replaces them) and `drift` (nullable: `{ count, last_path, at }`). `count` is the number of repo-relative write paths outside the planned entries since that plan. `last_path` is the latest such path, capped at 400 characters. `at` is its event time. A new plan resets `drift` to null. Absolute write paths are never drift. Both fields are set lazily and stay off exports, mirrors, publishers and vault notes.
+- Binding snapshot (worker → hooks): `drift_count` (integer, 0 when none), read by the status line (` ⚠ drift N`) and `quill status`.
+- Hook state (local, not journaled): `state/drift/<session>.json` `{ planned_paths, pending, last_path, at, nudged_at }`, written only by the hook for the nudge-mode Stop nudge.
+- Handoff request and record: `planned_paths[]` (optional, local). Set by `--planned`; needs autonomous or full access (`planned-needs-guard`) and `edit_source` (`permission-dependency`). An invalid entry fails with `planned-invalid`. Resume carries it over.
+- Grant: `plannedPaths[]` when the record has planned files, frozen with the grant hash.
+- Guard ledger line (`kind: "guard"`): `drift: true` on an allowed `Edit`, `Write`, `MultiEdit` or `NotebookEdit` call whose target lies inside the checkout but outside `plannedPaths`. Set after the decision; never present on a denied call.
+- Handoff record: `scope_drift` (integer, nullable/absent). The number of allowed calls the guard marked `drift`, counted once per `tool_use_id` when the run finishes. Absent when the run had no planned files or ran unobserved. Exports carry it as a whole number (`HANDOFF_COUNT_FIELDS`); `planned_paths` never travels.
 
 ### Task 10 Context card
 
