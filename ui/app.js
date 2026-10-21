@@ -50,6 +50,10 @@ const appState = {
   contentStatus: {},
   // Result blobs read as run records (run detail sections), by content hash: { status: 'loading' } | { data } | { error }.
   runRecords: {},
+  // ADR 0040: a run's patch and critic notes, by content hash: { status: 'loading' } | { text } | { error }.
+  runBlobs: {},
+  // Diff files the owner opened or closed in run detail, by `<patch_ref>:<path>`.
+  diffOpen: {},
   loadedTicket: null,
   lastFocus: null,
   error: null,
@@ -377,6 +381,31 @@ function runRecordFor(run, s) {
   return { record: r.data ?? null, recordStatus: r.status === 'loading' ? 'loading' : r.error ? { error: r.error } : null };
 }
 
+// A run's patch and critic notes (ADR 0040), owner dashboard only, fetched once per content hash
+// like the run record; `text` null means the blob is no longer stored.
+function loadRunBlob(hash, generation, retried = false) {
+  appState.runBlobs[hash] = { status: 'loading' };
+  api.getContent(hash, generation).then((text) => {
+    appState.runBlobs[hash] = { text: typeof text === 'string' ? text : null };
+    render();
+  }).catch(async (err) => {
+    if (err.code === 'generation-expired' && !retried) { await poll(); return loadRunBlob(hash, appState.snapshot.generation_id, true); }
+    appState.runBlobs[hash] = { error: err.message || 'the request failed' };
+    render();
+  });
+}
+
+function runBlobsFor(run, s) {
+  if (!run || api.static || !(s.capabilities ?? {}).handoff) return {};
+  const refs = [run.patch_ref, ['clean', 'warnings'].includes(run.critic_status) ? run.critic_ref : null].filter((r) => typeof r === 'string' && /^[0-9a-f]{64}$/.test(r));
+  const blobs = {};
+  for (const ref of refs) {
+    if (!Object.hasOwn(appState.runBlobs, ref)) loadRunBlob(ref, s.generation_id);
+    blobs[ref] = appState.runBlobs[ref];
+  }
+  return { blobs, diffOpen: appState.diffOpen };
+}
+
 function renderDetailPanel(now, pending) {
   const panel = $('#detail');
   const s = appState.snapshot;
@@ -403,7 +432,7 @@ function renderDetailPanel(now, pending) {
   const key = ticket ? ticket.id : `run:${runId}`;
   const html = ticket
     ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded, leases: appState.leases })
-    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, memory: appState.memory, ...runRecordFor(run, s) }) : renderRunNotFound(runId);
+    : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, memory: appState.memory, ...runRecordFor(run, s), ...runBlobsFor(run, s) }) : renderRunNotFound(runId);
   setMarkup(panel, html);
   // A different ticket or run starts at its title, not at the previous one's scroll offset.
   if (renderedDetail !== key) { panel.scrollTop = 0; renderedDetail = key; }
@@ -433,7 +462,7 @@ function renderDialog() {
   else if (d.type === 'run-agent') {
     const t = ticketById(s, d.ticket);
     if (!t) { appState.dialog = null; return renderDialog(); }
-    html = renderRunAgentDialog(t, s, { recipe: d.recipe, retryOf: d.retryOf });
+    html = renderRunAgentDialog(t, s, { recipe: d.recipe, retryOf: d.retryOf, note: d.note });
   } else if (d.type === 'bulk-handoff') html = renderBulkHandoffForm(s, d.ids, { mode: d.mode });
   else if (d.type === 'bulk-results') html = renderBulkResults(s, { batchId: d.batchId, rows: d.rows, requests: [...appState.requests.values()] });
   else if (d.type === 'bulk-status') html = renderBulkStatusDialog(appState.checked.size);
@@ -689,7 +718,7 @@ function handleAction(el) {
     case 'toggle-blocked': appState.blockedExpanded = !appState.blockedExpanded; render(); break;
     case 'close-dialog': closeDialog(); break;
     case 'handoff':
-    case 'run-agent': appState.dialog = { type: 'run-agent', ticket: el.dataset.ticket, recipe: el.dataset.recipe ?? null, retryOf: el.dataset.retryOf ?? null }; render(); break;
+    case 'run-agent': appState.dialog = { type: 'run-agent', ticket: el.dataset.ticket, recipe: el.dataset.recipe ?? null, retryOf: el.dataset.retryOf ?? null, note: el.dataset.note ?? null }; render(); break;
     case 'run-agent-pick': appState.dialog = { ...appState.dialog, recipe: el.dataset.recipe }; render(); break;
     case 'run-agent-back': appState.dialog = { ...appState.dialog, recipe: null }; render(); break;
     case 'record-deployment': appState.dialog = { type: 'deployment', ticket: el.dataset.ticket, mode: 'record', deploymentId: el.dataset.deployment ?? null }; render(); break;
@@ -777,6 +806,7 @@ function handleAction(el) {
     case 'load-content': loadContent(el.dataset.hash, el.dataset.generation); break;
     case 'hide-content': delete appState.content[el.dataset.hash]; render(); break;
     case 'load-run-record': loadRunRecord(el.dataset.hash, appState.snapshot.generation_id); render(); break;
+    case 'load-run-blob': loadRunBlob(el.dataset.hash, appState.snapshot.generation_id); render(); break;
     case 'load-ticket': {
       api.getTicket(el.dataset.ticket, el.dataset.generation).then((t) => { appState.loadedTicket = t; render(); }).catch((err) => { if (err.code === 'generation-expired') poll(); });
       break;
@@ -1155,6 +1185,8 @@ export function startApp() {
   document.addEventListener('toggle', (e) => {
     const d = e.target;
     if (d instanceof HTMLDetailsElement && d.classList.contains('access-advanced') && !d.open && d.querySelector('input[name="access"]:checked')) d.open = true;
+    // A run's diff file stays open or closed as the owner left it across polls (ADR 0040).
+    if (d instanceof HTMLDetailsElement && d.dataset.diffFile) appState.diffOpen[d.dataset.diffFile] = d.open;
   }, true);
   // Typing a scope's target ticks its box (review M5), so a typed target is never silently dropped.
   document.addEventListener('input', (e) => {

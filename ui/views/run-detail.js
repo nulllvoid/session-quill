@@ -7,6 +7,7 @@
 import { esc, attr, icon, timeEl, handoffChip, ticketById, normalizeSnapshot, contentViewer, keyEl, trustChip, repoName } from '../components.js';
 import { testGateChip, accessBadge, runTimings, runQuality, suggestionItem, fileEffects, SOURCE_LABELS } from './agents.js';
 import { supersededBy } from '../lib/runs.js';
+import { parseDiff, groupFiles, hunkRetryNote } from '../lib/diff.js';
 
 // The worker's own rule (src/handoff/resume.js resumeProblem): interrupted, with a session id that
 // Claude Code reported (a UUID).
@@ -253,6 +254,104 @@ function runSnapshots(h, t, caps, pending, { now, tz }) {
   return `<p class="small muted">${esc(note)}</p><ol class="run-snapshots">${items.join('')}</ol>`;
 }
 
+// ADR 0040: the run's patch (`patch_ref`) and the critic's notes (`critic_ref`) are blobs only the
+// owner's dashboard fetches. `blobs` maps a content hash to { status: 'loading' }, { text } (null:
+// no longer stored) or { error }. An export has neither ref, so it shows neither.
+const DIFF_FILE_LINES = 400;
+const DIFF_TOTAL_LINES = 4000;
+const DIFF_OPEN_LINES = 120;
+const DIFF_STATUS = { added: 'Added', deleted: 'Deleted', renamed: 'Renamed' };
+const DIFF_MARK = { add: '+', del: '-', context: ' ', meta: '' };
+const parsedPatches = new Map();
+function parsedPatch(hash, text) {
+  if (!parsedPatches.has(hash)) {
+    if (parsedPatches.size >= 20) parsedPatches.delete(parsedPatches.keys().next().value);
+    parsedPatches.set(hash, parseDiff(text));
+  }
+  return parsedPatches.get(hash);
+}
+
+function blobLine(ref, b, label) {
+  if (!b || b.status === 'loading') return `<p class="small muted run-blob-status" aria-busy="true">${esc(`Loading ${label}…`)}</p>`;
+  if (b.error) return `<p class="small run-blob-status"><span class="critical" role="alert">${esc(`Could not load ${label}: ${b.error}`)}</span> <button type="button" class="btn small ghost" data-action="load-run-blob" data-hash="${attr(ref)}">Retry</button></p>`;
+  if (typeof b.text !== 'string') return `<p class="small muted run-blob-status">${esc(`${label.charAt(0).toUpperCase()}${label.slice(1)} is no longer stored.`)}</p>`;
+  return '';
+}
+
+// The patch, grouped by where each file sits (ui/lib/diff.js), each hunk with its own retry. Long
+// lines wrap inside the panel; a very long diff shows its first lines and says how many are left.
+function groupedDiff(h, files, { open = {}, retry = null } = {}) {
+  if (!files.length) return '<p class="small muted">The patch holds no file changes.</p>';
+  let budget = DIFF_TOTAL_LINES;
+  const adds = files.reduce((n, f) => n + f.additions, 0);
+  const dels = files.reduce((n, f) => n + f.deletions, 0);
+  const few = files.length <= 10;
+  const fileItem = (f) => {
+    const chip = DIFF_STATUS[f.status] ? ` <span class="chip small">${esc(DIFF_STATUS[f.status])}</span>` : '';
+    const from = f.status === 'renamed' && f.oldPath && f.oldPath !== f.path ? ` <span class="small muted">from <code>${esc(f.oldPath)}</code></span>` : '';
+    if (f.binary) return `<li class="diff-file diff-binary"><code class="diff-path">${esc(f.path)}</code>${chip}${from} <span class="chip small">Binary file: content not shown</span></li>`;
+    const key = `${h.patch_ref}:${f.path}`;
+    const lines = f.hunks.reduce((n, x) => n + x.lines.length, 0);
+    const isOpen = Object.hasOwn(open, key) ? !!open[key] : few && lines <= DIFF_OPEN_LINES;
+    let room = DIFF_FILE_LINES;
+    let hidden = 0;
+    const hunks = f.hunks.map((hk) => {
+      const rows = [];
+      for (const l of hk.lines) {
+        if (room <= 0 || budget <= 0) { hidden += 1; continue; }
+        room -= 1;
+        budget -= 1;
+        rows.push(`<span class="diff-line ${l.kind}">${esc(`${DIFF_MARK[l.kind] ?? ''}${l.text}`)}</span>`);
+      }
+      const again = retry ? ` <button type="button" class="btn small ghost" data-action="run-agent" data-ticket="${attr(retry.ticket.id)}" data-recipe="${attr(retry.recipe)}" data-retry-of="${attr(h.id)}" data-note="${attr(hunkRetryNote(f, hk))}" aria-label="${attr(`Retry as new run: rework ${f.path} at ${hk.header}`)}">Retry as new run</button>` : '';
+      return `<div class="diff-hunk"><div class="diff-hunk-head"><code>${esc(hk.header)}</code>${hk.section ? ` <span class="small muted diff-section">${esc(hk.section)}</span>` : ''}${again}</div>${rows.length ? `<pre class="diff-lines">${rows.join('')}</pre>` : ''}</div>`;
+    }).join('');
+    const more = hidden ? `<p class="small muted">${esc(`${hidden} more line${hidden === 1 ? '' : 's'} not shown here; the run's patch file has them all.`)}</p>` : '';
+    return `<li><details class="diff-file" data-diff-file="${attr(key)}"${isOpen ? ' open' : ''}><summary><code class="diff-path">${esc(f.path)}</code>${chip}${from} <span class="small muted">${esc(`+${f.additions} −${f.deletions}`)}</span></summary>${hunks || '<p class="small muted">No line changes: only its mode or name changed.</p>'}${more}</details></li>`;
+  };
+  const groups = groupFiles(files).map((g) => `<div class="diff-group"><h5>${esc(g.name)} <span class="muted small">(${g.files.length})</span></h5><ul class="diff-files">${g.files.map(fileItem).join('')}</ul></div>`).join('');
+  return `<div class="run-diff"><h4>Grouped by file path</h4><p class="small muted">${esc(`${files.length} file${files.length === 1 ? '' : 's'} · +${adds} −${dels}. Grouped by where each file sits in the repository, not by what the change does.`)}</p>${groups}</div>`;
+}
+
+function runDiff(h, caps, blobs, opts) {
+  if (!caps.handoff) return '';
+  if (h.patch_ref) {
+    const b = blobs[h.patch_ref];
+    return blobLine(h.patch_ref, b, "the run's diff") || groupedDiff(h, parsedPatch(h.patch_ref, b.text), opts);
+  }
+  if (h.patch_too_large) return `<p class="small">The diff is over 1 MB, so it is not shown here.${h.patch_path ? ` It is in <code>${esc(h.patch_path)}</code> <button type="button" class="btn small ghost icon-only" data-copy="${attr(h.patch_path)}" data-copy-label="the patch file path" aria-label="Copy the patch file path">${icon('copy')}</button>` : ''}</p>`;
+  return '';
+}
+
+// The critic's findings (ADR 0040): its opinion, never Quill's verification. Every word is agent text.
+const CRITIC_STATES = new Set(['clean', 'warnings', 'not-run', 'failed']);
+const SEVERITY = { high: ['High severity', ' warning'], medium: ['Medium severity', ''], low: ['Low severity', ''] };
+function reviewNotes(h, caps, blobs) {
+  if (!caps.handoff || !CRITIC_STATES.has(h.critic_status)) return '';
+  const lead = `<p class="small muted">${esc('The critic agent\'s opinion, not Quill\'s check. Only "Tests passed (worker)" is Quill\'s own check.')}</p>`;
+  const why = esc(recordText(h.critic_reason) || 'no reason recorded');
+  if (h.critic_status === 'not-run') return `${lead}<p class="small">The critic did not run: ${why}.</p>`;
+  if (h.critic_status === 'failed') return `${lead}<p class="small"><span class="chip warning small">${icon('alert')}Critic did not finish</span> ${why}</p>`;
+  if (!h.critic_ref) return lead;
+  const b = blobs[h.critic_ref];
+  const status = blobLine(h.critic_ref, b, "the critic's notes");
+  if (status) return lead + status;
+  const rec = parseRunRecord(b.text);
+  if (!rec) return `${lead}<p class="small muted">The critic's notes could not be read.</p>`;
+  const summary = recordText(rec.summary);
+  const items = recordRows(rec.findings).map((f) => {
+    const [word, tone] = SEVERITY[recordText(f.severity)] ?? ['Severity not stated', ''];
+    const file = recordText(f.file);
+    const where = file ? ` <code>${esc(`${file}${Number.isInteger(f.line) && f.line > 0 ? `:${f.line}` : ''}`)}</code>` : '';
+    const hunk = recordText(f.hunk);
+    const flag = recordText(f.instruction_like) ? ' <span class="chip warning small" title="This note reads like an instruction to an agent. It is shown for you to read and is never given to a run.">Reads like an instruction</span>' : '';
+    const suggestion = recordText(f.suggestion);
+    const category = recordText(f.category);
+    return `<li class="review-note"><span class="chip small${tone}">${esc(word)}</span>${category ? ` <span class="chip small">${esc(category)}</span>` : ''}${where}${hunk ? ` <code>${esc(hunk)}</code>` : ''}${flag}<p class="small">${esc(recordText(f.text))}</p>${suggestion ? `<p class="small muted">Suggestion: ${esc(suggestion)}</p>` : ''}</li>`;
+  });
+  return `${lead}${summary ? `<p class="small">${esc(summary)}</p>` : ''}${items.length ? `<ul class="review-notes">${items.join('')}</ul>` : '<p class="small muted">The critic noted nothing to review.</p>'}`;
+}
+
 function closeRow(t) {
   return `<div class="detail-nav"><button type="button" class="btn icon-only" data-action="close-run" aria-label="Close run (Escape)">${icon('x')}</button>${t ? `<button type="button" class="btn small ghost" data-action="open-ticket-from-run" data-ticket="${attr(t.id)}">Open ticket</button>` : ''}<span class="detail-nav-keys"><button type="button" class="btn small ghost icon-only prev" data-action="run-prev" aria-label="Previous run">${icon('chevron')}</button><button type="button" class="btn small ghost icon-only" data-action="run-next" aria-label="Next run">${icon('chevron')}</button></span></div>`;
 }
@@ -263,7 +362,9 @@ export function renderRunNotFound(id) {
 
 // `record` is the parsed result blob (parseRunRecord) when the owner's dashboard has it, and
 // `recordStatus` 'loading' or { error } while it does not; `memory` is the owner's memory listing.
-export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, record = null, recordStatus = null, memory = null } = {}) {
+// `blobs` holds the fetched patch and critic blobs (see blobLine) and `diffOpen` which diff files
+// the owner opened or closed, by `<patch_ref>:<path>`, so a poll keeps them as they were.
+export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, record = null, recordStatus = null, memory = null, blobs = {}, diffOpen = {} } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const caps = snapshot.capabilities ?? {};
   const tz = snapshot.meta.timezone;
@@ -287,8 +388,14 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
     runQuality(h, { gate: false }),
   ].join('');
 
+  // A per-hunk retry is the run's ordinary retry with a pre-filled note: offered while the ticket is
+  // open, the run has finished and no later run superseded it.
+  const retry = caps.handoff && t && !next && t.status !== 'done' && !['queued', 'running'].includes(h.state) ? { ticket: t, recipe: name } : null;
+  const diff = runDiff(h, caps, blobs, { open: diffOpen, retry });
   const changes = [
-    (h.changed_files ?? []).length ? `<p class="small">${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : '',
+    // The grouped diff names every file, so the plain list is shown only while it is not there.
+    (h.changed_files ?? []).length && !(caps.handoff && h.patch_ref && blobs[h.patch_ref] && typeof blobs[h.patch_ref].text === 'string') ?`<p class="small">${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : '',
+    diff,
     caps.handoff && Array.isArray(h.planned_paths) && h.planned_paths.length ? `<p class="small muted">Planned files: ${h.planned_paths.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : '',
     h.commit_sha ? `<p class="small">Commit <code>${esc(h.commit_sha.slice(0, 7))}</code> <button type="button" class="btn small ghost icon-only" data-copy="${attr(h.commit_sha)}" data-copy-label="the commit" aria-label="Copy the commit">${icon('copy')}</button></p>` : '',
     (h.test_results ?? []).length ? `<ul class="small test-results">${h.test_results.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : '',
@@ -333,6 +440,7 @@ ${section('Plan', plan.length ? `<ol class="run-plan small">${plan.map((p) => `<
 ${section(`Attempts (${attempts.length})`, attempts.length ? `<ul class="run-attempts">${attempts.map(attemptItem).join('')}</ul>` : '')}
 ${section('Verification', runVerification(verification))}
 ${section('Changes', changes)}
+${section(`Review notes (${Number.isInteger(h.critic_count) && h.critic_count >= 0 ? h.critic_count : 0})`, reviewNotes(h, caps, blobs))}
 ${section(`Critical changes (${critical.length})`, critical.length ? `<p class="small muted">Writes this run was not allowed to make. One Quill can pin to an exact action becomes its own ticket, which you approve in Runs → Needs you.</p><ul class="run-critical">${runCriticalChanges(h, critical, snapshot, caps)}</ul>` : '')}
 ${section('Production writes (full access)', productionWrites(h, caps, { now, tz }))}
 ${section('Delivery', delivery)}

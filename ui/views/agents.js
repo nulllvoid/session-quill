@@ -7,8 +7,9 @@ const ACTIVE = new Set(['pending', 'applying']);
 
 // Repository recipes replace global ones of the same name for that repository only.
 // A recipe that runs only as an approved critical change (ADR 0028: it requires an action pin) is
-// never offered to pick: its runs come from Runs → Needs you.
-export const offeredRecipe = (r) => !(Array.isArray(r.requires) && r.requires.includes('action_pin'));
+// never offered to pick: its runs come from Runs → Needs you. Nor is the critic (ADR 0040: it
+// requires a run's diff), which runs only inside a fix run.
+export const offeredRecipe = (r) => !(Array.isArray(r.requires) && (r.requires.includes('action_pin') || r.requires.includes('run_diff')));
 
 export function effectiveRecipes(rawSnapshot, repoId) {
   const snapshot = normalizeSnapshot(rawSnapshot);
@@ -151,7 +152,7 @@ export function fileEffects(h, ticket, { canEdit, pending }) {
 export function runTimings(h) {
   const t = h.timings;
   if (!t) return '';
-  const parts = [['queue_wait_ms', 'Queue wait'], ['worktree_ms', 'Setup'], ['agent_ms', 'Agent'], ['test_ms', 'Tests']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`);
+  const parts = [['queue_wait_ms', 'Queue wait'], ['worktree_ms', 'Setup'], ['agent_ms', 'Agent'], ['test_ms', 'Tests'], ['critic_ms', 'Critic']].filter(([k]) => Number.isFinite(t[k])).map(([k, label]) => `${label} ${formatDuration(t[k])}`);
   return parts.length ? `<p class="run-timings small muted">${esc(parts.join(' · '))}</p>` : '';
 }
 
@@ -202,7 +203,8 @@ export function runBlockers(ticket, rawSnapshot, recipe) {
   return out;
 }
 
-export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf = null } = {}) {
+// `note` pre-fills the note field (ADR 0040: a per-hunk retry names the file and the hunk).
+export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf = null, note = null } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const ticket = normalizeTicket(rawTicket);
   const p = recipe.permissions ?? {};
@@ -233,7 +235,7 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
 ${boxes.length || advanced.length ? `<fieldset><legend>Permissions for this run</legend>${boxes.join('\n')}${advanced.length ? `<details class="advanced"><summary>Advanced: commit, push, PR</summary>${advanced.join('\n')}</details>` : ''}<p class="muted small">The recipe allows at most what is listed here. Anything with a side effect stays off unless you tick it.</p></fieldset>` : '<p class="small">This run works from the ticket notes only: no source access and no side effects.</p>'}
 ${recipe.mode === 'files' ? '' : accessFieldset(snapshot, { scopes: true })}
 <label class="label" for="recipe-note">Note <span class="muted">(max 280)</span></label>
-<textarea id="recipe-note" name="note" maxlength="280" rows="2" placeholder="Anything the agent should focus on?"></textarea>
+<textarea id="recipe-note" name="note" maxlength="280" rows="2" placeholder="Anything the agent should focus on?">${typeof note === 'string' ? esc(note.slice(0, 280)) : ''}</textarea>
 <p class="muted small">Capped at <span class="run-cap"${['standard', 'settings', 'autonomous', 'full'].map((a) => ` data-cap-${a}="${attr(recipeCap(recipe, a))}"`).join('')}>${esc(recipeCap(recipe))}</span> minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>
 ${blockers.length ? `<ul class="issues">${blockers.map((b) => `<li data-level="${b.level}">${icon('alert')}${esc(b.text)}</li>`).join('')}</ul>` : ''}
 <p class="run-summary" aria-live="polite">${esc(runSummary(recipe, defaults, repo))}</p>
