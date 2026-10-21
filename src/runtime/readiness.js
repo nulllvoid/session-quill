@@ -1,7 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadContext, workerStatus } from '../cli/context.js';
-import { startDetached } from '../cli/commands/worker.js';
 import { acquireLock, isLocked } from '../worker/lock.js';
 import { runDir, stateDir } from '../lib/paths.js';
 import { readJsonIfExists, writeJsonAtomic } from '../lib/atomic-fs.js';
@@ -62,6 +61,9 @@ export async function ensureReady(ctx = loadContext(), { wait = true, resume = f
       } else {
         const attempt = { store_id: ctx.storeMeta.store_id, at: Date.now() };
         writeJsonAtomic(attemptPath(ctx.env), attempt);
+        // Loaded only to launch: the worker module graph is most of a SessionStart hook's start-up
+        // cost, and a hook that finds the worker ready never needs it (ADR 0034).
+        const { startDetached } = await import('../cli/commands/worker.js');
         const pid = await startDetached(ctx);
         writeJsonAtomic(attemptPath(ctx.env), { ...attempt, pid });
       }
