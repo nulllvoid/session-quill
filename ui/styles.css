@@ -1018,6 +1018,32 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-snapshots > li:first-child { border-top: 0; }
 .run-snapshots .snapshot-commit { white-space: nowrap; }
 .run-snapshots .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
+/* Grouped diff and Review notes (ADR 0040): paths, hunk headers and lines are agent text of any
+   length, so everything wraps inside the panel; the +/- marker, not the colour, says what a line is. */
+.run-diff { min-width: 0; }
+.run-diff h4 { font-size: 13px; font-weight: 600; margin: 12px 0 2px; }
+.run-diff h5 { font-size: 12px; font-weight: 600; margin: 12px 0 4px; color: var(--text-muted); }
+.diff-files { list-style: none; margin: 0; padding: 0; }
+.diff-files > li { border-top: 1px solid var(--hairline); padding: 4px 0; min-width: 0; overflow-wrap: anywhere; }
+.diff-files > li:first-child { border-top: 0; }
+.diff-file summary { cursor: pointer; padding: 4px 0; overflow-wrap: anywhere; }
+.diff-file .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
+.diff-path { overflow-wrap: anywhere; }
+.diff-hunk { margin: 6px 0 10px; min-width: 0; }
+.diff-hunk-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; overflow-wrap: anywhere; }
+.diff-hunk-head .btn { margin-left: auto; }
+.diff-section { overflow-wrap: anywhere; min-width: 0; }
+.diff-lines { margin: 4px 0 0; padding: 4px 0; font-size: 12px; line-height: 1.45; background: var(--surface-inset); border: 1px solid var(--hairline); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-width: 100%; }
+.diff-line { display: block; padding: 0 8px; min-height: 1.45em; }
+.diff-line.add { background: var(--status-done-bg); }
+.diff-line.del { background: var(--status-blocked-bg); }
+.diff-line.meta { color: var(--text-muted); font-style: italic; }
+.review-notes { list-style: none; margin: 0; padding: 0; }
+.review-notes > li { padding: 6px 0; border-top: 1px solid var(--hairline); overflow-wrap: anywhere; min-width: 0; }
+.review-notes > li:first-child { border-top: 0; }
+.review-notes p { margin: 4px 0 0; max-width: 70ch; }
+.review-notes code { overflow-wrap: anywhere; }
+.review-notes .chip { height: auto; min-height: 22px; max-width: 100%; white-space: normal; }
 @media (max-width: 599px) {
   .run-open { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "state ticket" "state recipe" "state badges" "state facts" "state time"; }
   .run-badges { justify-content: flex-start; }

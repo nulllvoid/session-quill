@@ -28,7 +28,7 @@ export function isReadOnlyRecipe(r) {
 export function offeredRecipe(recipes, publisher, name) {
   if (!publisher || publisher.run_agent !== true || !recipes) return null;
   const r = recipes.forRepo(null).effective.get(name);
-  if (!r || r.error || r.source === 'repo' || (Array.isArray(r.requires) && r.requires.includes('action_pin'))) return null;
+  if (!r || r.error || r.source === 'repo' || (Array.isArray(r.requires) && (r.requires.includes('action_pin') || r.requires.includes('run_diff')))) return null;
   return isReadOnlyRecipe(r) || (publisher.run_recipes ?? []).includes(name) ? r : null;
 }
 

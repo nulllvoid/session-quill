@@ -3,13 +3,13 @@
 import { esc, attr, icon, keyEl, normalizeSnapshot, normalizeTicket } from '../components.js';
 import { effectiveRecipes, offeredRecipe, attachedFilePaths, permissionSummary, renderRecipeRunDialog, recipeCap, SOURCE_LABELS } from './agents.js';
 
-export function renderRunAgentDialog(rawTicket, rawSnapshot, { recipe = null, retryOf = null } = {}) {
+export function renderRunAgentDialog(rawTicket, rawSnapshot, { recipe = null, retryOf = null, note = null } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const ticket = normalizeTicket(rawTicket);
   const hasFiles = attachedFilePaths(ticket).length > 0;
   const recipes = effectiveRecipes(snapshot, ticket.repo_id).filter((r) => offeredRecipe(r) && (r.mode !== 'files' || hasFiles));
   const chosen = recipe ? recipes.find((r) => r.name === recipe && !r.error) : null;
-  if (chosen) return renderRecipeRunDialog(chosen, ticket, snapshot, { retryOf });
+  if (chosen) return renderRecipeRunDialog(chosen, ticket, snapshot, { retryOf, note });
   const cards = recipes.map((r) => {
     if (r.error) return `<li class="recipe-card" data-invalid="true"><strong>${esc(r.name)}</strong> <span class="small critical">${icon('alert')}Invalid: ${esc(r.error)}</span></li>`;
     const p = r.permissions ?? {};

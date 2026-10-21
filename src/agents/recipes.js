@@ -17,7 +17,8 @@ const PERMISSION_ALIASES = { push: 'push_branch', draft_pr: 'open_draft_pr' };
 // `work`, `related` and `history` (ADR 0013): files, commits and their diff; the parent, siblings
 // and children; and earlier runs on the ticket with the owner's decisions on their suggestions.
 export const INPUTS = ['ticket', 'notes', 'prs', 'deployments', 'work', 'related', 'history', 'docs'];
-export const OUTPUTS = ['summary', 'next_action', 'blocker', 'followups', 'deploy_evidence', 'comment_draft', 'test_results', 'changed_files', 'description', 'stage_reached', 'plan', 'attempts', 'verification', 'critical_changes', 'learnings'];
+// `review_findings` (ADR 0040) is produced only by the critic step of a fix run (src/handoff/critic.js).
+export const OUTPUTS = ['summary', 'next_action', 'blocker', 'followups', 'deploy_evidence', 'comment_draft', 'test_results', 'changed_files', 'description', 'stage_reached', 'plan', 'attempts', 'verification', 'critical_changes', 'learnings', 'review_findings'];
 export const PLACEHOLDERS = ['ticket.key', 'ticket.url', 'ticket.title', 'ticket.status', 'ticket.next_action', 'note', 'prs', 'deployments', 'environments'];
 // The wall-clock ceiling for any recipe; a recipe that sets no `timeout_min` gets the default
 // (20 min, or the longer autonomous default from `budgetFor`).
@@ -28,9 +29,11 @@ export const FRONTMATTER_KEYS = ['name', 'description', 'mode', 'permissions', '
 // Quill rejects unknown keys (ADR 0020), so the declaration documents why it does.
 const VERSIONED_KEYS = ['max_turns', 'max_budget_usd', 'requires'];
 // What a run of the recipe must carry (ADR 0028): `action_pin` (the approved action of a critical
-// change, which only an owner's approval of a run's proposal supplies) and `scopes` (write scopes).
-// A recipe that requires either is never scheduled and never offered on a page.
-export const REQUIREMENTS = ['action_pin', 'scopes'];
+// change, which only an owner's approval of a run's proposal supplies), `scopes` (write scopes) and
+// `run_diff` (ADR 0040: the diff of a fix run whose tests passed, which only the worker's critic step
+// supplies). A recipe that requires any is never scheduled and never offered on a page; one that
+// requires `action_pin` or `run_diff` is never offered in the Run dialog either.
+export const REQUIREMENTS = ['action_pin', 'scopes', 'run_diff'];
 const MAX_RECIPE_TURNS = 1000;
 const MAX_RECIPE_BUDGET_USD = 1000;
 // The input a placeholder reads from; a recipe must declare it (environments come from config).

@@ -26,6 +26,10 @@
 //   FAKE_CLAUDE_VERSION_DELAY_MS — how long `--version` takes to answer (default 0)
 //   FAKE_CLAUDE_INIT_VERSION — claude_code_version in the init event (default: the version's number)
 //   FAKE_CLAUDE_MCP_SERVERS — JSON list for the init event's mcp_servers (default [])
+//   FAKE_CLAUDE_CRITIC_RESULT — JSON a critic prompt (ADR 0040, "You are the Session Quill critic")
+//                           is answered with (default: a clean review); FAKE_CLAUDE_CRITIC_MODE 'crash'
+//                           exits 3, 'malformed' answers without a JSON block, 'hang' never answers.
+//                           A critic turn never edits, and its { prompt, args } go to <capture>.critic
 //   FAKE_CLAUDE_GUARD_CALLS — JSON list of { tool_name, tool_input } the fake "calls": each runs the
 //                           PreToolUse hook from --settings (the real guard) with that input, in
 //                           order, and the capture records each decision as `guard_decisions`
@@ -84,7 +88,24 @@ function transcript() {
   return true;
 }
 
+// The critic (ADR 0040): a fresh process with its own prompt; it never edits and never resumes.
+function critic() {
+  const capture = process.env.FAKE_CLAUDE_CAPTURE;
+  if (capture) fs.writeFileSync(`${capture}.critic`, JSON.stringify({ prompt, args }));
+  process.stdout.write(line({ type: 'system', subtype: 'init', session_id: 'fake-critic-session', tools: ['Read'], mcp_servers: [] }));
+  const how = process.env.FAKE_CLAUDE_CRITIC_MODE ?? 'ok';
+  if (how === 'hang') { setTimeout(() => {}, 600_000); return; }
+  setTimeout(() => {
+    if (how === 'crash') process.exit(3);
+    const reply = process.env.FAKE_CLAUDE_CRITIC_RESULT ?? JSON.stringify({ summary: 'The change does what the ticket asks.', review_findings: [] });
+    const text = how === 'malformed' ? 'I reviewed it but forgot the JSON block.' : `Review done.\n\n\`\`\`json\n${reply}\n\`\`\`\n`;
+    process.stdout.write(line({ type: 'result', subtype: 'success', is_error: false, result: text, session_id: 'fake-critic-session', num_turns: 2, total_cost_usd: Number(process.env.FAKE_CLAUDE_COST ?? 0.01) }));
+    process.exit(0);
+  }, sleep);
+}
+
 function run() {
+  if (prompt.startsWith('You are the Session Quill critic')) { critic(); return; }
   if (!transcript()) {
     process.stderr.write(`No conversation found with session ID: ${SESSION}\n`);
     process.exit(1);

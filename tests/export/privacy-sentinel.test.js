@@ -41,6 +41,8 @@ function fixture() {
     // ADR 0033: the evidence receipt's local fields (refs, counts keyed by class) and the run's own PR observation.
     tested_tree: S, commit_tree: S, guard_summary: { allow: 1, deny: 0, critical: 0, by_class: { [S]: 1 } }, change_summary: { files: 1, [S]: 1 },
     receipt: { sha256: S, through_sequence: 1 }, pr_observed: { state: 'merged', merge_commit: S, reverted_by: S, error: S },
+    // ADR 0040: the patch and the critic's notes are blobs on the owner's dashboard; refs, status and reason stay local.
+    patch_ref: S, patch_too_large: true, critic_ref: S, critic_status: 'warnings', critic_count: 2, critic_reason: S,
   });
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
   s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
@@ -91,7 +93,7 @@ test('exported handoffs carry counts and the stage, not the records', () => {
   forged.handoffs[0].scope_drift = `src/${S}.js`;
   assert.equal('scope_drift' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a whole-number drift count travels');
   for (const k of ['planned_paths', 'drift']) assert.equal(k in sanitizeSnapshot(fixture(), ALL).sessions[0], false, k);
-  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes', 'planned_paths', 'tested_tree', 'commit_tree', 'guard_summary', 'change_summary', 'receipt', 'pr_observed']) assert.equal(k in out, false, k);
+  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes', 'planned_paths', 'tested_tree', 'commit_tree', 'guard_summary', 'change_summary', 'receipt', 'pr_observed', 'patch_ref', 'patch_too_large', 'critic_ref', 'critic_status', 'critic_count', 'critic_reason']) assert.equal(k in out, false, k);
   assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
   const gated = fixture();
   gated.handoffs[0].test_gate = { status: 'passed', exit_code: 0, ms: 5, attempts: 2, repaired: true, command: S, tail: S, runs: [{ status: S, exit_code: 1, ms: 3 }] };

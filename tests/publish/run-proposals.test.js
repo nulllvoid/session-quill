@@ -50,6 +50,9 @@ test('the page offers read-only recipes by default, plus the ones the owner allo
   // ADR 0028: critical-change needs an approved action pin, so no page ever offers it.
   assert.equal(isReadOnlyRecipe(c.get('critical-change')), false);
   assert.deepEqual(runChoices(c, pub({ run_recipes: ['critical-change'] }).publishers[0]), names);
+  // ADR 0040: nor the critic, which reviews a fix run's diff from inside that run.
+  assert.equal(isReadOnlyRecipe(c.get('critic-review')), false);
+  assert.deepEqual(runChoices(c, pub({ run_recipes: ['critic-review'] }).publishers[0]), names);
   assert.equal(isReadOnlyRecipe(c.get('attempt-fix')), false);
   assert.equal(isReadOnlyRecipe(c.get('file-task')), false);
   assert.deepEqual(runChoices(c, pub().publishers[0]), names);
