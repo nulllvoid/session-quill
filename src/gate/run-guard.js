@@ -27,7 +27,7 @@ import { quillHome, handoffRunDir } from '../lib/paths.js';
 import { isProtectedBranch } from '../handoff/permissions.js';
 import { canonicalJson } from '../handoff/grant.js';
 import { commandProblem, commandCheck, BUILTIN_COMMANDS } from './scope-commands.js';
-import { soleCommand, dryRunTwin, dryRunRecord, readLedgerText, DRY_RUN_SCOPES } from './dry-run.js';
+import { soleCommand, pinnedTwin, dryRunRecord, readLedgerText, DRY_RUN_SCOPES } from './dry-run.js';
 
 // The Quill install this guard runs from.
 export const INSTALL_ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -876,7 +876,7 @@ function leaseProblem(g, e) {
 // that cannot be read refuses.
 function dryRunProblem(p, g, c, vars, home, ctx) {
   if (g.requireDryRun !== true || !DRY_RUN_SCOPES.has(p.scope)) return null;
-  const twin = dryRunTwin(c, ctx);
+  const twin = pinnedTwin(c, ctx);
   // A pin with no twin the guard accepts decides as in 1.1 (ADR 0031, amendment of 21 October 2026).
   if (!twin) return null;
   let file = null;
