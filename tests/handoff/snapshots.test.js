@@ -135,3 +135,53 @@ test('archiveRefs moves a run\'s snapshot refs under refs/quill/archive and the 
   assert.equal(git(repo, 'cat-file', '-t', a.commit), 'commit');
   assert.deepEqual(await archiveRefs(repo, HID), {}, 'nothing left to move');
 });
+
+test('restore skips a path whose parent is now an ignored file the pre-restore snapshot could not hold', async () => {
+  const { dir } = checkout();
+  write(dir, 'out/x.js', 'generated\n');
+  const target = await snapshotTree(dir, { handoffId: HID, step: 'agent', n: 1 });
+  // Later `out` is ignored and is a file with the owner's data in it.
+  fs.rmSync(path.join(dir, 'out'), { recursive: true });
+  fs.appendFileSync(path.join(dir, '.gitignore'), 'out\n');
+  write(dir, 'out', 'my uncommitted data\n');
+  const out = restoreSnapshot(dir, target.commit, { handoffId: HID, n: 2 });
+  assert.ok(out.skipped.includes('out/x.js'), `skipped: ${out.skipped}`);
+  assert.ok(!out.restored.includes('out/x.js'));
+  assert.equal(read(dir, 'out'), 'my uncommitted data\n', 'the ignored file is still there');
+  assert.ok(out.restored.includes('.gitignore'));
+});
+
+test('restore skips a path whose parent is now an ignored symlink', async (t) => {
+  const { dir } = checkout();
+  write(dir, 'lib/x.js', 'generated\n');
+  const target = await snapshotTree(dir, { handoffId: HID, step: 'agent', n: 1 });
+  fs.rmSync(path.join(dir, 'lib'), { recursive: true });
+  fs.appendFileSync(path.join(dir, '.gitignore'), 'lib\n');
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'st-snaplink-'));
+  write(elsewhere, 'keep.txt', 'outside\n');
+  try { fs.symlinkSync(elsewhere, path.join(dir, 'lib'), 'junction'); } catch { t.skip('no symlink support'); return; }
+  const out = restoreSnapshot(dir, target.commit, { handoffId: HID, n: 2 });
+  assert.ok(out.skipped.includes('lib/x.js'), `skipped: ${out.skipped}`);
+  assert.ok(fs.lstatSync(path.join(dir, 'lib')).isSymbolicLink(), 'the link stays');
+  assert.equal(fs.existsSync(path.join(elsewhere, 'x.js')), false, 'nothing is written through the link');
+  assert.equal(read(elsewhere, 'keep.txt'), 'outside\n');
+});
+
+test('restore of a file where a directory now holds unsaved files skips it; a directory of saved files gives way', async () => {
+  const { dir } = checkout();
+  write(dir, 'a', 'file a\n');
+  write(dir, 'c', 'file c\n');
+  const target = await snapshotTree(dir, { handoffId: HID, step: 'agent', n: 1 });
+  fs.rmSync(path.join(dir, 'a'));
+  fs.rmSync(path.join(dir, 'c'));
+  write(dir, 'a/b', 'saved\n');
+  write(dir, 'a/.cache', 'ignored, never saved\n');
+  write(dir, 'c/d', 'saved too\n');
+  fs.appendFileSync(path.join(dir, '.gitignore'), '.cache\n');
+  const out = restoreSnapshot(dir, target.commit, { handoffId: HID, n: 2 });
+  assert.ok(out.skipped.includes('a'), `skipped: ${out.skipped}`);
+  assert.equal(read(dir, 'a/.cache'), 'ignored, never saved\n', 'the unsaved file is still there');
+  assert.equal(git(dir, 'show', `${out.pre.commit}:a/b`), 'saved', 'what went is in the pre-restore snapshot');
+  assert.ok(out.restored.includes('c'));
+  assert.equal(read(dir, 'c'), 'file c\n');
+});
