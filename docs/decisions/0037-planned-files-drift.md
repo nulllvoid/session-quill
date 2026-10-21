@@ -12,6 +12,7 @@ There are two places a list of expected files can come from. An interactive sess
 
 1. **Planned files.** These are repo-relative paths or globs (`src/core/**`, `README.md`), at most 50, each at most 200 characters. An entry is rejected when it is absolute, drive- or home-relative, a URL, contains a colon or a `..` segment, has control characters, has no letter or digit, or holds more than 4 wildcards (`*`, `**` and `?` count one each; a run of three or more `*` is first collapsed to `**`). `src/core/planned-paths.js` holds the rules and has no Quill imports, so the hook, the reducer and the guard share one definition:
    - `extractPlannedPaths(text)` takes path-like tokens from the plan text: code spans, link targets and bare words. A token counts as a path if it has a directory part, or a name of two or more characters plus an extension with a letter in it. URLs, absolute paths, flags and version numbers are ignored.
+     Only the first 65,536 characters (64 K) of the plan are read, and every pattern on it is bounded (a URL scheme is at most 21 characters), so extraction on the hook path stays linear in the plan's size.
    - `matchesPlanned(path, globs)` matching:
      - An entry with a `/` is anchored at the repository root and covers everything below it.
      - An entry without a `/` matches a file or directory name at any depth, as in .gitignore.
@@ -51,6 +52,7 @@ There are two places a list of expected files can come from. An interactive sess
 ## Consequences
 
 - A plan's prose can produce false positives (`github.com`, `and/or`). They only widen the planned list, so they mean fewer drift flags, never a refusal. A plan that names more than 50 files keeps the first 50, so later files can count as drift.
+- A plan longer than 64 K characters contributes only the paths in its first 64 K characters; later files can count as drift.
 - A plan or `--planned` entry with more than 4 wildcards is dropped (from a plan) or refused as `planned-invalid` (from the CLI). Dropping one only shrinks the list, so it can mean more drift flags, never a refusal.
 - Shell writes (`sed -i`, redirects) are not measured, in sessions or in runs. Only the file write tools name their targets reliably without parsing commands.
 - Strict mode, the default, gets the status line count but no Stop nudge.

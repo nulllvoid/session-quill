@@ -158,3 +158,20 @@ test('the reducer drift path never throws on junk planned entries or write paths
   }
   assert.doesNotThrow(() => recordSessionDrift({ planned_paths: ['src'] }, null, 't'));
 });
+
+test('extractPlannedPaths stays linear on long scheme-like text and caps the plan text', () => {
+  let t = performance.now();
+  assert.deepEqual(extractPlannedPaths('a.'.repeat(100_000)), []);
+  assert.ok(performance.now() - t < 50, `a.a.a… took ${performance.now() - t} ms`);
+  t = performance.now();
+  extractPlannedPaths('ab-'.repeat(70_000) + '://x');
+  assert.ok(performance.now() - t < 50, `scheme run took ${performance.now() - t} ms`);
+  for (const run of ['.'.repeat(60_000) + 'a', 'a' + '.'.repeat(60_000) + 'a', '/'.repeat(60_000) + 'a']) {
+    t = performance.now();
+    extractPlannedPaths(run);
+    assert.ok(performance.now() - t < 50, `a run of ${run[1]} took ${performance.now() - t} ms`);
+  }
+  assert.deepEqual(extractPlannedPaths('Edit src/a.js... then docs/b.md.'), ['src/a.js', 'docs/b.md'], 'trailing dots end a sentence, not a path');
+  assert.deepEqual(extractPlannedPaths(' '.repeat(70 * 1024) + 'src/late.js'), [], 'text past the 64 KB cap is not read');
+  assert.deepEqual(extractPlannedPaths('see https://x.example/src/a.js and src/b.js'), ['src/b.js']);
+});

@@ -9,17 +9,26 @@ import path from 'node:path';
 export const MAX_PLANNED = 50;
 export const PLANNED_CHARS = 200;
 export const MAX_WILDCARDS = 4;
+/** How much of a plan's text is searched for paths: plans are agent output of any size. */
+export const PLAN_TEXT_CHARS = 64 * 1024;
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
-const URL_RE = /\b[a-z][a-z0-9+.-]*:\/\/[^\s)>\]`'"]*/gi;
+// The scheme is bounded, so a long run of scheme characters with no `://` stays linear.
+const URL_RE = /\b[a-z][a-z0-9+.-]{0,20}:\/\/[^\s)>\]`'"]*/gi;
 const WWW_RE = /\bwww\.[^\s)>\]`'"]*/gi;
 // The characters a path token in prose may hold. Anything else (spaces, quotes, brackets, colons,
 // commas, backticks) ends it, so `C:\x`, `~/x` and `[a](b)` split into parts the checks reject.
 const TOKEN_RE = /[A-Za-z0-9_@+\-.*?/\\]+/g;
 
 const slashes = (s) => s.replace(/\\/g, '/');
+// `s` without its trailing dots. A loop, not `/\.+$/`, which is quadratic on a long run of dots.
+function trimDots(s) {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === '.') end -= 1;
+  return s.slice(0, end);
+}
 
 // One planned entry in canonical form (forward slashes, no leading `./`, no trailing `/`), or
 // null when it is not a repo-relative path or glob: absolute, drive- or home-relative, a URL,
@@ -60,7 +69,7 @@ export function invalidPlannedEntry(list) {
 // letter in it (so `1.1.1`, `e.g` and `i.e` are not files).
 function looksLikePath(token) {
   if (token.startsWith('-')) return false;
-  const s = token.replace(/\.+$/, '');
+  const s = trimDots(token);
   if (s.includes('/') || s.includes('\\')) return true;
   const dot = s.lastIndexOf('.');
   if (dot < 0) return false;
@@ -77,14 +86,14 @@ function looksLikePath(token) {
  */
 export function extractPlannedPaths(text) {
   if (typeof text !== 'string' || !text) return [];
-  const clean = text.replace(URL_RE, ' ').replace(WWW_RE, ' ');
+  const clean = text.slice(0, PLAN_TEXT_CHARS).replace(URL_RE, ' ').replace(WWW_RE, ' ');
   const out = [];
   for (const m of clean.matchAll(TOKEN_RE)) {
     const token = m[0];
     // A token right after a colon is the rest of a drive path (`C:\x`) or a scheme: never a repo path.
     if (m.index > 0 && clean[m.index - 1] === ':') continue;
     if (!looksLikePath(token)) continue;
-    const s = canonicalEntry(token.replace(/\.+$/, ''));
+    const s = canonicalEntry(trimDots(token));
     if (s && !out.includes(s)) out.push(s);
     if (out.length >= MAX_PLANNED) break;
   }
