@@ -27,6 +27,7 @@ import { descriptionProblems, parseDescription } from '../core/description.js';
 import { writeProjections as writeMemoryProjections } from '../memory/project.js';
 import { memoryPaths } from '../memory/paths.js';
 import { latestInventory } from '../handoff/inventory.js';
+import { ContextCards } from '../memory/blast-radius.js';
 
 // What hooks need to know about a bound ticket, with a signature to tell when it changed.
 function ticketFacts(ticket) {
@@ -78,6 +79,7 @@ export class Worker {
     this.memoryDirty = true;
     this.lastMemoryProjectionMs = -Infinity;
     this.memoryProblems = new Set();
+    this.contextCards = new ContextCards();
   }
 
   now() {
@@ -117,6 +119,7 @@ export class Worker {
     for (const e of this.replayErrors ?? []) this.recordHealthError({ kind: 'apply-error', phase: 'replay', ...e });
     this.replayErrors = [];
     this.publishAllBindings();
+    this.contextCards.noteAllBound(this);
     this.markStaleNotesDirty();
     this.heartbeat(true);
     for (const ext of this.extensions) if (ext.onStart) await ext.onStart(this);
@@ -241,6 +244,7 @@ export class Worker {
     if (this.flushRequested || (this.firstDirtyAt !== null && nowMs >= this.firstDirtyAt + NOTE_FLUSH_MS)) this.flushNotes();
     for (const ext of this.extensions) if (ext.tick) ext.tick(this);
     this.publishMemory();
+    this.contextCards.tick(this);
     if (this.generationDirty) this.publishGeneration();
   }
 
@@ -393,6 +397,7 @@ export class Worker {
         if (this.publishedTicketFacts.get(key) !== ticketFacts(this.state.tickets.get(session.current_ticket_id)).signature) this.publishBinding(key);
       }
     }
+    this.contextCards.note(this, result);
     for (const id of result.requestsChanged) this.publishRequest(id);
     if ((result.changed.size || result.handoffsChanged.size || record.session_id) && this.firstDirtyAt === null) this.firstDirtyAt = this.clock();
     for (const effect of result.effects) {
@@ -536,6 +541,7 @@ export class Worker {
   async stop({ flush = true, ...extOptions } = {}) {
     this.running = false;
     for (const ext of this.extensions) if (ext.onStop) await ext.onStop(this, extOptions);
+    await this.contextCards.stop();
     if (flush && this.state) {
       try { this.flushNotes(); } catch (err) { this.log(`flush on stop failed: ${err.message}`); }
     }

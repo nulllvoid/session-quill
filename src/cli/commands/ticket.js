@@ -8,7 +8,7 @@ import { CATEGORIES, PRIORITIES, loadRepoConfig, resolveTracker } from '../../co
 import { renderUrl, isSafeExternalUrl, TRACKER_SYSTEMS } from '../../core/external-keys.js';
 import { uuid } from '../../lib/ids.js';
 import { isDate, nowIso } from '../../lib/time.js';
-import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
+import { readBindingSnapshot, readContextCard } from '../../hooks/binding-snapshot.js';
 import { sessionKey, TICKET_STATUSES } from '../../core/state.js';
 import { TrackerError } from '../../lib/errors.js';
 import { cleanupSuggestions, IDLE_DAYS } from '../../core/cleanup.js';
@@ -24,7 +24,7 @@ async function bind(ctx, io, session, ticket, flags) {
   if (ack.rejected) throw new TrackerError(ack.rejected, `bind rejected: ${ack.rejected}`);
   const snap = readBindingSnapshot(sessionKey(session), ctx.env);
   io.println(`Bound session ${session.session_id}${session.agent_id ? ` (agent ${session.agent_id})` : ''} to ${ticket.key} — ${ticket.title} (binding revision ${snap ? snap.binding_revision : '?'}).`);
-  const brief = resumeBrief(latestTicketDetail(ctx, ticket.id) ?? ticket, { nowIso: nowIso() });
+  const brief = resumeBrief(latestTicketDetail(ctx, ticket.id) ?? ticket, { nowIso: nowIso(), card: readContextCard(ticket.id, ctx.env) });
   if (brief) io.println(brief);
   return snap;
 }
@@ -77,7 +77,7 @@ async function create(ctx, io, args, flags, { work = false } = {}) {
   io.println(`${ack.ticket?.reused ? 'Reused' : 'Created'} ${ticket.key} — ${ticket.title}${work ? '' : ` [${ticket.category}, ${ticket.priority}, project ${project_id}${parent ? `, child of ${parent.key}` : ''}]`}`);
   if (work) {
     io.println(`Working on ${ticket.key} in session ${session.session_id}. Earlier work keeps its original ticket attribution.`);
-    const brief = ack.ticket?.reused ? resumeBrief(latestTicketDetail(ctx, ticket.id), { nowIso: nowIso() }) : null;
+    const brief = ack.ticket?.reused ? resumeBrief(latestTicketDetail(ctx, ticket.id), { nowIso: nowIso(), card: readContextCard(ticket.id, ctx.env) }) : null;
     if (brief) io.println(brief);
   }
   else if (flags.bind) await bind(ctx, io, session, ticket, flags);

@@ -255,3 +255,30 @@ test('without QUILL_HANDOFF_GUARD (or with it empty) the handoff PreToolUse outp
     assert.equal(events(env)[0].payload.denied, true);
   }
 });
+
+// The context card (ADR 0038): SessionStart reads the worker's projection, never git, and the hook
+// stays within its budget with the extra file read.
+test('a bound SessionStart appends the context card the worker wrote, within the hook budget', () => {
+  const env = setup({ bound: true });
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const home = env.QUILL_HOME;
+  fs.mkdirSync(path.join(home, 'projections', 'tickets'), { recursive: true });
+  fs.mkdirSync(path.join(home, 'projections', 'context'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'projections', 'tickets', `${id}.json`), JSON.stringify({ id, key: 'LOCAL-x-00000001', status: 'active', summary: '', next_action: 'Finish the retry loop', files_touched: [{ relative_path: 'src/a.js', last_seen: NOW }], last_activity: NOW }));
+  fs.writeFileSync(path.join(home, 'projections', 'context', `${id}.json`), JSON.stringify({ format: 1, ticket_id: id, co_change: [{ file: 'src/a.js', partner: 'src/b.js', n: 3 }], related: [], guard: [] }));
+  const input = fixture('session-start');
+  const r = runHook('SessionStart', input, { env, now: NOW });
+  assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /Next action: Finish the retry loop\. Recently changed: src\/a\.js\. Context: Often changed together: src\/b\.js with src\/a\.js \(3 commits\)\./);
+  // A card written for another ticket id is ignored.
+  fs.writeFileSync(path.join(home, 'projections', 'context', `${id}.json`), JSON.stringify({ ticket_id: 'other', co_change: [{ file: 'x', partner: 'y', n: 9 }] }));
+  assert.doesNotMatch(JSON.parse(runHook('SessionStart', input, { env, now: NOW }).stdout).hookSpecificOutput.additionalContext, / Context: Often/);
+  const durations = [];
+  for (let i = 0; i < 50; i += 1) {
+    const started = process.hrtime.bigint();
+    runHook('SessionStart', { ...input, source: `resume-${i}` }, { env, now: NOW });
+    durations.push(Number(process.hrtime.bigint() - started) / 1e6);
+  }
+  durations.sort((a, b) => a - b);
+  const p95 = durations[Math.floor(durations.length * 0.95)];
+  assert.ok(p95 < 200, `SessionStart p95 was ${p95.toFixed(1)} ms`);
+});

@@ -28,7 +28,30 @@ function recentFiles(ticket, limit = 5) {
     .map((f) => f.relative_path);
 }
 
-export function resumeBrief(ticket, { nowIso }) {
+// The worker's context card (ADR 0038, src/memory/blast-radius.js), already filtered and cleaned
+// when it was written; here it is only clipped. Empty when the card says nothing.
+export const CONTEXT_MAX = 600;
+const list = (v) => (Array.isArray(v) ? v : []);
+
+export function contextBlock(card) {
+  if (!card || typeof card !== 'object') return '';
+  const parts = [];
+  const co = list(card.co_change).slice(0, 5).filter((c) => c && c.file && c.partner).map((c) => `${clip(c.partner, 100)} with ${clip(c.file, 100)} (${Number(c.n) || 0} commits)`);
+  if (co.length) parts.push(`Often changed together: ${co.join(', ')}`);
+  const rel = list(card.related).slice(0, 5).filter((r) => r && r.key).map((r) => {
+    const state = [r.status ? clip(r.status, 20) : null, r.live_run === true ? 'a run is live' : null].filter(Boolean).join(', ');
+    return `${clip(r.key, 60)}${r.title ? ` "${clip(r.title, 80)}"` : ''}${state ? ` (${state})` : ''}: ${list(r.files).slice(0, 3).map((f) => clip(f, 100)).join(', ')}`;
+  });
+  if (rel.length) parts.push(`Other tickets on these files: ${rel.join('; ')}`);
+  const guard = list(card.guard).slice(0, 5).filter((g) => typeof g === 'string' && g).map((g) => clip(g, 200));
+  if (guard.length) parts.push(`Guard: ${guard.join('; ')}`);
+  if (!parts.length) return '';
+  let text = `Context: ${parts.map((p) => `${p}.`.replace(/\.\.$/, '.')).join(' ')}`;
+  if (text.length > CONTEXT_MAX) text = `${text.slice(0, CONTEXT_MAX - 1)}…`;
+  return text;
+}
+
+export function resumeBrief(ticket, { nowIso, card = null }) {
   if (!ticket) return null;
   const parts = [];
   const goal = (() => { try { return parseDescription(ticket.summary ?? '').goal; } catch { return null; } })();
@@ -51,5 +74,6 @@ export function resumeBrief(ticket, { nowIso }) {
   const head = `Where ${ticket.key} stands (${ticket.status}${when ? `, last activity ${when}` : ''}):`;
   let text = `${head} ${parts.map((p) => `${p}.`.replace(/\.\.$/, '.')).join(' ')}`;
   if (text.length > BRIEF_MAX) text = `${text.slice(0, BRIEF_MAX - 1)}…`;
-  return text;
+  const context = contextBlock(card);
+  return context ? `${text} ${context}` : text;
 }

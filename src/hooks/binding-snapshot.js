@@ -14,6 +14,16 @@ export function readTicketProjection(ticketId, env = process.env) {
   try { return readJsonIfExists(path.join(projectionsDir(env), 'tickets', `${ticketId}.json`)); } catch { return null; }
 }
 
+// The worker's context card of one ticket (ADR 0038), read with the projection above. A missing or
+// unreadable card is simply absent: the first prompt-time bind may come before the worker wrote it.
+export function readContextCard(ticketId, env = process.env) {
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(String(ticketId ?? ''))) return null;
+  try {
+    const card = readJsonIfExists(path.join(projectionsDir(env), 'context', `${ticketId}.json`));
+    return card && typeof card === 'object' && card.ticket_id === ticketId ? card : null;
+  } catch { return null; }
+}
+
 export function snapshotFileName(sessionKey) {
   return `${String(sessionKey).replace(/[^A-Za-z0-9_-]/g, '_')}.json`;
 }

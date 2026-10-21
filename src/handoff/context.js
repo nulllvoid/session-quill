@@ -9,6 +9,8 @@ import { getBlob } from '../core/blobs.js';
 // `context.memory` (and `context.guide` for a run without a checkout).
 export { gatherMemory, inlineBudget, writeContext } from '../memory/deliver.js';
 import { deliverableRunNotes } from '../memory/deliver.js';
+import { contextCard, readCachedCoChange, cardLines } from '../memory/blast-radius.js';
+import { quillHome } from '../lib/paths.js';
 
 export const CONTEXT_LIMITS = {
   user_notes: 6000,
@@ -97,7 +99,7 @@ function latestCheckpoint(state, ticket) {
   return best;
 }
 
-export function gatherContext(state, ticket, { env = process.env, currentId = null, readBlob = (hash) => getBlob(hash, env) } = {}) {
+export function gatherContext(state, ticket, { env = process.env, currentId = null, readBlob = (hash) => getBlob(hash, env), now } = {}) {
   const plans = [...(ticket.plans ?? [])].sort((a, b) => String(a.approved_at).localeCompare(String(b.approved_at)));
   const plan = plans.at(-1) ?? null;
   const planText = plan ? (plan.content_ref && readBlob(plan.content_ref)) || plan.preview : null;
@@ -113,6 +115,8 @@ export function gatherContext(state, ticket, { env = process.env, currentId = nu
     commits: ticketCommits(ticket),
     related: relatedTickets(state, ticket),
     history: runHistory(state, ticket, currentId),
+    // The context card (ADR 0038) from state and the cached co-change index: no git at dispatch.
+    blast_radius: cardLines(contextCard(state, ticket, readCachedCoChange(quillHome(env), ticket.repo_id), { now })),
     diff: null,
   };
 }

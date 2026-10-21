@@ -354,7 +354,18 @@ _Not yet filled._
 
 ### Task 10 Context card
 
-_Not yet filled._
+ADR 0038. No new event kind, record field or request.
+
+- **Context card projection** `projections/context/<ticketId>.json` is written by the worker and read by hooks and the CLI. The file holds `{ format: 1, ticket_id, repo_id, head, computed_at, co_change, related, guard }`:
+  - `head` is the HEAD the co-change index was built from, or null when the repository has no registered checkout or no commits.
+  - `co_change` is `[{ file, partner, n }]`, at most 5, with `n` ≥ 2.
+  - `related` is `[{ key, title, status, files, live_run }]`, at most 5. `title` is null when withheld, `files` holds at most 3 entries, and `live_run` is true for a queued or running run that no shared page proposed.
+  - `guard` is `string[]`, at most 5: open critical children, protected checkout paths among the touched files, and the worker's `denied:*` memory facts.
+
+  The card is derived from git and state, so it is never journaled. It is local-only: never in `snapshot.json`, ticket detail files, exports, the mirror, publishers, tracker pushes or vault notes. A reader ignores a card whose `ticket_id` differs from the file name. Local-only tickets never appear in `related`.
+- **Co-change cache** `<quillHome>/memory/cache/<repoStem>.cochange.json` holds `{ format: 1, head, repo_path, max_commits, max_files_per_commit, partners: { [file]: [[partner, n]] } }`. It is rebuilt when HEAD or a limit changes. It is local generated state, never exported and never copied to a run's `context/` folder.
+- **Resume brief.** `resumeBrief(ticket, { nowIso, card })` appends one "Context:" block of at most 600 characters after the brief, which stays at most 1,200 characters. SessionStart, the prompt-time auto-bind, `ticket bind` and `ticket work` pass the card.
+- **Run context.** `gatherContext()` returns `blast_radius: string[] | null`, rebuilt from state and the cached index with no git. The prompt shows it inside the data fence under the `work` input.
 
 ### Task 11 Attention groups and CI watch
 
