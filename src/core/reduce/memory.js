@@ -4,8 +4,14 @@ import { deterministicId } from '../../lib/ids.js';
 // deterministic - every time comes from the event, nothing is computed from a clock. Staleness is a
 // selector concern (src/core/memory.js), not stored here. A malformed or unknown op is ignored and
 // recorded in state.memory.problems; the reducer never throws.
+//
+// Anchored memory (ADR 0032): a sourced entry may carry `anchors` (the cited file's blob, line and
+// nearby symbol). The worker compares them with the repository and journals `staled` when the
+// anchored source changed; the reducer only records that verdict (state 'stale', stale_reason
+// 'anchor-changed'). Pinned and owner entries are never staled (ruling R27); `confirmed`, `edited`,
+// an owner note, `pinned` and `approved` revive a staled entry.
 
-export const MEMORY_OPS = ['filed', 'confirmed', 'superseded', 'retired', 'approved', 'owner-note', 'pinned', 'unpinned', 'edited'];
+export const MEMORY_OPS = ['filed', 'confirmed', 'superseded', 'retired', 'approved', 'owner-note', 'pinned', 'unpinned', 'edited', 'staled'];
 export const MEMORY_SCOPES = ['machine', 'repo', 'task'];
 export const MEMORY_TRUSTS = ['owner', 'verified', 'sourced', 'observed', 'quarantined'];
 export const MEMORY_STATES = ['active', 'stale', 'retired'];
@@ -32,6 +38,30 @@ function revisionProblem(p, entry) {
 
 const nonEmpty = (v) => typeof v === 'string' && v.trim() !== '';
 const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+
+export const MAX_ANCHORS = 10;
+const ANCHOR_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const ANCHOR_SYMBOL_CHARS = 200;
+
+/** An anchor list shape-checked and copied field by field: at most MAX_ANCHORS, malformed ones dropped. */
+export function validAnchors(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const a of list) {
+    if (!a || typeof a !== 'object' || typeof a.file_path !== 'string' || !a.file_path || a.file_path.length > 1024 || /[\r\n\0]/.test(a.file_path)) continue;
+    if (typeof a.blob_sha !== 'string' || !ANCHOR_SHA.test(a.blob_sha) || !Number.isInteger(a.line) || a.line < 1) continue;
+    out.push({ file_path: a.file_path, blob_sha: a.blob_sha, line: a.line, symbol_name: typeof a.symbol_name === 'string' && a.symbol_name ? a.symbol_name.slice(0, ANCHOR_SYMBOL_CHARS) : null });
+    if (out.length >= MAX_ANCHORS) break;
+  }
+  return out;
+}
+
+// A staled entry becomes active again and forgets why it was staled.
+function revive(entry) {
+  if (entry.state === 'stale') entry.state = 'active';
+  delete entry.stale_reason;
+  delete entry.stale_anchor;
+}
 
 // A fresh entry object built field by field from the payload (never aliasing it), or { code } when malformed.
 function buildEntry(raw, ev, { trust } = {}) {
@@ -69,6 +99,9 @@ function buildEntry(raw, ev, { trust } = {}) {
   if (nonEmpty(raw.superseded_by)) entry.superseded_by = raw.superseded_by;
   // Why filing held a learning for the owner (src/memory/file.js); shown on the Memory page.
   if (finalTrust === 'quarantined' && nonEmpty(raw.quarantine_reason)) entry.quarantine_reason = raw.quarantine_reason.slice(0, 200);
+  // Only present when filing anchored the entry, so entries filed before ADR 0032 reduce as before.
+  const anchors = validAnchors(raw.anchors);
+  if (anchors.length) entry.anchors = anchors;
   return { entry };
 }
 
@@ -100,6 +133,7 @@ export function applyMemoryTx(state, ev) {
     existing.text = built.entry.text;
     existing.trust = 'owner';
     existing.state = 'active';
+    revive(existing);
     if (built.entry.section) existing.section = built.entry.section;
     if (built.entry.key) existing.key = built.entry.key;
     if (built.entry.kind) existing.kind = built.entry.kind;
@@ -119,7 +153,9 @@ export function applyMemoryTx(state, ev) {
       if (entry.state === 'retired' || entry.superseded_by) return problem(state, ev, op, 'memory-entry-retired', id);
       entry.confirmations += 1;
       entry.last_confirmed_at = ev.occurred_at;
-      if (entry.state === 'stale') entry.state = 'active';
+      revive(entry);
+      // A confirming run re-anchors a sourced entry at the file version it checked (ADR 0032).
+      if (entry.trust === 'sourced' && validAnchors(raw.anchors).length) entry.anchors = validAnchors(raw.anchors);
       entry.revision += 1;
       return {};
     case 'superseded': {
@@ -150,11 +186,14 @@ export function applyMemoryTx(state, ev) {
       if (entry.trust !== 'quarantined') return problem(state, ev, op, 'memory-not-quarantined', id);
       entry.trust = 'owner';
       delete entry.quarantine_reason;
+      revive(entry);
       entry.revision += 1;
       return {};
     case 'pinned':
     case 'unpinned':
       entry.pinned = op === 'pinned';
+      // R27: a pinned entry never stays stale.
+      if (op === 'pinned') revive(entry);
       entry.revision += 1;
       return {};
     case 'edited':
@@ -165,8 +204,31 @@ export function applyMemoryTx(state, ev) {
       entry.text = raw.text;
       entry.trust = 'owner';
       entry.state = 'active';
+      revive(entry);
       entry.revision += 1;
       return {};
+    case 'staled': {
+      // The worker's verdict that an anchored source changed (ADR 0032). R27: pinned and owner
+      // entries are exempt; a retired or superseded entry has nothing left to stale.
+      if (entry.state === 'retired' || entry.superseded_by) return problem(state, ev, op, 'memory-entry-retired', id);
+      if (entry.pinned === true || entry.trust === 'owner') return problem(state, ev, op, 'memory-stale-exempt', id);
+      const a = p.anchor;
+      if (p.reason !== 'anchor-changed' || !a || typeof a !== 'object' || typeof a.file_path !== 'string' || !a.file_path) return problem(state, ev, op, 'memory-stale-invalid', id);
+      const sha = (v) => (typeof v === 'string' && ANCHOR_SHA.test(v) ? v : null);
+      const anchor = {
+        file_path: a.file_path.slice(0, 1024),
+        blob_sha: sha(a.blob_sha),
+        current_blob_sha: sha(a.current_blob_sha),
+        changed_ratio: typeof a.changed_ratio === 'number' && Number.isFinite(a.changed_ratio) ? Math.min(1, Math.max(0, a.changed_ratio)) : null,
+      };
+      const same = entry.state === 'stale' && entry.stale_reason === 'anchor-changed' && JSON.stringify(entry.stale_anchor) === JSON.stringify(anchor);
+      if (same) return {};
+      entry.state = 'stale';
+      entry.stale_reason = 'anchor-changed';
+      entry.stale_anchor = anchor;
+      entry.revision += 1;
+      return {};
+    }
     default:
       return problem(state, ev, op, 'memory-op-unknown', id);
   }

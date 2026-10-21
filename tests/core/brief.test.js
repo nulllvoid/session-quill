@@ -85,3 +85,20 @@ test('the context block is bounded and one line', () => {
   assert.ok(b.length <= BRIEF_MAX + CONTEXT_MAX + 1, `${b.length}`);
   assert.doesNotMatch(b, /\n/);
 });
+
+test('ADR 0032: "Failed before" lists the last two worker test-gate failures from the Run notes, never a page-proposed run\'s', () => {
+  const f = (sig, extra = {}) => ({ kind: 'test-gate', status: 'failed', command: 'npm test', exit_code: 1, signature: sig, files_touched: ['src/retry.js', 'src/a.js', 'src/b.js', 'src/c.js'], ...extra });
+  const notes = [
+    { run_id: '11111111aaaa', at: '2026-10-08T00:00:00Z', attempts: [], lessons: [], failure: f('1111111111111111') },
+    { run_id: '22222222bbbb', at: '2026-10-09T00:00:00Z', attempts: [], lessons: [], failure: f('2222222222222222', { status: 'timeout', exit_code: null }) },
+    { run_id: '33333333cccc', at: '2026-10-10T00:00:00Z', attempts: [], lessons: [], failure: f('3333333333333333') },
+    { run_id: '44444444dddd', at: '2026-10-11T00:00:00Z', attempts: [], lessons: [], failure: f('4444444444444444'), origin: 'page' },
+    { run_id: '55555555eeee', at: '2026-10-11T01:00:00Z', attempts: [{ route: 'x' }], lessons: [] },
+  ];
+  const b = resumeBrief(ticket({ run_notes: notes }), { nowIso: NOW });
+  assert.match(b, /Failed before: run 33333333 tests failed \(exit 1\), signature 3333333333333333 running npm test, changed src\/retry\.js, src\/a\.js, src\/b\.js and 1 more \| run 22222222 tests timed out, signature 2222222222222222 running npm test, changed /);
+  assert.doesNotMatch(b, /44444444|11111111/);
+  // A failure alone is history enough for a brief.
+  assert.match(resumeBrief(ticket({ run_notes: [notes[0]] }), { nowIso: NOW }), /^Where FIX-7 stands .*Failed before: run 11111111/);
+  assert.equal(resumeBrief(ticket({ run_notes: [notes[3]] }), { nowIso: NOW }), null, 'a page-proposed run\'s failure is not shown');
+});

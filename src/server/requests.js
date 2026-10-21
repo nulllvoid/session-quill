@@ -15,6 +15,7 @@ import { scopeFor } from '../hooks/scope.js';
 import { catalogFor } from '../agents/recipes.js';
 import { EVIDENCE_KINDS } from '../deploy/environments.js';
 import { suggestionMutation } from '../agents/suggestions.js';
+import { DISMISS_REASON_CHARS } from '../core/reduce/requests.js';
 import { parseRemote } from '../onboard/remotes.js';
 import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
@@ -338,6 +339,13 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'dismiss-suggestion': {
       const { h, sug } = findSuggestion(state, target, payload);
       normalized = { handoff_id: h.id, suggestion_id: sug.id };
+      // ADR 0032: an optional reason for a dismissal, kept on the run's local Run note.
+      if (body.kind === 'dismiss-suggestion' && payload.reason !== undefined && payload.reason !== null) {
+        if (typeof payload.reason !== 'string') throw new TrackerError('request-invalid', 'reason must be a string');
+        const reason = payload.reason.trim();
+        if (reason.length > DISMISS_REASON_CHARS) throw new TrackerError('request-invalid', `reason must be at most ${DISMISS_REASON_CHARS} characters`);
+        if (reason) normalized.reason = reason;
+      }
       break;
     }
     case 'undo-file-effect': {
@@ -728,6 +736,7 @@ export function evaluateRequest(worker, req) {
       try { mutation = suggestionMutation(state, ticket, found.h, found.sug, req.kind === 'accept-suggestion' ? 'accepted' : 'dismissed'); } catch (err) {
         return { outcome: 'failed', error: { code: err.code ?? 'suggestion-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
       }
+      if (req.kind === 'dismiss-suggestion' && typeof req.payload.reason === 'string' && req.payload.reason) mutation.reason = req.payload.reason.slice(0, DISMISS_REASON_CHARS);
       return { outcome: 'applied', mutation, result: { handoff_id: found.h.id, suggestion_id: found.sug.id, state: mutation.state } };
     }
     case 'undo-file-effect': {

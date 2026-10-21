@@ -13,7 +13,9 @@
 //     with replace refs and grafts ignored (or, with no base commit, in the checkout's working tree
 //     for files the run did not change)
 //                                             -> sourced; each matched evidence item is pinned as
-//                                                " @blob:<git blob sha1>"
+//                                                " @blob:<git blob sha1>", and each cite becomes an
+//                                                anchor { file_path, blob_sha, line, symbol_name }
+//                                                (src/memory/anchors.js, ADR 0032)
 //   repo-file whose cite does not verify (no cite, missing file or line, outside the checkout, no
 //     checkout)                               -> quarantined, reason "unverified-cite" (ruling R28)
 //
@@ -36,6 +38,7 @@ import { deterministicId } from '../lib/ids.js';
 import { redactCapped, summarizeInput } from '../handoff/stream.js';
 import { canonicalSection } from './sections.js';
 import { instructionLike } from './instructions.js';
+import { makeAnchor, MAX_ANCHORS } from './anchors.js';
 
 export { instructionLike, INSTRUCTION_PATTERNS, scanForms } from './instructions.js';
 export { workerLearnings } from './worker-facts.js';
@@ -260,7 +263,7 @@ function parseBatch(buf, rels) {
     const size = Number(m[3]);
     const content = buf.subarray(pos, pos + size);
     pos += size + 1;
-    if (m[2] === 'blob' && size <= MAX_SOURCE_BYTES) out.set(rel, { lines: lineCount(content), sha: m[1] });
+    if (m[2] === 'blob' && size <= MAX_SOURCE_BYTES) out.set(rel, { lines: lineCount(content), sha: m[1], content });
   }
   return out;
 }
@@ -298,7 +301,7 @@ function readWorkingTree(checkoutReal, rels, changed) {
         const st = fs.statSync(real);
         if (inside(checkoutReal, real) && st.isFile() && st.size <= MAX_SOURCE_BYTES) {
           const buf = fs.readFileSync(real);
-          src = { lines: lineCount(buf), sha: blobSha(buf) };
+          src = { lines: lineCount(buf), sha: blobSha(buf), content: buf };
         }
       }
     } catch { src = null; }
@@ -315,7 +318,7 @@ const citedRels = (checkoutReal, evidence) => evidence.flatMap((item) => citesIn
 /**
  * Reads every file the run's repo-file learnings cite, once, before filing (M4: one asynchronous git
  * call per run, so the worker stays responsive). Pass the result to fileLearnings({ citeSources }).
- * @returns {Promise<Map<string, { lines: number, sha: string }|null>>}  by checkout-relative path
+ * @returns {Promise<Map<string, { lines: number, sha: string, content: Buffer }|null>>}  by checkout-relative path
  */
 export async function readCiteSources({ learnings, run, checkout }) {
   const checkoutReal = realCheckout(checkout);
@@ -330,8 +333,9 @@ export async function readCiteSources({ learnings, run, checkout }) {
   return base ? readAtCommit(checkoutReal, base, list) : readWorkingTree(checkoutReal, list, changedSet(run));
 }
 
-// Sourced evidence with each matched item pinned, or null when there is no cite or any cite fails.
-// `citeSources` (readCiteSources) is used when given; a path missing from it does not verify.
+// Sourced evidence with each matched item pinned, and the anchors of its cites (ADR 0032), or null
+// when there is no cite or any cite fails. `citeSources` (readCiteSources) is used when given; a path
+// missing from it does not verify.
 function sourcedEvidence(evidence, checkout, run, citeSources) {
   const checkoutReal = realCheckout(checkout);
   if (!checkoutReal) return null;
@@ -343,16 +347,18 @@ function sourcedEvidence(evidence, checkout, run, citeSources) {
   const base = baseOf(run);
   const sources = citeSources instanceof Map ? citeSources : base ? readAtCommitSync(checkoutReal, base, rels) : readWorkingTree(checkoutReal, rels, changedSet(run));
   const pinned = [];
+  const anchors = [];
   for (const { item, cites } of items) {
     const shas = [];
     for (const c of cites) {
       const src = sources.get(c.rel);
       if (!src || c.line < 1 || c.line > src.lines) return null;
       if (!shas.includes(src.sha)) shas.push(src.sha);
+      if (anchors.length < MAX_ANCHORS && !anchors.some((a) => a.file_path === c.rel && a.line === c.line)) anchors.push(makeAnchor({ file_path: c.rel, blob_sha: src.sha, line: c.line, text: src.content ?? null }));
     }
     pinned.push(shas.length ? `${item} ${shas.map((s) => `@blob:${s}`).join(' ')}` : item);
   }
-  return pinned;
+  return { evidence: pinned, anchors };
 }
 
 // --- trust ------------------------------------------------------------------------------------------
@@ -372,7 +378,7 @@ function decideTrust(l, { page, calls, checkout, run, citeSources }) {
     return claims && claims.every((c) => namesCommand(c.command, l.text)) ? { trust: 'verified' } : { trust: 'observed' };
   }
   const pinned = sourcedEvidence(l.evidence, checkout, run, citeSources);
-  return pinned ? { trust: 'sourced', evidence: pinned } : { trust: 'quarantined', reason: 'unverified-cite' };
+  return pinned ? { trust: 'sourced', evidence: pinned.evidence, anchors: pinned.anchors } : { trust: 'quarantined', reason: 'unverified-cite' };
 }
 
 // --- filing -----------------------------------------------------------------------------------------
@@ -432,7 +438,9 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
       if (match.fromRun || confirmedIds.has(match.id)) { counts.duplicates += 1; return; }
       confirmedIds.add(match.id);
       tally.confirmed += 1;
-      events.push({ kind: 'memory-tx', payload: { op: 'confirmed', entry: { id: match.id } }, source_identity: `memory-tx:${run.id}:${tag}:confirmed` });
+      // A sourced confirmation re-anchors the entry at the file version this run checked (ADR 0032).
+      const reanchor = match.trust === 'sourced' && entry.trust === 'sourced' && Array.isArray(entry.anchors) && entry.anchors.length;
+      events.push({ kind: 'memory-tx', payload: { op: 'confirmed', entry: { id: match.id, ...(reanchor ? { anchors: entry.anchors } : {}) } }, source_identity: `memory-tx:${run.id}:${tag}:confirmed` });
       return;
     }
     events.push({ kind: 'memory-tx', payload: { op: 'filed', entry }, source_identity: `memory-tx:${run.id}:${tag}:filed` });
@@ -477,6 +485,7 @@ export function fileLearnings({ learnings, run, ledger = [], checkout = null, ex
       ...(l.scope === 'repo' ? { repo_id: run.repo_id } : {}),
       ...(l.scope === 'task' ? { ticket_id: run.ticket_id } : {}),
       ...(quarantined ? { quarantine_reason: decided.reason } : {}),
+      ...(decided.anchors && decided.anchors.length ? { anchors: decided.anchors } : {}),
     };
     place(entry, { tag: `learning:${i}`, tally: counts });
   });
@@ -531,9 +540,11 @@ export const withheldText = (runId) => `[withheld: instruction-like text — see
  * @param {string} ticketId
  * @param {object[]} reconciledAttempts  reconcileAttempts() output (agent attempts plus refusals the ledger added)
  * @param {{ entry_id: string, text: string, trust: string }[]} taskLearnings  taskLessons() output
- * @param {{ run: { id: string, ticket_id: string, proposal?: object }, at: string|number }} opts
+ * @param {{ run: { id: string, ticket_id: string, proposal?: object }, at: string|number, failure?: object|null }} opts
+ *   failure: failureRecord() output (src/memory/failure.js, ADR 0032): worker-structured fields of a
+ *   failed test gate, kept on the note even when the run reported no attempts.
  */
-export function appendRunNotes(ticketId, reconciledAttempts, taskLearnings, { run, at } = {}) {
+export function appendRunNotes(ticketId, reconciledAttempts, taskLearnings, { run, at, failure = null } = {}) {
   if (!run || !nonEmpty(run.id) || !nonEmpty(ticketId)) return null;
   let withheld = 0;
   const free = (v, max = RUN_NOTE_FIELD_BYTES) => {
@@ -546,7 +557,8 @@ export function appendRunNotes(ticketId, reconciledAttempts, taskLearnings, { ru
     verified: typeof a.verified === 'string' ? a.verified.slice(0, 40) : null, ...(a.added === true ? { added: true } : {}),
   }));
   const lessons = (Array.isArray(taskLearnings) ? taskLearnings : []).filter((l) => l && nonEmpty(l.text)).slice(0, RUN_NOTE_LESSONS).map((l) => ({ entry_id: typeof l.entry_id === 'string' ? l.entry_id : null, text: free(l.text, ENTRY_TEXT_BYTES), trust: typeof l.trust === 'string' ? l.trust : null }));
-  if (!attempts.length && !lessons.length) return null;
-  const note = { ticket_id: ticketId, run_id: run.id, at: toIso(at), attempts, lessons, ...(withheld ? { withheld } : {}), ...(isPageProposed(run) ? { origin: 'page' } : {}) };
+  const failed = failure && typeof failure === 'object' && failure.kind === 'test-gate' ? failure : null;
+  if (!attempts.length && !lessons.length && !failed) return null;
+  const note = { ticket_id: ticketId, run_id: run.id, at: toIso(at), attempts, lessons, ...(withheld ? { withheld } : {}), ...(isPageProposed(run) ? { origin: 'page' } : {}), ...(failed ? { failure: failed } : {}) };
   return { kind: 'handoff-tx', payload: { handoff_id: run.id, run_notes: note }, source_identity: `handoff-tx:${run.id}:run-notes` };
 }

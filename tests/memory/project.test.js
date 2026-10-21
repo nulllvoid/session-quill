@@ -93,6 +93,19 @@ test('the repo file lists its sections in spec order, stale entries under ## Sta
   assert.match(pit, /Free-form section falls back by kind/);
 });
 
+test('ADR 0032: an entry staled because its cited source changed is listed under ## Stale with that reason', () => {
+  const home = tempHome();
+  const s = seeded();
+  ev(s, 'memory-tx', { op: 'staled', entry: { id: 'pit' }, reason: 'anchor-changed', anchor: { file_path: 'src/pit.js', blob_sha: 'a'.repeat(40), current_blob_sha: 'b'.repeat(40), changed_ratio: 0.6 } });
+  writeProjections(s, home, { now: NOW });
+  const text = fs.readFileSync(memoryPaths(home).repo('demo'), 'utf8');
+  const stale = text.slice(text.indexOf('## Stale'));
+  assert.match(stale, /or their cited source changed/);
+  assert.match(stale, /Retry tests flake with real timers .*\(section: Pitfalls; source changed since recorded\)/);
+  assert.match(stale, /Tabs not spaces .*\(section: Conventions\)$/m, 'an entry stale by age has no such reason');
+  assert.doesNotMatch(text.slice(0, text.indexOf('## Stale')), /Retry tests flake/);
+});
+
 test('the machine file lists tool inventory and machine entries; the owner file keeps the owner\'s own text', () => {
   const home = tempHome();
   const s = seeded();

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { newState, ev, resetSeq } from './helpers.js';
 import { EVENT_KINDS, makeEvent, validateEvent } from '../../src/core/events.js';
 import { applyEvent } from '../../src/core/reducer.js';
-import { memoryFor, quarantined, conflicts, memoryStaleness } from '../../src/core/memory.js';
+import { memoryFor, quarantined, conflicts, memoryStaleness, memoryListing } from '../../src/core/memory.js';
 import { buildSnapshot } from '../../src/worker/projections.js';
 
 const T0 = '2026-10-02T08:00:00Z';
@@ -382,4 +382,112 @@ test('conflicts apply to task scope too', () => {
   const found = conflicts(s);
   assert.equal(found.length, 1);
   assert.deepEqual([found[0].ticket_id, found[0].entries.map((e) => e.id)], ['tk1', ['t2', 't1']]);
+});
+
+// --- ADR 0032: anchors and the `staled` op ---------------------------------------------------------
+
+const SHA_A = 'a'.repeat(40);
+const SHA_B = 'b'.repeat(40);
+const anchor = (over = {}) => ({ file_path: 'src/retry.js', blob_sha: SHA_A, line: 12, symbol_name: 'retry', ...over });
+const staledPayload = (over = {}) => ({ reason: 'anchor-changed', anchor: { file_path: 'src/retry.js', blob_sha: SHA_A, current_blob_sha: SHA_B, changed_ratio: 0.5 }, ...over });
+const listingOf = (s) => memoryListing(s, Date.parse(T2));
+
+test('filed copies valid anchors field by field; entries without anchors carry no anchors field', () => {
+  const s = newState();
+  const anchors = [anchor(), anchor({ file_path: 'a\nb' }), anchor({ blob_sha: 'nothex' }), anchor({ line: 0 }), anchor({ file_path: 'b.js', symbol_name: undefined, extra: 'dropped' })];
+  mem(s, 'filed', entry({ anchors }));
+  assert.deepEqual(get(s, 'm1').anchors, [anchor(), { file_path: 'b.js', blob_sha: SHA_A, line: 12, symbol_name: null }]);
+  anchors[0].line = 99;
+  assert.equal(get(s, 'm1').anchors[0].line, 12, 'not aliased');
+  mem(s, 'filed', entry({ id: 'm2', key: undefined, anchors: Array.from({ length: 20 }, (_, i) => anchor({ line: i + 1 })) }));
+  assert.equal(get(s, 'm2').anchors.length, 10, 'capped');
+  mem(s, 'filed', entry({ id: 'm3', key: undefined }));
+  assert.equal('anchors' in get(s, 'm3'), false, 'an entry filed before ADR 0032 reduces exactly as before');
+});
+
+test('staled marks an anchored entry stale with its reason; it is no longer delivered and the listing says why', () => {
+  const s = newState();
+  mem(s, 'filed', entry({ anchors: [anchor()] }));
+  assert.equal(mem(s, 'staled', { id: 'm1' }, T1, staledPayload()).rejected, undefined);
+  const e = get(s, 'm1');
+  assert.deepEqual([e.state, e.stale_reason, e.revision], ['stale', 'anchor-changed', 2]);
+  assert.deepEqual(e.stale_anchor, { file_path: 'src/retry.js', blob_sha: SHA_A, current_blob_sha: SHA_B, changed_ratio: 0.5 });
+  assert.equal(memoryFor(s, { repo_id: 'demo' }).some((x) => x.id === 'm1'), false);
+  const row = listingOf(s).entries.find((x) => x.id === 'm1');
+  assert.deepEqual([row.staleness, row.stale_reason], ['stale', 'anchor-changed']);
+  // The same verdict again changes nothing.
+  mem(s, 'staled', { id: 'm1' }, T2, staledPayload());
+  assert.equal(get(s, 'm1').revision, 2);
+  // An entry stale by age alone has no anchor reason.
+  const NOW = Date.parse('2026-06-01T00:00:00Z');
+  mem(s, 'filed', entry({ id: 'old', key: undefined, created_at: '2026-01-01T00:00:00Z', last_confirmed_at: '2026-01-01T00:00:00Z' }));
+  const old = memoryListing(s, NOW).entries.find((x) => x.id === 'old');
+  assert.deepEqual([old.staleness, old.stale_reason], ['stale', null]);
+});
+
+test('replaying the journal with staled events gives the same memory state', () => {
+  const events = [];
+  const s1 = newState();
+  const rec = (op, e, at, extra) => { events.push([op, e, at, extra]); return mem(s1, op, e, at, extra); };
+  rec('filed', entry({ anchors: [anchor()] }), T0);
+  rec('staled', { id: 'm1' }, T1, staledPayload());
+  rec('staled', { id: 'm1' }, T1, staledPayload());
+  rec('confirmed', { id: 'm1', anchors: [anchor({ blob_sha: SHA_B })] }, T2);
+  rec('staled', { id: 'm1' }, T2, staledPayload({ anchor: { file_path: 'src/retry.js', blob_sha: SHA_B, current_blob_sha: SHA_A, changed_ratio: 1 } }));
+  const s2 = newState();
+  for (const [op, e, at, extra] of events) mem(s2, op, e, at, extra);
+  assert.deepEqual(get(s2, 'm1'), get(s1, 'm1'));
+  assert.deepEqual(s2.memory.problems.map((x) => x.code), s1.memory.problems.map((x) => x.code));
+  assert.equal(get(s1, 'm1').state, 'stale');
+});
+
+test('confirmed revives a staled entry and re-anchors a sourced one at the version it checked', () => {
+  const s = newState();
+  mem(s, 'filed', entry({ anchors: [anchor()] }));
+  mem(s, 'staled', { id: 'm1' }, T1, staledPayload());
+  mem(s, 'confirmed', { id: 'm1', anchors: [anchor({ blob_sha: SHA_B, line: 14 })] }, T2);
+  const e = get(s, 'm1');
+  assert.deepEqual([e.state, e.stale_reason, e.stale_anchor], ['active', undefined, undefined]);
+  assert.deepEqual(e.anchors, [anchor({ blob_sha: SHA_B, line: 14 })]);
+  // A confirmation without anchors keeps the old ones; a verified entry never gains anchors.
+  mem(s, 'confirmed', { id: 'm1' }, T2);
+  assert.equal(get(s, 'm1').anchors[0].blob_sha, SHA_B);
+  mem(s, 'filed', entry({ id: 'v', key: undefined, trust: 'verified' }));
+  mem(s, 'confirmed', { id: 'v', anchors: [anchor()] }, T2);
+  assert.equal(get(s, 'v').anchors, undefined);
+});
+
+test('R27: pinned and owner entries are never staled; pinning, editing or approving revives a staled entry', () => {
+  const s = newState();
+  mem(s, 'filed', entry({ id: 'p', key: undefined, pinned: true, anchors: [anchor()] }));
+  mem(s, 'filed', entry({ id: 'o', key: undefined, trust: 'owner', anchors: [anchor()] }));
+  assert.equal(mem(s, 'staled', { id: 'p' }, T1, staledPayload()).rejected, 'memory-stale-exempt');
+  assert.equal(mem(s, 'staled', { id: 'o' }, T1, staledPayload()).rejected, 'memory-stale-exempt');
+  assert.deepEqual([get(s, 'p').state, get(s, 'o').state], ['active', 'active']);
+
+  for (const [id, op, e] of [['pin', 'pinned', { id: 'pin' }], ['ed', 'edited', { id: 'ed', text: 'owner wording' }]]) {
+    mem(s, 'filed', entry({ id, key: undefined, anchors: [anchor()] }));
+    mem(s, 'staled', { id }, T1, staledPayload());
+    mem(s, op, e, T2);
+    assert.deepEqual([get(s, id).state, get(s, id).stale_reason], ['active', undefined], op);
+    assert.ok(memoryFor(s, { repo_id: 'demo' }).some((x) => x.id === id), op);
+  }
+  mem(s, 'filed', entry({ id: 'q', key: undefined, trust: 'quarantined', anchors: [anchor()] }));
+  mem(s, 'staled', { id: 'q' }, T1, staledPayload());
+  mem(s, 'approved', { id: 'q' }, T2);
+  assert.deepEqual([get(s, 'q').state, get(s, 'q').trust], ['active', 'owner']);
+});
+
+test('staled refuses a malformed verdict and a retired entry', () => {
+  const s = newState();
+  mem(s, 'filed', entry({ anchors: [anchor()] }));
+  assert.equal(mem(s, 'staled', { id: 'm1' }, T1, staledPayload({ reason: 'age' })).rejected, 'memory-stale-invalid');
+  assert.equal(mem(s, 'staled', { id: 'm1' }, T1, staledPayload({ anchor: null })).rejected, 'memory-stale-invalid');
+  assert.equal(mem(s, 'staled', { id: 'nope' }, T1, staledPayload()).rejected, 'memory-entry-unknown');
+  mem(s, 'retired', { id: 'm1' }, T1);
+  assert.equal(mem(s, 'staled', { id: 'm1' }, T2, staledPayload()).rejected, 'memory-entry-retired');
+  // Out-of-range numbers are clamped, malformed shas dropped.
+  mem(s, 'filed', entry({ id: 'm2', key: undefined, anchors: [anchor()] }));
+  mem(s, 'staled', { id: 'm2' }, T1, staledPayload({ anchor: { file_path: 'x.js', blob_sha: 'zz', current_blob_sha: null, changed_ratio: 7 } }));
+  assert.deepEqual(get(s, 'm2').stale_anchor, { file_path: 'x.js', blob_sha: null, current_blob_sha: null, changed_ratio: 1 });
 });

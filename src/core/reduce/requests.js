@@ -131,6 +131,10 @@ export function applySuggestion(state, ev, m, req, result) {
   h.revision = (h.revision ?? 1) + 1;
   h.updated_at = ev.occurred_at;
   result.handoffsChanged.add(h.id);
+  if (m.state === 'dismissed' && typeof m.reason === 'string' && m.reason.trim()) {
+    recordDismissal(ticket, h, sug, m.reason.trim(), req, ev);
+    result.changed.add(ticket.id);
+  }
   if (m.state !== 'accepted') return;
   if (m.fields) applyTicketFields(state, ticket, m.fields, ev, 'manual', result);
   if (m.child && !state.tickets.has(m.child.id)) {
@@ -154,9 +158,44 @@ function appendRunNote(ticket, note, runId) {
     ...(Number.isInteger(note.withheld) && note.withheld > 0 ? { withheld: note.withheld } : {}),
     ...(note.origin === 'page' ? { origin: 'page' } : {}),
   };
+  const failure = runNoteFailure(note.failure);
+  if (failure) entry.failure = failure;
+  // Dismissals of this run's suggestions recorded before its note arrived stay with the note.
+  const previous = (Array.isArray(ticket.run_notes) ? ticket.run_notes : []).find((n) => n && n.run_id === runId);
+  if (previous && Array.isArray(previous.dismissals)) entry.dismissals = previous.dismissals;
   const list = (Array.isArray(ticket.run_notes) ? ticket.run_notes : []).filter((n) => n && n.run_id !== runId);
   list.push(entry);
   ticket.run_notes = list.slice(-RUN_NOTES_MAX);
+}
+
+// The failure ledger (ADR 0032): only the worker-structured fields of a failed test gate, copied
+// field by field. Never test output or test names.
+const SIGNATURE = /^[0-9a-f]{16}$/;
+function runNoteFailure(f) {
+  if (!f || typeof f !== 'object' || f.kind !== 'test-gate' || (f.status !== 'failed' && f.status !== 'timeout')) return null;
+  return {
+    kind: 'test-gate',
+    status: f.status,
+    command: typeof f.command === 'string' && f.command ? f.command.slice(0, 300) : null,
+    exit_code: Number.isInteger(f.exit_code) ? f.exit_code : null,
+    signature: typeof f.signature === 'string' && SIGNATURE.test(f.signature) ? f.signature : null,
+    files_touched: (Array.isArray(f.files_touched) ? f.files_touched : []).filter((x) => typeof x === 'string' && x).slice(0, 20).map((x) => x.slice(0, 300)),
+  };
+}
+
+// An owner's reason for dismissing a run's suggestion (ADR 0032), kept on that run's Run note, which
+// stays local (exports, the mirror and vault notes drop run_notes). A run without a note gets one.
+export const DISMISS_REASON_CHARS = 280;
+export const DISMISSALS_MAX = 20;
+function recordDismissal(ticket, h, sug, reason, req, ev) {
+  const list = Array.isArray(ticket.run_notes) ? ticket.run_notes : [];
+  let note = list.find((n) => n && n.run_id === h.id);
+  if (!note) {
+    note = { run_id: h.id, at: ev.occurred_at, attempts: [], lessons: [], ...(h.proposal ? { origin: 'page' } : {}) };
+    ticket.run_notes = [...list, note].slice(-RUN_NOTES_MAX);
+  }
+  const item = { suggestion_id: sug.id, type: typeof sug.type === 'string' ? sug.type : null, reason: reason.slice(0, DISMISS_REASON_CHARS), at: ev.occurred_at, by: req.actor_id ?? 'owner' };
+  note.dismissals = [...(Array.isArray(note.dismissals) ? note.dismissals : []).filter((d) => d && d.suggestion_id !== sug.id), item].slice(-DISMISSALS_MAX);
 }
 
 export function handleHandoffTx(state, ev, result) {
