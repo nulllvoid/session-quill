@@ -35,6 +35,7 @@ import { interruptedEffects, batchBudgetUsd, batchBudgetReached, resumePrompt, c
 import { createTicketWorktreeSweep } from './ticket-worktrees.js';
 import { takeSnapshot, archiveSnapshots } from './snapshots.js';
 import { patchFields, criticSettings, runCritic, criticFields } from './critic.js';
+import { createCiWatch } from './ci-watch.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -124,9 +125,11 @@ function grantedFingerprints(scopes) {
   } catch { return null; }
 }
 
-export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDraftPrFn = openDraftPr, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
+export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDraftPrFn = openDraftPr, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes, ciProviderFor = null } = {}) {
   // Ticket worktree teardown (ADR 0036): at start, then at most hourly from the tick.
   const ticketWorktrees = createTicketWorktreeSweep();
+  // CI watch of Quill-opened pull requests (ADR 0039): at most every `[ci] interval_minutes` from the tick.
+  const ciWatch = createCiWatch({ providerFor: ciProviderFor });
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   const finishing = new Set(); // finish() promises, until memory filing has landed
   const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
@@ -716,7 +719,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       if (!repoCfg || !repoCfg.canonical_path || !fs.existsSync(repoCfg.canonical_path)) return fail(worker, h, 'repo-unavailable', 'source access requires the registered repository on this owner machine; it is not available');
       try {
         // The ticket's own branch when it can be found, else HEAD (spec §10).
-        base = await worktreeBase(ticket, repoCfg);
+        // A CI fix (ADR 0039) starts from the commit CI failed on, on the branch it pushes to.
+        const ci = h.origin === 'ci' && h.ci_fix && typeof h.ci_fix === 'object' ? { branch: h.ci_fix.head_branch, commit: h.ci_fix.head_sha } : null;
+        if (ci && ci.branch !== h.branch) return fail(worker, h, 'ci-branch-mismatch', 'this CI fix pushes to a different branch than the one CI failed on, so it did not start');
+        base = await worktreeBase(ticket, repoCfg, { ci });
         baseCommit = base.ref === 'HEAD' ? await headCommit(repoCfg.canonical_path) : base.ref;
         worktreePath = path.join(handoffsDir(worker.env), 'worktrees', h.id);
         const worktreeStarted = performance.now();
@@ -725,7 +731,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
           updateHandoff(worker, h.id, { worktree_path: worktreePath });
         } finally { timings.worktree_ms = Math.round(performance.now() - worktreeStarted); }
       } catch (err) {
-        return fail(worker, h, err.code === 'worktree-failed' ? 'worktree-failed' : 'source-failed', err.message);
+        return fail(worker, h, ['worktree-failed', 'ci-head-changed', 'branch-protected'].includes(err.code) ? err.code : 'source-failed', err.message);
       }
       cwd = worktreePath;
       await takeSnapshot(worker, h.id, 'start');
@@ -925,6 +931,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     sweepTicketWorktrees: () => ticketWorktrees.run(currentWorker, ctx.config),
     // The anchor check now, unthrottled (tests and embedders); tick runs it every ANCHOR_CHECK_MS.
     checkAnchors: () => checkAnchors(currentWorker),
+    sweepCi: () => ciWatch.run(currentWorker, ctx.config),
     async onStart(worker) {
       // Each recipe carries its time cap per access level, from the same budget dispatch uses.
       worker.recipeInfo = () => catalogFor(worker).list().map((r) => (r.error ? r : { ...r, caps: recipeCaps(r, ctx.config) }));
@@ -950,6 +957,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     tick(worker) {
       if (paused) return;
       ticketWorktrees.tick(worker, ctx.config);
+      ciWatch.tick(worker, ctx.config);
       const now = worker.now();
       for (const h of worker.state.handoffs.values()) {
         if (h.cancel_requested && h.state === 'running' && running.has(h.id) && running.get(h.id).reason === null) killWithReason(h.id, 'cancel');
@@ -976,6 +984,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       // A run still waiting in dispatch for an earlier filing must not start once a stop began.
       stopping = true;
       await ticketWorktrees.idle();
+      await ciWatch.idle();
       if (abandonRuns) { running.clear(); return; }
       // M7: a dispatch still setting up (no process yet) returns once it sees `stopping`, or has just
       // spawned: wait for it, bounded, so no run starts after the stop and a fresh child is stopped below.

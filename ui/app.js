@@ -32,6 +32,8 @@ const appState = {
   filters: { ...EMPTY_FILTERS },
   selected: null,
   runTab: null,
+  // Needs you grouping (ADR 0039): 'attention' (default) or 'none' (one list); `group=` in the hash.
+  runGroup: 'attention',
   selectedRun: null,
   detailTab: 'overview',
   detailExpanded: false,
@@ -125,6 +127,7 @@ function readHash() {
   appState.selected = params.get('ticket') || null;
   appState.treeRoot = params.get('root') || null;
   appState.runTab = params.get('tab') || null;
+  appState.runGroup = params.get('group') === 'none' ? 'none' : 'attention';
   appState.selectedRun = appState.view === 'runs' ? params.get('run') || null : null;
   appState.memoryTab = appState.view === 'memory' && MEMORY_TABS.includes(params.get('mtab')) ? params.get('mtab') : null;
   appState.memoryRepo = appState.view === 'memory' ? params.get('mrepo') || null : null;
@@ -158,6 +161,7 @@ function writeHash() {
   if (appState.selected && appState.detailTab !== 'overview') params.set('section', appState.detailTab);
   if (appState.treeRoot) params.set('root', appState.treeRoot);
   if (appState.view === 'runs' && appState.runTab) params.set('tab', appState.runTab);
+  if (appState.view === 'runs' && appState.runGroup === 'none') params.set('group', 'none');
   if (appState.view === 'runs' && appState.selectedRun) params.set('run', appState.selectedRun);
   if (appState.view === 'memory' && appState.memoryTab) params.set('mtab', appState.memoryTab);
   if (appState.view === 'memory' && appState.memoryRepo) params.set('mrepo', appState.memoryRepo);
@@ -214,7 +218,7 @@ function render() {
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
-  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun, memory: appState.memory });
+  else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun, memory: appState.memory, group: appState.runGroup });
   else if (appState.view === 'memory') html = renderMemory(appState.memory, s, { now, pending, tab: appState.memoryTab, repo: appState.memoryRepo, editing: appState.memoryEditing, status: appState.memoryStatus, filters: appState.filters, online: appState.online });
   if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
   renderBulkBar(s);
@@ -663,6 +667,7 @@ function handleAction(el) {
     }
     case 'review-proposals': appState.filters = { ...EMPTY_FILTERS }; setView('runs'); appState.runTab = 'needs'; render(); break;
     case 'run-tab': appState.runTab = el.dataset.tab; render(); document.querySelector(`#run-tab-${CSS.escape(appState.runTab)}`)?.focus(); break;
+    case 'run-group': appState.runGroup = el.dataset.group === 'none' ? 'none' : 'attention'; render(); document.querySelector('#main [data-action="run-group"]')?.focus(); break;
     case 'open-run': openRun(el.dataset.run, el); break;
     case 'close-run': closeRun(); break;
     case 'run-prev': stepRun(-1); break;

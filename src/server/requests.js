@@ -146,6 +146,11 @@ export function fromOwnerDashboard(req) {
 // CLI, an ingress request claiming the owner, a schedule or a page never approve one.
 function approvalRefusal(req, p, kind) {
   const actor = req.actor_id ?? 'owner';
+  // ADR 0039: a CI fix proposal is approved and dismissed on the dashboard alone, like a scope grant.
+  if (p.origin === 'ci') {
+    if (fromOwnerDashboard(req)) return null;
+    return { code: 'ci-fix-dashboard-only', message: `${kind === 'approve-run' ? 'approving' : 'dismissing'} a CI fix proposal is a dashboard action by the owner: open Runs → Needs you with quill ui` };
+  }
   if (kind === 'approve-run' && p.origin === 'run') {
     if (fromOwnerDashboard(req)) return null;
     return { code: 'critical-approve-dashboard-only', message: 'approving a critical change is a dashboard action by the owner: open Runs → Needs you with quill ui' };
@@ -185,6 +190,28 @@ function approveCritical(worker, req, ticket, p) {
   const recipeNote = builtin && p.recipe.hash && builtin.hash !== p.recipe.hash ? 'recipe updated since proposed' : null;
   const actionPins = specs.map((scope) => ({ scope, pin }));
   return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote, leaseMinutes: lease });
+}
+
+// Approval of a CI fix proposal (ADR 0039). The run that opened the pull request must still record
+// CI failing on the very commit the proposal names, on the branch it pushed; otherwise the proposal
+// is stale (it lapses in state at the next observation anyway). The queued run is an ordinary
+// attempt-fix of the built-in recipe with the proposal's permissions (edit, commit, push to that
+// branch; never a new pull request) and access (never wider than the original run's, never scopes),
+// through the same validation and reservation as any run; validateHandoffRequest refuses a
+// protected branch. The failing log tail travels on the run as `ci_fix`, local only.
+function approveCi(worker, req, ticket, p) {
+  const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
+  const ci = p.ci && typeof p.ci === 'object' ? p.ci : {};
+  const h = worker.state.handoffs.get(p.from_handoff_id);
+  if (!h || !h.ci || h.ci.state !== 'failing' || h.ci.head_sha !== ci.head_sha || h.ci.pr_url !== ci.pr_url) return fail('ci-proposal-stale', 'CI on this pull request changed since the fix was proposed (a new commit, a pass or a merge), so nothing was queued');
+  if (!h.pushed_branch || h.pushed_branch !== ci.head_branch || h.ci.head_branch !== ci.head_branch) return fail('ci-branch-mismatch', `the pull request's branch is not the branch run ${String(h.id).slice(0, 8)} pushed, so a CI fix is not queued`);
+  const evaluation = evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: p.access === 'autonomous' ? 'autonomous' : 'standard', branch: ci.head_branch, suggest: true });
+  if (evaluation.outcome !== 'applied') return evaluation;
+  Object.assign(evaluation.mutation.handoff, {
+    origin: 'ci',
+    ci_fix: { proposal_id: p.id, root_handoff_id: h.id, pr_url: ci.pr_url, head_sha: ci.head_sha, head_branch: ci.head_branch, failing: Array.isArray(ci.failing) ? [...ci.failing] : [], log_tail: typeof ci.log_tail === 'string' ? ci.log_tail : null, log_withheld: Number.isInteger(ci.log_withheld) ? ci.log_withheld : 0 },
+  });
+  return evaluation;
 }
 
 // The interrupted run a resume-run request names (spec §5.4, Task 19): a run of the target ticket
@@ -698,15 +725,16 @@ export function evaluateRequest(worker, req) {
       if (refusal) return { outcome: 'failed', error: { code: refusal.code, message: refusal.message, retryable: false, current_revision: ticket.revision } };
       if (req.kind === 'dismiss-run') return { outcome: 'applied', mutation: { type: 'run-proposal-dismiss', proposal_id: p.id }, result: { proposal_id: p.id } };
       const critical = p.origin === 'run';
+      const ciFix = p.origin === 'ci';
       if (!critical && req.payload && req.payload.ttl_minutes !== undefined && req.payload.ttl_minutes !== null) return { outcome: 'failed', error: { code: 'invalid-ttl', message: 'only the approval of a critical change takes ttl_minutes', retryable: false, current_revision: ticket.revision } };
       // The recipe this ticket would run must still be the one the page offered (same layer and
       // text); a repository recipe of that name shadows it and is refused.
-      const shadow = critical ? null : shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
+      const shadow = critical || ciFix ? null : shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);
       if (shadow) return { outcome: 'failed', error: { code: shadow.code, message: shadow.message, retryable: false, current_revision: ticket.revision } };
       // Approval queues an ordinary run through the same checks and reservation as the Run dialog.
       // It suggests rather than applies: whoever proposed it, the owner reviews what it found. Page
       // text never becomes the owner's note; where the run came from travels as `proposal`.
-      const evaluation = critical ? approveCritical(worker, req, ticket, p) : evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
+      const evaluation = critical ? approveCritical(worker, req, ticket, p) : ciFix ? approveCi(worker, req, ticket, p) : evaluateHandoff(worker, req, ticket, { recipe: p.recipe, note: '', permissions: p.permissions, access: p.access, suggest: true });
       if (evaluation.outcome !== 'applied') {
         if (evaluation.error && evaluation.error.code === 'handoff-reserved') {
           const existing = state.handoffs.get(evaluation.result.existing_handoff_id);

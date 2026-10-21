@@ -23,6 +23,8 @@ const USER_ONLY_FIELDS = new Set([
   'worktree',
   // ADR 0031: whether an approved critical run must dry-run its pinned writes first.
   'critical',
+  // ADR 0039: whether the worker polls CI of Quill-opened pull requests, and how often.
+  'ci',
 ]);
 
 // `[worktree]` (ADR 0036), user config only: `auto` makes `ticket work|bind` mount a ticket worktree
@@ -151,6 +153,17 @@ export function resolveConfig({ cli = {}, session = {}, repo = {}, user = {} } =
 export function criticalSettings(config = {}) {
   const c = config && typeof config.critical === 'object' && config.critical !== null ? config.critical : {};
   return { requireDryRun: c.require_dry_run !== false };
+}
+
+/**
+ * `[ci]` (ADR 0039), user config only: `watch` (default true; only an explicit `false` turns it
+ * off) polls the CI checks of pull requests Quill runs opened on GitHub; `interval_minutes` (whole
+ * minutes from 1 to 60, default 5) is how often. Invalid values keep the default.
+ */
+export function ciSettings(config = {}) {
+  const c = config && typeof config.ci === 'object' && config.ci !== null && !Array.isArray(config.ci) ? config.ci : {};
+  const m = c.interval_minutes;
+  return { watch: c.watch !== false, intervalMinutes: Number.isInteger(m) && m >= 1 && m <= 60 ? m : 5 };
 }
 
 export const GATE_MODES = ['off', 'nudge', 'strict'];

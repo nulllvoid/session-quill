@@ -994,6 +994,18 @@ body[data-layout="medium"][data-detail="open"] .bulk-bar { display: none; }
 .run-facts { grid-area: facts; min-width: 0; overflow-wrap: anywhere; }
 .run-time { grid-area: time; white-space: nowrap; }
 .run-row.proposal { padding: 10px 12px; border-radius: var(--radius-ctl); box-shadow: inset 0 0 0 1px var(--hairline); }
+/* Needs you groups (ADR 0039): a heading and its list per group; Live comes last and is not counted. */
+.run-groups { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 20px; }
+.run-group-head { font-size: 15px; line-height: 1.3; font-weight: 600; margin: 0 0 8px; color: var(--text); }
+.run-group-head .count { font-family: var(--mono); font-size: 12px; color: var(--text-faint); margin-left: 4px; }
+.run-group-toggle { display: flex; justify-content: flex-end; margin: 0 0 8px; }
+/* CI failed item: check names, branch and the log are tool text of any length; they wrap, and the
+   log scrolls inside its own box. */
+.proposal[data-kind="ci"] .ci-body { flex-basis: 100%; min-width: 0; }
+.proposal[data-kind="ci"] .ci-body p { margin: 2px 0; max-width: 70ch; }
+.proposal[data-kind="ci"] code { overflow-wrap: anywhere; }
+.proposal[data-kind="ci"] .proposal-actions { flex-wrap: wrap; max-width: 100%; min-width: 0; }
+.ci-log-text { margin: 6px 0 0; padding: 8px; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; background: var(--surface-inset); border-radius: var(--radius-ctl); }
 .run-uncertain { display: flex; gap: 8px; padding: 10px 12px; border-radius: var(--radius-ctl); background: var(--status-deploy-bg); color: var(--status-deploy); }
 .run-uncertain ul { margin: 4px 0 0; padding-left: 18px; }
 .run-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 0; }

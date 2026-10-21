@@ -91,7 +91,12 @@ async function commitOf(repoPath, ref) {
 // What a run's checkout starts from: the ticket's own branch (the one its work was recorded on)
 // when it exists here or on origin, else the repository's HEAD. `ref` is a commit id or "HEAD";
 // `label` is the honest sentence the prompt gives the agent.
-export async function worktreeBase(ticket, repoCfg) {
+// A CI fix (ADR 0039) passes `ci`: { branch, commit } and starts from exactly the commit CI failed
+// on, which must still be the branch's tip on origin (else `ci-head-changed`: nothing changes, and
+// the next CI observation of the new commit decides again). The run's push then fast-forwards the
+// same branch or is rejected. A protected branch is refused (`branch-protected`).
+export async function worktreeBase(ticket, repoCfg, { ci = null } = {}) {
+  if (ci) return ciFixBase(repoCfg, ci);
   const fallback = { ref: 'HEAD', label: 'checkout is on HEAD; ticket branch unknown' };
   const repoPath = repoCfg && repoCfg.canonical_path;
   const branches = [...((ticket && ticket.branches) ?? [])].filter((b) => b && typeof b.name === 'string').sort((a, b) => String(b.last_seen ?? '').localeCompare(String(a.last_seen ?? '')));
@@ -110,6 +115,23 @@ export async function worktreeBase(ticket, repoCfg) {
   }
   if (local) return { ref: local, label: `checkout based on branch ${branch}` };
   return fallback;
+}
+
+async function ciFixBase(repoCfg, { branch, commit }) {
+  const repoPath = repoCfg && repoCfg.canonical_path;
+  if (!repoPath) throw new TrackerError('worktree-failed', 'a CI fix needs the registered repository on this machine');
+  if (!refOk(branch)) throw new TrackerError('worktree-failed', `not a safe branch name: ${branch}`);
+  if (typeof commit !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)) throw new TrackerError('worktree-failed', 'a CI fix needs the full commit id CI failed on');
+  if (isProtectedBranch(branch, repoCfg)) throw new TrackerError('branch-protected', `refusing a CI fix on protected branch ${branch}`);
+  let remote = null;
+  try {
+    await git(repoPath, ['remote', 'get-url', 'origin']);
+    try { await git(repoPath, ['fetch', '--quiet', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { timeoutMs: 30_000, env: { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' } }); } catch { /* offline: the push decides */ }
+    remote = await commitOf(repoPath, `refs/remotes/origin/${branch}`);
+  } catch { /* no origin */ }
+  if (remote && remote !== commit) throw new TrackerError('ci-head-changed', `branch ${branch} is at ${remote.slice(0, 7)} on origin, not at ${commit.slice(0, 7)} where CI failed, so this CI fix did not start and nothing changed`);
+  if (!(await commitOf(repoPath, commit))) throw new TrackerError('worktree-failed', `commit ${commit.slice(0, 7)}, where CI failed, is not in the repository`);
+  return { ref: commit, label: `checkout at commit ${commit.slice(0, 7)} of branch ${branch}, where CI failed` };
 }
 
 export async function changedFiles(dir) {
