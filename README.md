@@ -20,6 +20,22 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Publishers.** Share a roll-up note, a read-only HTML copy or a live claude.ai artifact page. Each sends only the fields and projects you list, and only after you confirm the destination.
 - **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear on a schedule; sync never writes. Opt in to push one ticket's status back yourself, previewed and confirmed. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline. With Run agent on, they can propose an agent run that waits for your Approve.
 
+## What's new in 2.0
+
+- **A worktree per ticket.** `quill ticket work … --worktree` gives a ticket its own branch and checkout outside the repository, so two sessions can work on two tickets at once. See [Ticket worktrees](#ticket-worktrees).
+- **Review a fix on the dashboard.** Run detail shows the fix's diff grouped by file path, with **Retry as new run** on any hunk. It also has snapshots of the checkout at each step, which you can restore. See [Reviewing a fix run](#reviewing-a-fix-run).
+- **An optional second opinion.** A read-only critic can review a fix after its tests pass. Its notes are labelled as the critic's opinion, never as Quill's check.
+- **Evidence in the pull request.** A fix run's draft PR carries a receipt of what the worker saw: test runs, guard counts, change counts and a digest. `quill receipt` rebuilds it.
+- **CI on Quill's pull requests.** The worker watches GitHub checks on PRs its runs opened. When CI fails it proposes a fix, which runs only if you approve it on the dashboard.
+- **Needs you, grouped.** Runs → Needs you groups items into Needs your decision, Tests or CI failed, Other failures, Ready to review and Live.
+- **Safer critical changes.** An approval can be valid for 5, 15 or 60 minutes. A pinned `kubectl` or `psql` write waits for its server-side dry run. See [Critical changes](#critical-changes).
+- **Planned files.** Writes outside an approved plan show as drift in the status line and on runs. Drift is observed, never blocked. See [Planned files](#planned-files).
+- **Memory that notices change.** A learning about code goes stale when that code is rewritten. One about the run environment goes stale when that environment changes. A repeated test failure is recognised by its signature. See [Memory](#memory) and [MCP servers in autonomous runs](#mcp-servers-in-autonomous-runs).
+- **Secrets stay out of the journal.** Tokens in known formats are redacted from hook and CLI events before they are stored. See [Privacy and limits](#privacy-and-limits).
+- **Faster start, faster status line.** The worker resumes from a state checkpoint instead of replaying the whole journal. The status line loads less code. `quill doctor` shows per-recipe counts.
+
+The full list is in [CHANGELOG.md](CHANGELOG.md); every new field is in [DATA-CONTRACT, "2.0.0 index"](docs/DATA-CONTRACT.md#200-index).
+
 ## Documentation
 
 | For | Read |
@@ -189,6 +205,31 @@ mode = "nudge"                                 # off | nudge | strict
 ```
 
 A repository can make the gate stricter than your own setting but never looser, and it can narrow your `prefixes` list but never widen it. In `strict` mode a mention only links the session when `prefixes` is set. A `.quill.toml` that cannot be parsed makes its repository strict until it is fixed. Patterns match within whitespace-free words of up to 100 characters. The worker picks up edits to either file within about 10 seconds. `gate_enabled = false` still works and means `mode = "off"`.
+
+## Ticket worktrees
+
+Give a ticket its own checkout when you work on more than one ticket in a repository at a time:
+
+```bash
+/session-quill:ticket work "Retry budget for uploads" --worktree
+/session-quill:ticket bind PROJ-42 --worktree
+```
+
+Quill creates the worktree at `~/.claude/quill/worktrees/<repo>/<KEY>`, outside the repository, on the branch `quill/<KEY>`. The branch starts from the ticket's latest recorded branch, or else from the repository's HEAD. An existing `quill/<KEY>` branch is checked out as it is. The command prints `Worktree path: …`, and Claude switches into that path and makes every edit, test and commit there. Your repository's own checkout is not touched. Ignored files listed in `[worktree] copy` are copied in, never linked; a tracked file is never copied. Agent runs never get a ticket worktree: they have their own checkouts.
+
+```toml
+[worktree]                       # user config only (~/.claude/quill/config.toml)
+auto = false                     # true: ticket work|bind mount a worktree without --worktree (--no-worktree skips it)
+copy = [".env", ".env.local"]    # repository-relative ignored files copied into a new worktree
+keep_days = 7                    # how long a done ticket's clean worktree stays
+```
+
+```bash
+quill worktree list [--all] [--json]   # each worktree and its state on disk: clean, uncommitted changes, detached HEAD, missing
+quill worktree remove PROJ-42          # removes a clean one; the branch is always kept
+```
+
+The worker removes a ticket's worktree once the ticket has been done for `keep_days` and no live session uses it. It never removes one with uncommitted changes, a detached HEAD that no branch contains, or a copied ignored file you changed. Such a worktree is kept and `quill worktree list` says why. Removal uses `git worktree remove` without `--force`, and there is no force option. The dashboard does not show ticket worktrees yet ([ADR 0036](docs/decisions/0036-ticket-worktrees.md)).
 
 ## Schedules
 
@@ -370,7 +411,7 @@ token_env = "BITBUCKET_TOKEN"                       # an access token, sent as a
 
 ## Agent recipes
 
-A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check`, `verify-deploy` (read-only post-deploy health through Argo CD and Kibana), `file-task`, `standup` and `workspace-setup`, plus `critical-change`, which runs only from an approved critical change; add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
+A recipe is a Markdown file with frontmatter and a prompt. Quill ships `analyse`, `analyse-followups`, `attempt-fix`, `deploy-check`, `verify-deploy` (read-only post-deploy health through Argo CD and Kibana), `file-task`, `standup` and `workspace-setup`, plus `critical-change`, which runs only from an approved critical change, and `critic-review`, which runs only as a fix run's critic step (see [Reviewing a fix run](#reviewing-a-fix-run)); add your own in a repository's `.quill/agents/` (shared, and preferred for that repository) or in `~/.claude/quill/agents/` (just you).
 
 ```markdown
 ---
@@ -433,6 +474,40 @@ max_concurrent_fix = 1        # runs that edit source (default 1; and one per re
 
 **Bulk runs.** On Board or Pick next, press **Select** (or `x` on a focused card; Shift-click selects a range, Esc clears) and choose **Analyze**, **Attempt fix** or **Change status** for every checked ticket. The bulk dialog shows which tickets are ready, already running, have no repository or are not eligible, and asks once for the recipe and access; bulk fixes need an explicit edit-source confirmation. Each ticket gets its own request, so one stale ticket does not stop the rest, and the runs share a batch id with a progress strip and **Cancel batch** for the queued ones (`quill handoff cancel --batch <id>` from a terminal). Bulk status changes keep their 10-second undo, gathered under **Undo all**. Large analyses may split the work across Claude Code subagents inside the one run ([ADR 0023](docs/decisions/0023-bulk-runs-and-test-gate.md)).
 
+## Reviewing a fix run
+
+A finished fix with changes appears in Runs → Needs you under **Ready to review** for up to 7 days. It stays there until its ticket is done, its PR merges or closes, or a later run replaces it. The item shows *Tests passed (worker)* or *Not test-verified*. There is no "Mark reviewed" action yet.
+
+**The diff.** Run detail → Changes shows the fix's patch on your dashboard, grouped by where each file sits: Core logic, Schema and state, CLI, routes and UI, and Tests. It is labelled "Grouped by file path" because the grouping is by path, not by what the change does. Each hunk has **Retry as new run**, which opens the Run dialog with a note naming that file and hunk; you can edit the note before queuing. A patch over 1 MB is not shown, but its file path is. Per-hunk revert is not built.
+
+**Snapshots.** The worker snapshots a fix run's checkout at each step: at the start, after the main turn, before each follow-up turn, before the tests and before the commit. Run detail → Snapshots lists them. **Restore checkout to this snapshot** has the 10-second undo. It changes only the run's checkout, never its commit, branch or pull request. It saves the current files as a snapshot first, and it never touches ignored files such as `.env`. Snapshots are git refs under `refs/quill/snapshots/<run>/` in your repository. When the checkout is removed (7 days after the run), they move to `refs/quill/archive/<run>/` and can no longer be restored from the dashboard ([ADR 0035](docs/decisions/0035-run-snapshots.md)).
+
+**The critic (opt-in).** Turn it on per repository and a fresh, read-only Claude Code process reviews each fix after the worker's tests pass, before the commit:
+
+```toml
+[repos.my-repo]
+critic = true                                   # only true turns it on
+review_docs = ["CLAUDE.md", "docs/STYLE.md"]    # at most 5 repository files, read at the run's base commit (default ["CLAUDE.md"])
+```
+
+The critic never resumes the run's session. It cannot edit, and it never gets the run's scope credentials. In an autonomous run it is under the guard with a read-only grant. It is capped by what is left of the run's budget and by 10 minutes. Its findings show in run detail as **Review notes (n)**, "The critic agent's opinion, not Quill's check". It never blocks a run: whatever it says, the run ends as it would have without it ([ADR 0040](docs/decisions/0040-diff-review-and-critic.md)).
+
+**The evidence receipt.** A fix run that opens a draft PR appends a receipt to the PR body. The receipt is built from what the worker journaled before the push, never from the agent's reply. It lists the run, recipe and access, and each test attempt with its exit code and time. It says whether the tested tree matches the commit, and gives guard counts (allowed, refused, critical), owner approvals and change counts. It ends with a sha256 digest and "Not a deployment." Scope names, targets, local paths and test output never appear in it. To rebuild it from the journal and check its digest, run `quill receipt <run-id>` (`--json` for the data); it exits 1 when the digest differs. The digest identifies a set of facts and is not proof. Change counts use two optional glob lists:
+
+```toml
+[repos.my-repo]
+critical_paths = ["src/billing/**", "migrations/**"]   # counted as critical-path files; none by default
+config_globs = ["**/*.yaml", "deploy/**"]               # counted as config; default: JSON, TOML, YAML, INI, .env*, Dockerfile, Makefile, .github/** …
+```
+
+**CI watch.** For repositories with `provider = "github"`, the worker polls the checks of pull requests that Quill runs opened in the last 7 days. It covers open tickets whose PR is not merged or closed. When CI fails on a commit, Needs you shows a **CI failed** item with the failing checks. When the branch is the one the run pushed, the item also offers a fix proposal with a redacted log tail of at most 4096 characters. **Approve and queue CI fix** is a dashboard action only. It queues an `attempt-fix` run on exactly that commit, which pushes to the same branch, fast-forward only, never to a protected branch, and opens no new PR. There is at most one proposal per failing commit and two per PR. A proposal lapses when the PR's head changes, CI passes, or the PR merges or closes. Bitbucket CI is not watched yet ([ADR 0039](docs/decisions/0039-attention-groups-and-ci-watch.md)).
+
+```toml
+[ci]                      # user config only
+watch = true              # only false turns it off
+interval_minutes = 5      # 1 to 60
+```
+
 ## Autonomous runs
 
 An autonomous run (the default access) works like a careful engineer in your own Claude Code session:
@@ -480,6 +555,15 @@ log_retention_days = 30
 [memory]
 inline_budget_bytes = 48000    # how much memory goes into the prompt; the rest is readable in the run's context/ folder
 ```
+
+### Planned files
+
+Planned files say which files a piece of work expects to change. Writes outside them are counted as drift. Drift is observed only: nothing is refused, paused or delayed ([ADR 0037](docs/decisions/0037-planned-files-drift.md)).
+
+- **In your own sessions**, an approved plan (`ExitPlanMode`) supplies the list: the paths and globs the plan names. Later writes outside it add up as drift. The status line ends with ` ⚠ drift N`, and `quill status` prints a "Plan drift" line. In `nudge` mode, Claude is asked once at the end of a turn to update the plan or carry on.
+- **For a run**, give the list when you queue it: `quill agent run attempt-fix PROJ-42 --planned "src/upload/**" --planned README.md` (repeat the flag or use commas). It needs Autonomous or Full access and edit-source, because only the run guard sees each file write. Run detail and the run's row show "N writes outside planned files" in amber. A finished fix with drift is listed under Needs your decision. The Run dialog has no planned-files field yet.
+
+Only the file-writing tools (Edit, Write, MultiEdit, NotebookEdit) count; shell writes are not measured. Entries are repo-relative paths or globs, at most 50.
 
 ### Set up read-only credentials
 
@@ -593,6 +677,15 @@ quill memory pin <id> [--unpin]
 quill memory retire <id>
 ```
 
+**Memory that follows the code.** A sourced learning is anchored to the file, blob and nearest symbol it cites. At most every 5 minutes, when the registered checkout's HEAD or the anchored entries changed, the worker compares the anchors with HEAD. When enough of the anchored region has changed, the entry goes stale, shows *Source changed · not delivered to runs* on the Memory page, and stops reaching runs. Pinned and owner entries never go stale this way. A later run that confirms the learning brings it back.
+
+```toml
+[memory]
+anchor_stale_ratio = 0.3    # share of the anchored lines no longer in the file at which an entry goes stale (above 0, at most 1)
+```
+
+**Failures are remembered, not their output.** When the worker's test gate fails, the run's Run note records the command, the exit code, a failure signature and the files the run changed. It never records the test output. Before a test-repair turn, a run whose failure matches an earlier run's signature is told what that run tried. The resume brief adds "Failed before:" with the last two failures. `quill agent dismiss <run> <suggestion> --reason "…"` keeps your reason (at most 280 characters) on that run's note, and later runs on the ticket receive it as your word. The dashboard's Dismiss does not ask for a reason ([ADR 0032](docs/decisions/0032-anchored-memory-and-failure-ledger.md)).
+
 Approve and Edit are dashboard-only. Ids need at least 8 characters and must match one entry. Inside an agent run the CLI refuses every memory change, and an autonomous run cannot run `quill memory` at all; it already has its memory inline and in its `context/` folder.
 
 ### Critical changes
@@ -606,6 +699,13 @@ When the run finishes `done`, the worker checks each recorded change against the
 **Approve and queue (scopes: …)** is a dashboard action only. It checks that the scope definitions have not changed since the proposal (`scope-changed` otherwise). It then queues one autonomous run of the built-in `critical-change` recipe, which may make exactly that change, as written, and verify it. Any other write is refused as a new critical change, even in the same scope, and so is the same action with reordered options. The run's `done` does not close the child; you do.
 
 A change Quill cannot pin is listed on the run with its reason ("Not proposed: …"). Examples: an unknown scope, a chained command, or a target the scope would not cover. Proposals lapse after 7 days. The child ticket stays, and you can run it by hand with write scopes ticked in the Run dialog. That run is a scope grant without a pinned action, and the dialog says so. Full-access runs make such writes directly; the run lists them under *Production writes (full access)*.
+
+**Valid for and dry runs.** Next to **Approve and queue**, **Valid for** limits how long the approved run may make covered writes: Whole run (the default), 5 min, 15 min or 1 h. It counts from when the run starts. After it, the guard refuses the run's scoped and pinned writes (`lease-expired`); reads continue. The choice is frozen in the run's grant, and nothing can extend it; more time needs a new approval. When the pinned action is a `kubectl` or `psql` write, the guard also refuses it until the same run has run its server-side dry run and it exited 0: `--dry-run=server` for kubectl, `EXPLAIN` for psql. The item shows that dry run before you approve. Helm, mysql, redis-cli, MCP pins and other actions without such a dry run show *No dry run* and run as pinned. terraform, gh and aws are not covered ([ADR 0031](docs/decisions/0031-dry-run-preflight-and-leases.md)).
+
+```toml
+[critical]                # user config only
+require_dry_run = true    # only false turns the dry-run requirement off
+```
 
 ### Resume an interrupted run
 
@@ -698,7 +798,7 @@ Add the quill segment to your status line (`~/.claude/settings.json`):
 
 If you already have a status line, keep it and run both scripts from a small wrapper so neither replaces the other.
 
-While the worker is healthy, the segment ends with the dashboard address as a clickable link (OSC 8, in terminals that support it). It is only the address, never a sign-in secret, and it disappears when the worker stops.
+After an approved plan, the segment adds ` ⚠ drift N` when the session wrote N files outside it (see [Planned files](#planned-files)). While the worker is healthy, the segment ends with the dashboard address as a clickable link (OSC 8, in terminals that support it). It is only the address, never a sign-in secret, and it disappears when the worker stops.
 
 ## Diagnostics
 
@@ -707,6 +807,15 @@ quill doctor
 ```
 
 Reports Node, Git and Claude versions, store ownership (copies on other machines are read-only), worker lock and heartbeat, whether the worker starts at login, ingress backlog, journal health and recent capture gaps. `quill status --json` shows the binding for a session. Logs are under `~/.claude/quill/logs/`.
+
+`quill doctor` also prints a **Recipes** section for the last 30 days, from this machine's journal: per recipe, runs, done and failed. It counts tests passed by the worker first time and after a repair, owner interventions (a cancel, an undo, a retry or resume), and PRs merged. It also counts PRs reverted within 48 hours of merge, PRs not yet known, and the median time from run end to merge. These are counts, not a score; `quill doctor --json` carries them as `recipes`. Revert detection needs GitHub; Bitbucket PRs stay "not yet known" ([ADR 0033](docs/decisions/0033-evidence-receipts-and-recipe-stats.md)).
+
+**Worker start.** The worker keeps a state checkpoint (`state/state.checkpoint.json` in the Quill home). On start it loads the checkpoint and replays only the newer events. It writes one on stop, and on an idle moment once enough events have arrived since the last one. Any mismatch replays the whole journal: another Quill version, changed reducer code, changed repository or project configuration, or an edited journal. Deleting the file is always safe ([ADR 0030](docs/decisions/0030-state-checkpoint.md)).
+
+```toml
+[worker]
+checkpoint_every = 500    # events journaled since the last checkpoint before an idle tick writes a new one
+```
 
 ## Uninstall
 
@@ -717,6 +826,7 @@ Reports Node, Git and Claude versions, store ownership (copies on other machines
 ## Privacy and limits
 
 - No telemetry. Hooks capture tool metadata and selected assistant content, not full prompts, environments or command output.
+- **Secret redaction at ingress (2.0).** Every hook and CLI event is redacted before it reaches the journal or the blob store, and the worker redacts each ingress file again before journaling it. This covers end-of-turn messages, approved plans, the start of a shell command, tool error text, the first prompt's title, commit messages and `quill tracker push --comment`, which is redacted before the preview, so what you see is what is sent. Known credential formats are replaced with `[secret redacted]`: GitHub, GitLab, Slack, npm and `sk-` tokens, AWS key ids, Bearer and Basic credentials, passwords in URLs, `secret=value` pairs, `.env` lines with secret-looking names, private keys, and long random-looking strings. Ids, hashes, paths, branches and URLs are kept as they are. Not covered: secrets in no known format (a short plain password in prose), events the worker writes itself, what you type into the dashboard, and journals and blobs written before 2.0, which are not rewritten. Claude Code's own transcripts are outside Quill ([ADR 0029](docs/decisions/0029-ingress-redaction.md)).
 - The gate covers tool calls delivered to its hooks. External processes, disabled hooks and host crashes are outside its guarantee, and a valid binding never bypasses normal Claude Code permissions.
 - Exports are copies: they do not update and cannot be revoked after you share them.
 - Handoffs use your configured model provider; selected ticket content leaves the machine when you queue one. That includes the ticket's Notes section, its full latest plan and checkpoint, its earlier run summaries and, with source access, the diff of its commits.
