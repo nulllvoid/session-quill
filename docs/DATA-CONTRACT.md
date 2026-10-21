@@ -394,7 +394,9 @@ CLI: `quill receipt <run-id> [--json]` prints the receipt rebuilt from the journ
 
 ### Task 6 Hook latency
 
-_Not yet filled._
+No contract change ([ADR 0034](decisions/0034-hook-latency-and-daemon-ipc.md)): no event kind, field, file or projection is added or changed. Hooks still write one ingress file per event; the status line still reads only the binding snapshot, `state/heartbeat.json` and `state/ui-endpoint.json`, and its output is byte for byte what 1.1.1 printed.
+
+`node scripts/bench-hooks.mjs --json` prints one object, for tooling and release notes only (not a stored record): `node` (version string), `platform`, `calls` (per case) and `cases[]`, each with `name`, `p50_ms`, `p95_ms`, `p99_ms` and `max_ms` (milliseconds, one decimal). Case names: `bare node start`, `quill-hook PreToolUse`, `quill-hook PostToolUse`, `quill-hook SessionStart`, `statusline`, `in-process runHook PreToolUse`, `in-process runHook PostToolUse`, plus `<entry> hook PreToolUse|PostToolUse` with `--entry`.
 
 ### Task 7 Run snapshots
 

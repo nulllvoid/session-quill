@@ -1,40 +1,15 @@
-import { loadContext, workerStatus, latestSnapshot, liveEndpoint, portFallbackNote } from '../context.js';
-import { readBindingSnapshot } from '../../hooks/binding-snapshot.js';
-import { sessionKey } from '../../core/state.js';
+import { loadContext, workerStatus, latestSnapshot } from '../context.js';
+import { statusLine, parseStatusInput, bindingFor } from '../statusline.js';
 import { countIngress } from '../../core/ingress.js';
 import fs from 'node:fs';
 import { pausePath } from '../../runtime/readiness.js';
-import { driftSuffix } from '../../core/planned-paths.js';
-
-// The dashboard address as an OSC 8 hyperlink (ADR 0022). Only the base URL: the sign-in secret
-// never appears in the status line.
-function dashboardLink(ctx) {
-  const endpoint = liveEndpoint(ctx);
-  if (!endpoint) return '';
-  const url = `http://${endpoint.host}:${endpoint.port}/`;
-  const osc = '\u001b]8;;';
-  const st = '\u001b\\';
-  const note = portFallbackNote(endpoint);
-  return ` ${osc}${url}${st}${url}${osc}${st}${note ? ` ⚠ ${note}` : ''}`;
-}
-
-function bindingFor(ctx, session) {
-  if (!session) return null;
-  return readBindingSnapshot(sessionKey(session), ctx.env);
-}
 
 export async function run({ flags, io, env }) {
   const ctx = loadContext(env, { requireStore: false });
   if (flags.statusline) {
-    let input = {};
-    try { input = JSON.parse((await io.readStdin()) || '{}'); } catch { input = {}; }
-    if (!ctx.initialized) { io.out('⌁ quill: not initialized'); return 0; }
-    const session = input.session_id ? { session_id: input.session_id, agent_id: null } : null;
-    const b = bindingFor(ctx, session);
-    const ws = workerStatus(ctx);
-    const warn = `${driftSuffix(b && b.drift_count)}${ws.healthy ? dashboardLink(ctx) : ' ⚠ worker'}`;
-    if (b && b.ticket_id) io.out(`⌁ ${b.ticket_key} ${b.ticket_title ?? ''}${b.gate_enabled === false ? ' (gate off)' : ''}${warn}`.trim());
-    else io.out(`⌁ unbound${b && b.gate_enabled === false ? ' (gate off)' : ''}${warn}`);
+    let raw = '';
+    try { raw = await io.readStdin(); } catch { raw = ''; }
+    io.out(statusLine(ctx, parseStatusInput(raw)));
     return 0;
   }
   const session = flags.session ? { session_id: flags.session, agent_id: flags.agent ?? null } : null;
