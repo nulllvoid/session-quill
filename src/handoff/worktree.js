@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { TrackerError } from '../lib/errors.js';
+import { branchNameOk } from '../lib/git-ref.js';
 import { isProtectedBranch } from './permissions.js';
 
 export function git(cwd, args, { timeoutMs = 60_000, raw = false, env = undefined } = {}) {
@@ -120,7 +121,7 @@ export async function worktreeBase(ticket, repoCfg, { ci = null } = {}) {
 async function ciFixBase(repoCfg, { branch, commit }) {
   const repoPath = repoCfg && repoCfg.canonical_path;
   if (!repoPath) throw new TrackerError('worktree-failed', 'a CI fix needs the registered repository on this machine');
-  if (!refOk(branch)) throw new TrackerError('worktree-failed', `not a safe branch name: ${branch}`);
+  if (!branchNameOk(branch)) throw new TrackerError('worktree-failed', `not a branch name git accepts: ${branch}`);
   if (typeof commit !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit)) throw new TrackerError('worktree-failed', 'a CI fix needs the full commit id CI failed on');
   if (isProtectedBranch(branch, repoCfg)) throw new TrackerError('branch-protected', `refusing a CI fix on protected branch ${branch}`);
   let remote = null;

@@ -9,6 +9,7 @@
 import { deterministicId } from '../../lib/ids.js';
 import { timelineEntry } from './common.js';
 import { pruneProposals } from './integrations.js';
+import { branchNameOk } from '../../lib/git-ref.js';
 
 export const CI_STATES = ['failing', 'pending', 'passing', 'none'];
 export const CI_PR_STATES = ['open', 'draft', 'merged', 'closed', 'unknown'];
@@ -18,15 +19,15 @@ export const CI_PROPOSALS_PER_PR = 2;
 export const CI_RECIPE = Object.freeze({ name: 'attempt-fix', source: 'builtin' });
 // What an approved CI fix may do: edit, commit and push to the PR's own branch. Never a new PR.
 export const CI_PERMISSIONS = Object.freeze({ read_source: true, edit_source: true, commit: true, push_branch: true, open_draft_pr: false, edit_files: false, delete_files: false });
-const LIMITS = Object.freeze({ id: 64, checks: 30, checkName: 120, failing: 10, branch: 255 });
+const LIMITS = Object.freeze({ id: 64, checks: 30, checkName: 120, failing: 10 });
 const PR_URL_RE = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/;
 const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const BRANCH_RE = /^[A-Za-z0-9_][A-Za-z0-9._/@+-]{0,254}$/;
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const text = (v, max, min = 1) => typeof v === 'string' && v.length >= min && v.length <= max;
 const oneLine = (v, max) => String(v).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
-const branchOk = (b) => typeof b === 'string' && BRANCH_RE.test(b) && !b.includes('..') && !b.endsWith('/') && !b.endsWith('.lock');
+// Any branch git accepts (git's ref-format rules, at most 255 characters): GitHub allows `fix/#123`.
+const branchOk = branchNameOk;
 
 /** A check name as the run's record keeps it: one line of at most 120 characters. */
 export const ciCheckName = (name) => oneLine(name, LIMITS.checkName);

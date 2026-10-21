@@ -459,12 +459,12 @@ ADR 0039. Every field below is local only. None is on an export, sanitize, mirro
 - Event `ci-observation` (worker only; through ingress it is quarantined as `ingress-forged`). Payload `{ handoff_id, n, pr_url, head_sha, head_branch, pr_state, state, checks[] }`:
   - `n` is 1 for a run's first observation, then the previous one plus 1.
   - `pr_url` is the run's own GitHub PR URL.
-  - `head_sha` is 40 or 64 hex characters. `head_branch` is a safe branch name.
+  - `head_sha` is 40 or 64 hex characters. `head_branch` is a branch name git accepts (`git check-ref-format --branch` rules, `branchNameOk` in `src/lib/git-ref.js`), at most 255 characters, with no Unicode control, format or separator character.
   - `pr_state` is open, draft, merged, closed or unknown.
   - `state` is failing, pending, passing or none.
   - `checks` holds at most 30 entries `{ name, state }`, where `state` is failed, pending, passed or skipped.
 
-  Source identity `ci-observation:<handoff_id>:<n>`. Refusals (not applied): `ci-observation-source`, `ci-observation-invalid`, `handoff-unknown`, `ci-pr-mismatch`, `ci-observation-out-of-order`.
+  Source identity `ci-observation:<handoff_id>:<n>:<digest>`, where `digest` is 16 hex of sha256 over the observed facts (`pr_url`, `head_sha`, `head_branch`, `pr_state`, `state`, `checks`). Refusals (not applied): `ci-observation-source`, `ci-observation-invalid`, `handoff-unknown`, `ci-pr-mismatch`, `ci-observation-out-of-order`. The watch checks the journal for the source identity before it emits, so a refused observation is journaled once and not again while the same facts are seen; a refused or duplicate observation is not counted observed.
 - Handoff field `ci` (on the run that opened the pull request): `{ n, pr_url, head_sha, head_branch, pr_state, state, checks[], failing[], observed_at, since }`.
   - Check names are one line of at most 120 characters.
   - `failing` holds the names of the failed checks.

@@ -9,6 +9,7 @@
 // ledger's redaction, every instruction-like line is withheld, and it is cut to 4096 characters
 // before it reaches the journal. It stays local (the proposal and the fix run's record) and reaches
 // the fix run's prompt only as labelled data inside the data fence.
+import { createHash } from 'node:crypto';
 import { MINUTE } from '../lib/time.js';
 import { repoFor } from '../core/state.js';
 import { ciSettings } from '../config/config.js';
@@ -73,6 +74,9 @@ export function watchedRuns(state, nowIso) {
   return out.sort((a, b) => String(b.finished_at ?? '').localeCompare(String(a.finished_at ?? ''))).slice(0, CI_WATCH_MAX_PRS);
 }
 
+// 16 hex of the observation's facts (never a log: the payload holds only states and check names).
+const observationDigest = (payload) => createHash('sha256').update(JSON.stringify([payload.pr_url, payload.head_sha, payload.head_branch, payload.pr_state, payload.state, payload.checks])).digest('hex').slice(0, 16);
+
 const failingNames = (checks) => checks.filter((c) => c.state === 'failed').map((c) => c.name);
 const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -95,7 +99,7 @@ export function proposalBlocker(state, h, repo) {
 }
 
 /** One pass over the watched pull requests; returns what it did, for logs and tests. */
-export async function sweepCi(worker, config, { providerFor = null } = {}) {
+export async function sweepCi(worker, config, { providerFor = null, refused = new Map() } = {}) {
   const out = { polled: 0, observed: 0, proposed: 0, errors: [] };
   if (!ciSettings(config).watch) return out;
   const providers = providerFor ? { for: providerFor } : defaultProviders(config, worker.env);
@@ -120,9 +124,20 @@ export async function sweepCi(worker, config, { providerFor = null } = {}) {
     if (changed(h.ci, seen)) {
       const n = (h.ci ? h.ci.n : 0) + 1;
       const payload = { handoff_id: h.id, n, pr_url: h.pr_url, head_sha: seen.head_sha, head_branch: seen.head_branch, pr_state: seen.pr_state, state: seen.state, checks: seen.checks.map((c) => ({ name: c.name, state: c.state })) };
+      // The source identity names the observed facts too: a refused observation is journaled once
+      // and never re-sent while the facts stay the same, and a later, different one is not taken
+      // for a duplicate of it (the reducer marks a refused event's identity applied as well).
+      const sourceIdentity = `ci-observation:${h.id}:${n}:${observationDigest(payload)}`;
+      if (refused.get(h.id) === sourceIdentity) continue;
+      if (worker.journal && worker.journal.hasSource(sourceIdentity)) {
+        refused.set(h.id, sourceIdentity);
+        out.errors.push({ handoff_id: h.id, error: 'ci-observation-refused-before' });
+        continue;
+      }
       try {
-        const { result } = worker.emit('ci-observation', payload, { ticket_id: h.ticket_id, source_identity: `ci-observation:${h.id}:${n}` });
-        if (result.rejected) { out.errors.push({ handoff_id: h.id, error: result.rejected }); continue; }
+        const { result } = worker.emit('ci-observation', payload, { ticket_id: h.ticket_id, source_identity: sourceIdentity });
+        if (result.rejected || result.duplicate) { refused.set(h.id, sourceIdentity); out.errors.push({ handoff_id: h.id, error: result.rejected ?? 'ci-observation-duplicate' }); continue; }
+        refused.delete(h.id);
         out.observed += 1;
       } catch (err) { out.errors.push({ handoff_id: h.id, error: err.message }); continue; }
     }
@@ -149,10 +164,13 @@ export async function sweepCi(worker, config, { providerFor = null } = {}) {
 export function createCiWatch({ providerFor = null } = {}) {
   let last = -Infinity;
   let inFlight = null;
+  // handoff id -> the source identity of the observation the reducer last refused for it: skipped,
+  // without a journal line or a log, until what the watch sees changes.
+  const refused = new Map();
   const run = (worker, config) => {
     if (inFlight) return inFlight;
     last = Date.parse(worker.now());
-    inFlight = sweepCi(worker, config, { providerFor })
+    inFlight = sweepCi(worker, config, { providerFor, refused })
       .then((r) => { if (r.errors.length) worker.log(`CI watch: ${r.errors.length} pull request(s) not observed (${r.errors[0].error})`); return r; })
       .catch((err) => { worker.log(`CI watch failed: ${err.message}`); return null; })
       .finally(() => { inFlight = null; });
