@@ -37,6 +37,8 @@ function fixture() {
   s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
   s.tickets[0].run_notes = [S];
   s.tickets[0].critical_spec = { rule: S };
+  // Ticket worktrees (ADR 0036): local paths and branch names stay on the machine.
+  s.tickets[0].worktrees = [{ id: '66666666-0000-4000-8000-000000000001', repo_id: 'demo', path: `C:/Users/me/.claude/quill/worktrees/demo/${S}`, branch: `quill/${S}`, base_sha: 'a'.repeat(40), state: 'kept', mounted_at: '2026-10-01T00:00:00Z', kept_at: '2026-10-09T00:00:00Z', kept_reason: 'uncommitted-changes', pruned_at: null }];
   const local = { ...s.tickets[1], id: TID(40), key: `LOCAL-${S}`, title: `Secret ${S}`, local_only: true };
   s.tickets.push(local);
   s.tickets[2].children_ids = [...(s.tickets[2].children_ids ?? []), local.id];
@@ -277,4 +279,18 @@ test('M1: scope errors reach exports, the mirror and vault notes without scope n
   const other = fixture();
   other.handoffs[0].error = { code: 'agent-exit', message: 'agent exited with exit code 1' };
   assert.equal(sanitizeSnapshot(other, ALL).handoffs[0].error.message, 'agent exited with exit code 1');
+});
+
+test('ticket worktree records never reach an export, the mirror, a publisher or a vault note (ADR 0036)', () => {
+  const s = fixture();
+  for (const opts of [{ exportedAt: ALL.exportedAt }, ALL, { ...ALL, fields: [...SELECTABLE_FIELDS, 'worktrees'] }]) {
+    for (const t of sanitizeSnapshot(s, opts).tickets) assert.equal('worktrees' in t, false);
+  }
+  assert.equal(SELECTABLE_FIELDS.includes('worktrees'), false);
+  assert.equal(Object.keys(PUBLISH_FIELDS).includes('worktrees'), false);
+  const base = { plans: [], conclusions: [], timeline: [], files_touched: [], prs: [], deployments: [], children_ids: [], handoff_ids: [], tags: [] };
+  const state = { tickets: new Map(s.tickets.map((t) => [t.id, t])), handoffs: new Map() };
+  const note = renderTicketNote({ ...base, ...s.tickets[0] }, { state });
+  assert.equal(note.includes(S), false);
+  assert.equal(note.includes('worktrees'), false);
 });

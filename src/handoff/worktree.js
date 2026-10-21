@@ -150,3 +150,136 @@ export function openDraftPr(dir, { branch, base, title, body }) {
     });
   });
 }
+
+// ---- Ticket worktrees (ADR 0036): a named branch checked out outside the repository for an
+// interactive session. Never used for worker runs, which keep their detached checkouts above.
+
+const refOk = (b) => typeof b === 'string' && SAFE_BRANCH.test(b) && !b.includes('..') && !b.includes('//') && !b.endsWith('/') && !b.endsWith('.') && !b.endsWith('.lock') && !b.includes('@{');
+
+/** Whether `branch` may be a ticket worktree's branch: a safe name git accepts that is not protected. */
+export async function checkWorktreeBranch(repoPath, branch, repo) {
+  if (!refOk(branch)) throw new TrackerError('branch-invalid', `not a safe branch name: ${branch}`);
+  if (isProtectedBranch(branch, repo)) throw new TrackerError('branch-protected', `refusing a worktree on protected branch ${branch}`);
+  try { await git(repoPath, ['check-ref-format', '--branch', branch]); } catch { throw new TrackerError('branch-invalid', `git does not accept the branch name ${branch}`); }
+  return branch;
+}
+
+/**
+ * `git worktree add` of `branch` at `dir`. An existing branch is checked out as it is (its commits are
+ * the ticket's earlier work); a new one starts at `base` (a commit id or HEAD). Returns
+ * { dir, branch, base_sha, created_branch }. Never forces, never resets a branch.
+ */
+export async function createBranchWorktree({ repoPath, dir, branch, base = 'HEAD', repo = null }) {
+  if (!repoPath || !fs.existsSync(repoPath)) throw new TrackerError('worktree-failed', `repository path is missing: ${repoPath}`);
+  await checkWorktreeBranch(repoPath, branch, repo);
+  if (fs.existsSync(dir)) throw new TrackerError('worktree-exists', `${dir} already exists`);
+  const existing = await commitOf(repoPath, `refs/heads/${branch}`);
+  let baseSha = existing;
+  if (!existing) {
+    if (typeof base !== 'string' || !(base === 'HEAD' || /^[0-9a-f]{7,64}$/.test(base))) throw new TrackerError('worktree-failed', `invalid base ${base}`);
+    baseSha = await commitOf(repoPath, base);
+    if (!baseSha) throw new TrackerError('worktree-failed', `base ${base} is not a commit in ${repoPath}`);
+  }
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  try {
+    await git(repoPath, existing ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir, baseSha]);
+  } catch (err) {
+    throw new TrackerError('worktree-failed', `git worktree add failed: ${err.message}`);
+  }
+  return { dir, branch, base_sha: baseSha, created_branch: !existing };
+}
+
+const isAbsoluteAnywhere = (p) => path.isAbsolute(p) || path.win32.isAbsolute(p) || path.posix.isAbsolute(p) || /^[A-Za-z]:/.test(p);
+const realOrNull = (p) => { try { return fs.realpathSync.native(p); } catch { return null; } };
+
+/**
+ * Copies `[worktree] copy` entries from the repository into a new worktree. An entry is a
+ * repository-relative path without `..`, `.git` or an absolute form; it is copied only when the source is a
+ * regular file (lstat: no links) that git ignores, its real path stays inside the repository, and
+ * the destination does not exist and resolves inside the worktree. Files are copied, never linked.
+ * Returns { copied: [rel], skipped: [{ path, reason }] }.
+ */
+export async function copyIgnoredFiles({ repoPath, dir, entries = [] }) {
+  const copied = [];
+  const skipped = [];
+  const repoReal = realOrNull(repoPath);
+  const dirReal = realOrNull(dir);
+  for (const raw of Array.isArray(entries) ? entries : []) {
+    const entry = typeof raw === 'string' ? raw.trim() : '';
+    const rel = entry.replace(/\\/g, '/');
+    const parts = rel.split('/');
+    if (!rel || rel.includes('\0') || isAbsoluteAnywhere(entry) || parts.some((s) => s === '..' || s === '' || s.toLowerCase() === '.git')) { skipped.push({ path: String(raw).slice(0, 200), reason: 'invalid-path' }); continue; }
+    const src = path.join(repoPath, ...parts);
+    let st = null;
+    try { st = fs.lstatSync(src); } catch { st = null; }
+    if (!st) { skipped.push({ path: rel, reason: 'missing' }); continue; }
+    if (!st.isFile()) { skipped.push({ path: rel, reason: 'not-a-file' }); continue; }
+    const srcReal = realOrNull(src);
+    if (!repoReal || !srcReal || !isUnder(repoReal, srcReal)) { skipped.push({ path: rel, reason: 'outside-repository' }); continue; }
+    // Exit 0 only for a path an ignore rule matches; tracked files are never reported ignored.
+    const ignored = await git(repoPath, ['check-ignore', '-q', '--', rel]).then(() => true, () => false);
+    if (!ignored) { skipped.push({ path: rel, reason: 'not-ignored' }); continue; }
+    const dest = path.join(dir, ...parts);
+    let destSt = null;
+    try { destSt = fs.lstatSync(dest); } catch { destSt = null; }
+    if (destSt) { skipped.push({ path: rel, reason: 'exists' }); continue; }
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      const parentReal = realOrNull(path.dirname(dest));
+      // A tracked symlinked folder in the checkout must not carry the copy outside the worktree.
+      if (!dirReal || !parentReal || !(parentReal === dirReal || isUnder(dirReal, parentReal))) { skipped.push({ path: rel, reason: 'outside-worktree' }); continue; }
+      fs.copyFileSync(src, dest, fs.constants.COPYFILE_EXCL);
+      copied.push(rel);
+    } catch (err) {
+      skipped.push({ path: rel, reason: err.code === 'EEXIST' ? 'exists' : 'copy-failed' });
+    }
+  }
+  return { copied, skipped };
+}
+
+/** Whether `dir` is a registered worktree of `repoPath` (git's own listing). */
+export async function isWorktreeOf(repoPath, dir) {
+  try {
+    const listing = await git(repoPath, ['worktree', 'list', '--porcelain'], { raw: true });
+    const target = norm(realOrNull(dir) ?? dir);
+    return listing.split(/\r?\n/).filter((l) => l.startsWith('worktree ')).map((l) => l.slice(9)).some((p) => norm(realOrNull(p) ?? p) === target);
+  } catch { return false; }
+}
+
+/** What removing the worktree at `dir` would lose: null when nothing, else the kept reason. */
+export async function worktreeLoss(dir) {
+  const status = await git(dir, ['status', '--porcelain', '--untracked-files=all'], { raw: true });
+  if (status.trim()) return 'uncommitted-changes';
+  // A detached HEAD whose commit no branch contains would leave its commits unreferenced.
+  const onBranch = await git(dir, ['symbolic-ref', '-q', 'HEAD']).then(() => true, () => false);
+  if (!onBranch) {
+    const containing = await git(dir, ['for-each-ref', '--count=1', '--contains', 'HEAD', 'refs/heads', 'refs/remotes']).catch(() => '');
+    if (!containing) return 'detached-head';
+  }
+  return null;
+}
+
+/**
+ * Removes a ticket worktree only when nothing would be lost (ADR 0036): `dir` must be inside `root`
+ * and a registered worktree of the repository, `git status --porcelain` must be empty, and the
+ * removal is `git worktree remove` without `--force` (git itself refuses a dirty or locked
+ * worktree). The branch is kept. Returns { removed: true, missing? } or { removed: false, reason }.
+ */
+export async function removeCleanWorktree({ repoPath, dir, root }) {
+  if (!root || !isUnder(root, dir)) return { removed: false, reason: 'outside-worktrees-root' };
+  if (!fs.existsSync(dir)) {
+    if (repoPath && fs.existsSync(repoPath)) await pruneWorktrees(repoPath, { under: root });
+    return { removed: true, missing: true };
+  }
+  if (!repoPath || !fs.existsSync(repoPath)) return { removed: false, reason: 'repository-missing' };
+  if (!(await isWorktreeOf(repoPath, dir))) return { removed: false, reason: 'not-a-worktree' };
+  let loss;
+  try { loss = await worktreeLoss(dir); } catch (err) { return { removed: false, reason: 'status-failed', message: err.message }; }
+  if (loss) return { removed: false, reason: loss };
+  try {
+    await git(repoPath, ['worktree', 'remove', dir]);
+  } catch (err) {
+    return { removed: false, reason: 'remove-failed', message: err.message };
+  }
+  return fs.existsSync(dir) ? { removed: false, reason: 'remove-failed', message: 'the folder is still there' } : { removed: true };
+}

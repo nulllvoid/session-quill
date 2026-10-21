@@ -346,7 +346,14 @@ _Not yet filled._
 
 ### Task 8 Ticket worktrees
 
-_Not yet filled._
+ADR 0036. Interactive sessions only; worker runs keep their detached checkouts under `<quillHome>/handoffs/worktrees/`.
+
+- Event kind `worktree` (ingress: the CLI emits `mounted`, and `pruned` for `quill worktree remove`; the worker's sweep emits `pruned` and `kept` with `Worker.emit`). Payload `{ op: 'mounted'|'pruned'|'kept', mount_id (UUID, one per mount), ticket_id, repo_id, path (absolute), branch, base_sha (40 or 64 hex), reason? }`; `reason` is required for `kept` (`uncommitted-changes` or `detached-head`) and is `missing` on a `pruned` whose folder was already gone. Source identity `worktree:<ticket_id>:<op>:<path>:<mount_id>`. The reducer rejects a malformed payload (`worktree-invalid`), an unknown ticket (`ticket-unknown`) and a `pruned`/`kept` naming no active mount (`worktree-unknown`); a second `mounted` for a folder that already has an active record is a no-op. Worktree events do not bump the ticket's revision.
+- Ticket field `worktrees[]` (local only; created on the first mount): `{ id (= mount_id), repo_id, path, branch, base_sha, state ('mounted'|'kept'|'pruned'), mounted_at, kept_at, kept_reason, pruned_at }`, at most 10 records, pruned ones dropped first. It is in the owner snapshot and ticket detail; it is never in an export, the mirror, a publisher payload, a tracker push or a vault note.
+- Location `<quillHome>/worktrees/<repo_id>/<KEY>`; branch `quill/<KEY>` (never a protected branch); base: an existing `quill/<KEY>` as it is, else the ticket's latest recorded branch, else the repository's HEAD.
+- User config `[worktree]` (user-only: a `.quill.toml` cannot set it): `auto` (boolean, default false), `copy` (repository-relative ignored files copied into a new worktree, default `[".env", ".env.local"]`), `keep_days` (whole days a done ticket's clean worktree stays, default 7).
+- Teardown: due when the ticket is done, neither the ticket's `updated_at` nor `mounted_at` is newer than `keep_days`, and no session that is not ended or extinct has its start `cwd` inside the worktree or is bound to the ticket. Removed only when the path is inside `<quillHome>/worktrees`, git lists it as a worktree of the repository and `git status --porcelain` is empty, with `git worktree remove` and never `--force`; the branch is kept.
+- CLI: `quill ticket work|bind ... --worktree|--no-worktree`; `quill worktree list [--all] [--json]` (each row: key, ticket_status, state, kept_reason, branch, path, repo_id, base_sha, mounted_at, pruned_at, disk: `clean`, `uncommitted changes`, `detached HEAD`, `missing` or `unreadable`); `quill worktree remove <KEY>`. Error codes: `worktree-no-repo`, `worktree-exists`, `worktree-failed`, `branch-invalid`, `branch-protected`, `worktree-unknown`, `worktree-dirty`, `worktree-not-removed`, `worktree-in-use`. Inside an agent run every `worktree` command and `ticket work|bind` exit 2 (`cli-in-run`).
 
 ### Task 9 Planned files and drift
 

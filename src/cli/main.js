@@ -26,6 +26,7 @@ const COMMANDS = {
   tracker: () => import('./commands/tracker.js'),
   mirror: () => import('./commands/mirror.js'),
   memory: () => import('./commands/memory.js'),
+  worktree: () => import('./commands/worktree.js'),
 };
 
 // Every command the dispatcher knows; tests enumerate it to check the in-run refusal.
@@ -38,13 +39,14 @@ Usage: quill <command> [options]
   start [--repo <path>] [--store <path>] [--session <id>] [--share-settings]
   init [--store <path>] [--project <id>] [--project-name <name>] [--repo <path>] [--timezone <tz>] [--yes] [--bootstrap-from-tracker]
   ticket create "<title>" --description "<Goal/Context/Done when>" [--category c] [--priority P2] [--parent KEY] [--project id] [--due YYYY-MM-DD] [--bind] --session <id>
-  ticket work "<task title>" --description "<Goal/Context/Done when>" [--category c] [--project id] [--repo id] --session <id>  (reuse or create, then bind)
-  ticket bind <KEY> --session <id>          ticket show --session <id> [--json]
+  ticket work "<task title>" --description "<Goal/Context/Done when>" [--category c] [--project id] [--repo id] [--worktree|--no-worktree] --session <id>  (reuse or create, then bind)
+  ticket bind <KEY> [--worktree|--no-worktree] --session <id>   ticket show --session <id> [--json]
   ticket off --session <id>                 ticket on --session <id>
   ticket relink <KEY> --external <EXT-KEY> [--system s] [--url <url>] --session <id>   (--jira is an alias)
   ticket children <KEY>                     ticket list [--status s] [--json]
   ticket stale [--idle-days n] [--json]     ticket stale --apply  (closes shipped and children-done tickets)
   ticket set <KEY> [--description d] [--title t] [--status s] [--blocker b] [--next text] [--priority P] [--category c] [--due D|none] [--parent KEY|none] [--repo id|none] [--no-code yes|no]
+  worktree list [--all] [--json]            worktree remove <KEY>  (ticket worktrees under <quill home>/worktrees; a dirty one is never removed)
   repo add <path> [--id id] [--project id] [--repo-file]   repo list [--json]   repo remove <id>
   repo clone <KEY> [--url <remote>] [--confirm]   (preview, then clone a ticket's repository into [tracker] auto_clone_dir)
   approve [--checkpoint <id>] --session <id> dismiss [--checkpoint <id>] --session <id>

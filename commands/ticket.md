@@ -1,6 +1,6 @@
 ---
 description: Track a task across sessions; create, reuse, switch, or inspect tickets
-argument-hint: work "<task title>" [--description d] [--category c] | create "<title>" [--description d] [--category c] [--priority P2] [--parent KEY] [--bind] | bind <KEY> | show | off | on | relink <KEY> --external <EXT-KEY> | list | children <KEY>
+argument-hint: work "<task title>" [--description d] [--category c] [--worktree] | create "<title>" [--description d] [--category c] [--priority P2] [--parent KEY] [--bind] | bind <KEY> [--worktree] | show | off | on | relink <KEY> --external <EXT-KEY> | list | children <KEY>
 allowed-tools: Bash(node *)
 ---
 
@@ -28,7 +28,8 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quill.js" ticket $ARGUMENTS [--description "<des
 
 If the CLI rejects the description, fix the parts it names and run the command once more.
 
-4. Report the result. After `create --bind` or `bind`, state the key the session is now bound to. After `off`, remind the user that the gate is off for this session and audited; after `on`, that enforcement is restored.
+4. Report the result. After `create --bind` or `bind`, state the key the session is now bound to.
+5. If the output has a line `Worktree path: <path>`, the ticket has its own worktree (branch `quill/<KEY>`, outside the repository). Switch into that path before you edit anything: `cd "<path>"` in your shell, or open that folder with your worktree tool. Make every edit, test run and commit for the ticket there, and tell the user the path. The repository's own checkout is left as it was. After `off`, remind the user that the gate is off for this session and audited; after `on`, that enforcement is restored.
 
 Notes:
 - Tickets are tasks, not sessions. Use `work "<concise task title>"` to reuse an open task with the same title in this project/repository, or create it, and bind this session atomically. Check `list --json` and bind a known key when the task already exists under a different title. Follow-ups, retries, and approvals stay on the same task; a new task needs its own ticket. Sessions may switch tickets, and multiple sessions may work on one ticket.
@@ -36,5 +37,6 @@ Notes:
 - Mentioning a configured ticket key (for example `PROJ-123`) in a prompt links the session automatically; these commands remain for manual control.
 - `set <KEY> --description "<description>"` writes or replaces a ticket's description, in the same format. A session bound to a ticket without one is asked to write it.
 - `create` inherits project and category defaults from the repository's `.quill.toml`; pass `--category` or `--priority` to override.
+- `--worktree` (or `[worktree] auto = true` in the user config) gives the ticket a worktree under the Quill home; `--no-worktree` skips it. Ignored files listed in `[worktree] copy` (default `.env`, `.env.local`) are copied in, never linked. `quill worktree list` shows them; `quill worktree remove <KEY>` removes a clean one and keeps its branch. A worktree with uncommitted changes is never removed. The worker removes a clean one some days after its ticket is done.
 - Bindings never fall back to the working directory. Rebinding affects future tool calls only.
 - Recorded approval or binding is never permission to commit, push or deploy.
