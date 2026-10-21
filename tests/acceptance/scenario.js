@@ -81,7 +81,8 @@ export function scenario({ startMs = Date.parse('2026-10-02T08:00:00Z'), repos =
   return s;
 }
 
-export async function until(fn, { timeoutMs = 5000, stepMs = 25 } = {}) {
+// A fix run snapshots its checkout at each step (ADR 0035); a loaded machine needs more than 5 s for one.
+export async function until(fn, { timeoutMs = 20_000, stepMs = 25 } = {}) {
   const started = Date.now();
   for (;;) {
     const v = await fn();
