@@ -169,7 +169,7 @@ export function hasUnlinkedWork(session) {
 }
 
 export function requestFeedback(req, { now }) {
-  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run', 'memory-approve': 'approve learning', 'memory-edit': 'memory edit', 'memory-forget': 'retire', 'memory-pin': req.payload && req.payload.pinned === false ? 'unpin' : 'pin', 'memory-note': 'owner note' }[req.kind] ?? req.kind;
+  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'restore-snapshot': 'restore', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run', 'memory-approve': 'approve learning', 'memory-edit': 'memory edit', 'memory-forget': 'retire', 'memory-pin': req.payload && req.payload.pinned === false ? 'unpin' : 'pin', 'memory-note': 'owner note' }[req.kind] ?? req.kind;
   const memory = typeof req.kind === 'string' && req.kind.startsWith('memory-');
   let body = '';
   if (req.state === 'sending') body = 'Sending to the worker…';

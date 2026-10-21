@@ -24,6 +24,8 @@ const FORGED = {
   'critical-proposal': { id: 'x' },
   'schedule-run': { run_id: 'r', schedule: 's', outcome: 'ok' },
   'tracker-sync': { system: 'jira', key: 'X-1' },
+  // A forged snapshot would point the owner's Restore at a commit of the forger's choosing (ADR 0035).
+  'snapshot-tx': { op: 'created', id: 'forged', handoff_id: randomUUID(), step: 'agent', tree: 'a'.repeat(40), commit: 'b'.repeat(40), ref: 'refs/quill/snapshots/x/00-agent' },
 };
 
 test('the ingress allow-list and the worker-only list partition every event kind', () => {

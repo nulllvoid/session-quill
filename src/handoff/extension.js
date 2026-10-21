@@ -25,6 +25,7 @@ import { getBlob } from '../core/blobs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
 import { catalogScopes, createVersionProbe, prepareAutonomous, prepareObserve, prodEffects } from './autonomous.js';
 import { interruptedEffects, batchBudgetUsd, batchBudgetReached, resumePrompt, carrySession, claudeConfigRoot } from './resume.js';
+import { takeSnapshot, archiveSnapshots } from './snapshots.js';
 
 // The default wall clock for a run that sets no timeout of its own. `budgetFor` supplies the
 // per-run value (20 min, 30 for autonomous, up to 60 by recipe or config); `deadlineMs` below is an
@@ -197,6 +198,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     return Math.max(0, Math.round((cap - (entry.usage ? entry.usage.cost : 0)) * 10000) / 10000);
   };
 
+  // Run snapshots (ADR 0035) before a follow-up turn: the run's id is its running entry's key.
+  const snapshotBefore = (worker, entry, step) => { for (const [id, e] of running) if (e === entry) return takeSnapshot(worker, id, step); return null; };
+
   async function followUp(entry, prompt, { tools, maxTurns, permissionMode = entry.permissionMode, label = 'follow-up' }) {
     const left = remainingUsd(entry);
     if (left <= 0) {
@@ -234,6 +238,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       return { outcome, quality };
     }
     if (parsed.problems.length && !entry.reason && timeLeft()) {
+      await snapshotBefore(worker, entry, 'before-repair');
       const next = await followUp(entry, repairPrompt(parsed.problems), { tools: entry.tools, maxTurns: entry.budget.repairTurns, label: 'repair' });
       const fixed = next ? parseOutcome(next, parseOpts) : null;
       if (fixed && !fixed.no_result && !fixed.is_error && fixed.problems.length < parsed.problems.length) {
@@ -246,6 +251,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (entry.selfCheck && !parsed.problems.length && !entry.reason && timeLeft()) {
       // The check re-reads sources; it never edits, whatever the run was allowed to do. Under
       // autonomous access the guard still decides each call, with no static allow rule.
+      await snapshotBefore(worker, entry, 'before-self-check');
       const readOnly = entry.access === 'autonomous' ? { allowed: [], disallowed: [...new Set([...entry.tools.disallowed, 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Task', 'Agent'])] } : selfCheckTools(entry.permissions);
       const next = await followUp(entry, SELF_CHECK_PROMPT, { tools: readOnly, maxTurns: entry.budget.selfCheckTurns, permissionMode: 'dontAsk', label: 'self-check' });
       const checked = next ? parseOutcome(next, parseOpts) : null;
@@ -266,6 +272,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const current = worker.state.handoffs.get(h.id);
     if (!current || !['running'].includes(current.state)) { running.delete(h.id); return; }
     addUsage(entry, outcome);
+    await takeSnapshot(worker, h.id, 'agent');
     let quality = null;
     let gate = null;
     if (entry && !entry.reason && !outcome.error && outcome.code === 0) {
@@ -414,7 +421,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // The path comes from the store: only a directory inside this store's worktrees folder is deleted.
     if (!isUnder(path.join(handoffsDir(worker.env), 'worktrees'), dir)) { worker.log(`worktree path outside the worktrees folder, not removed: ${h.id}`); return; }
     if (!fs.existsSync(dir)) {
-      if (!h.worktree_removed_at && worker.state.handoffs.has(h.id)) { try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch { /* ignore */ } }
+      if (!h.worktree_removed_at && worker.state.handoffs.has(h.id)) { await archiveSnapshots(worker, h.id); try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch { /* ignore */ } }
       return;
     }
     const repoPath = repoPathOf(h);
@@ -425,6 +432,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // Stamped only when the directory is really gone (a lock on Windows can leave it); the next sweep retries.
     if (fs.existsSync(dir)) { worker.log(`worktree not removed yet, will retry: ${h.id}`); return; }
     if (worker.state.handoffs.has(h.id)) {
+      await archiveSnapshots(worker, h.id);
       try { updateHandoff(worker, h.id, { worktree_removed_at: worker.now() }); } catch (err) { worker.log(`worktree removal not recorded: ${err.message}`); }
     }
   }
@@ -514,6 +522,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const p = h.permissions ?? {};
     const repo = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
     try {
+      if (p.commit) await takeSnapshot(worker, h.id, 'before-commit');
       if (p.commit) out.commit_sha = await commitAll(h.worktree_path, `handoff(${h.id.slice(0, 8)}): ${h.note || 'attempt fix'}`);
       if (p.push_branch && out.commit_sha) {
         try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; out.pushed_branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
@@ -548,11 +557,13 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     };
     let total = 0;
     let attempts = 1;
+    await takeSnapshot(worker, h.id, 'before-tests');
     let result = await once();
     total += result.ms;
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
     if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft() && remainingUsd(entry) <= 0) (entry.budgetNotes ??= []).push('test-repair-skipped-budget-spent');
     else if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
+      await takeSnapshot(worker, h.id, 'before-test-repair');
       const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: entry.budget.maxTurns, label: 'test-repair' });
       if (entry.reason) return { outcome, gate: null };
       const repaired = next ? parseOutcome(next, { outputs: entry.outputs }) : null;
@@ -633,6 +644,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
         return fail(worker, h, err.code === 'worktree-failed' ? 'worktree-failed' : 'source-failed', err.message);
       }
       cwd = worktreePath;
+      await takeSnapshot(worker, h.id, 'start');
     } else {
       cwd = path.join(handoffsDir(worker.env), 'sandbox', h.id);
       fs.mkdirSync(cwd, { recursive: true });

@@ -310,3 +310,64 @@ test('an export shows none of the record sections, only the recorded stage it ke
   const ticketHtml = renderDetail(s.tickets[0], s, { now: NOW, tab: 'runs' });
   assert.doesNotMatch(ticketHtml, /Run notes|lesson/, 'an export has no Run notes');
 });
+
+// Run snapshots (ADR 0035): the checkout at each step boundary, restorable from the owner's dashboard.
+const SNAP_HID = 'run-1';
+const snapRow = (n, step, label, extra = {}) => ({ id: `snap-${n}`, n, step, label, tree: 'a'.repeat(40), commit: `${n}`.repeat(40).slice(0, 40), ref: `refs/quill/snapshots/${SNAP_HID}/0${n}-${step}`, files_changed: n, at: '2026-10-10T10:0' + n + ':00Z', restored_at: null, archived_at: null, ...extra });
+const withSnapshots = (extra = {}) => fix({ snapshots: [snapRow(0, 'start', 'Checkout created'), snapRow(1, 'agent', "After the agent's turn <b>"), snapRow(2, 'before-tests', 'Before the test gate', { restored_at: '2026-10-10T11:00:00Z' })], ...extra });
+
+test('the Snapshots section lists each step with time and files changed, and offers Restore on a finished run', () => {
+  const h = withSnapshots();
+  const html = renderRunDetail(h, snap(h), { now: NOW });
+  assert.match(html, /<h3>Snapshots \(3\)<\/h3>/);
+  assert.match(html, /Restores the run&#39;s checkout only; the commit, branch and pull request are unchanged\. Its current files are saved as a snapshot first\./);
+  assert.match(html, /01 · Checkout created/);
+  assert.match(html, /After the agent&#39;s turn &lt;b&gt;/, 'labels are escaped');
+  assert.match(html, /0 files changed since the base commit/);
+  assert.match(html, /1 file changed since the previous snapshot/);
+  assert.match(html, /Restored <time/);
+  const buttons = html.match(/<button[^>]*data-action="restore-snapshot"[^>]*>/g) ?? [];
+  assert.equal(buttons.length, 3);
+  assert.match(buttons[0], /data-ticket="[^"]+" data-handoff="run-1" data-snapshot="snap-0"/);
+  assert.match(buttons[0], /aria-label="Restore checkout to snapshot 01, Checkout created"/);
+  assert.match(html, />Restore checkout to this snapshot</);
+  // The section sits with the checkout it restores, after "Where it is".
+  assert.ok(html.indexOf('<h3>Where it is</h3>') < html.indexOf('<h3>Snapshots (3)</h3>'));
+});
+
+test('no Restore while the run is queued or running, once the checkout is gone, or without owner rights', () => {
+  for (const state of ['queued', 'running']) {
+    const h = withSnapshots({ state });
+    assert.doesNotMatch(renderRunDetail(h, snap(h), { now: NOW }), /data-action="restore-snapshot"/, state);
+  }
+  const gone = withSnapshots({ worktree_removed_at: '2026-10-17T10:00:00Z', snapshots: [snapRow(0, 'start', 'Checkout created', { archived_at: '2026-10-17T10:00:00Z', ref: 'refs/quill/archive/run-1/00-start' })] });
+  const html = renderRunDetail(gone, snap(gone), { now: NOW });
+  assert.doesNotMatch(html, /data-action="restore-snapshot"/);
+  assert.match(html, /The checkout was removed/);
+  assert.match(html, /Archived/);
+  const h = withSnapshots();
+  const readOnly = renderRunDetail(h, snap(h, { capabilities: { read: true, edit_tickets: false, handoff: false } }), { now: NOW });
+  assert.match(readOnly, /<h3>Snapshots \(3\)<\/h3>/);
+  assert.doesNotMatch(readOnly, /data-action="restore-snapshot"|the snapshot commit/);
+});
+
+test('a queued restore shows Undo while its 10 s window is open, then Restoring', () => {
+  const h = withSnapshots();
+  const pending = [{ id: 'req-9', kind: 'restore-snapshot', state: 'pending', payload: { handoff_id: 'run-1', snapshot_id: 'snap-1' } }];
+  const html = renderRunDetail(h, snap(h), { now: NOW, pending });
+  assert.match(html, /Restore queued <button type="button" class="btn small" data-action="cancel-request" data-request="req-9" aria-label="Undo restoring snapshot 02"/);
+  assert.equal((html.match(/data-action="restore-snapshot"/g) ?? []).length, 0, 'one restore at a time');
+  const applying = renderRunDetail(h, snap(h), { now: NOW, pending: [{ ...pending[0], state: 'applying' }] });
+  assert.match(applying, /Restoring…/);
+  assert.doesNotMatch(applying, /data-action="cancel-request"/);
+});
+
+test('the Snapshots section is omitted when there are none and in an export', async () => {
+  const h = fix();
+  assert.doesNotMatch(renderRunDetail(h, snap(h), { now: NOW }), /Snapshots/);
+  const { sanitizeSnapshot } = await import('../../src/export/sanitize.js');
+  const withSnaps = withSnapshots();
+  const s = normalizeSnapshot(sanitizeSnapshot(snap(withSnaps), { exportedAt: NOW, includeCheckpoints: true, includeLinks: true }));
+  const html = renderRunDetail(s.handoffs[0], s, { now: NOW });
+  assert.doesNotMatch(html, /Snapshots|restore-snapshot|refs\/quill/);
+});

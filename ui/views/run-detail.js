@@ -212,6 +212,39 @@ function recordStatusLine(h, status, generation) {
   return '';
 }
 
+// Run snapshots (ADR 0035): the checkout at each step boundary, as the worker recorded it. Restore
+// is an owner action on a finished run whose checkout is still there; it has the 10 s undo. The
+// labels are the worker's own words; they are escaped like everything else.
+const SNAPSHOT_LIMIT = 20;
+const SNAPSHOT_IN_FLIGHT = new Set(['sending', 'pending', 'applying']);
+function runSnapshots(h, t, caps, pending, { now, tz }) {
+  const list = recordRows(h.snapshots);
+  if (!list.length) return '';
+  const removed = !h.worktree_path || !!h.worktree_removed_at || list.some((s) => s.archived_at);
+  const restoring = pending.find((r) => r.kind === 'restore-snapshot' && SNAPSHOT_IN_FLIGHT.has(r.state) && r.payload && r.payload.handoff_id === h.id);
+  const full = list.length >= SNAPSHOT_LIMIT;
+  const canRestore = !!caps.handoff && !!t && !['queued', 'running'].includes(h.state) && !removed && !full && !restoring;
+  const items = list.map((s, i) => {
+    const num = String((Number.isInteger(s.n) ? s.n : i) + 1).padStart(2, '0');
+    const label = recordText(s.label) || recordText(s.step);
+    const files = Number.isInteger(s.files_changed) ? `${s.files_changed} file${s.files_changed === 1 ? '' : 's'} changed since ${i === 0 ? 'the base commit' : 'the previous snapshot'}` : '';
+    const commit = typeof s.commit === 'string' && /^[0-9a-f]{40,64}$/.test(s.commit) ? s.commit : '';
+    const copy = caps.handoff && commit ? ` <span class="snapshot-commit"><code>${esc(commit.slice(0, 7))}</code> <button type="button" class="btn small ghost icon-only" data-copy="${attr(commit)}" data-copy-label="the snapshot commit" aria-label="${attr(`Copy the commit of snapshot ${num}`)}">${icon('copy')}</button></span>` : '';
+    const marks = [s.restored_at ? `<span class="chip small">Restored ${timeEl(s.restored_at, now, tz)}</span>` : '', s.archived_at ? '<span class="chip small">Archived</span>' : ''].filter(Boolean).join(' ');
+    let control = '';
+    if (restoring && restoring.payload.snapshot_id === s.id) {
+      control = restoring.state === 'applying' ? '<span class="chip request small" data-state="applying">Restoring…</span>'
+        : `<span class="muted small">Restore queued${restoring.state === 'pending' ? ` <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(restoring.id)}" aria-label="${attr(`Undo restoring snapshot ${num}`)}">${icon('undo')}Undo</button>` : ''}</span>`;
+    } else if (canRestore) {
+      control = `<button type="button" class="btn small ghost" data-action="restore-snapshot" data-ticket="${attr(t.id)}" data-handoff="${attr(h.id)}" data-snapshot="${attr(recordText(s.id))}" aria-label="${attr(`Restore checkout to snapshot ${num}, ${label}`)}">${icon('undo')}Restore checkout to this snapshot</button>`;
+    }
+    return `<li><strong>${esc(`${num} · ${label}`)}</strong> ${typeof s.at === 'string' && s.at ? timeEl(s.at, now, tz) : ''}${files ? ` <span class="small muted">${esc(files)}</span>` : ''}${copy}${marks ? ` ${marks}` : ''}${control ? ` ${control}` : ''}</li>`;
+  });
+  const note = removed ? "The checkout was removed, so these snapshots can no longer be restored here; the repository keeps them under refs/quill/archive."
+    : `Restores the run's checkout only; the commit, branch and pull request are unchanged. Its current files are saved as a snapshot first.${full ? ` This run has ${SNAPSHOT_LIMIT} snapshots, the most it keeps, so it cannot save one before a restore.` : ''}`;
+  return `<p class="small muted">${esc(note)}</p><ol class="run-snapshots">${items.join('')}</ol>`;
+}
+
 function closeRow(t) {
   return `<div class="detail-nav"><button type="button" class="btn icon-only" data-action="close-run" aria-label="Close run (Escape)">${icon('x')}</button>${t ? `<button type="button" class="btn small ghost" data-action="open-ticket-from-run" data-ticket="${attr(t.id)}">Open ticket</button>` : ''}<span class="detail-nav-keys"><button type="button" class="btn small ghost icon-only prev" data-action="run-prev" aria-label="Previous run">${icon('chevron')}</button><button type="button" class="btn small ghost icon-only" data-action="run-next" aria-label="Next run">${icon('chevron')}</button></span></div>`;
 }
@@ -298,6 +331,7 @@ ${section(`Learnings filed (${learned.length})`, learned.length ? `<ul class="ru
 ${section('Tools used', toolsUsed(attempts))}
 ${section('Turns & cost', turnsAndCost(h))}
 ${section('Where it is', where)}
+${section(`Snapshots (${recordRows(h.snapshots).length})`, runSnapshots(h, t, caps, pending, { now, tz }))}
 ${section('Suggestions', suggestions)}
 ${actions.length ? `<div class="run-actions">${actions.join(' ')}</div>` : ''}
 </article>`;

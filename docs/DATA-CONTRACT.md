@@ -342,7 +342,17 @@ _Not yet filled._
 
 ### Task 7 Run snapshots
 
-_Not yet filled._
+ADR 0035. A fix run's checkout is snapshotted at step boundaries; the owner restores one from run detail.
+
+- Event `snapshot-tx` (worker only; through ingress it is quarantined as `ingress-forged`). Payload { op, id, handoff_id, ticket_id, … } with op:
+  - `created` { step, label, tree, commit, ref, files_changed, request_id?, restores? }. step is one of start, agent, before-repair, before-self-check, before-tests, before-test-repair, before-commit, pre-restore; tree and commit are full object ids; ref is `refs/quill/snapshots/<handoff_id>/<nn>-<step>[-k]`. Source identity `snapshot-tx:<handoff_id>:<n>`; id = deterministicId(`<handoff_id>:snapshot:<n>`), n the snapshot's index in the run. A pre-restore snapshot carries the restore's request_id and the id of the snapshot it restores.
+  - `restored` { request_id, pre_restore_id, restored, removed, skipped } (counts). Source identity `snapshot-tx:restored:<request id>`.
+  - `archived` { ref } (a ref under `refs/quill/archive/<handoff_id>/`). Source identity `snapshot-tx:<snapshot id>:archived`.
+  - Reducer refusals (not applied): `snapshot-op-unknown`, `handoff-unknown`, `snapshot-invalid` (unknown step, a tree or commit that is not a full id, a ref outside the run's own folder), `snapshot-limit` (the run already has 20), `snapshot-unknown`. The same id again is a duplicate.
+- Handoff field `snapshots[]` (local-only: never in a static export, the mirror, a publisher payload, a tracker push or a vault note; the owner dashboard snapshot carries it): { id, n, step, label, tree, commit, ref, files_changed (vs the previous snapshot; the first vs the base commit), at, restored_at, archived_at, request_id?, restores?, restore? { request_id, pre_restore_id, restored, removed, skipped } }. At most 20 per run, restores' own snapshots included.
+- Request kind `restore-snapshot`: targets a ticket, payload { handoff_id, snapshot_id }, expected_revision optional, the 10 s undo window. Submit and apply refuse `handoff-unknown`, `snapshot-unknown`, `run-active` (the run is queued or running), `checkout-removed` (the checkout was removed, its snapshots archived, or its path is not under `<quillHome>/handoffs/worktrees/`), `snapshot-limit` (no room for the pre-restore snapshot); apply refuses `snapshot-restore-dashboard-only` unless the dashboard server journaled it (producer `worker`, actor `owner`; ruling R59), and `snapshot-failed` when git fails. Applying it snapshots the checkout (`created`, step pre-restore) before any file changes, restores, records `restored`, then the request transaction with mutation `snapshot-restore` { handoff_id, snapshot_id, pre_restore_id }, which adds a ticket timeline line saying the commit, branch and pull request are unchanged. result { snapshot_id, pre_restore_id, restored, removed, skipped }. A request left applying whose `restored` event exists finishes as applied without restoring again.
+- Restore semantics: only the checkout's files change; HEAD, the run's commit, branch, pull request and the real index do not. Files of the target are written; files the pre-restore snapshot holds that the target lacks are deleted. Ignored files are never captured, deleted or overwritten; a target path now taken by a file or directory the pre-restore snapshot could not hold is skipped.
+- Git refs: `refs/quill/snapshots/<run id>/` in the run's repository while the checkout exists; moved to `refs/quill/archive/<run id>/` when the checkout is removed (`archived`). Archived snapshots cannot be restored from the dashboard.
 
 ### Task 8 Ticket worktrees
 

@@ -4,6 +4,7 @@ import { hasValidDescription, descriptionProblems } from '../description.js';
 import { timelineEntry, touch } from './common.js';
 import { applyTicketFields, createTicket, relinkTicket } from './tickets.js';
 import { attachUnboundWork } from './capture.js';
+import { applySnapshotRestore } from './snapshots.js';
 
 export function handleRequest(state, ev, result) {
   const r = ev.payload;
@@ -69,6 +70,8 @@ export function handleRequestTx(state, ev, result) {
         if (ticket) { ticket.timeline.push(timelineEntry(ev, 'handoff', `Undid: ${effect.action === 'deleted' ? 'restored' : 'reverted'} ${effect.path}`)); touch(state, ticket, ev, result); }
         result.handoffsChanged.add(h.id);
       }
+    } else if (m.type === 'snapshot-restore') {
+      applySnapshotRestore(state, ev, m, result);
     } else if (m.type === 'handoff-cancel') {
       const h = state.handoffs.get(m.handoff_id);
       if (h && h.state === 'queued') {
