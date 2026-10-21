@@ -1,5 +1,5 @@
-// Teardown of ticket worktrees (ADR 0036, FR-1.3), run by the worker at start and then at most once
-// an hour from its tick. A done ticket's worktree is removed once it is clean, `keep_days` have
+// Teardown of ticket worktrees (ADR 0036, FR-1.3), run by the worker at start (without holding the
+// start up) and then at most once an hour from its tick. A done ticket's worktree is removed once it is clean, `keep_days` have
 // passed and no live session uses it; a dirty one, or one whose copied ignored files (`.env`) differ
 // from the repository's, is kept and reported once. The branch is always
 // kept (ADR 0021 finds PRs by branch). Nothing here ever forces a removal.
@@ -69,7 +69,12 @@ export function createTicketWorktreeSweep({ intervalMs = SWEEP_INTERVAL_MS, remo
     if (inFlight) return inFlight;
     last = Date.parse(worker.now());
     inFlight = sweepTicketWorktrees(worker, config, removeFn ? { removeFn } : {})
-      .catch((err) => { worker.log(`ticket worktree sweep failed: ${err.message}`); return null; })
+      .catch((err) => {
+        const error = `ticket worktree sweep failed: ${err.message}`;
+        worker.log(error);
+        if (typeof worker.recordHealthError === 'function') worker.recordHealthError({ kind: 'worktree-sweep', error });
+        return null;
+      })
       .finally(() => { inFlight = null; });
     return inFlight;
   };

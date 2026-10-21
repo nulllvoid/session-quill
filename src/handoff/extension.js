@@ -124,9 +124,9 @@ function grantedFingerprints(scopes) {
   } catch { return null; }
 }
 
-export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDraftPrFn = openDraftPr, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
-  // Ticket worktree teardown (ADR 0036): at start, then at most hourly from the tick.
-  const ticketWorktrees = createTicketWorktreeSweep();
+export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDraftPrFn = openDraftPr, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes, ticketWorktreeRemoveFn } = {}) {
+  // Ticket worktree teardown (ADR 0036): at start (in the background), then at most hourly from the tick.
+  const ticketWorktrees = createTicketWorktreeSweep(ticketWorktreeRemoveFn ? { removeFn: ticketWorktreeRemoveFn } : {});
   const running = new Map(); // handoff id -> { child, done, reason, fix }
   const finishing = new Set(); // finish() promises, until memory filing has landed
   const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
@@ -945,7 +945,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       try { reemitMissingCriticalProposals(worker); } catch (err) { worker.log(`critical proposals not re-emitted: ${err.message}`); }
       // Housekeeping at start: checkouts past their keep time, stale registrations, old ledgers and logs.
       try { await pruneOldWorktrees(); pruneRetention(); } catch (err) { worker.log(`handoff housekeeping failed: ${err.message}`); }
-      await ticketWorktrees.run(worker, ctx.config);
+      // Not awaited (ADR 0030 fast start): the sweep runs `git status` per due worktree. It logs and
+      // records its own failure; a stop waits for it.
+      ticketWorktrees.run(worker, ctx.config);
     },
     tick(worker) {
       if (paused) return;

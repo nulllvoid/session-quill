@@ -320,3 +320,42 @@ test('a worktree whose copied ignored file was edited, or whose original is gone
     assert.equal(b.w.state.tickets.get(T1).worktrees[0].state, 'pruned');
   } finally { await b.w.stop(); }
 });
+
+// ADR 0030 fast start: the start-up sweep runs in the background.
+import { Worker } from '../../src/worker/worker.js';
+import { derive } from '../../src/reconcile/derive.js';
+import { createExtension as handoffExtension } from '../../src/handoff/extension.js';
+import { createTicketWorktreeSweep } from '../../src/handoff/ticket-worktrees.js';
+
+test('worker start does not wait for the ticket worktree sweep', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  await mounted(b, repo);
+  setStatus(b, T1, 'done');
+  await b.w.stop();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let calls = 0;
+  let released = false;
+  const w = new Worker({ config: b.config, storeMeta: b.meta, env: b.env, clock: () => Date.parse('2026-10-20T08:00:00Z'), derive });
+  w.use(handoffExtension({ env: b.env, config: b.config, storeMeta: b.meta }, { runtimeAvailable: true, maxConcurrent: 4, ticketWorktreeRemoveFn: async () => { calls += 1; await gate; return { removed: false, reason: 'remove-failed', message: 'held' }; } }));
+  const timer = setTimeout(() => { released = true; release(); }, 15_000);
+  try {
+    await w.start();
+    assert.equal(released, false, 'start returned while the sweep was still in git');
+    await until(() => calls === 1);
+  } finally {
+    clearTimeout(timer);
+    release();
+    await w.stop();
+  }
+});
+
+test('a sweep that throws is logged and recorded as a health note', async () => {
+  const notes = [];
+  const logs = [];
+  const worker = { env: {}, now: () => '2026-10-20T08:00:00Z', log: (l) => logs.push(l), recordHealthError: (r) => notes.push(r), state: { tickets: { values() { throw new Error('boom'); } }, sessions: new Map() } };
+  assert.equal(await createTicketWorktreeSweep().run(worker, {}), null);
+  assert.deepEqual(notes.map((n) => [n.kind, n.error]), [['worktree-sweep', 'ticket worktree sweep failed: boom']]);
+  assert.equal(logs.length, 1);
+});
