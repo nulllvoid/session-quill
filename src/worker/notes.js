@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { contentHash } from '../lib/ids.js';
 import { writeFileAtomic } from '../lib/atomic-fs.js';
 import { stringifyYaml, parseYaml, safeInline } from './markdown.js';
-import { possibleWritesLine, exportableError } from '../export/sanitize.js';
+import { possibleWritesLine, exportableError, exportableTimeline, localOnlyProvenance } from '../export/sanitize.js';
 
 export const GENERATED_SECTIONS = ['timeline', 'plans', 'conclusions', 'files', 'prs', 'followups', 'handoffs'];
 const HEADINGS = {
@@ -35,6 +35,8 @@ function frontmatterFor(ticket, state) {
   delete fm.critical_spec;
   // Ticket worktree records hold local paths (ADR 0036).
   delete fm.worktrees;
+  // Local-only timeline lines (the CI watch's proposal line, ADR 0039) stay on the dashboard.
+  if (Array.isArray(fm.timeline)) fm.timeline = exportableTimeline(fm.timeline);
   fm.plans = ticket.plans.map(({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }));
   fm.conclusions = ticket.conclusions.map(({ id, session_id, checkpoint_id, content_ref, recorded_at, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, recorded_at, approved_at, provenance }));
   return fm;
@@ -42,8 +44,9 @@ function frontmatterFor(ticket, state) {
 
 function sectionBodies(ticket, state) {
   const b = {};
-  b.timeline = ticket.timeline.length
-    ? ticket.timeline.map((e) => `- ${e.at} · ${e.kind} · ${safeInline(e.text)}${e.coverage !== 'complete' ? ` _(coverage: ${e.coverage})_` : ''}${e.content_ref ? ` [full](quill://content/${e.content_ref})` : ''}`).join('\n')
+  const timeline = exportableTimeline(ticket.timeline);
+  b.timeline = timeline.length
+    ? timeline.map((e) => `- ${e.at} · ${e.kind} · ${safeInline(e.text)}${e.coverage !== 'complete' ? ` _(coverage: ${e.coverage})_` : ''}${e.content_ref ? ` [full](quill://content/${e.content_ref})` : ''}`).join('\n')
     : '_No events yet._';
   b.plans = ticket.plans.length
     ? ticket.plans.map((p) => `### Plan ${p.id.slice(0, 8)} — approved ${p.approved_at} (${p.provenance})\n\n${safeInline(p.preview).replace(/\\n/g, '\n')}\n\n[Full plan](quill://content/${p.content_ref})`).join('\n\n')
@@ -146,7 +149,8 @@ export function renderHandoffNote(run, { state }) {
     uncertainLines(handoff).length ? `\n### Uncertain effects\n${uncertainLines(handoff).map((u) => `- ${safeInline(u)}`).join('\n')}` : '',
     '',
   ].filter((l) => l !== '').join('\n');
-  const fm = Object.fromEntries(HANDOFF_NOTE_FIELDS.filter((k) => k in handoff).map((k) => [k, handoff[k]]));
+  // A CI fix's provenance stays on the dashboard (ADR 0039), as in exports.
+  const fm = Object.fromEntries(HANDOFF_NOTE_FIELDS.filter((k) => k in handoff && !(localOnlyProvenance(handoff) && (k === 'proposal' || k === 'proposal_id'))).map((k) => [k, handoff[k]]));
   return `---\n${stringifyYaml(fm)}---\n${block('handoff', body)}## Notes\n\n`;
 }
 

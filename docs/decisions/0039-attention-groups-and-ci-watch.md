@@ -55,7 +55,7 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
    - The id is `deterministicId("<handoff_id>:ci:<head_sha>")`. A page `run-proposal` with an id of that (version-5) shape is refused (`proposal-id-reserved`), so it cannot claim the id first. The reducer checks it again, along with the producer, the caps, that the observation it names is the run's latest failing one on that branch, and the limit (`ci-proposal-limit`).
    - The proposal is a run proposal with `origin: 'ci'`, the built-in `attempt-fix` recipe, and permissions read, edit, commit and push. It never gets `open_draft_pr`, scopes or an action pin.
    - Its access is `autonomous` when the run that opened the pull request was autonomous, otherwise `standard`. A full or settings run's fix never inherits that access.
-   - Its timeline line names only the commit and the run. Check names and log text never reach the timeline, which reaches prompts.
+   - Its timeline line names only the commit and the run. Check names and log text never reach the timeline, which reaches prompts. The line is marked `local_only`: exports, the mirror and vault notes leave it out, as they leave out a CI fix run's `proposal` and `proposal_id` (the run then shows as an ordinary run there). Exports gain nothing from the CI watch.
 
 7. **The log tail.** For the first failed GitHub Actions check, the watch reads `gh run view --job <id> --repo <owner/repo> --log-failed` (only a numeric id reaches `gh`). `ciLogTail` then:
    - strips colour codes and control characters;

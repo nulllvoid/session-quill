@@ -476,6 +476,7 @@ ADR 0039. Every field below is local only. None is on an export, sanitize, mirro
   - `handoff-unknown`, `ci-not-failing` (the run's latest observation is not failing on that commit and URL) and `ci-branch-mismatch` (not the observed branch, or not the run's `pushed_branch`);
   - `ci-proposal-limit` (the run already has 2), `ticket-unknown` and `ticket-done`.
 - Event `run-proposal` (a page pick) is refused with `proposal-id-reserved` when its `id` has the version-5 shape of `deterministicId`, the id space of worker-only proposals (CI fixes and critical changes); a page pick's id (`editRequestId`) is version-4 shaped. So no run-proposal can take a CI or critical proposal's id first and make the worker's event a duplicate.
+- Timeline entries gain an optional `local_only: true`. The CI proposal's line ("CI failed on commit … a fix run is proposed …") carries it, and `sanitizeSnapshot` and vault notes (`exportableTimeline`) drop such entries. A CI fix run's `proposal` and `proposal_id` are dropped from exports and vault-note front matter too.
 - Run proposal `origin: 'ci'` (in `run_proposals[]` on the owner snapshot): `{ id, ticket_id, origin, from_handoff_id, recipe: { name: 'attempt-fix', source: 'builtin', hash: null }, mode: 'attempt-fix', permissions, access, ci, lapse_reason, … }`.
   - `permissions`: read_source, edit_source, commit and push_branch are true; open_draft_pr, edit_files and delete_files are false.
   - `access` is `autonomous` if the opening run was autonomous, else `standard`.

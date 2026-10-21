@@ -152,8 +152,9 @@ export function applyCiProposal(state, ev, result) {
     expected_revision: null, proposed_at: ev.occurred_at, lapsed_at: null, lapse_reason: null, state: 'proposed', resolved_at: null, resolved_by: null, request_id: null, handoff_id: null,
   });
   // Like a page proposal: on the timeline without a revision bump. No check names or log text here,
-  // since the timeline reaches prompts.
-  t.timeline.push(timelineEntry(ev, 'proposal', `CI failed on commit ${p.head_sha.slice(0, 7)} of the pull request run ${String(h.id).slice(0, 8)} opened; a fix run is proposed and waits for your approval`));
+  // since the timeline reaches prompts. `local_only`: the line stays on the owner's dashboard, never
+  // in an export, the mirror or a vault note (exports gain nothing from the CI watch).
+  t.timeline.push({ ...timelineEntry(ev, 'proposal', `CI failed on commit ${p.head_sha.slice(0, 7)} of the pull request run ${String(h.id).slice(0, 8)} opened; a fix run is proposed and waits for your approval`), local_only: true });
   result.changed.add(t.id);
   return {};
 }

@@ -321,3 +321,38 @@ test('ticket worktree records never reach an export, the mirror, a publisher or 
   assert.equal(note.includes(S), false);
   assert.equal(note.includes('worktrees'), false);
 });
+
+// ADR 0039: a CI fix run's provenance and the CI proposal's timeline line stay on the owner's
+// dashboard; exports, the mirror and vault notes gain nothing from the CI watch.
+test('a CI fix run\'s proposal provenance and the CI proposal timeline line never leave the dashboard', async () => {
+  const { newState, createTicket, ev } = await import('../core/helpers.js');
+  const { ciProposalId } = await import('../../src/core/reduce/ci.js');
+  const st = newState();
+  const tid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const hid = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const pr = 'https://github.com/acme/app/pull/12';
+  createTicket(st, { id: tid, key: 'PMO-7', title: 'x' });
+  st.handoffs.set(hid, { id: hid, ticket_id: tid, state: 'done', access: 'standard', permissions: {}, pr_url: pr, branch: 'quill/x', pushed_branch: 'quill/x', revision: 1 });
+  const w = (kind, payload) => ev(st, kind, payload, { producer: 'worker' });
+  w('ci-observation', { handoff_id: hid, n: 1, pr_url: pr, head_sha: 'a'.repeat(40), head_branch: 'quill/x', pr_state: 'open', state: 'failing', checks: [{ name: 't', state: 'failed' }] });
+  assert.equal(w('ci-proposal', { id: ciProposalId(hid, 'a'.repeat(40)), handoff_id: hid, pr_url: pr, head_sha: 'a'.repeat(40), head_branch: 'quill/x', failing: ['t'], log_tail: null, log_withheld: 0 }).rejected, undefined);
+  const line = st.tickets.get(tid).timeline.at(-1);
+  assert.match(line.text, /^CI failed on commit/);
+
+  const s = fixture();
+  s.tickets[0].timeline = [...(s.tickets[0].timeline ?? []), { ...line, text: `${line.text} ${S}` }];
+  Object.assign(s.handoffs[0], { proposal_id: 'p-ci', proposal: { id: 'p-ci', origin: 'ci', from_handoff_id: `${S}-root`, recipe: 'attempt-fix' } });
+  for (const opts of [{ exportedAt: ALL.exportedAt }, ALL]) {
+    const out = sanitizeSnapshot(s, opts);
+    assert.equal(JSON.stringify(out).includes(S), false);
+    assert.equal(JSON.stringify(out).includes('CI failed on commit'), false, 'the CI proposal line stays local');
+    assert.equal('proposal' in out.handoffs[0], false, 'no CI provenance on an exported run');
+    assert.equal(buildStaticHtml(s, opts).includes(S), false);
+  }
+  const state = { tickets: new Map(s.tickets.map((t) => [t.id, t])), handoffs: new Map(s.handoffs.map((h) => [h.id, h])) };
+  const base = { plans: [], conclusions: [], timeline: [], files_touched: [], prs: [], deployments: [], children_ids: [], handoff_ids: [], tags: [] };
+  assert.equal(renderTicketNote({ ...base, ...s.tickets[0] }, { state }).includes('CI failed on commit'), false);
+  const note = renderHandoffNote(s.handoffs[0], { state });
+  assert.equal(note.includes(S), false);
+  assert.doesNotMatch(note, /origin: ci/);
+});
