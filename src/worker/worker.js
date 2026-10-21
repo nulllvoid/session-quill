@@ -7,7 +7,7 @@ import { validateEvent, makeEvent, INGRESS_KINDS } from '../core/events.js';
 import { listIngress, removeIngress, quarantineIngress } from '../core/ingress.js';
 import { createState, sessionKey } from '../core/state.js';
 import { applyEvent } from '../core/reducer.js';
-import { readCheckpoint, writeCheckpoint } from '../core/checkpoint.js';
+import { readCheckpoint, writeCheckpoint, metaFingerprint } from '../core/checkpoint.js';
 import { safeKeyFileName } from '../core/keys.js';
 import { journalPath, stateDir, requestsDir, configPath, quillHome } from '../lib/paths.js';
 import { ensureDir, writeJsonAtomic, readJsonIfExists, listFiles, removeIfExists } from '../lib/atomic-fs.js';
@@ -90,6 +90,7 @@ export class Worker {
     this.checkpointEvery = checkpointEvery(config);
     this.checkpointSequence = 0; // journal sequence of the last checkpoint written or hydrated
     this.checkpointError = null;
+    this.loadedMetaFingerprint = null; // the reducer-visible meta state was built with
     this.stateLoad = null; // how start() built state: { source, events_replayed, checkpoint_ignored, ms }
   }
 
@@ -150,6 +151,7 @@ export class Worker {
       repos: this.config.repos,
       tracker_version: this.config.tracker_version ?? '1.0.0',
     });
+    this.loadedMetaFingerprint = metaFingerprint(fresh.meta);
     const ignored = [];
     const checkpoint = readCheckpoint({ env: this.env, meta: fresh.meta, onIgnore: (reason) => ignored.push(reason) });
     this.journalInfo = this.journal.open(checkpoint ? { resume: { byteOffset: checkpoint.byteOffset, sequence: checkpoint.sequence, lastEventId: checkpoint.lastEventId, eventIds: checkpoint.state.appliedEvents, sourceIds: checkpoint.state.appliedSources } } : {});
@@ -291,9 +293,13 @@ export class Worker {
 
   // The reduced state at the journal's current position (ADR 0030). Every journaled event has been
   // applied whenever this runs (append and apply happen together), so the two always agree. A
-  // failure is logged once per message and retried after another checkpoint_every events.
+  // failure is logged once per message and retried after another checkpoint_every events. After a
+  // live configuration change the reducer can see (refreshIdentity), state mixes events reduced
+  // under both configurations, which no replay reproduces: no checkpoint is written until a restart
+  // replays the journal under the new one.
   writeStateCheckpoint() {
     if (!this.state || this.journal.fd === null || this.journal.corrupt) return false;
+    if (metaFingerprint(this.state.meta) !== this.loadedMetaFingerprint) return false;
     const position = this.journal.position();
     if (position.sequence < 1 || position.sequence === this.checkpointSequence) return false;
     try {

@@ -299,3 +299,26 @@ test('a checkpoint that no longer matches is ignored with a health note and the 
   const changed = { ...f.config, repos: { ...f.config.repos, demo: { ...f.config.repos.demo, deployment_environments: ['staging', 'production'] } } };
   assert.match(await restart(changed), /^state checkpoint ignored: the store configuration/);
 });
+
+test('after a live configuration change the reducer can see, no checkpoint is written until a restart', async () => {
+  const f = fixture();
+  const w = await seeded(f);
+  await w.stop({ flush: false });
+  const before = fs.readFileSync(checkpointFile(f), 'utf8');
+  const changed = { ...f.config, repos: { ...f.config.repos, demo: { ...f.config.repos.demo, deployment_environments: ['staging', 'production'] } } };
+  const w2 = new Worker({ config: f.config, storeMeta: f.meta, env: f.env, clock: f.clock });
+  await w2.start();
+  assert.equal(w2.stateLoad.source, 'checkpoint');
+  writeIngress(f.mk('ticket-update', { ticket_id: T1, fields: { next_action: 'later' }, source: 'manual' }), f.env);
+  w2.tick();
+  // As refreshIdentity does when config.toml changes while the worker runs.
+  w2.state.meta.repos = changed.repos;
+  await w2.stop({ flush: false });
+  assert.equal(fs.readFileSync(checkpointFile(f), 'utf8'), before, 'the checkpoint was not replaced');
+  const w3 = new Worker({ config: changed, storeMeta: f.meta, env: f.env, clock: f.clock });
+  await w3.start();
+  assert.equal(w3.stateLoad.source, 'journal', 'the restart replays under the new configuration');
+  assert.deepStrictEqual(w3.state, fullReplay(f, w3.state.meta));
+  await w3.stop({ flush: false });
+  assert.notEqual(fs.readFileSync(checkpointFile(f), 'utf8'), before, 'and then writes a checkpoint for it');
+});
