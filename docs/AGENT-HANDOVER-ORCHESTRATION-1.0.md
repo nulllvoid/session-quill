@@ -105,7 +105,15 @@ The task reports noted these; none of them is a defect in what shipped:
 - **The whole-process Pre/PostToolUse latency KPI is not met.** Whole-process p95 sits about 70–115 ms above a bare Node start on the loaded reference machine (about 53 ms on the unloaded 0.6.1 run), against a target of 15 ms. In-process `runHook` meets its p99 target on the least loaded run. Reaching it needs fewer modules on the per-call path (ADR 0034, Alternatives).
 - **The run-env fingerprint includes per-run grants.** Push or a draft PR keeps the git system's tokens, and scopes and Bedrock/Vertex sign-in change report words. So a run with different grants stales entries learned under others. This conservative staling is intended (ADR 0041, residual risks).
 - **A variable the worker never inherited is not "removed".** For example, `CRE_JENKINS_HOST` under a macOS LaunchAgent. The Environment section cannot list it; that is issue fix 1.
-- **The plan's Task 13 browser check was not run with this documentation task.** The plan asks for `npm run test:acceptance` and a headless browser check of run detail, Needs you and the critical item at 390×844 and 1280×720. Neither was run here; run both before tagging.
+- **The plan's Task 13 browser check was not run.** The plan asks for a headless browser check of run detail, Needs you and the critical item at 390×844 and 1280×720. Run it before tagging.
+
+### Verified in Task 13
+
+On the integration head plus the documentation commits, Windows 11, Node 24.19.0:
+- `node scripts/build-ui-assets.mjs --check`: 50 assets verified;
+- `node --test "tests/ui/*.test.js" "tests/export/*.test.js"`: 251 passed;
+- `tests/plugin/manifest.test.js`, `tests/core/checkpoint.test.js` and `tests/handoff/receipt.test.js` (the tests that read versions): 25 passed;
+- `npm test`, which includes the acceptance and scaled performance suites: 5,010 tests, 5,004 passed, 6 skipped, 0 failed.
 
 ## Status (runs-first dashboard)
 
