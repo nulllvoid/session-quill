@@ -4,6 +4,7 @@
 // pauses anything, so it can never widen what the gate or a run's guard decides.
 //
 // Pure functions with no Quill imports: the hook, the reducer and the run guard all load this.
+import fs from 'node:fs';
 import path from 'node:path';
 
 export const MAX_PLANNED = 50;
@@ -232,11 +233,29 @@ export function driftOfCall(toolName, toolInput, grant, cwd) {
   const root = typeof grant.checkoutRoot === 'string' && grant.checkoutRoot ? grant.checkoutRoot : cwd;
   if (typeof root !== 'string' || !root) return false;
   for (const target of writeTargets(toolName, toolInput)) {
-    const rel = path.relative(root, path.resolve(cwd || root, target));
+    const abs = path.resolve(cwd || root, target);
+    let rel = path.relative(root, abs);
+    // The same folder can be spelled two ways (macOS /var → /private/var, a symlinked home): compare
+    // real paths before calling a write outside the checkout.
+    if (rel.startsWith('..') || path.isAbsolute(rel)) rel = path.relative(realish(root), realish(abs));
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
     if (!matchesPlanned(rel, planned)) return true;
   }
   return false;
+}
+
+// The real path of `p`, resolving its nearest existing ancestor (the written file may not exist yet).
+function realish(p) {
+  let dir = p;
+  const rest = [];
+  for (let i = 0; i < 64; i += 1) {
+    try { return path.join(fs.realpathSync.native(dir), ...rest.reverse()); } catch { /* not there yet */ }
+    const up = path.dirname(dir);
+    if (up === dir) return p;
+    rest.push(path.basename(dir));
+    dir = up;
+  }
+  return p;
 }
 
 /** How many allowed calls the run's guard marked as drift, one per call (`tool_use_id`). */

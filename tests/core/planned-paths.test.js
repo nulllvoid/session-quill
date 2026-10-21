@@ -1,6 +1,9 @@
 // Planned files (ADR 0037): paths a plan names, and the writes outside them that count as drift.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   extractPlannedPaths, matchesPlanned, normalizePlanned, outsidePlan, applyPlannedPaths, recordSessionDrift,
   driftOfCall, countRunDrift, driftSuffix, MAX_PLANNED,
@@ -174,4 +177,19 @@ test('extractPlannedPaths stays linear on long scheme-like text and caps the pla
   assert.deepEqual(extractPlannedPaths('Edit src/a.js... then docs/b.md.'), ['src/a.js', 'docs/b.md'], 'trailing dots end a sentence, not a path');
   assert.deepEqual(extractPlannedPaths(' '.repeat(70 * 1024) + 'src/late.js'), [], 'text past the 64 KB cap is not read');
   assert.deepEqual(extractPlannedPaths('see https://x.example/src/a.js and src/b.js'), ['src/b.js']);
+});
+
+test('driftOfCall compares real paths when the checkout is reached through a symlink (macOS /var → /private/var)', (t) => {
+  const real = fs.mkdtempSync(path.join(os.tmpdir(), 'quill-drift-real-'));
+  const link = `${real}-link`;
+  try { fs.symlinkSync(real, link, process.platform === 'win32' ? 'junction' : 'dir'); } catch { t.skip('symlinks unavailable'); return; }
+  try {
+    const grant = { plannedPaths: ['src.js'], checkoutRoot: link };
+    assert.equal(driftOfCall('Write', { file_path: 'other.js' }, grant, real), true, 'cwd is the real path, the grant names the link');
+    assert.equal(driftOfCall('Write', { file_path: 'src.js' }, grant, real), false);
+    assert.equal(driftOfCall('Write', { file_path: path.join(os.tmpdir(), 'elsewhere.js') }, grant, real), false, 'outside the checkout is not drift');
+  } finally {
+    fs.rmSync(link, { recursive: true, force: true });
+    fs.rmSync(real, { recursive: true, force: true });
+  }
 });
