@@ -286,3 +286,76 @@ test('a recorded path outside the worktrees root, or a folder git does not list,
     assert.equal(worktreeEvents(b, 'pruned').length + worktreeEvents(b, 'kept').length, 0);
   } finally { await b.w.stop(); }
 });
+
+test('a worktree whose copied ignored file was edited, or whose original is gone, is kept; an untouched copy goes', async () => {
+  const repo = makeRepo();
+  fs.writeFileSync(path.join(repo.dir, '.gitignore'), '.env\n');
+  git(repo.dir, 'add', '.gitignore');
+  git(repo.dir, 'commit', '-q', '-m', 'ignore env');
+  repo.head = git(repo.dir, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(repo.dir, '.env'), 'TOKEN=main\n');
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  try {
+    const { wt } = await mounted(b, repo);
+    fs.copyFileSync(path.join(repo.dir, '.env'), path.join(wt, '.env'));
+    fs.writeFileSync(path.join(wt, '.env'), 'TOKEN=edited-in-the-worktree\n');
+    setStatus(b, T1, 'done');
+    b.advance(8 * DAY);
+    await b.hext.sweepTicketWorktrees();
+    await b.hext.sweepTicketWorktrees();
+    assert.equal(fs.readFileSync(path.join(wt, '.env'), 'utf8'), 'TOKEN=edited-in-the-worktree\n', 'git status is clean, yet the edit is kept');
+    const kept = worktreeEvents(b, 'kept');
+    assert.equal(kept.length, 1, 'reported once');
+    assert.equal(kept[0].payload.reason, 'ignored-files-changed');
+    assert.equal(b.w.state.tickets.get(T1).worktrees[0].kept_reason, 'ignored-files-changed');
+    // The repository's own copy is gone: the worktree's is the only one left.
+    fs.writeFileSync(path.join(wt, '.env'), 'TOKEN=main\n');
+    fs.rmSync(path.join(repo.dir, '.env'));
+    await b.hext.sweepTicketWorktrees();
+    assert.ok(fs.existsSync(path.join(wt, '.env')));
+    // Back in step with the repository's copy: nothing would be lost.
+    fs.writeFileSync(path.join(repo.dir, '.env'), 'TOKEN=main\n');
+    await b.hext.sweepTicketWorktrees();
+    assert.equal(fs.existsSync(wt), false);
+    assert.equal(b.w.state.tickets.get(T1).worktrees[0].state, 'pruned');
+  } finally { await b.w.stop(); }
+});
+
+// ADR 0030 fast start: the start-up sweep runs in the background.
+import { Worker } from '../../src/worker/worker.js';
+import { derive } from '../../src/reconcile/derive.js';
+import { createExtension as handoffExtension } from '../../src/handoff/extension.js';
+import { createTicketWorktreeSweep } from '../../src/handoff/ticket-worktrees.js';
+
+test('worker start does not wait for the ticket worktree sweep', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true });
+  await mounted(b, repo);
+  setStatus(b, T1, 'done');
+  await b.w.stop();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let calls = 0;
+  let released = false;
+  const w = new Worker({ config: b.config, storeMeta: b.meta, env: b.env, clock: () => Date.parse('2026-10-20T08:00:00Z'), derive });
+  w.use(handoffExtension({ env: b.env, config: b.config, storeMeta: b.meta }, { runtimeAvailable: true, maxConcurrent: 4, ticketWorktreeRemoveFn: async () => { calls += 1; await gate; return { removed: false, reason: 'remove-failed', message: 'held' }; } }));
+  const timer = setTimeout(() => { released = true; release(); }, 15_000);
+  try {
+    await w.start();
+    assert.equal(released, false, 'start returned while the sweep was still in git');
+    await until(() => calls === 1);
+  } finally {
+    clearTimeout(timer);
+    release();
+    await w.stop();
+  }
+});
+
+test('a sweep that throws is logged and recorded as a health note', async () => {
+  const notes = [];
+  const logs = [];
+  const worker = { env: {}, now: () => '2026-10-20T08:00:00Z', log: (l) => logs.push(l), recordHealthError: (r) => notes.push(r), state: { tickets: { values() { throw new Error('boom'); } }, sessions: new Map() } };
+  assert.equal(await createTicketWorktreeSweep().run(worker, {}), null);
+  assert.deepEqual(notes.map((n) => [n.kind, n.error]), [['worktree-sweep', 'ticket worktree sweep failed: boom']]);
+  assert.equal(logs.length, 1);
+});

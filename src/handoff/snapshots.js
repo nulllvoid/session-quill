@@ -6,8 +6,9 @@
 //
 // A restore first snapshots the checkout as it is now (pre-restore), then writes the target's files
 // and deletes only files the pre-restore snapshot holds that the target lacks. Ignored files are
-// never captured, so they are never deleted or overwritten; a target file whose path is now taken by
-// a file the pre-restore snapshot could not hold is skipped. Nothing the restore replaces is lost.
+// never captured, so they are never deleted or overwritten; a target file whose path, or a folder on
+// its way, is now taken by something the pre-restore snapshot could not hold is skipped. Nothing the
+// restore replaces is lost.
 //
 // Every git call runs without inherited GIT_* overrides, replace refs or grafts (cleanGitEnv), with
 // hooks and the fsmonitor off: the checkout's configuration is the agent's to edit.
@@ -126,6 +127,20 @@ export function snapshotTree(dir, opts) {
 const lexists = (p) => { try { fs.lstatSync(p); return true; } catch { return false; } };
 const within = (root, p) => p === root || isUnder(root, p);
 
+// True when a folder on the way to `rel` exists as anything but a real directory (a file, a symlink,
+// a junction): writing `rel` would replace it.
+function blockedParent(root, rel) {
+  const parts = rel.split('/');
+  let at = root;
+  for (const part of parts.slice(0, -1)) {
+    at = path.join(at, part);
+    let stat;
+    try { stat = fs.lstatSync(at); } catch { return false; }
+    if (!stat.isDirectory()) return true;
+  }
+  return false;
+}
+
 function* restoreSteps(dir, commit, { handoffId, n, against = null, onPreRestore = null }) {
   if (typeof commit !== 'string' || !FULL_SHA.test(commit)) throw new TrackerError('snapshot-invalid', 'restore needs the snapshot commit id');
   const target = yield { args: ['rev-parse', '--verify', `${commit}^{tree}`] };
@@ -134,18 +149,17 @@ function* restoreSteps(dir, commit, { handoffId, n, against = null, onPreRestore
   if (onPreRestore) onPreRestore(pre);
   const fields = names(yield { args: ['diff-tree', '-r', '-z', '--no-renames', '--name-status', pre.tree, target], raw: true });
   const root = fs.realpathSync(dir);
-  const restored = [];
+  const candidates = [];
   const removed = [];
   const skipped = [];
   const deletions = [];
   for (let i = 0; i + 1 < fields.length; i += 2) {
     const [status, rel] = [fields[i], fields[i + 1]];
     if (status === 'D') deletions.push(rel);
-    // A path the target adds that is taken now (an ignored file, a directory) is not the pre-restore
-    // snapshot's to give back: it stays as it is.
-    else if (status === 'A' && lexists(path.join(root, rel))) skipped.push(rel);
-    else restored.push(rel);
+    else candidates.push({ status, rel });
   }
+  // Deletions go first: each removes only a file the pre-restore snapshot holds, so a path the target
+  // turns from a directory into a file (or back) is free afterwards unless something unsaved is in it.
   for (const rel of deletions) {
     const abs = path.join(root, rel);
     let parent = null;
@@ -157,6 +171,14 @@ function* restoreSteps(dir, commit, { handoffId, n, against = null, onPreRestore
     removed.push(rel);
     // Directories the removal emptied go too, as a checkout would leave them.
     for (let d = path.dirname(abs); isUnder(root, d); d = path.dirname(d)) { try { fs.rmdirSync(d); } catch { break; } }
+  }
+  // A path the target adds that is taken now (an ignored file, a directory still holding ignored
+  // files), or whose parent is now something other than a directory (an ignored file or symlink), is
+  // not the pre-restore snapshot's to give back: checkout-index would unlink it. It stays as it is.
+  const restored = [];
+  for (const { status, rel } of candidates) {
+    if ((status === 'A' && lexists(path.join(root, rel))) || blockedParent(root, rel)) skipped.push(rel);
+    else restored.push(rel);
   }
   if (restored.length) {
     const tmp = tempIndex();

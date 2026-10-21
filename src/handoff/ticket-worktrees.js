@@ -1,6 +1,7 @@
-// Teardown of ticket worktrees (ADR 0036, FR-1.3), run by the worker at start and then at most once
-// an hour from its tick. A done ticket's worktree is removed once it is clean, `keep_days` have
-// passed and no live session uses it; a dirty one is kept and reported once. The branch is always
+// Teardown of ticket worktrees (ADR 0036, FR-1.3), run by the worker at start (without holding the
+// start up) and then at most once an hour from its tick. A done ticket's worktree is removed once it is clean, `keep_days` have
+// passed and no live session uses it; a dirty one, or one whose copied ignored files (`.env`) differ
+// from the repository's, is kept and reported once. The branch is always
 // kept (ADR 0021 finds PRs by branch). Nothing here ever forces a removal.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,7 +23,7 @@ function emitOnce(worker, payload) {
 
 /** One sweep over every ticket worktree the journal knows; returns what it did, for logs and tests. */
 export async function sweepTicketWorktrees(worker, config, { removeFn = removeCleanWorktree } = {}) {
-  const { keep_days } = worktreeConfig(config);
+  const { keep_days, copy } = worktreeConfig(config);
   const root = ticketWorktreesRoot(worker.env);
   const out = { pruned: [], kept: [], skipped: [] };
   const plan = teardownPlan(worker.state.tickets.values(), worker.state.sessions.values(), { nowIso: worker.now(), keepDays: keep_days });
@@ -39,7 +40,7 @@ export async function sweepTicketWorktrees(worker, config, { removeFn = removeCl
     const ticket = worker.state.tickets.get(item.ticket_id);
     if (!ticket || ticket.status !== 'done') continue;
     let r;
-    try { r = await removeFn({ repoPath, dir: record.path, root }); } catch (err) { r = { removed: false, reason: 'remove-failed', message: err.message }; }
+    try { r = await removeFn({ repoPath, dir: record.path, root, copy }); } catch (err) { r = { removed: false, reason: 'remove-failed', message: err.message }; }
     try {
       if (r.removed) {
         emitOnce(worker, { op: 'pruned', ...base, repo_id: record.repo_id, branch: record.branch, base_sha: record.base_sha, ...(r.missing ? { reason: 'missing' } : {}) });
@@ -68,7 +69,12 @@ export function createTicketWorktreeSweep({ intervalMs = SWEEP_INTERVAL_MS, remo
     if (inFlight) return inFlight;
     last = Date.parse(worker.now());
     inFlight = sweepTicketWorktrees(worker, config, removeFn ? { removeFn } : {})
-      .catch((err) => { worker.log(`ticket worktree sweep failed: ${err.message}`); return null; })
+      .catch((err) => {
+        const error = `ticket worktree sweep failed: ${err.message}`;
+        worker.log(error);
+        if (typeof worker.recordHealthError === 'function') worker.recordHealthError({ kind: 'worktree-sweep', error });
+        return null;
+      })
       .finally(() => { inFlight = null; });
     return inFlight;
   };

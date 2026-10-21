@@ -6,7 +6,7 @@ import { sessionState } from '../reconcile/lifecycle.js';
 export const WORKTREE_OPS = ['mounted', 'pruned', 'kept'];
 export const WORKTREE_STATES = ['mounted', 'kept', 'pruned'];
 // Why the sweep left a worktree in place (the `kept` op). The branch is always kept.
-export const KEPT_REASONS = ['uncommitted-changes', 'detached-head'];
+export const KEPT_REASONS = ['uncommitted-changes', 'detached-head', 'ignored-files-changed'];
 export const WORKTREES_MAX = 10;
 export const DEFAULT_KEEP_DAYS = 7;
 export const DEFAULT_COPY = Object.freeze(['.env', '.env.local']);

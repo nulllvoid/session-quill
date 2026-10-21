@@ -199,3 +199,44 @@ test('a dismissal by anyone but the owner is kept on the note but never delivere
   const m = await gatherMemory(s, t, { repoCfg: { id: 'demo' }, now: AT });
   assert.doesNotMatch(m.inline, /from a page/);
 });
+
+// A dismissal on a run that has no Run note must never push a real note (attempts, a failure) out.
+import { applySuggestion, handleHandoffTx, RUN_NOTES_MAX, DISMISSAL_NOTES_MAX } from '../../src/core/reduce/requests.js';
+
+test('dismissal-only notes never evict a real Run note; they have their own cap and merge into the run\'s note when it arrives', () => {
+  const s = newState();
+  const t = createTicket(s);
+  const real = Array.from({ length: RUN_NOTES_MAX }, (_, i) => ({ run_id: `real-${i}`, at: AT, attempts: [{ route: 'retry', outcome: 'failed' }], lessons: [], ...(i === 0 ? { failure: { kind: 'test-gate', status: 'failed', command: 'npm test', exit_code: 1, signature: 'a'.repeat(16), files_touched: [] } } : {}) }));
+  t.run_notes = real.map((n) => ({ ...n }));
+  const result = () => ({ changed: new Set(), handoffsChanged: new Set() });
+  const dismiss = (hid, n = 1) => {
+    s.handoffs.set(hid, { id: hid, ticket_id: t.id, state: 'done', suggestions: Array.from({ length: n }, (_, i) => ({ id: `${hid}-s${i}`, type: 'next-action', state: 'proposed' })) });
+    for (let i = 0; i < n; i += 1) applySuggestion(s, { occurred_at: AT }, { handoff_id: hid, suggestion_id: `${hid}-s${i}`, ticket_id: t.id, state: 'dismissed', reason: `not now ${i}` }, { id: `req-${hid}-${i}`, actor_id: 'owner' }, result());
+  };
+  const ids = () => t.run_notes.map((n) => n.run_id);
+  dismiss('quiet-0', 2);
+  assert.deepEqual(ids(), [...real.map((n) => n.run_id), 'quiet-0'], 'the oldest real note and its failure record stay');
+  assert.equal(t.run_notes[0].failure.signature, 'a'.repeat(16));
+  assert.deepEqual(t.run_notes.at(-1).dismissals.map((d) => d.reason), ['not now 0', 'not now 1']);
+  for (let i = 1; i <= DISMISSAL_NOTES_MAX + 2; i += 1) dismiss(`quiet-${i}`);
+  const quiet = ids().filter((id) => id.startsWith('quiet-'));
+  assert.equal(quiet.length, DISMISSAL_NOTES_MAX, 'dismissal-only notes have their own cap');
+  assert.equal(quiet[0], 'quiet-3', 'the oldest dismissal-only notes go first');
+  assert.equal(ids().filter((id) => id.startsWith('real-')).length, RUN_NOTES_MAX);
+  // A dismissal on a run that has a note attaches to it.
+  s.handoffs.set('real-5', { id: 'real-5', ticket_id: t.id, state: 'done', suggestions: [{ id: 'r5', type: 'deploy-evidence', state: 'proposed' }] });
+  applySuggestion(s, { occurred_at: AT }, { handoff_id: 'real-5', suggestion_id: 'r5', ticket_id: t.id, state: 'dismissed', reason: 'already recorded' }, { id: 'req-r5', actor_id: 'owner' }, result());
+  assert.equal(ids().filter((id) => id === 'real-5').length, 1);
+  assert.equal(t.run_notes.find((n) => n.run_id === 'real-5').dismissals[0].reason, 'already recorded');
+  // Redelivery changes nothing: the suggestion is already resolved.
+  const before = JSON.stringify(t.run_notes);
+  applySuggestion(s, { occurred_at: AT }, { handoff_id: 'quiet-12', suggestion_id: 'quiet-12-s0', ticket_id: t.id, state: 'dismissed', reason: 'not now 0' }, { id: 'req-quiet-12-0', actor_id: 'owner' }, result());
+  assert.equal(JSON.stringify(t.run_notes), before);
+  // The run's own note arrives later: it takes the dismissals and counts as a real note.
+  const r = { changed: new Set(), handoffsChanged: new Set(), requestsChanged: new Set() };
+  handleHandoffTx(s, { occurred_at: AT, payload: { handoff_id: 'quiet-12', run_notes: { at: AT, attempts: [{ route: 'probe', outcome: 'worked' }], lessons: [] } } }, r);
+  const merged = t.run_notes.find((n) => n.run_id === 'quiet-12');
+  assert.deepEqual([merged.attempts.length, merged.dismissals.length], [1, 1]);
+  assert.equal(ids().filter((id) => id.startsWith('real-') || id === 'quiet-12').length, RUN_NOTES_MAX, 'real notes rotate among themselves');
+  assert.equal(ids().includes('real-0'), false);
+});

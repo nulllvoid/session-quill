@@ -24,7 +24,7 @@ import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js'
 import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSources } from '../memory/file.js';
 import { writeDocsProjection } from '../memory/project.js';
 import { failureRecord, repeatNotice } from '../memory/failure.js';
-import { anchorStaleRatio, anchorCandidates, staledEvent } from '../memory/anchors.js';
+import { anchorStaleRatio, anchorCandidates, anchorCheckKey, staledEvent } from '../memory/anchors.js';
 import { runEnvForFiling, runEnvStaleEvents } from './run-env.js';
 import { anchorVerdicts } from '../memory/deliver.js';
 import { addMs, MINUTE } from '../lib/time.js';
@@ -125,9 +125,9 @@ function grantedFingerprints(scopes) {
   } catch { return null; }
 }
 
-export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDraftPrFn = openDraftPr, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes, ciProviderFor = null } = {}) {
-  // Ticket worktree teardown (ADR 0036): at start, then at most hourly from the tick.
-  const ticketWorktrees = createTicketWorktreeSweep();
+export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDraftPrFn = openDraftPr, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes, ciProviderFor = null, ticketWorktreeRemoveFn } = {}) {
+  // Ticket worktree teardown (ADR 0036): at start (in the background), then at most hourly from the tick.
+  const ticketWorktrees = createTicketWorktreeSweep(ticketWorktreeRemoveFn ? { removeFn: ticketWorktreeRemoveFn } : {});
   // CI watch of Quill-opened pull requests (ADR 0039): at most every `[ci] interval_minutes` from the tick.
   const ciWatch = createCiWatch({ providerFor: ciProviderFor });
   const running = new Map(); // handoff id -> { child, done, reason, fix }
@@ -135,7 +135,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
   const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
   const dispatches = new Map(); // handoff id -> its dispatch promise, until it settles (M7: onStop waits)
   const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
-  const anchorSeen = new Map(); // repo id -> HEAD and candidate count at its last anchor check
+  const anchorSeen = new Map(); // repo id -> anchorCheckKey (HEAD and the candidates) of its last anchor check
   let anchorCheckAt = null;
   let anchorCheck = null; // the anchor check in flight
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
@@ -878,8 +878,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     return !batchBudgetReached(members, batchId, budget);
   }
 
-  // ADR 0032: anchored memory against each registered repository's HEAD. Only when HEAD (or the set
-  // of anchored entries) changed since the last check; an anchored region that changed by at least
+  // ADR 0032: anchored memory against each registered repository's HEAD. Only when HEAD or the set
+  // of anchored entries (their ids and anchor blobs) changed since the last check; an anchored region that changed by at least
   // `[memory] anchor_stale_ratio` is journaled as a `staled` memory-tx (deterministic source
   // identity, so a repeated check never journals twice). Pinned and owner entries are never
   // candidates (R27); a git failure stales nothing.
@@ -891,7 +891,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       if (!entries.length) continue;
       let head;
       try { head = await headCommit(cfg.canonical_path); } catch { continue; }
-      const seen = `${head}:${entries.length}`;
+      const seen = anchorCheckKey(head, entries);
       if (anchorSeen.get(repoId) === seen) continue;
       const verdicts = await anchorVerdicts(entries, { checkout: cfg.canonical_path, commit: head, ratio, log: (line) => worker.log(`${line} (anchor check of ${repoId})`) });
       if (stopping) return;
@@ -952,7 +952,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       try { reemitMissingCriticalProposals(worker); } catch (err) { worker.log(`critical proposals not re-emitted: ${err.message}`); }
       // Housekeeping at start: checkouts past their keep time, stale registrations, old ledgers and logs.
       try { await pruneOldWorktrees(); pruneRetention(); } catch (err) { worker.log(`handoff housekeeping failed: ${err.message}`); }
-      await ticketWorktrees.run(worker, ctx.config);
+      // Not awaited (ADR 0030 fast start): the sweep runs `git status` per due worktree. It logs and
+      // records its own failure; a stop waits for it.
+      ticketWorktrees.run(worker, ctx.config);
     },
     tick(worker) {
       if (paused) return;

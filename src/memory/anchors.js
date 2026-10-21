@@ -8,6 +8,7 @@
 // and owner entries are never staled (ruling R27).
 //
 // Everything here is pure: callers pass file text and get numbers or events back.
+import { createHash } from 'node:crypto';
 import { validAnchors, fileAnchors, runEnvAnchor, isRunEnvAnchor, MAX_ANCHORS } from '../core/reduce/memory.js';
 
 // A run-env anchor (ADR 0041, src/handoff/run-env.js) can sit beside the file anchors; every
@@ -135,6 +136,16 @@ export function anchorCandidates(state, repoId) {
     if ((e.scope === 'repo' && e.repo_id === repoId) || (ticket && ticket.repo_id === repoId)) out.push(e);
   }
   return out;
+}
+
+/**
+ * What the worker's anchor check of one repository saw: HEAD plus a hash of the candidates' ids and
+ * their anchors' files and blobs, sorted. Equal keys mean an equal check, so it may be skipped; a
+ * candidate swapped for another, or re-anchored by a confirmation, at the same HEAD is a new key.
+ */
+export function anchorCheckKey(head, entries) {
+  const lines = entries.map((e) => [e.id, ...fileAnchors(e.anchors).map((a) => `${a.file_path}@${a.blob_sha}`).sort()].join('\t')).sort();
+  return `${head}:${createHash('sha256').update(lines.join('\n')).digest('hex')}`;
 }
 
 /**

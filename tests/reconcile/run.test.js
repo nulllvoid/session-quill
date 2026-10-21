@@ -183,7 +183,7 @@ test('findGithubRevert: a revert commit or a Revert PR inside 48 h of the merge 
   assert.match(inside.calls.find((a) => a[0] === 'api')[1], /^repos\/acme\/demo\/commits\?since=.*&until=2026-10-04T08%3A00%3A00Z/);
   const late = ghFake({ commits: [{ sha: REVERT, commit: { message: `This reverts commit ${MERGE}.`, committer: { date: '2026-10-04T09:00:00Z' } } }], prs: [{ title: 'Revert "Fix retries"', mergedAt: '2026-10-05T00:00:00Z', mergeCommit: { oid: REVERT } }] });
   assert.equal((await findGithubRevert(late.exec, { url: PR_URL, merged_at: '2026-10-02T08:00:00Z', merge_commit: MERGE })).reverted_by, null);
-  const byPr = ghFake({ prs: [{ title: 'Revert "Other"', mergedAt: '2026-10-02T09:00:00Z', mergeCommit: { oid: 'e'.repeat(40) } }, { title: 'Revert "Fix retries"', mergedAt: '2026-10-02T20:00:00Z', mergeCommit: { oid: REVERT } }] });
+  const byPr = ghFake({ prs: [{ title: 'Revert "Other"', body: 'Reverts acme/demo#6', mergedAt: '2026-10-02T09:00:00Z', mergeCommit: { oid: 'e'.repeat(40) } }, { title: 'Revert "Fix retries"', body: 'Reverts acme/demo#7', headRefName: 'revert-7-fix', mergedAt: '2026-10-02T20:00:00Z', mergeCommit: { oid: REVERT } }] });
   assert.equal((await findGithubRevert(byPr.exec, { url: PR_URL, merged_at: '2026-10-02T08:00:00Z', merge_commit: MERGE })).reverted_by, REVERT);
   await assert.rejects(findGithubRevert(inside.exec, { url: 'https://example.com/x' }), /unsupported/);
 });
@@ -214,4 +214,28 @@ test('a run PR is observed on the run, checked for a revert until its 48 h windo
   await runReconciliation(w, { reason: 'test', providers });
   assert.equal(fetches, 2, 'a settled run PR is not polled again');
   await w.stop();
+});
+
+test('findGithubRevert: a Revert PR counts only for the PR it names, never for every PR sharing its title', async () => {
+  const { findGithubRevert } = await import('../../src/reconcile/providers/github.js');
+  // A bulk dialog gives every run the same note, so their PRs share the title "Handoff: fix flaky".
+  const title = 'Handoff: fix flaky';
+  const url = (n) => `https://github.com/acme/demo/pull/${n}`;
+  const revertOf8 = { title: `Revert "${title}"`, body: 'Reverts acme/demo#8\n\nBroke the build.', headRefName: 'revert-8-quill-run-b', mergedAt: '2026-10-02T20:00:00Z', mergeCommit: { oid: REVERT } };
+  const batch = ghFake({ title, prs: [revertOf8] });
+  const check = async (n, fake = batch) => (await findGithubRevert(fake.exec, { url: url(n), merged_at: '2026-10-02T08:00:00Z', merge_commit: MERGE })).reverted_by;
+  assert.equal(await check(8), REVERT, 'the PR the revert names');
+  assert.equal(await check(7), null, 'a sibling with the same title is not reverted');
+  assert.equal(await check(9), null);
+  // The title alone never counts; a near-miss number never counts.
+  const titleOnly = ghFake({ title, prs: [{ title: `Revert "${title}"`, body: 'manual revert', headRefName: 'undo-it', mergedAt: '2026-10-02T20:00:00Z', mergeCommit: { oid: REVERT } }] });
+  assert.equal(await check(7, titleOnly), null);
+  const near = ghFake({ title, prs: [{ title: `Revert "${title}"`, body: 'Reverts acme/demo#70', headRefName: 'revert-70-x', mergedAt: '2026-10-02T20:00:00Z', mergeCommit: { oid: REVERT } }] });
+  assert.equal(await check(7, near), null);
+  const otherRepo = ghFake({ title, prs: [{ title: `Revert "${title}"`, body: 'Reverts someone/else#7', mergedAt: '2026-10-02T20:00:00Z', mergeCommit: { oid: REVERT } }] });
+  assert.equal(await check(7, otherRepo), null);
+  // GitHub's revert branch alone is enough.
+  const byBranch = ghFake({ title, prs: [{ title: 'Revert something', body: '', headRefName: 'revert-7-quill-run-a', mergedAt: '2026-10-02T20:00:00Z', mergeCommit: { oid: REVERT } }] });
+  assert.equal(await check(7, byBranch), REVERT);
+  assert.ok(batch.calls.some((a) => a[0] === 'pr' && a[1] === 'list' && a.includes('title,body,headRefName,mergedAt,mergeCommit')));
 });
