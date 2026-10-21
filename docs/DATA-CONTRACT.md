@@ -413,7 +413,45 @@ ADR 0038. No new event kind, record field or request.
 
 ### Task 11 Attention groups and CI watch
 
-_Not yet filled._
+ADR 0039. Every field below is local only. None is on an export, sanitize, mirror, vault-note or publisher allow-list, and none is on `ticket.prs` (`tests/export/privacy-sentinel.test.js`). Run proposals never reach an export.
+
+- Event `ci-observation` (worker only; through ingress it is quarantined as `ingress-forged`). Payload `{ handoff_id, n, pr_url, head_sha, head_branch, pr_state, state, checks[] }`:
+  - `n` is 1 for a run's first observation, then the previous one plus 1.
+  - `pr_url` is the run's own GitHub PR URL.
+  - `head_sha` is 40 or 64 hex characters. `head_branch` is a safe branch name.
+  - `pr_state` is open, draft, merged, closed or unknown.
+  - `state` is failing, pending, passing or none.
+  - `checks` holds at most 30 entries `{ name, state }`, where `state` is failed, pending, passed or skipped.
+
+  Source identity `ci-observation:<handoff_id>:<n>`. Refusals (not applied): `ci-observation-source`, `ci-observation-invalid`, `handoff-unknown`, `ci-pr-mismatch`, `ci-observation-out-of-order`.
+- Handoff field `ci` (on the run that opened the pull request): `{ n, pr_url, head_sha, head_branch, pr_state, state, checks[], failing[], observed_at, since }`.
+  - Check names are one line of at most 120 characters.
+  - `failing` holds the names of the failed checks.
+  - `since` is when this commit's current state was first observed.
+- Applying an observation lapses each open CI proposal of the run. It sets the proposal's `lapsed_at` and its `lapse_reason`: `pr-merged`, `pr-closed`, `head-changed` (another commit) or `ci-passed`.
+- Event `ci-proposal` (worker only; quarantined through ingress). Payload `{ id, handoff_id, pr_url, head_sha, head_branch, failing[≤10], log_tail (≤ 4096 characters, or null), log_withheld }`. `id` = deterministicId(`<handoff_id>:ci:<head_sha>`). Source identity `ci-proposal:<id>`. The same id again is a duplicate. Refusals:
+  - `ci-proposal-source`, `ci-proposal-invalid` and `ci-id-mismatch` (the event itself);
+  - `handoff-unknown`, `ci-not-failing` (the run's latest observation is not failing on that commit and URL) and `ci-branch-mismatch` (not the observed branch, or not the run's `pushed_branch`);
+  - `ci-proposal-limit` (the run already has 2), `ticket-unknown` and `ticket-done`.
+- Run proposal `origin: 'ci'` (in `run_proposals[]` on the owner snapshot): `{ id, ticket_id, origin, from_handoff_id, recipe: { name: 'attempt-fix', source: 'builtin', hash: null }, mode: 'attempt-fix', permissions, access, ci, lapse_reason, … }`.
+  - `permissions`: read_source, edit_source, commit and push_branch are true; open_draft_pr, edit_files and delete_files are false.
+  - `access` is `autonomous` if the opening run was autonomous, else `standard`.
+  - `ci` is `{ pr_url, head_sha, head_branch, observation_n, failing[], log_tail, log_withheld }`.
+  - It never has scopes or an action pin. Its state follows `proposalState`, with the 7-day expiry and `lapsed_at`.
+- Proposal `failing[]`: check names with each instruction-like name replaced by `[name withheld: instruction-like text]`.
+- Log tail: the last part of `gh run view --job <id> --log-failed` for the first failed GitHub Actions check. It has colour codes and control characters removed, is redacted with `redactLog`, and has each instruction-like line replaced by `[line withheld: instruction-like text]` (`log_withheld` counts them). It is cut to its last 4096 characters on a line boundary.
+- Request `approve-run` / `dismiss-run` of a CI proposal: only a request the dashboard server journaled (producer `worker`, actor `owner`). Anything else fails with `ci-fix-dashboard-only`. `ttl_minutes` is refused (`invalid-ttl`). Approve also fails with:
+  - `ci-proposal-stale`: the opening run's `ci` is no longer failing on the proposal's commit;
+  - `ci-branch-mismatch`;
+  - any `evaluateHandoff` refusal: `branch-protected`, `handoff-reserved`, ….
+- Handoff fields of an approved CI fix: `origin: 'ci'`, `ci_fix` `{ proposal_id, root_handoff_id, pr_url, head_sha, head_branch, failing[], log_tail, log_withheld }`, `branch` (the PR's branch), `proposal` `{ id, origin: 'ci', from_handoff_id, recipe }`.
+- Dispatch of a CI fix checks out exactly `ci_fix.head_sha`. It fails the run with `ci-head-changed` when origin's tip of the branch is another commit, `ci-branch-mismatch` when `branch` differs from `ci_fix.head_branch`, and `branch-protected` for a protected branch. The push is the ordinary fast-forward-only `git push origin HEAD:refs/heads/<branch>`. No pull request is opened.
+- User config `[ci]` (user-only: a `.quill.toml` cannot set it): `watch` (boolean, default true; only `false` turns it off) and `interval_minutes` (whole minutes 1–60, default 5).
+- Watched runs: done, a GitHub `pr_url`, finished in the last 7 days, not `origin: 'ci'`, on an open ticket, and with a pull request not recorded merged or closed. At most 50 per sweep. The repository provider must be `github`.
+- Dashboard: Needs you groups and `group=` (`attention` by default, or `none`). The counting rules and wording are in design system §5–§7.
+  - `supersededBy` ignores runs with `origin: 'ci'`.
+  - The Needs you count and the attention dot count the decision, tests or CI, other failures and ready-to-review items. They never count Live.
+- `REDUCER_VERSION` is 2.
 
 ### Task 12 Diff review and critic
 
