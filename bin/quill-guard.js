@@ -17,6 +17,7 @@ import { redactCapped, summarizeInput } from '../src/handoff/stream.js';
 import { handoffRunDir } from '../src/lib/paths.js';
 import { currentBranch } from '../src/lib/git-head.js';
 import { sourceOfTool, MCP_SERVERS_FILE } from '../src/handoff/mcp-sources.js';
+import { driftOfCall } from '../src/core/planned-paths.js';
 
 const MAX_STDIN_BYTES = 4 * 1024 * 1024;
 const EXCERPT_BYTES = 2048;
@@ -133,6 +134,8 @@ function check(raw, env) {
       ...(change ? { critical: true } : {}),
       ...(change && change.ambiguous === true ? { ambiguous: true } : {}),
       ...(enforced ? { enforce_decision: enforced.decision, enforce_reason: summary(enforced.reason, EXCERPT_BYTES) } : {}),
+      // Planned files (ADR 0037): marked after the decision and never fed back into it.
+      ...(r.decision === 'allow' && plannedDrift(input, s) ? { drift: true } : {}),
     });
     return done(r.decision, r.reason);
   } catch (err) {
@@ -157,6 +160,12 @@ function callFields(s) {
     input_summary,
     input_excerpt: excerpt(input.tool_input),
   };
+}
+
+// Whether an allowed file write lands outside the grant's planned files. A failure here only
+// leaves the mark off: it can never change the decision already made.
+function plannedDrift(input, s) {
+  try { return driftOfCall(input.tool_name, input.tool_input, s.grant, s.cwd); } catch { return false; }
 }
 
 function summary(v, max) {

@@ -132,6 +132,7 @@ export function resumeFields(h) {
     ...(scopes.length ? { scopes } : {}),
     ...(h.max_turns !== undefined ? { max_turns: h.max_turns } : {}),
     ...(h.max_budget_usd !== undefined ? { max_budget_usd: h.max_budget_usd } : {}),
+    ...(Array.isArray(h.planned_paths) && h.planned_paths.length ? { planned_paths: [...h.planned_paths] } : {}),
     ...(h.proposal_id ? { proposal_id: h.proposal_id } : {}),
     ...(isPlainObject(h.proposal) ? { proposal: { ...h.proposal } } : {}),
   };

@@ -1,6 +1,7 @@
 // Handoff permissions are an explicit per-request object, never inferred from approval text
 // (TRD §Handoff execution).
 import { TrackerError } from '../lib/errors.js';
+import { MAX_PLANNED, normalizePlanned, invalidPlannedEntry } from '../core/planned-paths.js';
 
 // `files` (ADR 0015) works on a ticket's attached files, outside any repository.
 export const MODES = ['analyse', 'analyse-followups', 'attempt-fix', 'files'];
@@ -82,10 +83,11 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
     if (attachedFileCount === 0) throw new TrackerError('files-required', 'this ticket has no attached files outside a repository for a files run to work on');
   }
   if ((permissions.read_source || permissions.edit_source) && !repo) throw new TrackerError('repo-required', 'source access requires a registered repository on the owner machine');
+  const planned = plannedList(payload.planned_paths, access, permissions);
   if (recipe) {
-    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}), ...batch, ...scopes, ...limits };
+    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}), ...batch, ...scopes, ...limits, ...planned };
   }
-  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...batch, ...scopes, ...limits };
+  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...batch, ...scopes, ...limits, ...planned };
 }
 
 // `{ scopes }` when the request names any, else {}. Scopes cover prod and external writes only and
@@ -98,6 +100,21 @@ function scopeList(raw, access) {
   if (!raw.length) return {};
   if (access !== 'autonomous') throw new TrackerError('scope-needs-autonomous', 'write scopes need autonomous access: only its guard can hold a run to them');
   return { scopes: [...new Set(raw)] };
+}
+
+// `{ planned_paths }` when the request names any (ADR 0037): the repository files the run expects to
+// change. Writes outside them are counted as drift, never refused. Only a run's guard (autonomous,
+// or full access in observe mode) sees each write, so other access levels cannot carry them.
+function plannedList(raw, access, permissions) {
+  if (raw === undefined || raw === null) return {};
+  if (!Array.isArray(raw) || raw.length > MAX_PLANNED) throw new TrackerError('planned-invalid', `planned_paths must be a list of at most ${MAX_PLANNED} repository paths or globs`);
+  const bad = invalidPlannedEntry(raw);
+  if (bad !== null) throw new TrackerError('planned-invalid', `planned path ${JSON.stringify(String(bad).slice(0, 80))} is not a repository-relative path or glob (no absolute paths, URLs, colons or '..')`);
+  const list = normalizePlanned(raw);
+  if (!list.length) return {};
+  if (access !== 'autonomous' && access !== 'full') throw new TrackerError('planned-needs-guard', 'planned files need autonomous or full access: only the run guard sees each write');
+  if (!permissions.edit_source) throw new TrackerError('permission-dependency', 'planned files are only meaningful for a run that may edit source');
+  return { planned_paths: list };
 }
 
 function pinRequirements(recipe, access, scopes, actionPins) {

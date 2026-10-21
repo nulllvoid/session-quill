@@ -116,7 +116,7 @@ const HANDOFF_SHAPED_FIELDS = ['test_gate', 'file_effects', 'suggestions', 'pr_u
 // Counts and the recorded stage stand in for the attempt, learning and critical-change records, which stay local.
 // scope_count (R53) says how many write scopes a run had, so an export can say "Autonomous + scopes (n)"; the
 // scope names, targets and fingerprints never travel.
-const HANDOFF_COUNT_FIELDS = ['attempt_count', 'learning_count', 'critical_count', 'recorded_stage', 'scope_count'];
+const HANDOFF_COUNT_FIELDS = ['attempt_count', 'learning_count', 'critical_count', 'recorded_stage', 'scope_count', 'scope_drift'];
 export const HANDOFF_EXPORT_FIELDS = [...HANDOFF_PLAIN_FIELDS, ...HANDOFF_SHAPED_FIELDS, ...HANDOFF_COUNT_FIELDS];
 
 // R55: an interrupted run's possible_writes (prod targets, MCP tool and scope names) stay on the
@@ -175,6 +175,8 @@ function sanitizeHandoff(h, o) {
   if (typeof h.recorded_stage === 'string') out.recorded_stage = h.recorded_stage;
   const scopes = countOf(h, 'scopes', 'scope_count');
   if (scopes) out.scope_count = scopes;
+  // ADR 0037: how many writes fell outside the run's planned files; the paths never travel.
+  if (Number.isInteger(h.scope_drift) && h.scope_drift >= 0) out.scope_drift = h.scope_drift;
   return out;
 }
 

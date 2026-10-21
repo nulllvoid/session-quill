@@ -30,12 +30,16 @@ function fixture() {
     cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S] }, max_turns: 7, max_budget_usd: 1,
     memory_filing: { filed: 1, problems: [{ code: S, count: 1 }] },
     critical_notes: [{ index: 0, reason: S }],
+    // ADR 0037: planned files are local; only the drift count travels.
+    planned_paths: [`src/${S}.js`], scope_drift: 3,
     // R55: what an interrupted run's ledger shows may have run (prod target, MCP tool, scope name).
     possible_writes: [`kubectl apply on ${S}-ctx may have run`, `mcp__${S}__editIssue on X-1 may have run`, `a ${S}.write call may have run`],
   });
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
   s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
   s.tickets[0].run_notes = [S];
+  // ADR 0037: a session's planned files and its last drifting path stay local.
+  Object.assign(s.sessions[0], { planned_paths: [`src/${S}.js`], drift: { count: 2, last_path: `src/${S}/x.js`, at: '2026-10-12T00:00:00Z' } });
   s.tickets[0].critical_spec = { rule: S };
   const local = { ...s.tickets[1], id: TID(40), key: `LOCAL-${S}`, title: `Secret ${S}`, local_only: true };
   s.tickets.push(local);
@@ -74,7 +78,11 @@ test('exported handoffs carry counts and the stage, not the records', () => {
   delete forged.handoffs[0].scopes;
   forged.handoffs[0].scope_count = 'k8s.write:prod';
   assert.equal('scope_count' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a numeric count travels');
-  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report']) assert.equal(k in out, false, k);
+  assert.equal(out.scope_drift, 3, 'a run exports how many writes fell outside its planned files (ADR 0037), never which');
+  forged.handoffs[0].scope_drift = `src/${S}.js`;
+  assert.equal('scope_drift' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a whole-number drift count travels');
+  for (const k of ['planned_paths', 'drift']) assert.equal(k in sanitizeSnapshot(fixture(), ALL).sessions[0], false, k);
+  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'planned_paths']) assert.equal(k in out, false, k);
   assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
   assert.ok(Object.keys(out).every((k) => HANDOFF_EXPORT_FIELDS.includes(k)));
 });

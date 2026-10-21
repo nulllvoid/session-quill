@@ -225,7 +225,7 @@ function evaluateResume(worker, req, ticket) {
   // A built-in is pinned by name and source (an upgrade may change its text); any other recipe
   // must still have the reviewed hash.
   const ref = fields.recipe ? { name: fields.recipe.name, source: fields.recipe.source, hash: fields.recipe.source === 'builtin' ? null : fields.recipe.hash } : undefined;
-  const payload = { ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
+  const payload = { ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.planned_paths ? { planned_paths: fields.planned_paths } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
   const critical = fields.action_pins ? { actionPins: fields.action_pins, scopeFingerprints: fields.scope_fingerprints, originProposalId: fields.origin_proposal_id } : null;
   const evaluation = evaluateHandoff(worker, req, ticket, payload, critical);
   if (evaluation.outcome !== 'applied') return evaluation;
@@ -551,6 +551,8 @@ function evaluateHandoff(worker, req, ticket, payload, critical = null) {
     ...(checked.scopes ? { scopes: checked.scopes } : {}),
     ...(checked.max_turns !== undefined ? { max_turns: checked.max_turns } : {}),
     ...(checked.max_budget_usd !== undefined ? { max_budget_usd: checked.max_budget_usd } : {}),
+    // Planned files (ADR 0037): frozen into the grant; writes outside them are counted, never refused. Local only.
+    ...(checked.planned_paths ? { planned_paths: checked.planned_paths } : {}),
     // An approved critical change (ADR 0028): its pinned action per scope, the fingerprints dispatch
     // checks again before the grant is frozen, and the proposal. Never exported (allow-lists).
     ...(critical ? { action_pins: critical.actionPins, scope_fingerprints: critical.scopeFingerprints, origin_proposal_id: critical.originProposalId } : {}),

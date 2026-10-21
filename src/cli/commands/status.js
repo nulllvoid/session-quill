@@ -4,6 +4,7 @@ import { sessionKey } from '../../core/state.js';
 import { countIngress } from '../../core/ingress.js';
 import fs from 'node:fs';
 import { pausePath } from '../../runtime/readiness.js';
+import { driftSuffix } from '../../core/planned-paths.js';
 
 // The dashboard address as an OSC 8 hyperlink (ADR 0022). Only the base URL: the sign-in secret
 // never appears in the status line.
@@ -31,7 +32,7 @@ export async function run({ flags, io, env }) {
     const session = input.session_id ? { session_id: input.session_id, agent_id: null } : null;
     const b = bindingFor(ctx, session);
     const ws = workerStatus(ctx);
-    const warn = ws.healthy ? dashboardLink(ctx) : ' ⚠ worker';
+    const warn = `${driftSuffix(b && b.drift_count)}${ws.healthy ? dashboardLink(ctx) : ' ⚠ worker'}`;
     if (b && b.ticket_id) io.out(`⌁ ${b.ticket_key} ${b.ticket_title ?? ''}${b.gate_enabled === false ? ' (gate off)' : ''}${warn}`.trim());
     else io.out(`⌁ unbound${b && b.gate_enabled === false ? ' (gate off)' : ''}${warn}`);
     return 0;
@@ -66,6 +67,8 @@ export async function run({ flags, io, env }) {
       io.println(`Session ${session.session_id}: no ticket linked${binding && binding.gate_enabled === false ? ' (gate OFF)' : ''}`);
       io.println('Choose the task before working: /session-quill:ticket work "<task title>" reuses or creates it; ticket bind <KEY> resumes a known task.');
     }
+    const drift = binding && Number.isInteger(binding.drift_count) ? binding.drift_count : 0;
+    if (drift > 0) io.println(`Plan drift: ${drift} write${drift === 1 ? '' : 's'} outside the files the latest plan names (observed, nothing was blocked)`);
   }
   return 0;
 }

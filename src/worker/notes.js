@@ -89,6 +89,9 @@ export function renderSessionNote(session, { state }) {
   const fm = { ...session };
   delete fm.run_notes;
   delete fm.critical_spec;
+  // Planned files and the last drifting path (ADR 0037) name repository paths: local only.
+  delete fm.planned_paths;
+  delete fm.drift;
   if (touchesLocal) {
     for (const k of SESSION_TEXT_FIELDS) delete fm[k];
     fm.ticket_ids = (session.ticket_ids ?? []).filter((id) => !local(id));

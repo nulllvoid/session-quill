@@ -18,6 +18,7 @@ import { MCP_SERVERS_FILE } from './mcp-sources.js';
 import { loadScopeCatalog, resolveScopes, scopeReferences } from './scopes.js';
 import { credentialSettings } from '../config/credentials.js';
 import { mcpSettings } from '../config/mcp-policy.js';
+import { normalizePlanned } from '../core/planned-paths.js';
 
 export const VERSION_CACHE_MS = 10 * MINUTE;
 // At most this many observed writes are kept on a full-access run's record.
@@ -54,7 +55,9 @@ export function createVersionProbe({ claudePath = 'claude', claudeArgs = [], spa
 
 // The run's frozen grant (spec §4.1, §4.2): what the guard reads on every call. Scopes carry name,
 // target, matchers and fingerprint only; a scope's credentials never enter the grant.
-function grantFor({ access, permissions, scopes, actionPins = [], cwd, runDir, contextDir, checkout, repoCfg, config, envOf, credentialSystems }) {
+function grantFor({ access, permissions, scopes, actionPins = [], plannedPaths = null, cwd, runDir, contextDir, checkout, repoCfg, config, envOf, credentialSystems }) {
+  // Planned files (ADR 0037), frozen with the grant: the guard marks writes outside them as drift and never refuses them.
+  const planned = normalizePlanned(plannedPaths);
   const { mcpPolicy, trustedMcpServers } = mcpSettings(config);
   const temps = [...new Set([envOf('TEMP'), envOf('TMP'), envOf('TMPDIR'), os.tmpdir()].filter((t) => typeof t === 'string' && path.isAbsolute(t)))];
   const home = envOf('USERPROFILE') ?? envOf('HOME') ?? os.homedir();
@@ -79,6 +82,7 @@ function grantFor({ access, permissions, scopes, actionPins = [], cwd, runDir, c
     trackerHosts: [],
     defaultBranch: repoCfg ? repoCfg.default_branch ?? null : null,
     ...(credentialSystems ? { credentialSystems } : {}),
+    ...(planned.length ? { plannedPaths: planned } : {}),
   };
 }
 
@@ -114,7 +118,7 @@ export function prepareAutonomous({ storeEnv, config, handoff: h, cwd, checkout,
   // CLI read on any other is refused with the onboarding hint (spec §3).
   const credentialSystems = CRED_SYSTEMS.filter((sys) => built.report[sys] && built.report[sys] !== 'stub');
   const actionPins = Array.isArray(h.action_pins) ? h.action_pins : [];
-  const grant = grantFor({ access: 'autonomous', permissions, scopes, actionPins, cwd, runDir, contextDir, checkout, repoCfg, config, envOf: lookup(built.env), credentialSystems });
+  const grant = grantFor({ access: 'autonomous', permissions, scopes, actionPins, plannedPaths: h.planned_paths, cwd, runDir, contextDir, checkout, repoCfg, config, envOf: lookup(built.env), credentialSystems });
   const { sha256 } = writeGrant(runDir, grant);
   const settingsPath = writeRunSettings(runDir);
   const childEnv = {
@@ -141,7 +145,7 @@ export function prepareObserve({ storeEnv, config, handoff: h, cwd, checkout, re
   const runDir = handoffRunDir(storeEnv, h.id);
   fs.mkdirSync(runDir, { recursive: true });
   const permissions = h.permissions ?? {};
-  const grant = grantFor({ access: 'full', permissions, scopes: [], cwd, runDir, contextDir: null, checkout, repoCfg, config, envOf: lookup({ ...process.env, ...env }), credentialSystems: null });
+  const grant = grantFor({ access: 'full', permissions, scopes: [], plannedPaths: h.planned_paths, cwd, runDir, contextDir: null, checkout, repoCfg, config, envOf: lookup({ ...process.env, ...env }), credentialSystems: null });
   const { sha256 } = writeGrant(runDir, grant);
   const settingsPath = writeRunSettings(runDir, { observe: true });
   const vars = {

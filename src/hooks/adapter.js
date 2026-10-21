@@ -12,7 +12,8 @@ import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } f
 import { readTicketProjection, readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
 import { scopeFor } from './scope.js';
 import { planAutoBind } from './autobind.js';
-import { markUnboundWork, shouldNudge, markNudged, nudgeReason, isWorkTool, markTicketWork, shouldCheckDone, markDoneChecked, doneCheckReason } from './nudge.js';
+import { markUnboundWork, shouldNudge, markNudged, nudgeReason, isWorkTool, markTicketWork, shouldCheckDone, markDoneChecked, doneCheckReason, recordPlanFiles, markDrift, driftToNudge, markDriftNudged, driftReason } from './nudge.js';
+import { extractPlannedPaths } from '../core/planned-paths.js';
 import { keyExample, renderUrl, externalTicketId, branchTitle } from '../core/external-keys.js';
 import { currentBranch } from '../lib/git-head.js';
 import { hostPlansDir, healthErrorsPath } from '../lib/paths.js';
@@ -280,6 +281,9 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
           } catch (err) {
             result.stderr += `Session Quill: capture gap — plan blob not stored (${err.message})\n`;
           }
+          // The files the approved plan names (ADR 0037); later writes outside them are drift.
+          payload.planned_paths = extractPlannedPaths(plan);
+          if (!handoff) { try { recordPlanFiles(key, env, payload.planned_paths); } catch { /* best effort */ } }
         }
       }
       // The branch the work landed on, so a PR from that branch can be linked to this ticket even
@@ -290,6 +294,9 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
       }
       if (mode === 'nudge' && !(snapshot && snapshot.ticket_id) && (payload.write_paths.length || payload.commit)) {
         try { markUnboundWork(key, env, occurred_at); } catch { /* best effort; never blocks capture */ }
+      }
+      if (mode === 'nudge' && !handoff && payload.write_paths.length) {
+        try { markDrift(key, env, payload.write_paths, occurred_at); } catch { /* observe only; never blocks capture */ }
       }
       // Work on a bound ticket arms the end-of-turn Done when check (ADR 0016).
       if (!handoff && snapshot && snapshot.ticket_id && isWorkTool(tool_name)) {
@@ -328,13 +335,18 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
         try { usage = collectTurnUsage(input.transcript_path, key, env); } catch { usage = null; /* effort is best effort; capture never fails on it */ }
       }
       const nudge = eventName === 'Stop' && mode === 'nudge' && !(snapshot && snapshot.ticket_id) && input.stop_hook_active !== true && shouldNudge(key, env);
+      // Plan drift (ADR 0037): once per session, in nudge mode, never in a run.
+      const drifted = !nudge && eventName === 'Stop' && mode === 'nudge' && !handoff && input.stop_hook_active !== true ? driftToNudge(key, env) : null;
       const ev = makeEvent({ ...base, kind: eventName === 'Stop' ? 'stop' : 'subagent-stop', payload: {
-        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge, ...(usage ? { usage } : {}),
+        content_ref, preview: preview(message ?? ''), length: message ? message.length : 0, complete, conclusions: complete ? extractConclusions(message) : [], agent_type: input.agent_type ?? null, nudged: nudge, ...(drifted ? { drift_nudged: true } : {}), ...(usage ? { usage } : {}),
       }, source_identity: `${eventName === 'Stop' ? 'stop' : 'subagent-stop'}:${key}:${content_ref ?? 'missing'}:${occurred_at}` });
       persist(ev, env, result);
       if (nudge) {
         try { markNudged(key, env, occurred_at); } catch { /* stop_hook_active still prevents a loop */ }
         result.stdout = JSON.stringify({ decision: 'block', reason: nudgeReason(scope.tracker) });
+      } else if (drifted) {
+        try { markDriftNudged(key, env, occurred_at); } catch { /* stop_hook_active still prevents a loop */ }
+        result.stdout = JSON.stringify({ decision: 'block', reason: driftReason(drifted) });
       } else if (eventName === 'Stop' && !handoff && input.stop_hook_active !== true && snapshot && snapshot.ticket_id
         && snapshot.ticket_repo_id === null && ['todo', 'active'].includes(snapshot.ticket_status)
         && Array.isArray(snapshot.ticket_done_when) && snapshot.ticket_done_when.length
