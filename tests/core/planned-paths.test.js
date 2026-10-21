@@ -118,3 +118,43 @@ test('driftSuffix is the status line segment, only for a positive count', () => 
   assert.equal(driftSuffix(3), ' ⚠ drift 3');
   for (const v of [0, -1, null, undefined, '3', 1.5]) assert.equal(driftSuffix(v), '');
 });
+
+// Agent-supplied plan text reaches the matcher on every captured write (reducer replay, hook, run
+// guard), so matching and extraction must stay linear whatever the entries and the text hold.
+test('matchesPlanned stays linear on a pathological glob (no backtracking)', () => {
+  const globs = ['src/*a*a*a*a*a*a*a*a*a*a*a*a*b', '**a**a**a**a**a**a**a**b', 'src/' + '*a'.repeat(40) + 'b'];
+  const p = 'src/' + 'a'.repeat(40) + '.js';
+  const t = performance.now();
+  assert.equal(matchesPlanned(p, globs), false);
+  assert.equal(matchesPlanned('src/' + 'a'.repeat(2000), globs), false);
+  assert.ok(performance.now() - t < 50, `took ${performance.now() - t} ms`);
+});
+
+test('matchesPlanned glob semantics: * and ? stay in a level, ** crosses, **/ may be empty, a directory covers below', () => {
+  const yes = [
+    ['src/*.js', 'src/a.js'], ['src/*.js', 'src/.js'], ['src/?.js', 'src/a.js'], ['src/**', 'src/a/b/c.js'], ['src/**/x.js', 'src/x.js'],
+    ['src/**/x.js', 'src/a/b/x.js'], ['**/x.js', 'x.js'], ['**/x.js', 'a/x.js'], ['src/a*b/c', 'src/aXXb/c/d.js'], ['*.md', 'docs/a/README.md'],
+    ['src/**.js', 'src/a/b.js'], ['src/a*', 'src/a/deep.js'], ['SRC/A.JS', 'src/a.js'], ['src/a+b(1).js', 'src/a+b(1).js'],
+  ];
+  const no = [
+    ['src/*.js', 'src/a/b.js'], ['src/?.js', 'src/ab.js'], ['src/?.js', 'src//.js'], ['src/**/x.js', 'src/ax.js'], ['src/a*b/c', 'src/a/b/c'],
+    ['src/a.js', 'src/a.jsx'], ['src/a.js', 'src/aajs'], ['src', 'srcx/a.js'], ['*.md', 'docs/a.mdx'], ['src/a+b.js', 'src/aab.js'],
+  ];
+  for (const [g, p] of yes) assert.equal(matchesPlanned(p, [g]), true, `${g} ~ ${p}`);
+  for (const [g, p] of no) assert.equal(matchesPlanned(p, [g]), false, `${g} !~ ${p}`);
+});
+
+test('planned entries are capped: at most 4 wildcards, runs of * collapse to **', () => {
+  assert.deepEqual(normalizePlanned(['src/***/a.js', 'src/****x*.js']), ['src/**/a.js', 'src/**x*.js']);
+  assert.deepEqual(normalizePlanned(['src/*a*a*a*a*a*a*a*b', 'a?b?c?d?e?f.js', 'src/*/*/*/*.js']), ['src/*/*/*/*.js']);
+  assert.deepEqual(extractPlannedPaths('edit src/*a*a*a*a*a*a*a*b and src/ok.js'), ['src/ok.js']);
+});
+
+test('the reducer drift path never throws on junk planned entries or write paths', () => {
+  for (const planned of [[7, null, {}, ['x'], 'src/' + '*a'.repeat(100)], 'src/a.js', { 0: 'a' }, null]) {
+    const s = { planned_paths: planned };
+    assert.doesNotThrow(() => recordSessionDrift(s, ['src/b.js', 7, null, {}, '', 'x'.repeat(5000)], 't'));
+    assert.doesNotThrow(() => applyPlannedPaths(s, planned));
+  }
+  assert.doesNotThrow(() => recordSessionDrift({ planned_paths: ['src'] }, null, 't'));
+});

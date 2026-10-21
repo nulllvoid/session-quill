@@ -425,7 +425,7 @@ ADR 0036. Interactive sessions only; worker runs keep their detached checkouts u
 
 ### Task 9 Planned files and drift
 
-ADR 0037. Observe only: no field here allows, refuses or pauses anything. A planned entry is a repo-relative path or glob, normalised to forward slashes with no leading `./` or trailing `/`. It may not be absolute, drive- or home-relative, a URL, hold a colon, a `..` segment or a control character, or exceed 200 characters. Lists hold at most 50 entries. Rules: `src/core/planned-paths.js`.
+ADR 0037. Observe only: no field here allows, refuses or pauses anything. A planned entry is a repo-relative path or glob, normalised to forward slashes with no leading `./` or trailing `/`. It may not be absolute, drive- or home-relative, a URL, hold a colon, a `..` segment or a control character, exceed 200 characters, or hold more than 4 wildcards (`*`, `**`, `?`; a run of three or more `*` is collapsed to `**` first). Lists hold at most 50 entries. Rules: `src/core/planned-paths.js`.
 
 - `post-tool` payload (ingress, `ExitPlanMode` approved only): `planned_paths[]`, the entries `extractPlannedPaths` found in the plan text (possibly empty). Absent on every other post-tool event and on a rejected plan. The reducer normalises it again.
 - `stop` payload (ingress, optional): `drift_nudged: true` when this Stop carried the once-per-session drift nudge (nudge mode only).
