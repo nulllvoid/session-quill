@@ -49,6 +49,8 @@ function gitSync(cwd, step) {
 function gitAsync(cwd, step) {
   return new Promise((resolve, reject) => {
     const child = execFile('git', [...PREFIX, ...step.args], optionsFor(cwd, step), (err, stdout, stderr) => (err ? reject(failed({ stderr, message: err.message }, step.args)) : resolve(output(stdout, step))));
+    // git may exit before it reads stdin (EPIPE); its exit code and stderr already say what happened.
+    child.stdin.on('error', () => {});
     child.stdin.end(step.input ?? '');
   });
 }

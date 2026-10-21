@@ -49,3 +49,7 @@ The PRD asked to move `src/export/sanitize.js` into ingress. The gap analysis co
 - **Redacting only in the worker.** Rejected: the ingress folder and the blob store would still hold the secret until the worker ran, and a blob is written before its event.
 - **Redacting every payload string, identifiers included.** Rejected: hashes and keys would change and break source identities, blob references and dedupe.
 - **Rewriting old journals on upgrade.** Rejected: it changes recorded hashes and identities, and the journal is append-only.
+
+## Amendment, 21 October 2026 (CI)
+
+On macOS CI, temp folders such as `/var/folders/<random>/T/…` matched the high-entropy rule, so a worktree event's `path` arrived as `[secret redacted]` and the reducer refused it. Filesystem path keys (`path`, `dir`, `root`, `file_path`, `*_path`, `*_dir`) are now identifier keys and kept byte for byte, like `cwd` and `write_paths`. A path inside free text can still be over-redacted when it holds a random mixed-case segment; that errs on the safe side.

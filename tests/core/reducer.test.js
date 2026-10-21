@@ -253,10 +253,12 @@ test('children_ids is derived from parent links and children_done_count counts d
 // ---- Ticket worktrees (ADR 0036)
 import { makeEvent } from '../../src/core/events.js';
 import { applyEvent } from '../../src/core/reducer.js';
+import path from 'node:path';
 import { worktreeIdentity, teardownPlan, ticketWorktreeDir } from '../../src/core/worktrees.js';
 import { STORE, MACHINE } from './helpers.js';
 
-const WT = 'C:/quill-home/worktrees/demo/LOCAL-demo-ticket-00000001';
+// Absolute on every platform (`C:…` on Windows, `/…` elsewhere).
+const WT = path.resolve('/quill-home/worktrees/demo/LOCAL-demo-ticket-00000001');
 const SHA = 'a'.repeat(40);
 const M1 = '11111111-0000-4000-8000-000000000001';
 const M2 = '11111111-0000-4000-8000-000000000002';

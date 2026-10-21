@@ -154,3 +154,10 @@ test('tool names and planned paths are identifiers: an MCP tool name survives, f
   assert.equal(out.payload.nested.tool, tool);
   assert.equal(out.payload.note, `called ${REDACTED}`, 'the same name in prose is text, and the entropy rule still applies');
 });
+
+test('filesystem paths are identifiers: a macOS temp folder survives ingress redaction byte for byte', () => {
+  const mac = '/var/folders/7x/k9q2m4vb5sd8h1c3xw0zt6r40000gn/T/quill-home-Xk2Rf9/worktrees/demo/FIX-1';
+  const out = redactEvent({ kind: 'worktree', payload: { op: 'mounted', path: mac, dir: mac, root: mac, file_path: mac, worktree_path: mac, run_dir: mac } }).payload;
+  for (const k of ['path', 'dir', 'root', 'file_path', 'worktree_path', 'run_dir']) assert.equal(out[k], mac, k);
+  assert.equal(redactEvent({ kind: 'stop', payload: { message: `see ${mac} and ghp_${'a'.repeat(36)}` } }).payload.message.includes('ghp_'), false, 'free text still redacts');
+});

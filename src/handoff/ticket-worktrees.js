@@ -65,8 +65,14 @@ export async function sweepTicketWorktrees(worker, config, { removeFn = removeCl
 export function createTicketWorktreeSweep({ intervalMs = SWEEP_INTERVAL_MS, removeFn } = {}) {
   let last = -Infinity;
   let inFlight = null;
+  let queued = null;
+  // An explicit run while a sweep is in flight (the background start-up sweep, a tick) waits for it
+  // and then sweeps again, so it never answers with a sweep that began before the caller's changes.
   const run = (worker, config) => {
-    if (inFlight) return inFlight;
+    if (inFlight) {
+      queued ??= inFlight.then(() => { queued = null; return run(worker, config); });
+      return queued;
+    }
     last = Date.parse(worker.now());
     inFlight = sweepTicketWorktrees(worker, config, removeFn ? { removeFn } : {})
       .catch((err) => {
