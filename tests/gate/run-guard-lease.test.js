@@ -32,15 +32,31 @@ test('the clock is the real one when no time is injected', () => {
   assert.equal(decide(bash(PIN_STG.pin), leased({ notAfter: '2999-01-01T00:00:00.000Z' }), ENV).decision, 'allow');
 });
 
-test('after the lease every scoped write is refused, pinned or not, covered or not, shell or MCP', () => {
+test('after the lease every write a scope or pin covers is refused, pinned or not, shell or MCP', () => {
   const scoped = grantWith({ scopes: [K8S_STG], notAfter: NOT_AFTER });
   assert.equal(decide(bash('kubectl --context stg apply -f x.yaml'), scoped, BEFORE).decision, 'allow');
   assert.match(decide(bash('kubectl --context stg apply -f x.yaml'), scoped, AFTER).reason, EXPIRED);
-  assert.match(decide(bash('kubectl --context prod delete pod api'), scoped, AFTER).reason, EXPIRED);
   const mcp = grantWith({ scopes: [ARGO], actionPins: [MCP_PIN], notAfter: NOT_AFTER });
   const sync = call('mcp__argocd__sync_application', { applicationName: 'pay-stg' });
   assert.equal(decide(sync, mcp, BEFORE).decision, 'allow');
   assert.match(decide(sync, mcp, AFTER).reason, EXPIRED);
+});
+
+test('after the lease a write no scope or pin covers follows the 1.1 path: refused as a critical change, proposed', () => {
+  const scoped = grantWith({ scopes: [K8S_STG], notAfter: NOT_AFTER });
+  for (const [c, g] of [
+    [bash('kubectl --context prod delete pod api'), scoped],
+    [bash('argocd app sync pay-prod'), leased()],
+    [bash('argocd app sync pay-stg --prune'), leased()],
+    [bash('kubectl --context stg apply -f x.yaml; kubectl --context prod delete pod api'), scoped],
+  ]) {
+    const before = decide(c, g, BEFORE);
+    const after = decide(c, g, AFTER);
+    assert.equal(after.decision, 'deny');
+    assert.match(after.reason, /^QUILL_CRITICAL_CHANGE /, c.tool_input.command);
+    assert.ok(after.criticalChange, 'the critical change is recorded for a proposal, as in 1.1');
+    assert.deepEqual(after, before, 'the lease changes nothing for an uncovered write');
+  }
 });
 
 test('reads and the run\'s own scratch files still pass after the lease', () => {

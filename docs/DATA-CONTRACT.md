@@ -350,7 +350,7 @@ ADR 0031 (FR-3.2, FR-3.4). It adds no event kinds. Every field below is local on
 - Error code (request submission and apply): `invalid-ttl`.
 - Guard refusals the agent sees:
   - `QUILL_DENIED dry-run-required: run <twin> first, …`: a pinned `k8s.write`/`db.write` call in a grant with `requireDryRun`, until the ledger holds an allowed guard line with the twin's `argv_sha` and, after it, the latest `tool_result` of the same `tool_use_id` with `exit_code` 0. A pin without a twin decides as in 1.1. An unreadable ledger refuses.
-  - `QUILL_DENIED lease-expired: …`: every scoped write and pinned action once the clock is past the grant's `notAfter`, or when `notAfter` does not parse. Reads, git under its per-run permissions and the run's scratch files still pass.
+  - `QUILL_DENIED lease-expired: …`: every write a granted scope or pin covers once the clock is past the grant's `notAfter`, or when `notAfter` does not parse. A write nothing covers is still refused as a critical change (`QUILL_CRITICAL_CHANGE`) and recorded for a proposal, as in 1.1. Reads, git under its per-run permissions and the run's scratch files still pass.
 - UI (critical change item, owner dashboard): a "Valid for" select (Whole run, 5 min, 15 min, 1 h) before Approve and queue, sent as `ttl_minutes`. It shows "Dry run required in run" when `dry_run` is projected, with the twin as escaped code, or a "No dry run" warning chip saying the approved run makes the action as pinned, without one.
 
 ### Task 4 Anchored memory and failure ledger

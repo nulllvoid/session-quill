@@ -201,15 +201,20 @@ function enforce(c, cls, parts, g, e, vars, home, ctx) {
     }
   }
 
-  let via = null;
+  const covered = [];
   for (const p of parts) {
     if (!(p.class === 'external.write' || (p.class === 'write' && !String(p.scope ?? '').startsWith('git.')))) continue;
-    // ADR 0031: after the approval's lease every scoped write and pinned action is refused; reads
-    // and the run's own files are not scoped and still pass.
-    const lease = leaseProblem(g, e);
-    if (lease) return deny(lease);
     const cover = coverOf(p, g, c, e);
     if (!cover.ok) return deny(REASONS.critical(changeOf(p), cover.pins, cover.why ?? null), changeOf(p));
+    covered.push([p, cover]);
+  }
+  // ADR 0031: after the approval's lease every write a granted scope or pin covers is refused. It is
+  // checked once every write part is covered, so a write nothing covers is still refused above as a
+  // critical change and proposed, as in 1.1. Reads and the run's own files are not scoped and pass.
+  const lease = covered.length ? leaseProblem(g, e) : null;
+  if (lease) return deny(lease);
+  let via = null;
+  for (const [p, cover] of covered) {
     if (cover.pinned) {
       const why = dryRunProblem(p, g, c, vars, home, ctx);
       if (why) return deny(why);
