@@ -97,6 +97,7 @@ async function list(ctx, io, flags) {
 const REFUSALS = {
   'uncommitted-changes': 'it has uncommitted changes; commit, stash or discard them first (there is no force option)',
   'detached-head': 'its HEAD is detached on commits no branch contains; put them on a branch first',
+  'ignored-files-changed': "an ignored file copied into it ([worktree] copy) differs from the repository's copy or has none there; save it elsewhere or make them match first",
   'not-a-worktree': 'git does not list it as a worktree of the repository',
   'outside-worktrees-root': 'it is outside the Quill worktrees folder',
   'repository-missing': 'its repository has no local checkout registered',
@@ -114,7 +115,7 @@ async function remove(ctx, io, args, flags) {
   for (const w of records) {
     if (isInsideOrSame(w.path, process.cwd())) throw new TrackerError('worktree-in-use', `this command runs inside ${w.path}; run it from another folder`);
     const repo = (ctx.config.repos ?? {})[w.repo_id];
-    const r = await removeCleanWorktree({ repoPath: repo && repo.canonical_path, dir: w.path, root });
+    const r = await removeCleanWorktree({ repoPath: repo && repo.canonical_path, dir: w.path, root, copy: worktreeConfig(ctx.config).copy });
     if (!r.removed) throw new TrackerError(r.reason === 'uncommitted-changes' ? 'worktree-dirty' : 'worktree-not-removed', `not removing ${w.path}: ${REFUSALS[r.reason] ?? `${r.reason}${r.message ? ` (${r.message})` : ''}`}`);
     await record(ctx, { op: 'pruned', mount_id: w.id, ticket_id: ticket.id, repo_id: w.repo_id, path: w.path, branch: w.branch, base_sha: w.base_sha, ...(r.missing ? { reason: 'missing' } : {}) }, { flags });
     io.println(`${r.missing ? 'Recorded the already-deleted worktree' : 'Removed the worktree'} for ${ticket.key} at ${w.path}; branch ${w.branch} kept.`);

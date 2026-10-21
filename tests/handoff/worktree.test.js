@@ -209,3 +209,20 @@ test('removeCleanWorktree keeps a worktree whose detached HEAD has commits no br
   git(r.wt, 'branch', 'keep-it');
   assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root }), { removed: true });
 });
+
+test('removeCleanWorktree keeps a worktree whose copied ignored file differs from the repository\'s; a tracked one never counts', async () => {
+  const r = ticketRepo();
+  await createBranchWorktree({ repoPath: r.dir, dir: r.wt, branch: 'quill/FEAT-1' });
+  await copyIgnoredFiles({ repoPath: r.dir, dir: r.wt, entries: ['.env'] });
+  const copy = ['.env', '.env.local', 'README.md', '../escape'];
+  fs.writeFileSync(path.join(r.wt, '.env'), 'TOKEN=changed\n');
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root, copy }), { removed: false, reason: 'ignored-files-changed' });
+  assert.equal(fs.readFileSync(path.join(r.wt, '.env'), 'utf8'), 'TOKEN=changed\n');
+  // An ignored file the worktree has and the repository lacks would be lost too.
+  fs.writeFileSync(path.join(r.wt, '.env'), 'TOKEN=local\n');
+  fs.writeFileSync(path.join(r.wt, '.env.local'), 'only here\n');
+  assert.equal((await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root, copy })).reason, 'ignored-files-changed');
+  fs.rmSync(path.join(r.wt, '.env.local'));
+  // README.md is tracked: git status covers it, and it differs from nothing ignored.
+  assert.deepEqual(await removeCleanWorktree({ repoPath: r.dir, dir: r.wt, root: r.root, copy }), { removed: true });
+});

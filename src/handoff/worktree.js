@@ -208,6 +208,16 @@ export async function createBranchWorktree({ repoPath, dir, branch, base = 'HEAD
 const isAbsoluteAnywhere = (p) => path.isAbsolute(p) || path.win32.isAbsolute(p) || path.posix.isAbsolute(p) || /^[A-Za-z]:/.test(p);
 const realOrNull = (p) => { try { return fs.realpathSync.native(p); } catch { return null; } };
 
+// A `[worktree] copy` entry as path segments, or null when it is absolute in any spelling or has a
+// `..`, `.git` or empty segment.
+function copyEntryParts(raw) {
+  const entry = typeof raw === 'string' ? raw.trim() : '';
+  const rel = entry.replace(/\\/g, '/');
+  const parts = rel.split('/');
+  if (!rel || rel.includes('\0') || isAbsoluteAnywhere(entry) || parts.some((s) => s === '..' || s === '' || s.toLowerCase() === '.git')) return null;
+  return parts;
+}
+
 /**
  * Copies `[worktree] copy` entries from the repository into a new worktree. An entry is a
  * repository-relative path without `..`, `.git` or an absolute form; it is copied only when the source is a
@@ -221,10 +231,9 @@ export async function copyIgnoredFiles({ repoPath, dir, entries = [] }) {
   const repoReal = realOrNull(repoPath);
   const dirReal = realOrNull(dir);
   for (const raw of Array.isArray(entries) ? entries : []) {
-    const entry = typeof raw === 'string' ? raw.trim() : '';
-    const rel = entry.replace(/\\/g, '/');
-    const parts = rel.split('/');
-    if (!rel || rel.includes('\0') || isAbsoluteAnywhere(entry) || parts.some((s) => s === '..' || s === '' || s.toLowerCase() === '.git')) { skipped.push({ path: String(raw).slice(0, 200), reason: 'invalid-path' }); continue; }
+    const parts = copyEntryParts(raw);
+    if (!parts) { skipped.push({ path: String(raw).slice(0, 200), reason: 'invalid-path' }); continue; }
+    const rel = parts.join('/');
     const src = path.join(repoPath, ...parts);
     let st = null;
     try { st = fs.lstatSync(src); } catch { st = null; }
@@ -275,13 +284,42 @@ export async function worktreeLoss(dir) {
   return null;
 }
 
+const sameBytes = (a, b) => { try { return fs.readFileSync(a).equals(fs.readFileSync(b)); } catch { return false; } };
+
+/**
+ * Whether removing the worktree at `dir` would lose a `[worktree] copy` file (ADR 0036): git status
+ * never lists ignored files and `git worktree remove` deletes them, so an ignored entry present in
+ * the worktree must match the repository's own copy byte for byte. One that differs, one whose
+ * original is gone, and an ignored non-file at the entry's path count; a tracked path never does
+ * (git status covers it), nor does a symlink (removing it loses only the link).
+ */
+export async function copiedFilesChanged({ repoPath, dir, entries = [] }) {
+  for (const raw of Array.isArray(entries) ? entries : []) {
+    const parts = copyEntryParts(raw);
+    if (!parts) continue;
+    const dest = path.join(dir, ...parts);
+    let st = null;
+    try { st = fs.lstatSync(dest); } catch { continue; }
+    if (st.isSymbolicLink()) continue;
+    if (st.isFile()) {
+      const src = path.join(repoPath, ...parts);
+      let srcSt = null;
+      try { srcSt = fs.lstatSync(src); } catch { srcSt = null; }
+      if (srcSt && srcSt.isFile() && srcSt.size === st.size && sameBytes(src, dest)) continue;
+    }
+    // Exit 0 only for a path an ignore rule matches; a tracked file is never reported ignored.
+    if (await git(dir, ['check-ignore', '-q', '--', parts.join('/')]).then(() => true, () => false)) return true;
+  }
+  return false;
+}
+
 /**
  * Removes a ticket worktree only when nothing would be lost (ADR 0036): `dir` must be inside `root`
  * and a registered worktree of the repository, `git status --porcelain` must be empty, and the
  * removal is `git worktree remove` without `--force` (git itself refuses a dirty or locked
  * worktree). The branch is kept. Returns { removed: true, missing? } or { removed: false, reason }.
  */
-export async function removeCleanWorktree({ repoPath, dir, root }) {
+export async function removeCleanWorktree({ repoPath, dir, root, copy = [] }) {
   if (!root || !isUnder(root, dir)) return { removed: false, reason: 'outside-worktrees-root' };
   if (!fs.existsSync(dir)) {
     if (repoPath && fs.existsSync(repoPath)) await pruneWorktrees(repoPath, { under: root });
@@ -292,6 +330,9 @@ export async function removeCleanWorktree({ repoPath, dir, root }) {
   let loss;
   try { loss = await worktreeLoss(dir); } catch (err) { return { removed: false, reason: 'status-failed', message: err.message }; }
   if (loss) return { removed: false, reason: loss };
+  try {
+    if (await copiedFilesChanged({ repoPath, dir, entries: copy })) return { removed: false, reason: 'ignored-files-changed' };
+  } catch (err) { return { removed: false, reason: 'status-failed', message: err.message }; }
   try {
     await git(repoPath, ['worktree', 'remove', dir]);
   } catch (err) {
