@@ -8,6 +8,9 @@ import path from 'node:path';
 import { Worker } from '../../src/worker/worker.js';
 import { applyDueRequests } from '../../src/server/requests.js';
 import { makeHome, cli } from './helpers.js';
+import { Journal } from '../../src/core/journal.js';
+import { makeEvent } from '../../src/core/events.js';
+import { journalPath } from '../../src/lib/paths.js';
 
 const ESC = String.fromCharCode(27);
 const BIDI = String.fromCharCode(0x202e);
@@ -141,4 +144,31 @@ test('M5: ids and every message are stripped of control characters; JSON escapes
     assert.equal(retire.out.includes(ESC), false);
     assert.match(retire.out, /Retired eeee5555/);
   } finally { await stop(); }
+});
+
+test('a read-only listing starts from the worker state checkpoint when it matches, and never writes one', async () => {
+  const { fx, w, stop } = await seeded();
+  await stop();
+  const file = path.join(fx.home, 'state', 'state.checkpoint.json');
+  // Mark the checkpointed copy of an entry so the listing shows where it came from.
+  const marked = fs.readFileSync(file, 'utf8').replace('gh 2.60 on PATH', 'gh 2.60 from the checkpoint');
+  fs.writeFileSync(file, marked);
+  // An event journaled after the checkpoint is the tail.
+  const j = new Journal(journalPath(fx.env));
+  j.open();
+  j.append(makeEvent({ kind: 'memory-tx', payload: { op: 'filed', entry: { id: 'dddd4444-tail', scope: 'machine', section: 'tools', kind: 'fact', text: 'TAIL-ENTRY', trust: 'observed', derived_from: 'own-command' } }, store_id: fx.meta.store_id, machine_id: w.storeMeta.owner_machine_id, producer: 'worker' }));
+  j.close();
+  const list = await cli(['memory', 'list'], fx.env);
+  assert.equal(list.code, 0, list.err);
+  assert.match(list.out, /gh 2\.60 from the checkpoint/);
+  assert.match(list.out, /TAIL-ENTRY/);
+  assert.equal(fs.readFileSync(file, 'utf8'), marked, 'the CLI never rewrites the checkpoint');
+  // A checkpoint from another version is ignored: the whole journal replays.
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(marked), package_version: '0.0.1' }));
+  const again = await cli(['memory', 'list'], fx.env);
+  assert.match(again.out, /gh 2\.60 on PATH/);
+  assert.match(again.out, /TAIL-ENTRY/);
+  fs.rmSync(file);
+  await cli(['memory', 'list'], fx.env);
+  assert.equal(fs.existsSync(file), false, 'nor creates one');
 });

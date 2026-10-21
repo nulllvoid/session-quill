@@ -19,6 +19,11 @@ import { applySnapshotTx } from './reduce/snapshots.js';
 
 export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 
+// The shape and meaning of reduced state (ADR 0030). A state checkpoint written under another value
+// is ignored and the journal replays in full, so bump it in any change that makes existing events
+// reduce differently or adds, removes or reshapes a state field.
+export const REDUCER_VERSION = 1;
+
 function replayDeferred(state, key, toolCallId, result) {
   if (!state.deferredResults) return;
   const deferredKey = `${key}:${toolCallId}`;

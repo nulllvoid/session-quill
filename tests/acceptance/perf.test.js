@@ -14,6 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { classifyCall } from '../../src/gate/prod-classify.js';
 import { decide } from '../../src/gate/run-guard.js';
 import { writeGrant } from '../../src/handoff/grant.js';
+import { Worker } from '../../src/worker/worker.js';
+import { Journal } from '../../src/core/journal.js';
+import { checkpointPath } from '../../src/core/checkpoint.js';
 
 const FULL = process.env.QUILL_PERF_FULL === '1';
 const TICKETS = FULL ? 10_000 : 2_000;
@@ -86,12 +89,47 @@ test(`A19 (scaled ${TICKETS} tickets / ${EVENTS} events): replay completes, hook
     const t2 = process.hrtime.bigint();
     s.w.publishGeneration();
     const publishMs = Number(process.hrtime.bigint() - t2) / 1e6;
-    console.log(`A19 scaled: platform=${process.platform} node=${process.versions.node} tickets=${TICKETS} events=${total} replay=${replayMs.toFixed(0)}ms hook p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms max=${max.toFixed(1)}ms ingest(${ingested})=${ingestMs.toFixed(0)}ms publish=${publishMs.toFixed(0)}ms journalReadsDuringHooks=${reads.length}`);
+    console.log(`A19 scaled: platform=${process.platform} node=${process.versions.node} tickets=${TICKETS} events=${total} replay=${replayMs.toFixed(0)}ms (state load ${s.w.stateLoad.ms}ms from ${s.w.stateLoad.source}) hook p50=${p50.toFixed(1)}ms p95=${p95.toFixed(1)}ms max=${max.toFixed(1)}ms ingest(${ingested})=${ingestMs.toFixed(0)}ms publish=${publishMs.toFixed(0)}ms journalReadsDuringHooks=${reads.length}`);
     assert.equal(reads.length, 0, 'hook path never scans events.jsonl');
     assert.ok(p95 <= 200, `hook p95 ${p95.toFixed(1)} ms exceeds 200 ms`);
     assert.equal(ingested, HOOK_CALLS);
   } finally {
     await s.stop({ flush: false });
+    fs.rmSync(s.home, { recursive: true, force: true });
+  }
+});
+
+// ------------------------------------------------------------------ state checkpoint (ADR 0030)
+// Worker start builds state from the last checkpoint plus the journal tail instead of replaying every
+// event. Measured on the state load alone (journal open, checkpoint read, replay): the rest of start
+// (bindings, the first projection generation) is the same either way. Best of three loads each.
+test(`state checkpoint: loading state for ${EVENTS} events from a checkpoint is at least 3x faster than a full replay`, () => {
+  const s = scenario();
+  seedJournal(s);
+  const w = new Worker({ config: s.config, storeMeta: s.meta, env: s.env, clock: s.clock });
+  const load = ({ write = false } = {}) => {
+    w.journal = new Journal(journalPath(s.env), { clock: s.clock });
+    try {
+      assert.deepEqual(w.loadState(), [], 'no checkpoint was ignored');
+      if (write) assert.equal(w.writeStateCheckpoint(), true);
+      return { ...w.stateLoad, state: w.state };
+    } finally {
+      w.journal.close();
+    }
+  };
+  const best = (runs) => runs.reduce((a, b) => (b.ms < a.ms ? b : a));
+  try {
+    const full = best([load(), load(), load({ write: true })]);
+    assert.equal(full.source, 'journal');
+    assert.equal(full.events_replayed, EVENTS);
+    const hydrated = best([load(), load(), load()]);
+    assert.equal(hydrated.source, 'checkpoint');
+    assert.equal(hydrated.events_replayed, 0);
+    assert.deepStrictEqual(hydrated.state, full.state, 'the hydrated state is the replayed state');
+    const mb = (fs.statSync(checkpointPath(s.env)).size / 1e6).toFixed(1);
+    console.log(`state checkpoint: platform=${process.platform} events=${EVENTS} full replay=${full.ms}ms hydrated=${hydrated.ms}ms (${(full.ms / Math.max(1, hydrated.ms)).toFixed(1)}x) checkpoint=${mb}MB`);
+    assert.ok(hydrated.ms * 3 <= full.ms, `hydrated load ${hydrated.ms} ms is not 3x faster than a full replay (${full.ms} ms)`);
+  } finally {
     fs.rmSync(s.home, { recursive: true, force: true });
   }
 });
