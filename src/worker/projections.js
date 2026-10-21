@@ -110,6 +110,17 @@ export function ticketDetailPath(env, ticketId) {
   return path.join(projectionsDir(env), 'tickets', `${ticketId}.json`);
 }
 
+// The context card of a ticket (ADR 0038): derived from git and state, so it is a projection of its
+// own, never journaled and never part of snapshot.json, an export or the mirror. Hooks read it.
+export function contextCardPath(env, ticketId) {
+  if (!/^[A-Za-z0-9-]{1,64}$/.test(String(ticketId ?? ''))) throw new Error(`invalid ticket id: ${ticketId}`);
+  return path.join(projectionsDir(env), 'context', `${ticketId}.json`);
+}
+
+export function writeContextCard(env, ticketId, card) {
+  writeJsonAtomic(contextCardPath(env, ticketId), card);
+}
+
 // Ticket detail files live in a stable directory and are rewritten only when the ticket changed;
 // the detail endpoint serves them only for the current generation, so they are never mixed.
 export function publishGeneration(state, { env, now, generationNumber, snapshotOptions, changedTickets = null }) {

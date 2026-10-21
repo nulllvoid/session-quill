@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resumeBrief, BRIEF_MAX } from '../../src/core/brief.js';
+import { resumeBrief, BRIEF_MAX, CONTEXT_MAX } from '../../src/core/brief.js';
 import { runHook } from '../../src/hooks/adapter.js';
 import { writeRuntimeIdentity, writeBindingSnapshot, writeHeartbeat } from '../../src/hooks/binding-snapshot.js';
 
@@ -51,4 +51,37 @@ test('a bound SessionStart carries the brief from the ticket projection', () => 
   const r = runHook('SessionStart', { session_id: 's1', source: 'resume', cwd: home }, { env, now: NOW });
   const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
   assert.match(ctx, /Bound to FIX-7.*Where FIX-7 stands.*Next action: Fix the loop bound\..*tickets represent tasks/s);
+});
+
+// The context card (ADR 0038): a "Context:" block after the brief, at most CONTEXT_MAX characters.
+const CARD = {
+  ticket_id: ID,
+  co_change: [{ file: 'src/retry.js', partner: 'src/backoff.js', n: 4 }, { file: 'src/retry.js', partner: 'test/retry.test.js', n: 3 }],
+  related: [{ key: 'FIX-3', title: 'Retry budget', status: 'done', files: ['src/retry.js'], live_run: false }, { key: 'FIX-9', title: null, status: 'active', files: ['src/retry.js'], live_run: true }],
+  guard: ['Critical change FIX-7.1 is proposed and waits for the owner\'s decision; it has not run'],
+};
+
+test('the brief appends the context card after the existing brief', () => {
+  const t = ticket({ next_action: 'Fix the loop bound', files_touched: [{ relative_path: 'src/retry.js', last_seen: NOW }] });
+  const plain = resumeBrief(t, { nowIso: NOW });
+  const b = resumeBrief(t, { nowIso: NOW, card: CARD });
+  assert.ok(b.startsWith(plain), 'the existing brief is unchanged');
+  const block = b.slice(plain.length);
+  assert.match(block, /^ Context: /);
+  assert.match(block, /Often changed together: src\/backoff\.js with src\/retry\.js \(4 commits\), test\/retry\.test\.js with src\/retry\.js \(3 commits\)\./);
+  assert.match(block, /Other tickets on these files: FIX-3 "Retry budget" \(done\): src\/retry\.js; FIX-9 \(active, a run is live\): src\/retry\.js\./);
+  assert.match(block, /Guard: Critical change FIX-7\.1 is proposed and waits for the owner's decision; it has not run\./);
+  assert.equal(resumeBrief(t, { nowIso: NOW, card: { co_change: [], related: [], guard: [] } }), plain, 'an empty card adds nothing');
+  assert.equal(resumeBrief(ticket(), { nowIso: NOW, card: CARD }), null, 'no brief, no card');
+});
+
+test('the context block is bounded and one line', () => {
+  const long = (n) => Array.from({ length: n }, (_, i) => `src/${'deep/'.repeat(20)}f${i}.js`);
+  const card = { co_change: long(5).map((f) => ({ file: f, partner: `${f}x`, n: 9 })), related: long(5).map((f, i) => ({ key: `K-${i}`, title: 't\n'.repeat(80), status: 'todo', files: [f], live_run: false })), guard: long(5) };
+  const t = ticket({ next_action: 'x'.repeat(5000) });
+  const b = resumeBrief(t, { nowIso: NOW, card });
+  const block = b.slice(b.indexOf(' Context: '));
+  assert.ok(block.length <= CONTEXT_MAX + 1, `${block.length}`);
+  assert.ok(b.length <= BRIEF_MAX + CONTEXT_MAX + 1, `${b.length}`);
+  assert.doesNotMatch(b, /\n/);
 });

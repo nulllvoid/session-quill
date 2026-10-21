@@ -19,6 +19,9 @@ import { loadScopeCatalog, resolveScopes, scopeReferences } from './scopes.js';
 import { credentialSettings } from '../config/credentials.js';
 import { mcpSettings } from '../config/mcp-policy.js';
 
+// R13: paths inside a checkout no run may change (also named on the context card, ADR 0038).
+export const PROTECTED_CHECKOUT_PATHS = Object.freeze(['.mcp.json', '.claude', '.git']);
+
 export const VERSION_CACHE_MS = 10 * MINUTE;
 // At most this many observed writes are kept on a full-access run's record.
 export const MAX_PROD_EFFECTS = 200;
@@ -73,7 +76,7 @@ function grantFor({ access, permissions, scopes, actionPins = [], cwd, runDir, c
     readableRoots: [...new Set([cwd, runDir, ...(contextDir ? [contextDir] : []), ...temps, path.join(claudeDir, 'plugins'), path.join(claudeDir, 'skills')])],
     writableRoots: [...new Set([runDir, ...temps, ...(editable ? [cwd] : [])])],
     // R13: the checkout's Claude and MCP configuration and git's own files never change in a run.
-    protectedPaths: checkout ? [path.join(checkout, '.mcp.json'), path.join(checkout, '.claude'), path.join(checkout, '.git')] : [],
+    protectedPaths: checkout ? PROTECTED_CHECKOUT_PATHS.map((p) => path.join(checkout, p)) : [],
     mcpPolicy,
     trustedMcpServers,
     trackerHosts: [],
