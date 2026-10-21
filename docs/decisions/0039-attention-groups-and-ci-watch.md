@@ -58,9 +58,11 @@ FR-4.4 asks Quill to notice when CI fails on a pull request it opened and to off
    - Its timeline line names only the commit and the run. Check names and log text never reach the timeline, which reaches prompts. The line is marked `local_only`: exports, the mirror and vault notes leave it out, as they leave out a CI fix run's `proposal` and `proposal_id` (the run then shows as an ordinary run there). Exports gain nothing from the CI watch.
 
 7. **The log tail.** For the first failed GitHub Actions check, the watch reads `gh run view --job <id> --repo <owner/repo> --log-failed` (only a numeric id reaches `gh`). `ciLogTail` then:
-   - strips colour codes and control characters;
-   - keeps the last 16 KB on a line boundary;
-   - redacts with the run ledger's `redactLog` (`src/handoff/stream.js`; Task 1 moves it to `src/lib/redact.js` and re-exports it there);
+   - keeps at most the last 1 MB of the fetched log, on a line boundary;
+   - strips colour codes;
+   - when the log starts inside a private key (an `-----END … PRIVATE KEY-----` line with no BEGIN before it), replaces everything up to that END with the redaction token;
+   - redacts the whole bounded log with the run ledger's `redactLog` (`src/handoff/stream.js`, patterns in `src/lib/redact.js`) before any other cut, so a key whose BEGIN lies far before the tail is still recognised, and an unterminated key is redacted to the end;
+   - strips control characters;
    - replaces every line the memory instruction filter flags with `[line withheld: instruction-like text]`;
    - cuts the result to its last 4096 characters on a line boundary.
 

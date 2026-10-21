@@ -483,7 +483,7 @@ ADR 0039. Every field below is local only. None is on an export, sanitize, mirro
   - `ci` is `{ pr_url, head_sha, head_branch, observation_n, failing[], log_tail, log_withheld }`.
   - It never has scopes or an action pin. Its state follows `proposalState`, with the 7-day expiry and `lapsed_at`.
 - Proposal `failing[]`: check names with each instruction-like name replaced by `[name withheld: instruction-like text]`.
-- Log tail: the last part of `gh run view --job <id> --log-failed` for the first failed GitHub Actions check. It has colour codes and control characters removed, is redacted with `redactLog`, and has each instruction-like line replaced by `[line withheld: instruction-like text]` (`log_withheld` counts them). It is cut to its last 4096 characters on a line boundary.
+- Log tail: the last part of `gh run view --job <id> --log-failed` for the first failed GitHub Actions check. At most the last 1 MB of the fetched log is read; a log that starts inside a private key loses everything up to the key's END line; the whole bounded log is redacted with `redactLog` before it is cut; colour codes and control characters are removed; and each instruction-like line is replaced by `[line withheld: instruction-like text]` (`log_withheld` counts them). It is cut to its last 4096 characters on a line boundary.
 - Request `approve-run` / `dismiss-run` of a CI proposal: only a request the dashboard server journaled (producer `worker`, actor `owner`). Anything else fails with `ci-fix-dashboard-only`. `ttl_minutes` is refused (`invalid-ttl`). Approve also fails with:
   - `ci-pr-closed`: the pull request is recorded merged or closed;
   - `ci-proposal-stale`: the opening run's `ci` is no longer failing on the proposal's commit;

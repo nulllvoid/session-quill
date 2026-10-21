@@ -17,6 +17,7 @@ import { defaultProviders } from '../reconcile/providers/index.js';
 import { ciProposalId, ciProposalsOf, ciPrEnded, ciCheckName, CI_LOG_MAX, CI_PROPOSALS_PER_PR } from '../core/reduce/ci.js';
 import { isProtectedBranch } from './permissions.js';
 import { redactLog } from './stream.js';
+import { REDACTED } from '../lib/redact.js';
 import { instructionLike } from '../memory/instructions.js';
 
 export const CI_WATCH_WINDOW_MS = 7 * 24 * 60 * MINUTE;
@@ -25,21 +26,35 @@ export const WITHHELD_LINE = '[line withheld: instruction-like text]';
 // A check name reaches the fix run's prompt too, so it passes the same filter.
 export const WITHHELD_NAME = '[name withheld: instruction-like text]';
 const GITHUB_PR_URL = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/;
-const PRE_CUT = 16 * 1024;
+// The most of a fetched log the tail is redacted from (gh's own buffer is 16 MB).
+const RAW_MAX = 1024 * 1024;
+const PEM_END = /-----END ([A-Z ]{0,40})PRIVATE KEY-----/;
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b[@-_]/g;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g;
 
+// A log that starts inside a private key (GitHub's own log, or the bound below, kept only its end)
+// has an END line with no BEGIN before it: everything up to that END is the key's body.
+function orphanKeyBody(text) {
+  const end = PEM_END.exec(text);
+  if (!end) return text;
+  const begin = text.indexOf(`-----BEGIN ${end[1]}PRIVATE KEY-----`);
+  if (begin >= 0 && begin < end.index) return text;
+  return `${REDACTED}${text.slice(end.index + end[0].length)}`;
+}
+
 /**
  * The redacted, filtered last part of a CI log: `{ text, withheld }`, text at most `max` characters
  * (null when nothing is left), withheld the number of instruction-like lines replaced by a marker.
- * Cuts fall on line boundaries, so no cut splits a secret the redaction would have recognised.
+ * The bounded log is redacted whole before the tail is cut (an unterminated key is redacted to the
+ * end), and a log that starts inside a private key loses everything up to the key's END line, so
+ * no cut leaves a key body behind.
  */
 export function ciLogTail(raw, max = CI_LOG_MAX) {
-  let s = String(raw ?? '').replace(/\r\n?/g, '\n').replace(ANSI, '');
-  if (s.length > PRE_CUT) { s = s.slice(-PRE_CUT); const i = s.indexOf('\n'); s = i >= 0 ? s.slice(i + 1) : ''; }
-  s = redactLog(s);
+  let s = String(raw ?? '');
+  if (s.length > RAW_MAX) { s = s.slice(-RAW_MAX); const i = s.indexOf('\n'); s = i >= 0 ? s.slice(i + 1) : ''; }
+  s = redactLog(orphanKeyBody(s.replace(/\r\n?/g, '\n').replace(ANSI, '')));
   s = s.split('\n').map((line) => (instructionLike(line) ? WITHHELD_LINE : line.replace(CONTROL, ''))).join('\n').replace(/^\n+|\s+$/g, '');
   if (s.length > max) { s = s.slice(-max); const i = s.indexOf('\n'); s = i >= 0 ? s.slice(i + 1) : ''; }
   const withheld = s.split('\n').filter((l) => l === WITHHELD_LINE).length;

@@ -185,3 +185,19 @@ test('a CI fix is resumed as a CI fix, by the owner on the dashboard only, and o
     assert.deepEqual([resumed.retry_of, resumed.origin, resumed.ci_fix.head_sha, resumed.ci_fix.root_handoff_id, resumed.branch, resumed.permissions.open_draft_pr], [fixId, 'ci', head, root, BRANCH, false]);
   } finally { await b.w.stop(); }
 });
+
+test('the log tail never keeps a private key body, whether the key starts before the cut or the log starts inside it', async () => {
+  const { ciLogTail } = await import('../../src/handoff/ci-watch.js');
+  const body = Array.from({ length: 2000 }, (_, i) => `KEYBODY${String(i).padStart(5, '0')}xx`);
+  const after = ['-----END RSA PRIVATE KEY-----', 'FAIL test/a.test.js', '  expected 1 to equal 2'];
+  // A key whose BEGIN lies more than 16 KB before the end of the log.
+  const whole = ciLogTail(['setup', '-----BEGIN RSA PRIVATE KEY-----', ...body, ...after].join('\n'));
+  assert.doesNotMatch(whole.text, /KEYBODY|END RSA PRIVATE KEY/);
+  assert.match(whole.text, /FAIL test\/a\.test\.js/);
+  // A log that starts inside a key (GitHub kept only its end): the body before the END goes too.
+  const orphan = ciLogTail([...body.slice(-50), ...after].join('\n'));
+  assert.doesNotMatch(orphan.text, /KEYBODY|END RSA PRIVATE KEY/);
+  assert.match(orphan.text, /expected 1 to equal 2/);
+  // An unterminated key at the end of the log.
+  assert.doesNotMatch(ciLogTail(['FAIL', '-----BEGIN PRIVATE KEY-----', ...body.slice(0, 20)].join('\n')).text, /KEYBODY/);
+});
