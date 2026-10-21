@@ -555,6 +555,24 @@ MCP servers are the preferred route to Argo CD and Kibana. Add them to your user
 
 **CLI fallback.** `argocd` works through `[prod.readonly.argocd_env]` above. Kibana's HTTP API has no profile redirect. Its API key variable is removed like any secret-looking name, unless you list it in `[handoff] keep_env`, and then it must be a read-only key. Only plain GET requests are reads; any request with a body, including a `_search` with a JSON query, is an external write and is refused. Prefer the MCP server.
 
+### MCP servers in autonomous runs
+
+A local (stdio) MCP server starts inside the run and sees the run's environment, not yours. Autonomous runs remove credential variables on purpose. A server that reads its token from your shell environment works in your own session and fails in a run, while still reporting "connected". Quill shows what it removed, by name, never by value:
+
+- The Run dialog, under Access, shows "Removed from autonomous runs: N variables", as recorded when the latest autonomous run started.
+- Run detail has an Environment section listing the variables that run did not inherit.
+- The agent is told that a tool needing one of them is unavailable in the run, not broken on your machine.
+
+Memory such a run files about its tools, its connectors, a removed variable or one of its MCP servers is marked "Seen in autonomous runs". It goes stale ("Run environment changed") when what autonomous runs get changes: the removed names, `keep_env`, the credential report or your `[prod.readonly]` keys.
+
+How to give a server what it needs:
+
+- **Removed by design.** Any variable whose name looks like a token, secret, password, API key or credential goes. So does each system's own list: `KUBECONFIG`, `AWS_*`, `ARGOCD_*`, `BITBUCKET_*`, `GH_TOKEN`, `JIRA_*`, `SLACK_*` and others. Every credential you pass into an autonomous run should be read-only: credentials are the boundary, and the guard is the second layer ([ADR 0026](docs/decisions/0026-autonomous-access-and-guard.md)).
+- **`keep_env` exempts only the generic secret-name pass.** `[handoff] keep_env = ["CRE_JENKINS_TOKEN"]` keeps a token that only its name would remove. It cannot keep a name on a system's own list, such as `BITBUCKET_*` or `ARGOCD_*`. Git-provider tokens stay only in runs granted push or a draft PR.
+- **Argo CD** gets its read-only credentials through `[prod.readonly.argocd_env]` (see above), not through `keep_env`.
+- **Literal values in the server's `env` block survive.** `claude mcp add … -e NAME=value` writes the value into the server's config, and the run uses it as written, so make it a read-only token. A `${VAR}` expansion in that block resolves against the run's stripped environment, so it is empty when `VAR` was removed.
+- **macOS and Linux.** The worker that starts at login (LaunchAgent or systemd user unit) gets only `PATH` and `QUILL_HOME` from your shell. Variables you export in `~/.zshrc` or `~/.bashrc` never reach it, removed or not, and the Environment section cannot list them. Put the value in the server's `env` block instead.
+
 ### Memory
 
 Runs file what they learn when they finish, and Quill decides how far to trust it by where it came from, not by what the agent says:
