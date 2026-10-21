@@ -10,7 +10,7 @@ import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest, runOptions, accessNotice } from './handoff.js';
 import { capMinutes, recipeCaps } from '../../handoff/runner.js';
 
-const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent resume <run-id> | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id>';
+const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent resume <run-id> | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id> [--reason text (dismiss, at most 280 characters)]';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
 
@@ -142,7 +142,7 @@ async function resolve(ctx, io, verb, args, flags) {
   if (!h) throw new TrackerError('handoff-unknown', `unknown run ${runId}`);
   const ticket = snap.tickets.find((t) => t.id === h.ticket_id);
   const kind = verb === 'accept' ? 'accept-suggestion' : 'dismiss-suggestion';
-  const terminal = await submitCliRequest(ctx, io, { kind, target_id: h.ticket_id, expected_revision: kind === 'accept-suggestion' && ticket ? ticket.revision : null, payload: { handoff_id: h.id, suggestion_id: sid } }, flags);
+  const terminal = await submitCliRequest(ctx, io, { kind, target_id: h.ticket_id, expected_revision: kind === 'accept-suggestion' && ticket ? ticket.revision : null, payload: { handoff_id: h.id, suggestion_id: sid, ...(kind === 'dismiss-suggestion' && typeof flags.reason === 'string' ? { reason: flags.reason } : {}) } }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};
     throw new TrackerError(err.code ?? terminal.state, `${verb} ${terminal.state}: ${err.message ?? ''}`);

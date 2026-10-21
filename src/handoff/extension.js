@@ -20,6 +20,9 @@ import { reconcileAttempts } from './reconcile.js';
 import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js';
 import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSources } from '../memory/file.js';
 import { writeDocsProjection } from '../memory/project.js';
+import { failureRecord, repeatNotice } from '../memory/failure.js';
+import { anchorStaleRatio, anchorCandidates, staledEvent } from '../memory/anchors.js';
+import { anchorVerdicts } from '../memory/deliver.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { getBlob } from '../core/blobs.js';
 import { parseInit, assertRuntime, autonomyInfo } from './inventory.js';
@@ -57,6 +60,8 @@ export const FINISH_WAIT_MS = 20_000;
 // At start, terminal runs finished this recently that have no memory_filing are filed again.
 export const REFILE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const REFILE_MAX = 50;
+// ADR 0032: how often the worker compares anchored memory with each registered repository's HEAD.
+export const ANCHOR_CHECK_MS = 5 * MINUTE;
 const TERMINAL = new Set(['done', 'failed', 'timed-out', 'cancelled']);
 
 // `[handoff] log_retention_days`: how long a run's ledger directory and log are kept.
@@ -117,6 +122,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
   const filings = new Map(); // ticket id -> Set of those promises, for the ticket's next dispatch
   const dispatches = new Map(); // handoff id -> its dispatch promise, until it settles (M7: onStop waits)
   const probeVersion = createVersionProbe({ claudePath, claudeArgs, spawnEnv });
+  const anchorSeen = new Map(); // repo id -> HEAD and candidate count at its last anchor check
+  let anchorCheckAt = null;
+  let anchorCheck = null; // the anchor check in flight
   // `maxConcurrent` (tests, embedders) sets both caps; otherwise they come from the user config.
   const configured = concurrencyLimits(ctx.config);
   const limits = { readonly: maxReadonly ?? maxConcurrent ?? configured.readonly, fix: maxFix ?? maxConcurrent ?? configured.fix };
@@ -371,7 +379,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       // Deterministic source identities: a filing redone at start never journals an event twice.
       const fresh = (e) => !(worker.journal && worker.journal.hasSource(e.source_identity));
       for (const e of events) if (fresh(e)) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
-      const note = appendRunNotes(h.ticket_id, result.attempts ?? [], lessons, { run: h, at: worker.now() });
+      // ADR 0032: a failed worker test gate leaves its worker-structured failure record on the note.
+      const note = appendRunNotes(h.ticket_id, result.attempts ?? [], lessons, { run: h, at: worker.now(), failure: failureRecord(worker.state.handoffs.get(id) ?? h) });
       if (note && fresh(note)) worker.emit(note.kind, note.payload, { source_identity: note.source_identity });
     } catch (err) {
       worker.log(`memory filing failed for ${id}: ${err.stack ?? err.message}`);
@@ -553,7 +562,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
     if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft() && remainingUsd(entry) <= 0) (entry.budgetNotes ??= []).push('test-repair-skipped-budget-spent');
     else if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
-      const next = await followUp(entry, testRepairPrompt(command, result), { tools: entry.tools, maxTurns: entry.budget.maxTurns, label: 'test-repair' });
+      const next = await followUp(entry, testRepairPrompt(command, result, repeatNotice(worker.state, worker.state.handoffs.get(h.id) ?? h, result)), { tools: entry.tools, maxTurns: entry.budget.maxTurns, label: 'test-repair' });
       if (entry.reason) return { outcome, gate: null };
       const repaired = next ? parseOutcome(next, { outputs: entry.outputs }) : null;
       if (repaired && !repaired.no_result && !repaired.is_error && repaired.problems.length <= parsed.problems.length) outcome = next;
@@ -701,7 +710,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     try {
       // Bring the projections up to date with the state first (a no-op when nothing changed).
       if (typeof worker.publishMemory === 'function') worker.publishMemory();
-      const mem = await gatherMemory(worker.state, worker.state.tickets.get(ticket.id) ?? ticket, { repoCfg, budgetBytes: inlineBudget(ctx.config), checkout: worktreePath, commit: baseCommit, home: quillHome(worker.env), now: worker.now(), run: current, docs: docsMap, contextDir, log: (line) => worker.log(`${line} (run ${h.id})`) });
+      const mem = await gatherMemory(worker.state, worker.state.tickets.get(ticket.id) ?? ticket, { repoCfg, budgetBytes: inlineBudget(ctx.config), anchorRatio: anchorStaleRatio(ctx.config), checkout: worktreePath, commit: baseCommit, home: quillHome(worker.env), now: worker.now(), run: current, docs: docsMap, contextDir, log: (line) => worker.log(`${line} (run ${h.id})`) });
       writeContext({ state: worker.state, home: quillHome(worker.env), paths: mem.paths, contextDir, runNotes: mem.runNotes });
       memoryDirs = [contextDir];
       context.memory = mem.inline || null;
@@ -774,6 +783,33 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     return !batchBudgetReached(members, batchId, budget);
   }
 
+  // ADR 0032: anchored memory against each registered repository's HEAD. Only when HEAD (or the set
+  // of anchored entries) changed since the last check; an anchored region that changed by at least
+  // `[memory] anchor_stale_ratio` is journaled as a `staled` memory-tx (deterministic source
+  // identity, so a repeated check never journals twice). Pinned and owner entries are never
+  // candidates (R27); a git failure stales nothing.
+  async function checkAnchors(worker) {
+    const ratio = anchorStaleRatio(ctx.config);
+    for (const [repoId, cfg] of Object.entries(ctx.config.repos ?? {})) {
+      if (stopping || !cfg || !cfg.canonical_path || !fs.existsSync(cfg.canonical_path)) continue;
+      const entries = anchorCandidates(worker.state, repoId);
+      if (!entries.length) continue;
+      let head;
+      try { head = await headCommit(cfg.canonical_path); } catch { continue; }
+      const seen = `${head}:${entries.length}`;
+      if (anchorSeen.get(repoId) === seen) continue;
+      const verdicts = await anchorVerdicts(entries, { checkout: cfg.canonical_path, commit: head, ratio, log: (line) => worker.log(`${line} (anchor check of ${repoId})`) });
+      if (stopping) return;
+      for (const [id, v] of verdicts) {
+        const live = worker.state.memory.entries.get(id);
+        if (v.verdict !== 'stale' || !v.anchor || !live || live.state !== 'active' || live.pinned === true || live.trust === 'owner') continue;
+        const e = staledEvent(id, v.anchor);
+        if (!(worker.journal && worker.journal.hasSource(e.source_identity))) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
+      }
+      anchorSeen.set(repoId, seen);
+    }
+  }
+
   function killWithReason(id, reason) {
     const entry = running.get(id);
     if (!entry) return;
@@ -789,6 +825,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     pruneOldWorktrees,
     pruneRetention,
     cleanupRun: (id) => cleanupRun(currentWorker, id),
+    // The anchor check now, unthrottled (tests and embedders); tick runs it every ANCHOR_CHECK_MS.
+    checkAnchors: () => checkAnchors(currentWorker),
     async onStart(worker) {
       // Each recipe carries its time cap per access level, from the same budget dispatch uses.
       worker.recipeInfo = () => catalogFor(worker).list().map((r) => (r.error ? r : { ...r, caps: recipeCaps(r, ctx.config) }));
@@ -818,6 +856,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       }
       for (const [id, entry] of running) {
         if (entry.reason === null && entry.deadlineAt && now >= entry.deadlineAt) killWithReason(id, 'timeout');
+      }
+      if (!anchorCheck && (anchorCheckAt === null || Date.parse(now) - anchorCheckAt >= ANCHOR_CHECK_MS)) {
+        anchorCheckAt = Date.parse(now);
+        anchorCheck = checkAnchors(worker).catch((err) => worker.log(`anchor check failed: ${err.message}`)).finally(() => { anchorCheck = null; });
       }
       const batchBudget = batchBudgetUsd(ctx.config);
       for (const h of nextDispatchable(worker.state, { running: new Set(running.keys()) })) {
@@ -849,6 +891,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
         if (entry.child) { killWithReason(id, 'stopped'); pending.push(entry.done, entry.finished); }
       }
       await Promise.all(pending);
+      if (anchorCheck) await settledWithin([anchorCheck], FINISH_WAIT_MS);
       // Runs that already left `running` may still be filing their memory: wait for them, bounded.
       if (finishing.size) {
         let timer;

@@ -69,7 +69,13 @@ function runNoteItem(n, snapshot, { now, tz }) {
   const withheld = Number.isInteger(n.withheld) && n.withheld > 0 ? `<p class="small muted">${esc(`${n.withheld} field${n.withheld === 1 ? '' : 's'} withheld: instruction-like text`)}</p>` : '';
   const attempts = (Array.isArray(n.attempts) ? n.attempts : []).filter((a) => a && typeof a === 'object');
   const lessons = (Array.isArray(n.lessons) ? n.lessons : []).filter((l) => l && typeof l.text === 'string' && l.text);
-  return `<li class="run-note"><div class="run-note-head">${head}</div>${page}${withheld}${attempts.length ? `<ul class="run-attempts">${attempts.map(attemptItem).join('')}</ul>` : ''}${lessons.length ? `<ul class="run-lessons">${lessons.map((l) => `<li>${trustChip(typeof l.trust === 'string' && l.trust ? l.trust : 'unknown')} ${esc(l.text)}</li>`).join('')}</ul>` : ''}</li>`;
+  // The failure ledger (ADR 0032): the worker's own fields of a failed test gate, never its output.
+  const f = n.failure && typeof n.failure === 'object' ? n.failure : null;
+  const files = f && Array.isArray(f.files_touched) ? f.files_touched.filter((x) => typeof x === 'string') : [];
+  const failure = f ? `<p class="small run-note-failure" data-level="warning">${icon('alert')}${esc(f.status === 'timeout' ? 'Tests timed out (worker)' : `Tests failed (worker)${Number.isInteger(f.exit_code) ? `, exit ${f.exit_code}` : ''}`)}${f.command ? ` · <code>${esc(f.command)}</code>` : ''}${f.signature ? ` · signature <code>${esc(f.signature)}</code>` : ''}${files.length ? ` · ${esc(`${files.length} file${files.length === 1 ? '' : 's'} changed: ${files.join(', ')}`)}` : ''}</p>` : '';
+  const dismissals = (Array.isArray(n.dismissals) ? n.dismissals : []).filter((d) => d && typeof d.reason === 'string' && d.reason);
+  const dismissed = dismissals.length ? `<ul class="run-lessons run-dismissals">${dismissals.map((d) => `<li>${esc(`Dismissed${typeof d.type === 'string' && d.type ? ` ${d.type}` : ''} suggestion: ${d.reason}`)}</li>`).join('')}</ul>` : '';
+  return `<li class="run-note"><div class="run-note-head">${head}</div>${page}${withheld}${failure}${dismissed}${attempts.length ? `<ul class="run-attempts">${attempts.map(attemptItem).join('')}</ul>` : ''}${lessons.length ? `<ul class="run-lessons">${lessons.map((l) => `<li>${trustChip(typeof l.trust === 'string' && l.trust ? l.trust : 'unknown')} ${esc(l.text)}</li>`).join('')}</ul>` : ''}</li>`;
 }
 
 function runNotesBlock(t, snapshot, { now, tz }) {

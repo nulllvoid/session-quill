@@ -330,7 +330,20 @@ _Not yet filled._
 
 ### Task 4 Anchored memory and failure ledger
 
-_Not yet filled._
+ADR 0032. No new event kinds. All fields below are local: memory never leaves the machine (ADR 0027), and `run_notes` is dropped by exports, the mirror, publishers and vault notes.
+
+| Where | Field or op | Shape and rules |
+| --- | --- | --- |
+| Memory entry | `anchors` | `[{ file_path, blob_sha, line, symbol_name \| null }]`, at most 10; present only on entries filing anchored (sourced learnings), so older entries reduce unchanged. `file_path` is checkout-relative with `/`; `blob_sha` the cited file's git blob at the run's base commit; `symbol_name` the nearest declaration within ±5 lines (text heuristic) |
+| `memory-tx` | op `confirmed` | May carry `entry.anchors`; a sourced entry takes them (re-anchored at the confirming run's version) |
+| `memory-tx` | op `staled` (worker only) | `{ op: 'staled', entry: { id }, reason: 'anchor-changed', anchor: { file_path, blob_sha, current_blob_sha \| null, changed_ratio } }`; source identity `memory-tx:anchor:<id>:<current_blob_sha \| missing>`. Sets `state: 'stale'`, `stale_reason: 'anchor-changed'`, `stale_anchor`. Problems: `memory-stale-exempt` (pinned or owner, R27), `memory-entry-retired`, `memory-stale-invalid`. Revived (state active, reason cleared) by `confirmed`, `edited`, an owner note on the id, `pinned` and `approved` |
+| `memoryListing` (`GET /v1/memory`, `quill memory list --json`) | `stale_reason` | `'anchor-changed'` for an entry staled by the worker, else `null` |
+| Config | `[memory] anchor_stale_ratio` | Share (0 < r ≤ 1, default 0.3) of the anchored region's meaningful lines no longer in the file at which an entry is stale; user config only |
+| Run note | `failure` | `{ kind: 'test-gate', status: 'failed' \| 'timeout', command \| null, exit_code \| null, signature, files_touched: string[≤ 20] }`; `signature` is 16 hex characters (`failureSignature`). Written for a failed or timed-out worker test gate, even with no attempts. Never the output tail or test names |
+| Run note | `dismissals` | `[{ suggestion_id, type, reason, at, by }]`, at most 20: the reasons given with `dismiss-suggestion`; `by` is the request's actor |
+| Request `dismiss-suggestion` | `payload.reason` | Optional string, trimmed, at most 280 characters (`request-invalid` otherwise); the request-tx mutation carries it as `reason` |
+
+Delivery: an entry whose anchored source changed by at least the ratio at the run's base commit is not inlined, and the "Left out" line counts it (with the entries already staled) under "Source changed since recorded, not delivered"; smaller changes keep the re-check suffix. A Run note's failure is delivered as one line of worker fields; dismissal reasons are delivered only when `by` is `owner` or `cli`, instruction-like text withheld. Before a test-repair turn, a matching signature in an earlier deliverable Run note of the ticket adds one fenced data line naming that run and its attempts. The resume brief adds "Failed before:" with the last two failures, never from an `origin: 'page'` note.
 
 ### Task 5 Evidence receipt and recipe stats
 

@@ -28,6 +28,26 @@ function recentFiles(ticket, limit = 5) {
     .map((f) => f.relative_path);
 }
 
+// The failure ledger (ADR 0032): the last FAILED_SHOWN worker test-gate failures from the ticket's Run
+// notes, newest first, in the worker's own fields only (never test output). A page-proposed run's
+// note is never given to anyone else, so it is skipped.
+export const FAILED_SHOWN = 2;
+function failedBefore(ticket) {
+  const notes = (Array.isArray(ticket.run_notes) ? ticket.run_notes : [])
+    .filter((n) => n && typeof n === 'object' && n.origin !== 'page' && n.failure && typeof n.failure === 'object')
+    .sort((a, b) => (String(b.at ?? '') > String(a.at ?? '') ? 1 : String(b.at ?? '') < String(a.at ?? '') ? -1 : 0))
+    .slice(0, FAILED_SHOWN);
+  if (!notes.length) return null;
+  const one = (n) => {
+    const f = n.failure;
+    const files = (Array.isArray(f.files_touched) ? f.files_touched : []).filter((x) => typeof x === 'string');
+    const what = f.status === 'timeout' ? 'tests timed out' : `tests failed${Number.isInteger(f.exit_code) ? ` (exit ${f.exit_code})` : ''}`;
+    const touched = files.length ? `, changed ${files.slice(0, 3).map((x) => clip(x, 80)).join(', ')}${files.length > 3 ? ` and ${files.length - 3} more` : ''}` : '';
+    return `run ${String(n.run_id ?? '').slice(0, 8)} ${what}, signature ${clip(f.signature ?? 'unknown', 16)}${f.command ? ` running ${clip(String(f.command).replace(/`/g, "'"), 80)}` : ''}${touched}`;
+  };
+  return `Failed before: ${notes.map(one).join(' | ')}`;
+}
+
 export function resumeBrief(ticket, { nowIso }) {
   if (!ticket) return null;
   const parts = [];
@@ -35,6 +55,8 @@ export function resumeBrief(ticket, { nowIso }) {
   if (goal) parts.push(`Goal: ${clip(goal, 200)}`);
   if (ticket.status === 'blocked' && ticket.blocker) parts.push(`Blocked on: ${clip(ticket.blocker, 160)}`);
   if (ticket.next_action) parts.push(`Next action: ${clip(ticket.next_action, 200)}`);
+  const failed = failedBefore(ticket);
+  if (failed) parts.push(failed);
   const plan = (ticket.plans ?? []).filter((p) => p.approved_at).slice(-1)[0] ?? (ticket.plans ?? []).slice(-1)[0];
   if (plan && plan.preview) parts.push(`${plan.approved_at ? 'Approved plan' : 'Latest plan'}: ${clip(plan.preview, 220)}`);
   const conclusions = (ticket.conclusions ?? []).slice(-2).map((c) => clip(c.preview, 160)).filter(Boolean);

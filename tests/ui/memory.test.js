@@ -35,6 +35,13 @@ test('trust chips carry their meaning in words: Verified, Sourced, Observed, Qua
   for (const [trust, label] of Object.entries(TRUST_LABELS)) assert.match(trustChip(trust), new RegExp(`class="chip trust[^"]*" data-trust="${trust}"[^>]*>[\\s\\S]*${label}</span>`));
 });
 
+test('ADR 0032: a stale entry whose cited source changed says so; one stale by age keeps the plain chip', () => {
+  const html = renderMemory({ entries: [entry('a1', { staleness: 'stale', stale_reason: 'anchor-changed' }), entry('a2', { staleness: 'stale', stale_reason: null })], conflicts: [] }, snapshot(), { now: NOW, tab: 'repo' });
+  assert.match(html, /data-stale="anchor-changed"[^>]*>[\s\S]*?Source changed · not delivered to runs<\/span>/);
+  assert.equal((html.match(/Source changed · not delivered to runs/g) ?? []).length, 1);
+  assert.equal((html.match(/Stale · not delivered to runs/g) ?? []).length, 1);
+});
+
 test('the Memory page has Repo, Machine and Quarantine tabs with roving tabindex and counts', () => {
   assert.deepEqual(MEMORY_TABS, ['repo', 'machine', 'quarantine']);
   const html = renderMemory(memory(), snapshot(), { now: NOW, tab: 'repo' });

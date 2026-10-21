@@ -79,6 +79,7 @@ export function conflicts(state) {
 
 // 90 days without confirmation -> stale (not inlined); 180 -> retired. The reducer cannot read a clock,
 // so callers pass `nowMs`. Pinned and owner entries stay active. The age runs from the later of creation and last confirmation.
+// An entry the worker staled because its anchored source changed (ADR 0032) is stale until revived.
 export function memoryStaleness(entry, nowMs) {
   if (entry.state === 'retired' || entry.superseded_by) return 'retired';
   // Owner notes and pinned entries never age out (ruling R27).
@@ -114,6 +115,9 @@ export function memoryListing(state, nowMs, { includeQuarantine = true } = {}) {
       text: e.text, trust: e.trust, pinned: e.pinned === true, staleness, confirmations: e.confirmations, last_confirmed_at: e.last_confirmed_at,
       created_at: e.created_at, run_id: e.run_id ?? null, derived_from: e.derived_from, evidence: [...e.evidence], revision: e.revision,
       conflict_key: inConflict.get(e.id) ?? null,
+      // Why a stale entry is stale: 'anchor-changed' when the worker found its cited source changed
+      // (ADR 0032), else null (unconfirmed for 90 days).
+      stale_reason: staleness === 'stale' && e.state === 'stale' && e.stale_reason === 'anchor-changed' ? 'anchor-changed' : null,
     };
     if (held) out.quarantine_reason = e.quarantine_reason ?? null;
     entries.push(out);
