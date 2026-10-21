@@ -65,7 +65,8 @@ function runNoteItem(n, snapshot, { now, tz }) {
   const id8 = String(n.run_id ?? '').slice(0, 8);
   const name = run ? (run.recipe ? run.recipe.name : run.mode) : null;
   const head = `${run ? `<button type="button" class="link" data-action="open-run" data-run="${attr(run.id)}">Run ${esc(id8)}</button>` : `Run <code>${esc(id8)}</code>`}${name ? ` <span class="muted small">${esc(name)}</span>` : ''}${typeof n.at === 'string' && n.at ? ` <span class="small">${timeEl(n.at, now, tz)}</span>` : ''}`;
-  const page = n.origin === 'page' || (run && run.proposal) ? '<p class="small muted">From a run proposed on a shared page: never given to other runs.</p>' : '';
+  const page = run && run.proposal && run.proposal.origin === 'ci' ? '<p class="small muted">From a CI fix run, which read CI output: never given to other runs.</p>'
+    : n.origin === 'page' || (run && run.proposal) ? '<p class="small muted">From a run proposed on a shared page: never given to other runs.</p>' : '';
   const withheld = Number.isInteger(n.withheld) && n.withheld > 0 ? `<p class="small muted">${esc(`${n.withheld} field${n.withheld === 1 ? '' : 's'} withheld: instruction-like text`)}</p>` : '';
   const attempts = (Array.isArray(n.attempts) ? n.attempts : []).filter((a) => a && typeof a === 'object');
   const lessons = (Array.isArray(n.lessons) ? n.lessons : []).filter((l) => l && typeof l.text === 'string' && l.text);

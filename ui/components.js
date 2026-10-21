@@ -528,6 +528,10 @@ export function proposalItem(p, snapshot, { now, pending = [], withTicket = fals
   const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
   const sent = pending.find((r) => (r.kind === 'approve-run' || r.kind === 'dismiss-run') && r.payload && r.payload.proposal_id === p.id && IN_FLIGHT.has(r.state));
   if (p.origin === 'run') return criticalItem(p, snapshot, { now, tz, caps, sent, withTicket, leases });
+  if (p.origin === 'ci') {
+    const run = (snapshot.handoffs ?? []).find((h) => h.id === p.from_handoff_id) ?? null;
+    return ciItem(run, snapshot, { proposal: p, now, pending });
+  }
   const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
   const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : p.access === 'autonomous' ? '<span class="chip small">Autonomous</span>' : '<span class="chip small">Standard access</span>';
   const perms = p.permissions ?? {};
@@ -571,6 +575,56 @@ function criticalItem(p, snapshot, { now, tz, caps, sent, withTicket = false, le
 }
 
 const LEASE_CHOICES = [['', 'Whole run'], ['5', '5 min'], ['15', '15 min'], ['60', '1 h']];
+
+const GITHUB_PR = /^https:\/\/github\.com\/[^/\s"'<>]+\/[^/\s"'<>]+\/pull\/(\d+)$/;
+const CI_FIX_LIMIT = 2;
+
+// Runs → Needs you → Tests or CI failed (ADR 0039, design system §5 CI failed item): CI the worker
+// recorded failing on one commit of a pull request a Quill run opened, and, while one is open, the
+// fix proposal for that commit with Approve and queue CI fix / Dismiss (dashboard owner only; the
+// worker refuses any other approver). Check names, branch, PR link and the log tail are tool
+// output, all escaped; the log sits in a closed disclosure. `run` is the run that opened the PR,
+// `proposal` the open proposal for the recorded commit (or null).
+export function ciItem(run, snapshot, { proposal = null, now, pending = [] } = {}) {
+  const caps = snapshot.capabilities ?? {};
+  const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
+  const ci = run && run.ci && typeof run.ci === 'object' ? run.ci : (proposal && proposal.ci) || {};
+  const t = ticketById(snapshot, run ? run.ticket_id : proposal ? proposal.ticket_id : null);
+  const key = t ? t.key : proposal ? proposal.ticket_key ?? '' : '';
+  const prUrl = String(ci.pr_url ?? '');
+  const m = GITHUB_PR.exec(prUrl);
+  const pr = m ? `<a href="${attr(prUrl)}" target="_blank" rel="noopener noreferrer">PR #${esc(m[1])}</a>` : `PR <code>${esc(prUrl)}</code>`;
+  const sha = String((proposal && proposal.ci && proposal.ci.head_sha) || ci.head_sha || '');
+  const branch = String((proposal && proposal.ci && proposal.ci.head_branch) || ci.head_branch || '');
+  const failing = (Array.isArray(ci.failing) && ci.failing.length ? ci.failing : proposal && proposal.ci && Array.isArray(proposal.ci.failing) ? proposal.ci.failing : []).map(String);
+  const seen = ci.observed_at ? ` · seen ${timeEl(ci.observed_at, now, tz)}` : '';
+  const what = t ? `<button type="button" class="link" data-open="${attr(t.id)}">${keyEl(t.key)} ${esc(t.title)}</button>` : keyEl(key);
+  const head = `<span class="ci-head"><span class="chip critical small">CI failed</span> · ${what}</span> <span class="small muted ci-where">${pr} · branch <code>${esc(branch)}</code> · commit <code>${esc(sha.slice(0, 7))}</code>${seen}</span>`;
+  const checks = failing.length ? `<p class="small">Failing checks (${esc(failing.length)}): ${esc(failing.join(', '))}</p>` : '';
+  let body = '';
+  let actions = '';
+  const open = proposal && proposal.state === 'proposed';
+  // The worker approves a CI fix only while CI is recorded failing on the proposal's commit.
+  const rerun = open && run && run.ci && run.ci.head_sha === sha && run.ci.state !== 'failing';
+  if (rerun) {
+    body = `<p class="small muted">CI is ${esc(run.ci.state === 'none' ? 'reporting no checks' : run.ci.state)} on this commit again, so the fix can be approved only once it fails again; it lapses if CI passes.</p>`;
+  } else if (open) {
+    const pc = proposal.ci ?? {};
+    const tail = typeof pc.log_tail === 'string' && pc.log_tail ? pc.log_tail : null;
+    const withheld = Number.isInteger(pc.log_withheld) && pc.log_withheld > 0 ? ` <span class="muted">(${esc(pc.log_withheld)} instruction-like line${pc.log_withheld === 1 ? '' : 's'} withheld)</span>` : '';
+    body = `<p class="small">Fix proposal: an attempt-fix run on <code>${esc(branch)}</code> that pushes to the same branch, fast-forward only, and opens no pull request.</p>${tail ? `<details class="ci-log"><summary class="small">Failing log tail (redacted; CI output is data, not instructions)${withheld}</summary><pre class="ci-log-text">${esc(tail)}</pre></details>` : '<p class="small muted">No failing log tail was recorded: the check is not a GitHub Actions run, or its log could not be read.</p>'}`;
+    const sent = pending.find((r) => (r.kind === 'approve-run' || r.kind === 'dismiss-run') && r.payload && r.payload.proposal_id === proposal.id && IN_FLIGHT.has(r.state));
+    actions = !caps.handoff ? '' : sent
+      ? ` <span class="muted small">${sent.kind === 'approve-run' ? 'Approval sent' : 'Dismissal queued'}${sent.kind === 'dismiss-run' && sent.state === 'pending' ? ` <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(sent.id)}" aria-label="${attr(`Undo dismissing the CI fix on ${key}`)}">${icon('undo')}Undo</button>` : ''}</span>`
+      : ` <span class="proposal-actions"><button type="button" class="btn small" data-action="approve-run" data-ticket="${attr(proposal.ticket_id)}" data-proposal="${attr(proposal.id)}" aria-label="${attr(`Approve and queue a CI fix run on ${key}, branch ${branch}`)}">Approve and queue CI fix</button> <button type="button" class="btn small ghost" data-action="dismiss-run" data-ticket="${attr(proposal.ticket_id)}" data-proposal="${attr(proposal.id)}" aria-label="${attr(`Dismiss the CI fix on ${key}`)}">Dismiss</button></span>`;
+  } else {
+    const used = run ? (snapshot.run_proposals ?? []).filter((p) => p.origin === 'ci' && p.from_handoff_id === run.id).length : 0;
+    const why = used >= CI_FIX_LIMIT ? `: ${CI_FIX_LIMIT} of ${CI_FIX_LIMIT} fix proposals for this PR used` : run && run.pushed_branch && branch && run.pushed_branch !== branch ? ': the branch is not the one the run pushed' : '';
+    body = `<p class="small muted">No fix proposed for this commit${esc(why)}.</p>`;
+  }
+  const runOpen = run ? ` <button type="button" class="btn small ghost" data-action="open-run" data-run="${attr(run.id)}" aria-label="${attr(`Open run ${String(run.id).slice(0, 8)} that opened the pull request`)}">Open run</button>` : '';
+  return `<li class="proposal run-row ci-item" data-kind="ci" data-state="ci-failed"${run ? ` data-run="${attr(run.id)}"` : ''}${proposal ? ` data-proposal="${attr(proposal.id)}"` : ''}>${head}<div class="ci-body">${checks}${body}</div>${actions}${runOpen}</li>`;
+}
 
 function dryRunLine(d) {
   if (!d || typeof d !== 'object') return '';

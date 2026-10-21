@@ -263,6 +263,19 @@ export function renderRunNotFound(id) {
 
 // `record` is the parsed result blob (parseRunRecord) when the owner's dashboard has it, and
 // `recordStatus` 'loading' or { error } while it does not; `memory` is the owner's memory listing.
+// ADR 0039 (owner snapshot only; neither field reaches an export): a CI fix names the run and commit
+// it fixes; a run whose pull request the CI watch observed says what CI last reported, in CI's words.
+const CI_WORDS = { failing: 'CI failing', pending: 'CI pending', passing: 'CI passing', none: 'no CI checks' };
+function ciLine(h, snapshot) {
+  if (h.origin === 'ci' && h.ci_fix && typeof h.ci_fix === 'object') {
+    const root = (snapshot.handoffs ?? []).find((x) => x.id === h.ci_fix.root_handoff_id);
+    const of = root ? `<button type="button" class="link" data-action="open-run" data-run="${attr(root.id)}">run ${esc(root.id.slice(0, 8))}</button>` : `run <code>${esc(String(h.ci_fix.root_handoff_id ?? '').slice(0, 8))}</code>`;
+    return `<p class="small">CI fix of ${of}: commit <code>${esc(String(h.ci_fix.head_sha ?? '').slice(0, 7))}</code> on branch <code>${esc(h.ci_fix.head_branch ?? '')}</code>, pushed to the same branch fast-forward only.</p>`;
+  }
+  if (h.ci && typeof h.ci === 'object' && CI_WORDS[h.ci.state]) return `<p class="small">${esc(CI_WORDS[h.ci.state])} on commit <code>${esc(String(h.ci.head_sha ?? '').slice(0, 7))}</code> of its pull request (seen by the CI watch)${h.ci.failing && h.ci.failing.length ? `: ${esc(h.ci.failing.join(', '))}` : ''}</p>`;
+  return '';
+}
+
 export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, record = null, recordStatus = null, memory = null } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const caps = snapshot.capabilities ?? {};
@@ -277,7 +290,7 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
   <h2 id="detail-title">${t ? esc(t.title) : esc(name)}</h2>
   <div class="detail-chips">${handoffChip({ ...h, error: null })} <strong>${esc(name)}</strong>${source}${h.recipe && h.recipe.name !== h.mode ? ` <span class="muted small">${esc(h.mode)}</span>` : ''} ${accessBadge(h)} ${testGateChip(h.test_gate)}${driftChip(h)}</div>
   ${runTimings(h)}
-  <p class="small muted">Requested ${timeEl(h.requested_at, now, tz)}${h.batch_id ? ` · Batch ${esc(h.batch_id.slice(0, 8))}` : ''}${h.retry_of ? ' · Retry of an earlier run' : ''}${next ? ` · ${next.retried ? 'Retried as a new run' : 'Superseded by a later run'}` : ''}</p>
+  <p class="small muted">Requested ${timeEl(h.requested_at, now, tz)}${h.batch_id ? ` · Batch ${esc(h.batch_id.slice(0, 8))}` : ''}${h.retry_of ? ' · Retry of an earlier run' : ''}${next ? ` · ${next.retried ? 'Retried as a new run' : 'Superseded by a later run'}` : ''}</p>${ciLine(h, snapshot)}
 </header>`;
 
   const result = [
