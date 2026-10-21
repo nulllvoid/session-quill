@@ -32,6 +32,8 @@ function fixture() {
     critical_notes: [{ index: 0, reason: S }],
     // ADR 0031: a critical approval's "Valid for" minutes stay on the run record.
     lease_minutes: 15,
+    // ADR 0037: planned files are local; only the drift count travels.
+    planned_paths: [`src/${S}.js`], scope_drift: 3,
     // R55: what an interrupted run's ledger shows may have run (prod target, MCP tool, scope name).
     possible_writes: [`kubectl apply on ${S}-ctx may have run`, `mcp__${S}__editIssue on X-1 may have run`, `a ${S}.write call may have run`],
     // Run snapshots (ADR 0035): refs, trees, commits and labels stay on the owner's dashboard.
@@ -40,6 +42,8 @@ function fixture() {
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
   s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
   s.tickets[0].run_notes = [S];
+  // ADR 0037: a session's planned files and its last drifting path stay local.
+  Object.assign(s.sessions[0], { planned_paths: [`src/${S}.js`], drift: { count: 2, last_path: `src/${S}/x.js`, at: '2026-10-12T00:00:00Z' } });
   s.tickets[0].critical_spec = { rule: S };
   // Ticket worktrees (ADR 0036): local paths and branch names stay on the machine.
   s.tickets[0].worktrees = [{ id: '66666666-0000-4000-8000-000000000001', repo_id: 'demo', path: `C:/Users/me/.claude/quill/worktrees/demo/${S}`, branch: `quill/${S}`, base_sha: 'a'.repeat(40), state: 'kept', mounted_at: '2026-10-01T00:00:00Z', kept_at: '2026-10-09T00:00:00Z', kept_reason: 'uncommitted-changes', pruned_at: null }];
@@ -80,7 +84,11 @@ test('exported handoffs carry counts and the stage, not the records', () => {
   delete forged.handoffs[0].scopes;
   forged.handoffs[0].scope_count = 'k8s.write:prod';
   assert.equal('scope_count' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a numeric count travels');
-  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes']) assert.equal(k in out, false, k);
+  assert.equal(out.scope_drift, 3, 'a run exports how many writes fell outside its planned files (ADR 0037), never which');
+  forged.handoffs[0].scope_drift = `src/${S}.js`;
+  assert.equal('scope_drift' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a whole-number drift count travels');
+  for (const k of ['planned_paths', 'drift']) assert.equal(k in sanitizeSnapshot(fixture(), ALL).sessions[0], false, k);
+  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes', 'planned_paths']) assert.equal(k in out, false, k);
   assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
   assert.ok(Object.keys(out).every((k) => HANDOFF_EXPORT_FIELDS.includes(k)));
 });

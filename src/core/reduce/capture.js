@@ -5,6 +5,7 @@ import { deriveStatusFromEvidence } from '../transitions.js';
 import { WRITE_TOOLS, timelineEntry, touch, UNBOUND_FILE_CAP, UNBOUND_COMMIT_CAP } from './common.js';
 import { getOrCreateSession, bindSession, recomputeUnpromoted, approveCheckpoint, ticketEffort } from './sessions.js';
 import { createTicket } from './tickets.js';
+import { applyPlannedPaths, recordSessionDrift } from '../planned-paths.js';
 
 // Owner-confirmed attachment of a session's unlinked work (ADR 0006). Unlike automatic binding
 // this is retroactive by design: the owner picked the ticket for exactly the work shown.
@@ -125,6 +126,12 @@ export function handlePostTool(state, ev, result) {
   const p = ev.payload;
   const ticket = attribution.ticket_id ? state.tickets.get(attribution.ticket_id) : null;
   const repo = repoFor(state, p.repo_id ?? (ticket ? ticket.repo_id : null));
+  // Planned files and drift (ADR 0037): observed on the session, whatever it is bound to.
+  if (p.tool_name === 'ExitPlanMode' && Array.isArray(p.planned_paths)) {
+    if (applyPlannedPaths(session, p.planned_paths)) result.bindingChanged.add(sessionKey(ev));
+  } else if (WRITE_TOOLS.has(p.tool_name) && recordSessionDrift(session, Array.isArray(p.write_paths) ? p.write_paths : [], ev.occurred_at)) {
+    result.bindingChanged.add(sessionKey(ev));
+  }
 
   if (p.plan_ref) {
     const cp = { id: deterministicId(`${ev.event_id}:plan-checkpoint`), session_id: session.id, ticket_id: attribution.ticket_id, binding_revision: attribution.binding_revision, recorded_at: ev.occurred_at, content_ref: p.plan_ref, preview: String(p.plan_preview ?? '').slice(0, 1500), complete: true, approved_at: null, approval_provenance: null, dismissed_at: null, sequence: ev.sequence ?? 0, kind: 'plan' };

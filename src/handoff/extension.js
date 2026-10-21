@@ -17,6 +17,7 @@ import { reemitMissingCriticalProposals } from './critical-changes.js';
 import { resultFromStream, sessionIdOf, readLedger } from './stream.js';
 import { buildDocsMap, renderDocsMap } from './docs-map.js';
 import { reconcileAttempts } from './reconcile.js';
+import { countRunDrift } from '../core/planned-paths.js';
 import { handoffsDir, handoffRunDir, logsDir, quillHome } from '../lib/paths.js';
 import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSources } from '../memory/file.js';
 import { writeDocsProjection } from '../memory/project.js';
@@ -309,9 +310,14 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     // A full-access run's writes, as its observer saw them, whatever state it ends in (spec §7).
     let effects = null;
     if ((current.access ?? 'standard') === 'full' && entry && entry.observed) { try { effects = prodEffects(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { effects = null; } }
+    // Planned files (ADR 0037): how many allowed writes the guard marked outside them, whatever state
+    // the run ends in. Observed, never refused; the export carries only this count.
+    let drift = null;
+    const guarded = current.access === 'autonomous' || (current.access === 'full' && !!(entry && entry.observed));
+    if (guarded && Array.isArray(current.planned_paths) && current.planned_paths.length) { try { drift = countRunDrift(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { drift = null; } }
     const record = async (w, id, parsed, opts) => {
       const final = withNotes(reconciled(parsed));
-      const out = recordResult(w, id, final, timings || usage || effects ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}) } } : opts);
+      const out = recordResult(w, id, final, timings || usage || effects || drift !== null ? { ...opts, extra: { ...(opts.extra ?? {}), ...(timings ? { timings } : {}), ...(usage ?? {}), ...(effects ? { prod_effects: effects } : {}), ...(drift !== null ? { scope_drift: drift } : {}) } } : opts);
       // Before cleanupRun removes the checkout: repo-file learnings are checked against it.
       await fileMemory(w, id, final);
       return out;

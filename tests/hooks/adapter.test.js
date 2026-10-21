@@ -111,6 +111,19 @@ test('ExitPlanMode success stores the plan blob and references it; rejected plan
   const env2 = setup({ bound: true });
   run('post-tool-use-exit-plan-mode-rejected', env2);
   assert.equal(events(env2)[0].payload.plan_ref, null);
+  assert.equal('planned_paths' in events(env2)[0].payload, false, 'a rejected plan plans no files');
+});
+
+test('an approved plan carries the repo-relative files it names as planned_paths (ADR 0037)', () => {
+  const env = setup({ bound: true });
+  const input = { ...fixture('post-tool-use-exit-plan-mode'), tool_input: { plan: '# Plan\n1. Change `src/core/x.js` and tests/core/x.test.js\n2. Not /etc/hosts or https://example.com/a.js' } };
+  runHook('PostToolUse', input, { env, now: NOW });
+  const [ev] = events(env);
+  assert.deepEqual(ev.payload.planned_paths, ['src/core/x.js', 'tests/core/x.test.js']);
+  assert.ok(ev.payload.plan_ref, 'the plan blob is stored as before');
+  const other = setup({ bound: true });
+  run('post-tool-use-exit-plan-mode', other);
+  assert.deepEqual(events(other)[0].payload.planned_paths, [], 'a plan that names no files plans none');
 });
 
 test('Stop persists the full checkpoint blob before the event and extracts conclusions; a missing message is an incomplete capture', () => {

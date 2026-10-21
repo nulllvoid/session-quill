@@ -13,6 +13,14 @@ import { supersededBy } from '../lib/runs.js';
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const resumable = (h) => h.state === 'failed' && !!h.error && h.error.code === 'interrupted' && typeof h.session_id === 'string' && SESSION_ID_RE.test(h.session_id);
 
+// Planned files (ADR 0037): writes the run's guard saw land outside them. Observed, never refused,
+// so the chip is amber and says it was recorded; an export carries the count without the paths.
+function driftChip(h) {
+  const n = h.scope_drift;
+  if (!Number.isInteger(n) || n <= 0) return '';
+  return ` <span class="chip warning small" title="Writes inside the checkout to files the run's planned files do not cover: recorded, not blocked">${icon('alert')}${esc(`${n} write${n === 1 ? '' : 's'} outside planned files`)}</span>`;
+}
+
 const section = (title, body) => (body ? `<section class="detail-section"><h3>${esc(title)}</h3>${body}</section>` : '');
 
 // Record values are whatever the agent wrote: only strings (and finite numbers) are shown.
@@ -267,7 +275,7 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
   const head = `<header class="detail-head run-head">${closeRow(t)}
   <div class="detail-keys">${t ? keyEl(t.key) : '<span class="muted">Ticket not in view</span>'}</div>
   <h2 id="detail-title">${t ? esc(t.title) : esc(name)}</h2>
-  <div class="detail-chips">${handoffChip({ ...h, error: null })} <strong>${esc(name)}</strong>${source}${h.recipe && h.recipe.name !== h.mode ? ` <span class="muted small">${esc(h.mode)}</span>` : ''} ${accessBadge(h)} ${testGateChip(h.test_gate)}</div>
+  <div class="detail-chips">${handoffChip({ ...h, error: null })} <strong>${esc(name)}</strong>${source}${h.recipe && h.recipe.name !== h.mode ? ` <span class="muted small">${esc(h.mode)}</span>` : ''} ${accessBadge(h)} ${testGateChip(h.test_gate)}${driftChip(h)}</div>
   ${runTimings(h)}
   <p class="small muted">Requested ${timeEl(h.requested_at, now, tz)}${h.batch_id ? ` · Batch ${esc(h.batch_id.slice(0, 8))}` : ''}${h.retry_of ? ' · Retry of an earlier run' : ''}${next ? ` · ${next.retried ? 'Retried as a new run' : 'Superseded by a later run'}` : ''}</p>
 </header>`;
@@ -281,6 +289,7 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
 
   const changes = [
     (h.changed_files ?? []).length ? `<p class="small">${h.changed_files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : '',
+    caps.handoff && Array.isArray(h.planned_paths) && h.planned_paths.length ? `<p class="small muted">Planned files: ${h.planned_paths.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p>` : '',
     h.commit_sha ? `<p class="small">Commit <code>${esc(h.commit_sha.slice(0, 7))}</code> <button type="button" class="btn small ghost icon-only" data-copy="${attr(h.commit_sha)}" data-copy-label="the commit" aria-label="Copy the commit">${icon('copy')}</button></p>` : '',
     (h.test_results ?? []).length ? `<ul class="small test-results">${h.test_results.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : '',
     fileEffects(h, t ?? { id: h.ticket_id }, { canEdit: !!caps.edit_tickets, pending }),

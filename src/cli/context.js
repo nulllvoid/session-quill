@@ -14,7 +14,7 @@ import { nowIso } from '../lib/time.js';
 export const COMMAND_NAMESPACE = 'session-quill';
 
 // Flags that may be given more than once; their values are collected into a list.
-const REPEATABLE = new Set(['scope']);
+const REPEATABLE = new Set(['scope', 'planned']);
 
 export function parseArgs(argv) {
   const positional = [];

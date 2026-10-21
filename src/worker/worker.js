@@ -515,6 +515,8 @@ export class Worker {
       ticket_status: ticket ? ticket.status : null,
       ticket_repo_id: ticket ? ticket.repo_id ?? null : null,
       ticket_done_when: facts ? facts.done : [],
+      // Writes outside the latest plan's files (ADR 0037), for the status line.
+      drift_count: session.drift && Number.isInteger(session.drift.count) ? session.drift.count : 0,
       revision_committed_at: this.now(),
     }, this.env);
   }

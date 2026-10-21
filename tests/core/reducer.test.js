@@ -329,3 +329,46 @@ test('teardownPlan: a done ticket worktree is due after keep_days with no live s
   assert.throws(() => ticketWorktreeDir('/h/worktrees', '..', 'K-1'));
   assert.throws(() => ticketWorktreeDir('/h/worktrees', 'demo', '../K'));
 });
+
+// Planned files and drift (ADR 0037).
+function planCycle(state, session_id, tool_call_id, planned_paths, at = '2026-10-02T08:02:00Z') {
+  ev(state, 'pre-tool', { tool_name: 'ExitPlanMode' }, { session_id, tool_call_id, occurred_at: at });
+  return ev(state, 'post-tool', { tool_name: 'ExitPlanMode', write_paths: [], plan_ref: 'p'.repeat(64), plan_preview: '# Plan', planned_paths, success: true }, { session_id, tool_call_id, occurred_at: at, source_identity: `post-tool:${session_id}:${tool_call_id}` });
+}
+
+test('an approved plan sets the session\'s planned files; later writes outside them count as drift and republish the binding', () => {
+  const state = newState();
+  createTicket(state, { id: T1 });
+  const s = bind(state, 'host-1', T1);
+  writeCycle(state, 'host-1', 'toolu_0', 'src/early.js', { at: '2026-10-02T08:01:00Z' });
+  assert.equal(s.drift ?? null, null, 'no plan yet, no drift');
+  const r = planCycle(state, 'host-1', 'toolu_plan', ['src/a.js', 'tests', '/etc/hosts', '../x.js']);
+  assert.ok(r.bindingChanged.has(sessionKey({ session_id: 'host-1' })));
+  assert.deepEqual(s.planned_paths, ['src/a.js', 'tests'], 'the reducer drops entries the hook should never have sent');
+  assert.ok([...(state.checkpointsBySession.get(s.id) ?? [])].some((id) => state.checkpoints.get(id).kind === 'plan'), 'the plan checkpoint is still recorded');
+  const inside = writeCycle(state, 'host-1', 'toolu_1', 'src/a.js');
+  assert.equal(inside.bindingChanged.size, 0);
+  writeCycle(state, 'host-1', 'toolu_2', 'tests/deep/a.test.js');
+  const out = writeCycle(state, 'host-1', 'toolu_3', 'src/b.js', { at: '2026-10-02T08:06:00Z' });
+  assert.ok(out.bindingChanged.has(sessionKey({ session_id: 'host-1' })));
+  assert.deepEqual(s.drift, { count: 1, last_path: 'src/b.js', at: '2026-10-02T08:06:00Z' });
+  writeCycle(state, 'host-1', 'toolu_4', 'C:/Users/me/.claude/plans/p.md');
+  assert.equal(s.drift.count, 1, 'a write outside the session directory is not drift');
+  assert.ok(state.tickets.get(T1).files_touched.some((f) => f.relative_path === 'src/b.js'), 'drift never changes what is attributed');
+  planCycle(state, 'host-1', 'toolu_plan2', ['src/b.js'], '2026-10-02T08:07:00Z');
+  assert.equal(s.drift, null, 'a new plan starts the count again');
+});
+
+test('drift is replay-stable: the same events give the same session fields', () => {
+  const build = () => {
+    resetSeq();
+    const state = newState();
+    createTicket(state, { id: T1 });
+    bind(state, 'host-1', T1);
+    planCycle(state, 'host-1', 'toolu_plan', ['src/a.js']);
+    writeCycle(state, 'host-1', 'toolu_1', 'src/z.js');
+    const s = state.sessions.get(sessionKey({ session_id: 'host-1' }));
+    return JSON.stringify({ planned: s.planned_paths, drift: s.drift });
+  };
+  assert.equal(build(), build());
+});

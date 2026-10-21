@@ -371,3 +371,24 @@ test('the Snapshots section is omitted when there are none and in an export', as
   const html = renderRunDetail(s.handoffs[0], s, { now: NOW });
   assert.doesNotMatch(html, /Snapshots|restore-snapshot|refs\/quill/);
 });
+
+// Planned files (ADR 0037): drift is an amber count in words, never success, never a refusal.
+test('writes outside the planned files are an amber chip in the header; the planned list is owner-only text', () => {
+  const h = fix({ access: 'autonomous', scope_drift: 3, planned_paths: ['src/<core>/**', 'README.md'] });
+  const html = renderRunDetail(h, snap(h), { now: NOW });
+  const chip = /<span class="chip warning small"[^>]*>(?:<svg[\s\S]*?<\/svg>)?[^<]*writes outside planned files<\/span>/.exec(html);
+  assert.ok(chip, 'amber chip present');
+  assert.match(chip[0], /3 writes outside planned files/);
+  assert.match(chip[0], /title="[^"]*recorded, not blocked[^"]*"/);
+  assert.match(html, /Planned files: <code>src\/&lt;core&gt;\/\*\*<\/code> <code>README\.md<\/code>/);
+  const one = fix({ access: 'autonomous', scope_drift: 1, planned_paths: ['src/a.js'] });
+  assert.match(renderRunDetail(one, snap(one), { now: NOW }), />1 write outside planned files</);
+  for (const v of [0, null, undefined, '3', -1]) {
+    const x = fix({ scope_drift: v, planned_paths: ['src/a.js'] });
+    assert.doesNotMatch(renderRunDetail(x, snap(x), { now: NOW }), /outside planned files/, String(v));
+  }
+  const exported = fix({ access: 'autonomous', scope_drift: 2 });
+  const viewer = renderRunDetail(exported, snap(exported, { capabilities: { read: true } }), { now: NOW });
+  assert.match(viewer, /2 writes outside planned files/, 'an export shows the count');
+  assert.doesNotMatch(viewer, /Planned files:/, 'and no paths');
+});
