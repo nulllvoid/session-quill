@@ -311,3 +311,55 @@ Provider health includes provider, last_success_at (nullable), last_attempt_at (
 Repository registry: id, project_id, display_name, canonical_path (local-only), default_branch, deployment_environments[], provider_config_ref (local-only), test_command (nullable, ADR 0023; in the owner snapshot, never in an export), test_timeout_ms (config only). Configuration secrets and canonical paths are never serialized to a shared snapshot.
 
 Freshness: never-synced when last_sync is null; fresh < 2 h; ageing >= 2 h and <= 6 h; stale > 6 h. Show absolute age even outside working hours. Worker connection and capture health are independent indicators. Offline snapshots show exported_at and their fixed last_sync; they do not pretend to reconnect.
+
+## 2.0.0 additions
+
+Work in progress for 2.0.0 (plan `docs/superpowers/plans/2026-10-21-quill-2.0.0.md`). Each task fills only its own subsection; Task 13 folds them into a 2.0.0 index.
+
+### Task 1 Ingress redaction
+
+_Not yet filled._
+
+### Task 2 State checkpoint
+
+_Not yet filled._
+
+### Task 3 Dry-run preflight and leases
+
+_Not yet filled._
+
+### Task 4 Anchored memory and failure ledger
+
+_Not yet filled._
+
+### Task 5 Evidence receipt and recipe stats
+
+_Not yet filled._
+
+### Task 6 Hook latency
+
+_Not yet filled._
+
+### Task 7 Run snapshots
+
+_Not yet filled._
+
+### Task 8 Ticket worktrees
+
+_Not yet filled._
+
+### Task 9 Planned files and drift
+
+_Not yet filled._
+
+### Task 10 Context card
+
+_Not yet filled._
+
+### Task 11 Attention groups and CI watch
+
+_Not yet filled._
+
+### Task 12 Diff review and critic
+
+_Not yet filled._

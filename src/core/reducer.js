@@ -239,6 +239,11 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'run-proposal': Object.assign(result, applyRunProposal(state, ev, result)); break;
     case 'memory-tx': Object.assign(result, applyMemoryTx(state, ev)); break;
     case 'critical-proposal': Object.assign(result, applyCriticalProposal(state, ev, result)); break;
+    // 2.0.0 kinds reserved as no-ops; each task replaces its own line with its handler.
+    case 'worktree': break;
+    case 'snapshot-tx': break;
+    case 'ci-observation': break;
+    case 'ci-proposal': break;
     case 'schedule-run':
       Object.assign(result, applyScheduleRun(state, ev));
       break;
