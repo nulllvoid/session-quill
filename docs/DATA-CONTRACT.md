@@ -322,7 +322,11 @@ _Not yet filled._
 
 ### Task 2 State checkpoint
 
-_Not yet filled._
+ADR 0030. `quillHome()/state/state.checkpoint.json` is local generated state: the reduced state at a journal position, so worker start hydrates it and replays only the journal after it. Only the worker writes it (on stop when anything was journaled since the last one, and on an idle tick once `[worker] checkpoint_every` events, default 500, were journaled since the last one); `quill memory list|show` may read it and never write it; a rebuild replays the whole journal. It is never exported, published, mirrored, copied to a run or written to the vault, and nothing in it reaches the dashboard snapshot except through the state it rebuilds.
+
+Fields: format (1), reducer_version (`REDUCER_VERSION` in `src/core/reducer.js`), package_version, code_fingerprint (sha256 of the reducer's source and the modules it imports), meta_fingerprint (sha256 of the meta the reducer reads: store_id, machine_id, machine_name, approval_phrases_enabled, projects, repos), sequence, byte_offset (just past the line of `last_event_id`), last_event_id, state (every state field except meta; Maps, Sets, `undefined`, non-finite numbers and shared or repeated objects as tagged values `$m`, `$s`, `$u`, `$n`, `$o`, `$r`).
+
+A checkpoint is used only when format, reducer_version, package_version, code_fingerprint and meta_fingerprint all match and the journal line ending at byte_offset is the event with last_event_id and sequence; otherwise the whole journal replays and the worker records a `state-checkpoint` health error "state checkpoint ignored: <reason>". `meta` is always built from current configuration after hydration. Hydrating at any position and replaying the rest equals a full replay with the same configuration. The worker's `stateLoad` records how start built state: source (`checkpoint` or `journal`), events_replayed, checkpoint_ignored, ms.
 
 ### Task 3 Dry-run preflight and leases
 
