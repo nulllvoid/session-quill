@@ -17,6 +17,9 @@ export const GIT_PROGRAM_VARS = /^(GIT_EXTERNAL_DIFF|GIT_CONFIG|GIT_CONFIG_PARAM
 // Provider tokens and prompts that let git push; removed unless push or a PR is granted.
 export const CREDENTIAL_VARS = ['GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITLAB_TOKEN', 'BITBUCKET_TOKEN', 'GIT_ASKPASS', 'SSH_ASKPASS'];
 
+// `report.removed` (ADR 0041) names at most this many inherited variables.
+export const MAX_REMOVED = 200;
+
 // The generic pass (spec §4.4): any inherited name that looks like a secret.
 export const SECRET_NAME = /(token|secret|password|passwd|api_?key|credential|auth)/i;
 
@@ -213,6 +216,12 @@ function awsProfileFiles(profile, configFile, credentialsFile) {
  * needs that cloud's credentials, so that provider's auth variables stay as the owner has them
  * (`report[aws|gcp] = 'owner'`) and `report.provider = 'shared'`: the agent can use them too.
  *
+ * `report.removed` (ADR 0041) names the inherited variables step 1 removed (each system's list, the
+ * generic secret-name pass, `stripNames`): names only, never values, sorted, at most MAX_REMOVED,
+ * in the inherited spelling and on win32 once per name in any case. A variable step 2 then points
+ * at a stub or a read-only profile is still listed: its inherited value did not reach the run.
+ * Session markers and git program variables, which every tier removes, are not listed.
+ *
  * `report.residual` lists owner credentials that still resolve and that no variable redirects
  * (direct ssh, ~/.netrc via libcurl, the Az PowerShell context, an OS credential store reachable
  * through a credential helper, the AWS SSO token cache); each entry is a short sentence.
@@ -224,7 +233,7 @@ function awsProfileFiles(profile, configFile, credentialsFile) {
  *
  * @returns {{ env: Record<string,string>, stubs: string[], report: Record<string, any> }}
  *   report: one of 'readonly' | 'stub' | 'scope' | 'owner' per CRED_SYSTEMS entry, plus
- *   `provider?: 'shared'`, `residual: string[]` (autonomous), `scope_errors?: string[]`.
+ *   `provider?: 'shared'`, `residual: string[]` and `removed: string[]` (autonomous), `scope_errors?: string[]`.
  */
 export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes = [], readonly = {}, runDir, platform = process.platform, keepEnv = [], apiBilling = false, gitUser, stripNames = [] } = {}) {
   readonly = readonly ?? {};
@@ -251,17 +260,21 @@ export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes =
   const resolveValue = (v) => (v.startsWith('env:') ? get(v.slice(4)) : v);
   const user = typeof gitUser === 'function' ? gitUser() : gitUser === undefined ? (push ? null : readOwnerGitConfig(baseEnv)) : gitUser;
 
-  // 1. Removals over the inherited variables.
+  // 1. Removals over the inherited variables; their names are reported (ADR 0041), never values.
+  const removed = [];
   for (const k of Object.keys(env)) {
     if (test(PROTECTED, k)) continue;
     const exempt = (push && test(PUSH_KEEP, k)) || (provider.aws && test(PROVIDER_KEEP.aws, k)) || (provider.gcp && test(PROVIDER_KEEP.gcp, k)) || (apiBilling && test(ANTHROPIC_AUTH, k));
     if (exempt) continue;
     const listed = test(ALWAYS_REMOVED, k) || test(ANTHROPIC_AUTH, k) || Object.entries(REMOVE).some(([sys, rx]) => (sys !== 'git' || !push) && test(rx, k));
-    if (listed || (SECRET_NAME.test(k) && !kept(k) && !test(GIT_IDENTITY, k))) delete env[k];
+    if (listed || (SECRET_NAME.test(k) && !kept(k) && !test(GIT_IDENTITY, k))) { delete env[k]; removed.push(k); }
   }
   // The sources of the scope catalog's env:NAME references, granted or not (C2): `keep_env` does
   // not exempt them. A granted scope's values are read from baseEnv in step 3.
-  for (const n of stripNames ?? []) if (typeof n === 'string' && n && !test(PROTECTED, n)) del(n);
+  for (const n of stripNames ?? []) {
+    if (typeof n !== 'string' || !n || test(PROTECTED, n)) continue;
+    for (const k of Object.keys(env)) if (same(k, n)) { delete env[k]; removed.push(k); }
+  }
 
   // 2. Redirects, into a fresh stub directory (an earlier attempt's files never carry over).
   const stubs = [];
@@ -409,8 +422,20 @@ export function buildChildEnv({ baseEnv = {}, access, permissions = {}, scopes =
 
   if (provider.aws || provider.gcp) report.provider = 'shared';
   report.residual = residuals({ homes, localAppData: get('LOCALAPPDATA'), pathApi, platform, awsSso });
+  report.removed = removedNames(removed, win);
   if (scopeErrors.length) report.scope_errors = scopeErrors;
   return { env, stubs: [...new Set(stubs)], report };
+}
+
+// Sorted, de-duplicated (case-insensitively on win32, keeping the first inherited spelling) and capped.
+function removedNames(names, win) {
+  const seen = new Set();
+  const out = [];
+  for (const n of names) {
+    const key = win ? n.toUpperCase() : n;
+    if (!seen.has(key)) { seen.add(key); out.push(n); }
+  }
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, MAX_REMOVED);
 }
 
 // Owner credentials no environment variable can redirect (spec §2 residual risk, ADR 0026). Only

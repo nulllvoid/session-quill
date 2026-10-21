@@ -1,6 +1,7 @@
 // Dashboard projections: one complete generation at a time, published through MANIFEST.json so
 // readers never see a half-written generation (TRD §Durability 4, DATA-CONTRACT §Dashboard projection).
 import { proposalState } from '../publish/run-proposals.js';
+import { runEnvSummary } from '../handoff/run-env.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { projectionsDir } from '../lib/paths.js';
@@ -101,7 +102,9 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     checkpoints: [...state.checkpoints.values()],
     // A run's init inventory and credential report stay on its record; the dashboard reads only the
     // latest of each (meta.autonomy), so the snapshot does not grow with them per run (ADR 0026).
-    handoffs: [...state.handoffs.values()].map(({ inventory, cred_report, ...h }) => h),
+    // ADR 0041: only the run environment's removed names and fingerprint (`run_env`) leave the
+    // credential report, for the owner's run detail; no export allow-list names it.
+    handoffs: [...state.handoffs.values()].map(({ inventory, cred_report, ...h }) => { const env = runEnvSummary(cred_report); return env ? { ...h, run_env: env } : h; }),
     requests,
     schedules,
     recipes,

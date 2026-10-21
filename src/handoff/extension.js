@@ -25,6 +25,7 @@ import { fileLearnings, taskLessons, appendRunNotes, workerLearnings, readCiteSo
 import { writeDocsProjection } from '../memory/project.js';
 import { failureRecord, repeatNotice } from '../memory/failure.js';
 import { anchorStaleRatio, anchorCandidates, staledEvent } from '../memory/anchors.js';
+import { runEnvForFiling, runEnvStaleEvents } from './run-env.js';
 import { anchorVerdicts } from '../memory/deliver.js';
 import { addMs, MINUTE } from '../lib/time.js';
 import { getBlob } from '../core/blobs.js';
@@ -397,7 +398,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       const learnings = h.state === 'done' ? result.learnings ?? [] : [];
       const citeSources = learnings.length ? await readCiteSources({ learnings, run: h, checkout }) : new Map();
       const workerFacts = workerLearnings({ run: h, ledger, testGate: h.test_gate ?? null, inventory: h.inventory ?? null });
-      const events = fileLearnings({ learnings, run: worker.state.handoffs.get(id) ?? h, ledger, checkout, existing, now: worker.now(), workerFacts, citeSources });
+      // ADR 0041: an autonomous run's environment-dependent learnings are anchored to its environment.
+      const runEnv = runEnvForFiling(h, { runDir: handoffRunDir(worker.env, id) });
+      const events = fileLearnings({ learnings, run: worker.state.handoffs.get(id) ?? h, ledger, checkout, existing, now: worker.now(), workerFacts, citeSources, runEnv });
       const lessons = taskLessons(events, existing);
       // Deterministic source identities: a filing redone at start never journals an event twice.
       const fresh = (e) => !(worker.journal && worker.journal.hasSource(e.source_identity));
@@ -738,6 +741,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings, ...(auto ? { cred_report: auto.report } : {}), ...(prints ? { scope_fingerprints: prints } : {}) });
     const current = worker.state.handoffs.get(h.id);
     if (!current || current.state !== 'running') return undefined;
+    // ADR 0041: memory learned in another run environment goes stale before this run's Memory is gathered.
+    if (auto) staleRunEnv(worker, auto.report.env_fingerprint);
     const url = (ticket.external && ticket.external.url) || (ticket.jira && ticket.jira.url) || null;
     const environments = worker.environmentsFor ? worker.environmentsFor(ticket.repo_id) : repoCfg ? repoCfg.deployment_environments ?? [] : [];
     const render = (r) => renderRecipe(r, { ticket, url, note: h.note, prs: ticket.prs ?? [], deployments: ticket.deployments ?? [], environments });
@@ -861,6 +866,14 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       }
       anchorSeen.set(repoId, seen);
     }
+  }
+
+  // ADR 0041: at an autonomous dispatch, each live entry anchored to another run environment is
+  // journaled stale (deterministic source identity, so one environment stales an entry once).
+  function staleRunEnv(worker, fingerprint) {
+    try {
+      for (const e of runEnvStaleEvents(worker.state, fingerprint)) if (!(worker.journal && worker.journal.hasSource(e.source_identity))) worker.emit(e.kind, e.payload, { source_identity: e.source_identity });
+    } catch (err) { worker.log(`run environment check failed: ${err.message}`); }
   }
 
   function killWithReason(id, reason) {

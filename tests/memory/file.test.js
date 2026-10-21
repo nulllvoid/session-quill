@@ -225,3 +225,30 @@ test('task learnings become Run notes lessons (never quarantined ones); Run note
   // Nothing to say: no note.
   assert.equal(appendRunNotes(ticket.id, [], [], { run: { id: 'run-0', ticket_id: ticket.id }, at: NOW }), null);
 });
+
+// ADR 0041: environment-dependent learnings of an autonomous run carry a run-env anchor.
+test('an autonomous run anchors its environment-dependent learnings to the run environment, and a confirmation carries the new fingerprint', () => {
+  const runEnv = { env_fingerprint: 'e'.repeat(16), removed: ['BITBUCKET_API_TOKEN'], mcp_servers: ['jenkins'] };
+  const envAnchor = { kind: 'run-env', env_fingerprint: runEnv.env_fingerprint };
+  const run = { ...RUN, access: 'autonomous' };
+  const events = file([
+    learning({ scope: 'machine', section: 'Connectors & MCP', text: 'The jq tool is on PATH', evidence: ['package.json:3'] }),
+    learning({ scope: 'repo', section: 'Pitfalls', kind: 'pitfall', text: 'BITBUCKET_API_TOKEN is unset here', evidence: ['curl → exit 1'], derived_from: 'own-command' }),
+    learning({ scope: 'repo', section: 'Pitfalls', kind: 'pitfall', text: 'the jenkins server reports Set CRE_JENKINS_HOST', evidence: ['x'], derived_from: 'tool-output' }),
+    learning({ text: 'The test suite runs with node --test' }),
+  ], { run, runEnv });
+  const [tools, removed, server, plain] = filed(events);
+  assert.deepEqual([tools.anchors.at(-1), tools.observed_in], [envAnchor, 'autonomous'], '(a), beside its file anchor');
+  assert.equal(tools.anchors[0].file_path, 'package.json');
+  assert.deepEqual([removed.anchors, removed.observed_in, removed.trust], [[envAnchor], 'autonomous', 'observed'], '(b)');
+  assert.deepEqual([server.anchors, server.trust], [[envAnchor], 'quarantined'], '(c)');
+  assert.equal(plain.observed_in, undefined);
+  assert.ok(plain.anchors.every((a) => !a.kind), 'not environment-dependent: file anchors only');
+  assert.ok(filed(file([learning({ scope: 'machine', section: 'Tools', text: 'jq' })], { run })).every((e) => !e.observed_in), 'no run environment: nothing anchored');
+  // A later run that learns the same thing confirms it with its own fingerprint.
+  const s = newState();
+  for (const e of memEvents(events)) ev(s, e.kind, e.payload, { source_identity: e.source_identity });
+  const next = { ...runEnv, env_fingerprint: 'f'.repeat(16) };
+  const again = memEvents(file([learning({ scope: 'repo', section: 'Pitfalls', kind: 'pitfall', text: 'BITBUCKET_API_TOKEN is unset here', evidence: ['curl → exit 1'], derived_from: 'own-command' })], { run: { ...run, id: 'run-2222' }, runEnv: next, existing: s.memory.entries }));
+  assert.deepEqual(again.map((e) => [e.payload.op, e.payload.entry.id, e.payload.entry.anchors]), [['confirmed', removed.id, [{ kind: 'run-env', env_fingerprint: next.env_fingerprint }]]]);
+});

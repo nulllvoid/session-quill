@@ -27,7 +27,9 @@ function fixture() {
   Object.assign(h, {
     attempts: [{ n: 1, note: S }], learnings: [{ text: S }], critical_changes: [{ path: S }], tool_ledger: [{ tool: S }],
     prod_effects: [{ what: S }], scopes: ['k8s.write:prod', S], action_pin: { sha: S }, inventory: { items: [S] }, recorded_stage: 'attempt',
-    cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S] }, max_turns: 7, max_budget_usd: 1,
+    cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S], removed: [`${S}_TOKEN`], env_fingerprint: S }, max_turns: 7, max_budget_usd: 1,
+    // ADR 0041: the run environment's removed names and fingerprint, as the owner's snapshot carries them.
+    run_env: { removed: [`${S}_TOKEN`], env_fingerprint: S },
     memory_filing: { filed: 1, problems: [{ code: S, count: 1 }] },
     critical_notes: [{ index: 0, reason: S }],
     // ADR 0031: a critical approval's "Valid for" minutes stay on the run record.
@@ -43,7 +45,7 @@ function fixture() {
     receipt: { sha256: S, through_sequence: 1 }, pr_observed: { state: 'merged', merge_commit: S, reverted_by: S, error: S },
   });
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
-  s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S] } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
+  s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S], removed: [`${S}_TOKEN`], env_fingerprint: S } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
   s.tickets[0].run_notes = [S];
   // ADR 0037: a session's planned files and its last drifting path stay local.
   Object.assign(s.sessions[0], { planned_paths: [`src/${S}.js`], drift: { count: 2, last_path: `src/${S}/x.js`, at: '2026-10-12T00:00:00Z' } });
@@ -91,7 +93,7 @@ test('exported handoffs carry counts and the stage, not the records', () => {
   forged.handoffs[0].scope_drift = `src/${S}.js`;
   assert.equal('scope_drift' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a whole-number drift count travels');
   for (const k of ['planned_paths', 'drift']) assert.equal(k in sanitizeSnapshot(fixture(), ALL).sessions[0], false, k);
-  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes', 'planned_paths', 'tested_tree', 'commit_tree', 'guard_summary', 'change_summary', 'receipt', 'pr_observed']) assert.equal(k in out, false, k);
+  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes', 'planned_paths', 'tested_tree', 'commit_tree', 'guard_summary', 'change_summary', 'receipt', 'pr_observed', 'run_env']) assert.equal(k in out, false, k);
   assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
   const gated = fixture();
   gated.handoffs[0].test_gate = { status: 'passed', exit_code: 0, ms: 5, attempts: 2, repaired: true, command: S, tail: S, runs: [{ status: S, exit_code: 1, ms: 3 }] };

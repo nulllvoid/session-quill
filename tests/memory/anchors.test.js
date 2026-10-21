@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { symbolAt, declaredName, splitLines, changedRatio, anchorStaleRatio, staledEvent, anchorCandidates, makeAnchor, SYMBOL_WINDOW, DEFAULT_ANCHOR_STALE_RATIO } from '../../src/memory/anchors.js';
+import { symbolAt, declaredName, splitLines, changedRatio, anchorStaleRatio, staledEvent, anchorCandidates, makeAnchor, validAnchors, fileAnchors, SYMBOL_WINDOW, DEFAULT_ANCHOR_STALE_RATIO } from '../../src/memory/anchors.js';
 import { fileLearnings, blobSha } from '../../src/memory/file.js';
 import { anchorVerdicts, gatherMemory, SOURCE_CHANGED_HEADING, RECHECK_SUFFIX } from '../../src/memory/deliver.js';
 import { memoryListing } from '../../src/core/memory.js';
@@ -200,4 +200,29 @@ test('the worker checks anchors against HEAD when it moves and journals staled o
     b.w.tick();
     b.w.tick();
   } finally { await b.w.stop(); }
+});
+
+// ADR 0041: a run-env anchor sits beside file anchors; every file-anchor reader skips it.
+test('a run-env anchor is kept beside the file anchors, one per entry; file checks and candidates ignore it', async () => {
+  const repo = anchoredRepo();
+  const blob = git(repo.dir, 'rev-parse', `${repo.base}:retry.js`);
+  const fileA = { file_path: 'retry.js', blob_sha: blob, line: 34, symbol_name: 'retry' };
+  const envA = { kind: 'run-env', env_fingerprint: 'c'.repeat(16) };
+  const many = Array.from({ length: 12 }, (_, i) => ({ ...fileA, line: i + 1 }));
+  const kept = validAnchors([...many, envA, { kind: 'run-env', env_fingerprint: 'd'.repeat(16) }, { kind: 'run-env', env_fingerprint: 'not hex' }, { kind: 'other' }]);
+  assert.equal(kept.filter((a) => !a.kind).length, 10, 'ten file anchors at most');
+  assert.deepEqual(kept.filter((a) => a.kind), [envA], 'one run-env anchor, the first valid one');
+  assert.deepEqual(fileAnchors([fileA, envA]), [fileA]);
+  const s = newState();
+  const base = { scope: 'repo', repo_id: 'demo', section: 'pitfalls', kind: 'pitfall', evidence: [`retry.js:34 @blob:${blob}`], derived_from: 'repo-file', trust: 'sourced', created_at: AT };
+  ev(s, 'memory-tx', { op: 'filed', entry: { ...base, id: 'both', text: 'both', anchors: [fileA, envA] } }, { occurred_at: AT });
+  ev(s, 'memory-tx', { op: 'filed', entry: { ...base, id: 'env', text: 'env only', anchors: [envA] } }, { occurred_at: AT });
+  assert.deepEqual(s.memory.entries.get('both').anchors, [fileA, envA]);
+  assert.deepEqual(anchorCandidates(s, 'demo').map((e) => e.id), ['both'], 'an entry with only a run-env anchor has no file to check');
+  const v = await anchorVerdicts([...s.memory.entries.values()], { checkout: repo.dir });
+  assert.equal(v.get('both').verdict, 'same');
+  // A sourced confirmation re-anchors the files and keeps the run-env anchor.
+  const moved = { ...fileA, line: 35 };
+  ev(s, 'memory-tx', { op: 'confirmed', entry: { id: 'both', anchors: [moved] } }, { occurred_at: AT });
+  assert.deepEqual(s.memory.entries.get('both').anchors, [moved, envA]);
 });

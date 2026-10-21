@@ -8,9 +8,11 @@
 // and owner entries are never staled (ruling R27).
 //
 // Everything here is pure: callers pass file text and get numbers or events back.
-import { validAnchors, MAX_ANCHORS } from '../core/reduce/memory.js';
+import { validAnchors, fileAnchors, runEnvAnchor, isRunEnvAnchor, MAX_ANCHORS } from '../core/reduce/memory.js';
 
-export { validAnchors, MAX_ANCHORS };
+// A run-env anchor (ADR 0041, src/handoff/run-env.js) can sit beside the file anchors; every
+// file check here reads fileAnchors() and never sees it.
+export { validAnchors, fileAnchors, runEnvAnchor, isRunEnvAnchor, MAX_ANCHORS };
 
 export const SYMBOL_WINDOW = 5;
 // Lines on each side of the anchored line whose change is measured.
@@ -128,7 +130,7 @@ export function changedRatio(oldText, newText, anchor, { window = ANCHOR_WINDOW 
 export function anchorCandidates(state, repoId) {
   const out = [];
   for (const e of state.memory ? state.memory.entries.values() : []) {
-    if (e.state !== 'active' || e.superseded_by || e.trust !== 'sourced' || e.pinned === true || !validAnchors(e.anchors).length) continue;
+    if (e.state !== 'active' || e.superseded_by || e.trust !== 'sourced' || e.pinned === true || !fileAnchors(e.anchors).length) continue;
     const ticket = e.scope === 'task' && state.tickets ? state.tickets.get(e.ticket_id) : null;
     if ((e.scope === 'repo' && e.repo_id === repoId) || (ticket && ticket.repo_id === repoId)) out.push(e);
   }

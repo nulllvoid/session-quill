@@ -259,3 +259,17 @@ test('Write scopes: each target field is named for its scope; a scope without cr
   const busy = snap({ handoffs: [{ id: 'h', ticket_id: t.id, state: 'running', permissions: {} }] });
   assert.match(renderRunAgentDialog(t, busy, { recipe: 'analyse' }), /<button type="submit" class="btn primary" disabled data-blocked="true"/);
 });
+
+// ADR 0041: the variables autonomous runs lose by design, from the latest autonomous run's report.
+test('the dialog lists the variables removed from autonomous runs, as recorded by the latest run, escaped', () => {
+  const report = { ...STUBS, removed: ['BITBUCKET_API_TOKEN', 'A<b>'], env_fingerprint: 'a'.repeat(16) };
+  const html = dialogFor(withMeta(autonomy({ credentials: { report, run_id: 'abcdef12-0000-4000-8000-000000000000', at: '2026-10-02T10:00:00Z' } })));
+  assert.match(html, /<details class="run-env-removed"><summary>Removed from autonomous runs: 2 variables <span class="muted">\(as recorded when run abcdef12 started\)<\/span><\/summary>/);
+  assert.match(html, /<code>BITBUCKET_API_TOKEN<\/code>/);
+  assert.match(html, /<code>A&lt;b&gt;<\/code>/);
+  assert.doesNotMatch(html, /A<b>/);
+  const one = dialogFor(withMeta(autonomy({ credentials: { report: { ...STUBS, removed: ['X_TOKEN'] }, run_id: 'r1', at: 'T' } })));
+  assert.match(one, /Removed from autonomous runs: 1 variable </);
+  // A report recorded before ADR 0041, or no autonomous run yet: nothing is claimed.
+  for (const a of [autonomy({ credentials: { report: STUBS, run_id: 'r1', at: 'T' } }), autonomy()]) assert.doesNotMatch(dialogFor(withMeta(a)), /Removed from autonomous runs/);
+});

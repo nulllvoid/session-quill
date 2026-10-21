@@ -4,7 +4,7 @@
 // against the tool ledger, the agent's verification, critical changes — read from its result blob
 // on the owner's dashboard only, plus what the worker recorded: the stage it observed, the
 // learnings it filed, turns and cost. Every word of a record is agent or tool text: all escaped.
-import { esc, attr, icon, timeEl, handoffChip, ticketById, normalizeSnapshot, contentViewer, keyEl, trustChip, repoName } from '../components.js';
+import { esc, attr, icon, timeEl, handoffChip, ticketById, normalizeSnapshot, contentViewer, keyEl, trustChip, repoName, envNameList } from '../components.js';
 import { testGateChip, accessBadge, runTimings, runQuality, suggestionItem, fileEffects, SOURCE_LABELS } from './agents.js';
 import { supersededBy } from '../lib/runs.js';
 
@@ -19,6 +19,16 @@ function driftChip(h) {
   const n = h.scope_drift;
   if (!Number.isInteger(n) || n <= 0) return '';
   return ` <span class="chip warning small" title="Writes inside the checkout to files the run's planned files do not cover: recorded, not blocked">${icon('alert')}${esc(`${n} write${n === 1 ? '' : 's'} outside planned files`)}</span>`;
+}
+
+// ADR 0041: what an autonomous run's environment lost by design and its fingerprint. The owner's
+// snapshot alone carries `run_env`; an export never does, so the section is simply absent there.
+function runEnvironment(h, caps) {
+  const env = h.run_env;
+  if (!caps.handoff || !env || typeof env !== 'object' || !Array.isArray(env.removed)) return '';
+  const names = env.removed.filter((n) => typeof n === 'string');
+  const fp = typeof env.env_fingerprint === 'string' && /^[0-9a-f]{16}$/.test(env.env_fingerprint) ? env.env_fingerprint : null;
+  return `<p class="small">${esc(`Removed by design (${names.length})`)}</p><p class="small muted">Variables this run did not inherit. A tool or MCP server that needed one was unavailable in this run, not broken on the machine.</p>${names.length ? envNameList(names) : ''}${fp ? `<p class="small muted">Fingerprint <code>${esc(fp)}</code> · memory learned about this environment goes stale when it changes</p>` : ''}`;
 }
 
 const section = (title, body) => (body ? `<section class="detail-section"><h3>${esc(title)}</h3>${body}</section>` : '');
@@ -338,6 +348,7 @@ ${section('Production writes (full access)', productionWrites(h, caps, { now, tz
 ${section('Delivery', delivery)}
 ${section(`Learnings filed (${learned.length})`, learned.length ? `<ul class="run-learnings">${learned.map((e) => learningItemOfRun(e, snapshot, caps)).join('')}</ul>` : '')}
 ${section('Tools used', toolsUsed(attempts))}
+${section('Environment', runEnvironment(h, caps))}
 ${section('Turns & cost', turnsAndCost(h))}
 ${section('Where it is', where)}
 ${section(`Snapshots (${recordRows(h.snapshots).length})`, runSnapshots(h, t, caps, pending, { now, tz }))}

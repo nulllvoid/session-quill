@@ -10,6 +10,11 @@ import { deterministicId } from '../../lib/ids.js';
 // anchored source changed; the reducer only records that verdict (state 'stale', stale_reason
 // 'anchor-changed'). Pinned and owner entries are never staled (ruling R27); `confirmed`, `edited`,
 // an owner note, `pinned` and `approved` revive a staled entry.
+//
+// Run-environment anchors (ADR 0041): an environment-dependent learning of an autonomous run also
+// carries one `{ kind: 'run-env', env_fingerprint }` anchor and `observed_in: 'autonomous'`. When an
+// autonomous dispatch's fingerprint differs the worker journals `staled` with reason
+// 'run-env-changed'; a `confirmed` op carrying a run-env anchor replaces it.
 
 export const MEMORY_OPS = ['filed', 'confirmed', 'superseded', 'retired', 'approved', 'owner-note', 'pinned', 'unpinned', 'edited', 'staled'];
 export const MEMORY_SCOPES = ['machine', 'repo', 'task'];
@@ -42,18 +47,45 @@ const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string'
 export const MAX_ANCHORS = 10;
 const ANCHOR_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const ANCHOR_SYMBOL_CHARS = 200;
+// ADR 0041: the 16-hex fingerprint of an autonomous run's environment.
+export const ENV_FINGERPRINT = /^[0-9a-f]{16}$/;
+export const isRunEnvAnchor = (a) => !!a && typeof a === 'object' && a.kind === 'run-env';
 
-/** An anchor list shape-checked and copied field by field: at most MAX_ANCHORS, malformed ones dropped. */
+/**
+ * An anchor list shape-checked and copied field by field: at most MAX_ANCHORS file anchors and one
+ * run-env anchor (ADR 0041), in their order; malformed ones dropped.
+ */
 export function validAnchors(list) {
   if (!Array.isArray(list)) return [];
   const out = [];
+  let files = 0;
+  let env = false;
   for (const a of list) {
-    if (!a || typeof a !== 'object' || typeof a.file_path !== 'string' || !a.file_path || a.file_path.length > 1024 || /[\r\n\0]/.test(a.file_path)) continue;
+    if (!a || typeof a !== 'object') continue;
+    if (a.kind !== undefined) {
+      if (a.kind === 'run-env' && !env && typeof a.env_fingerprint === 'string' && ENV_FINGERPRINT.test(a.env_fingerprint)) { out.push({ kind: 'run-env', env_fingerprint: a.env_fingerprint }); env = true; }
+      continue;
+    }
+    if (files >= MAX_ANCHORS) continue;
+    if (typeof a.file_path !== 'string' || !a.file_path || a.file_path.length > 1024 || /[\r\n\0]/.test(a.file_path)) continue;
     if (typeof a.blob_sha !== 'string' || !ANCHOR_SHA.test(a.blob_sha) || !Number.isInteger(a.line) || a.line < 1) continue;
     out.push({ file_path: a.file_path, blob_sha: a.blob_sha, line: a.line, symbol_name: typeof a.symbol_name === 'string' && a.symbol_name ? a.symbol_name.slice(0, ANCHOR_SYMBOL_CHARS) : null });
-    if (out.length >= MAX_ANCHORS) break;
+    files += 1;
   }
   return out;
+}
+
+/** The file anchors of a list (ADR 0032), without the run-env anchor. */
+export const fileAnchors = (list) => validAnchors(list).filter((a) => !isRunEnvAnchor(a));
+/** The run-env anchor of a list (ADR 0041), or null. */
+export const runEnvAnchor = (list) => validAnchors(list).find(isRunEnvAnchor) ?? null;
+
+function reanchor(entry, raw) {
+  const files = fileAnchors(raw.anchors);
+  const env = runEnvAnchor(raw.anchors);
+  if (entry.trust === 'sourced' && files.length) entry.anchors = [...files, ...validAnchors(entry.anchors).filter(isRunEnvAnchor)];
+  if (env) entry.anchors = [...fileAnchors(entry.anchors), env];
+  if (raw.observed_in === 'autonomous') entry.observed_in = 'autonomous';
 }
 
 // A staled entry becomes active again and forgets why it was staled.
@@ -102,6 +134,8 @@ function buildEntry(raw, ev, { trust } = {}) {
   // Only present when filing anchored the entry, so entries filed before ADR 0032 reduce as before.
   const anchors = validAnchors(raw.anchors);
   if (anchors.length) entry.anchors = anchors;
+  // ADR 0041: learned in an autonomous run about that run's own environment.
+  if (raw.observed_in === 'autonomous') entry.observed_in = 'autonomous';
   return { entry };
 }
 
@@ -154,8 +188,9 @@ export function applyMemoryTx(state, ev) {
       entry.confirmations += 1;
       entry.last_confirmed_at = ev.occurred_at;
       revive(entry);
-      // A confirming run re-anchors a sourced entry at the file version it checked (ADR 0032).
-      if (entry.trust === 'sourced' && validAnchors(raw.anchors).length) entry.anchors = validAnchors(raw.anchors);
+      // A confirming run re-anchors a sourced entry at the file version it checked (ADR 0032), and
+      // any entry at the run environment it ran in (ADR 0041); each kind replaces only its own.
+      reanchor(entry, raw);
       entry.revision += 1;
       return {};
     case 'superseded': {
@@ -213,6 +248,19 @@ export function applyMemoryTx(state, ev) {
       if (entry.state === 'retired' || entry.superseded_by) return problem(state, ev, op, 'memory-entry-retired', id);
       if (entry.pinned === true || entry.trust === 'owner') return problem(state, ev, op, 'memory-stale-exempt', id);
       const a = p.anchor;
+      if (p.reason === 'run-env-changed') {
+        // ADR 0041: the run environment the entry was learned in changed. The verdict must name the
+        // entry's own run-env anchor, so an outdated one cannot stale an entry confirmed since.
+        const own = runEnvAnchor(entry.anchors);
+        if (!own || !a || typeof a !== 'object' || a.kind !== 'run-env' || a.env_fingerprint !== own.env_fingerprint || typeof a.current_env_fingerprint !== 'string' || !ENV_FINGERPRINT.test(a.current_env_fingerprint)) return problem(state, ev, op, 'memory-stale-invalid', id);
+        const anchor = { kind: 'run-env', env_fingerprint: a.env_fingerprint, current_env_fingerprint: a.current_env_fingerprint };
+        if (entry.state === 'stale' && entry.stale_reason === 'run-env-changed' && JSON.stringify(entry.stale_anchor) === JSON.stringify(anchor)) return {};
+        entry.state = 'stale';
+        entry.stale_reason = 'run-env-changed';
+        entry.stale_anchor = anchor;
+        entry.revision += 1;
+        return {};
+      }
       if (p.reason !== 'anchor-changed' || !a || typeof a !== 'object' || typeof a.file_path !== 'string' || !a.file_path) return problem(state, ev, op, 'memory-stale-invalid', id);
       const sha = (v) => (typeof v === 'string' && ANCHOR_SHA.test(v) ? v : null);
       const anchor = {

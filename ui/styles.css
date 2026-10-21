@@ -825,6 +825,12 @@ button.chip.external:hover { box-shadow: inset 0 0 0 1px currentColor; }
 .connected-tools, .cred-systems { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .connected-tools li, .autonomy-notes .issues li { overflow-wrap: anywhere; }
 .autonomy-notes .issues { margin: 0; }
+/* ADR 0041: variable names an autonomous run lost by design; any length wraps at 390px. */
+.run-env-removed summary { cursor: pointer; }
+.run-env-removed > p { margin: 6px 0; }
+.env-names { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
+.env-names li { min-width: 0; max-width: 100%; }
+.env-names code { overflow-wrap: anywhere; word-break: break-word; }
 /* Write scopes (spec §4.3): one option per catalog scope, with its own words and credentials. */
 .access .write-scopes { background: var(--surface); margin-top: 8px; }
 .write-scopes p { margin: 0; }

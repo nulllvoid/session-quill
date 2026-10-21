@@ -465,6 +465,17 @@ const MCP_SOURCE_TEXT = { claudeai: 'claude.ai connector', user: 'your Claude Co
 const CRED_SYSTEM_TEXT = [['kubernetes', 'Kubernetes (kubectl)'], ['aws', 'AWS (aws)'], ['gcp', 'Google Cloud (gcloud)'], ['azure', 'Azure (az)'], ['databases', 'Databases (psql, mysql)'], ['argo', 'Argo CD (argocd)']];
 const CRED_VALUE_TEXT = { readonly: 'read-only profile', stub: 'no read-only profile; its reads are refused in autonomous runs', scope: 'write scope credentials', owner: 'your own credentials (shared with Claude Code\'s cloud sign-in)' };
 
+// The inherited variable names an autonomous run's environment removed by design (ADR 0041), as a
+// wrapping list of escaped names. Names only: the report never holds a value.
+export function envNameList(names) {
+  return `<ul class="env-names">${(Array.isArray(names) ? names : []).filter((n) => typeof n === 'string').map((n) => `<li><code>${esc(n)}</code></li>`).join('')}</ul>`;
+}
+
+function removedEnvDetails(names, runId) {
+  const n = names.filter((x) => typeof x === 'string').length;
+  return `<details class="run-env-removed"><summary>Removed from autonomous runs: ${esc(n)} variable${n === 1 ? '' : 's'} <span class="muted">(as recorded when run ${esc(String(runId ?? '').slice(0, 8))} started)</span></summary><p class="muted">Removed by design. A tool or MCP server that reads one of these finds it unset in an autonomous run, so it is unavailable there, not broken. The README section "MCP servers in autonomous runs" says how to give a server a read-only credential.</p>${envNameList(names)}</details>`;
+}
+
 // What the worker last recorded about autonomous runs on this machine (snapshot meta.autonomy):
 // the connectors the latest run's Claude Code reported and the credential report of the latest
 // autonomous run. Each line says what it rests on; with no meta.autonomy nothing is claimed.
@@ -499,6 +510,8 @@ function autonomyNotes(snapshot) {
     return `<li>${esc(label)}: ${esc(text)}</li>`;
   });
   out.push(`<p>Production command-line tools <span class="muted">(${cred ? `credentials as run ${short(cred.run_id)} got them` : 'from your config; no autonomous run yet'})</span></p><ul class="cred-systems">${lines.join('')}</ul>`);
+  // ADR 0041: the variables autonomous runs lose by design, names only, as the latest one recorded them.
+  if (cred && Array.isArray(report.removed)) out.push(removedEnvDetails(report.removed, cred.run_id));
   const issues = [];
   const anyReadonly = CRED_SYSTEM_TEXT.some(([sys]) => report[sys] === 'readonly' || configured.has(sys));
   if (!anyReadonly) issues.push('No read-only credentials configured: reads through production commands (kubectl, aws, gcloud, az, psql, argocd) are refused in autonomous runs; connectors and local tools still work. Add profiles under [prod.readonly] in config.toml.');

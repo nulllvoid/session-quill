@@ -99,6 +99,8 @@ export function memoryStaleness(entry, nowMs) {
 // whether it is in a conflict. Conflict groups name their entries by id. Owner-only data: callers
 // never put it in a snapshot, export or publisher payload (spec §9). `includeQuarantine: false` (the
 // CLI inside a run) leaves quarantined entries out entirely.
+const STALE_REASONS = new Set(['anchor-changed', 'run-env-changed']);
+
 export function memoryListing(state, nowMs, { includeQuarantine = true } = {}) {
   const groups = conflicts(state);
   const inConflict = new Map();
@@ -116,8 +118,11 @@ export function memoryListing(state, nowMs, { includeQuarantine = true } = {}) {
       created_at: e.created_at, run_id: e.run_id ?? null, derived_from: e.derived_from, evidence: [...e.evidence], revision: e.revision,
       conflict_key: inConflict.get(e.id) ?? null,
       // Why a stale entry is stale: 'anchor-changed' when the worker found its cited source changed
-      // (ADR 0032), else null (unconfirmed for 90 days).
-      stale_reason: staleness === 'stale' && e.state === 'stale' && e.stale_reason === 'anchor-changed' ? 'anchor-changed' : null,
+      // (ADR 0032), 'run-env-changed' when the autonomous run environment it was learned in changed
+      // (ADR 0041), else null (unconfirmed for 90 days).
+      stale_reason: staleness === 'stale' && e.state === 'stale' && STALE_REASONS.has(e.stale_reason) ? e.stale_reason : null,
+      // ADR 0041: learned in an autonomous run about that run's environment.
+      observed_in: e.observed_in === 'autonomous' ? 'autonomous' : null,
     };
     if (held) out.quarantine_reason = e.quarantine_reason ?? null;
     entries.push(out);
