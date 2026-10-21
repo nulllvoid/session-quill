@@ -59,6 +59,7 @@ Their pinned writes are unaffected by `require_dry_run`, whatever their scope. H
 
 - Turning on the default changes 1.1 behaviour for critical runs whose pin is a kubectl or psql write: the run needs one more call. A pin without a twin can no longer run until the owner turns the setting off. This is intended: the setting narrows.
 - An agent that runs the twin and the action in the same message is refused, because the twin's result is not yet in the ledger. The refusal says what to run.
+- A twin must run with the same tool as the pinned call, because the tool name is part of `argv_sha`. Pins are proposed and approved as Bash commands. A PowerShell result carries an exit code only when Claude Code reports one, so a twin run through PowerShell usually never counts. That is fail-safe: the pin stays refused.
 - A twin is matched by exact words. A reordered option is not the twin, as a reordered pin is not the pin (R43).
 - The lease counts from dispatch, not approval. A queued run does not lose its time while it waits. The agent's start-up comes out of the lease.
 - `lease_minutes`, `argv_sha`, `notAfter`, `requireDryRun` and `dry_run` are local only: no export, mirror, vault note or publisher carries them (`tests/export/privacy-sentinel.test.js`).
