@@ -4,7 +4,10 @@
 //
 // grant = { access, permissions, scopes: [{ name, target?, matchers: { mcp?, bash?, hosts? },
 //   fingerprint }], actionPins: [{ scope, pin }], readableRoots, writableRoots, protectedPaths,
-//   mcpPolicy, trustedMcpServers, trackerHosts }
+//   mcpPolicy, trustedMcpServers, trackerHosts, requireDryRun?, notAfter? }
+// ADR 0031: `requireDryRun` (an approved critical run's pinned k8s/db writes need their dry-run
+// twin first) and `notAfter` (the approval's lease end, an ISO time fixed at dispatch) are part of
+// the hashed grant, so neither can be changed or dropped once the run started.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -12,6 +15,8 @@ import { TrackerError } from '../lib/errors.js';
 import { ensureDir, tempPathFor, renameAtomic } from '../lib/atomic-fs.js';
 
 export const GRANT_FILE = 'grant.json';
+// The "Valid for" choices of a critical approval, in minutes (ADR 0031). No choice: the whole run.
+export const LEASE_MINUTES = Object.freeze([5, 15, 60]);
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -76,4 +81,16 @@ export function readGrant(file, expectedSha) {
   }
   if (!isPlainObject(grant)) throw new TrackerError('grant-invalid', 'the grant file does not hold a grant object');
   return deepFreeze(grant);
+}
+
+/**
+ * The lease end of a run dispatched at `startedAt` with `minutes` from LEASE_MINUTES, as an ISO
+ * time; null when there is no lease (undefined or null). Anything else throws `invalid-ttl`.
+ */
+export function leaseNotAfter(startedAt, minutes) {
+  if (minutes === undefined || minutes === null) return null;
+  if (!LEASE_MINUTES.includes(minutes)) throw new TrackerError('invalid-ttl', `a critical approval is valid for the whole run or ${LEASE_MINUTES.join(', ')} minutes, not ${String(minutes).slice(0, 20)}`);
+  const at = Date.parse(startedAt);
+  if (!Number.isFinite(at)) throw new TrackerError('invalid-ttl', 'the run has no dispatch time to start its lease from');
+  return new Date(at + minutes * 60_000).toISOString();
 }

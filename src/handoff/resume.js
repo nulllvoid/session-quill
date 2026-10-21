@@ -152,7 +152,9 @@ export function resumeFields(h) {
     if (typeof prints[s] !== 'string' || !prints[s]) refuse(`scope ${s} of this critical change run has no recorded fingerprint; it cannot be resumed`);
   }
   if (pins.some((a) => !scopes.includes(a.scope)) || Object.keys(prints).some((s) => !scopes.includes(s))) refuse('the pins or fingerprints of this critical change run name a scope it was not granted; it cannot be resumed');
-  return { ...out, action_pins: pins.map((a) => ({ scope: a.scope, pin: a.pin })), scope_fingerprints: { ...prints }, origin_proposal_id: h.origin_proposal_id };
+  // ADR 0031: a resumed critical run is held to the same "Valid for" minutes, counted from its own
+  // dispatch; it never gets the whole run where the approval gave less.
+  return { ...out, action_pins: pins.map((a) => ({ scope: a.scope, pin: a.pin })), scope_fingerprints: { ...prints }, origin_proposal_id: h.origin_proposal_id, ...(h.lease_minutes !== undefined && h.lease_minutes !== null ? { lease_minutes: h.lease_minutes } : {}) };
 }
 
 /**

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { TrackerError } from '../lib/errors.js';
 import { quillHome } from '../lib/paths.js';
-import { canonicalJson } from './grant.js';
+import { canonicalJson, LEASE_MINUTES } from './grant.js';
 import { BUILTIN_SCOPES, scopeSettings, SCOPE_NAME_RE } from '../config/scopes.js';
 import { BUILTIN_COMMANDS } from '../gate/scope-commands.js';
 import { SCOPE_SYSTEMS, credentialSystemOf } from './cred-env.js';
@@ -23,6 +23,16 @@ const show = (s) => JSON.stringify(String(s).slice(0, 140));
 // The per-install key that literal credential values are fingerprinted under (I1): 32 random bytes,
 // hex, in `<quillHome>/scope-fingerprint.key`, owner-only, created on first use, never exported.
 export const SCOPE_KEY_FILE = 'scope-fingerprint.key';
+
+/**
+ * The "Valid for" minutes of a critical approval (ADR 0031): null for the whole run (undefined or
+ * null), else one of LEASE_MINUTES exactly; anything else throws `invalid-ttl`.
+ */
+export function leaseMinutes(value) {
+  if (value === undefined || value === null) return null;
+  if (!LEASE_MINUTES.includes(value)) throw new TrackerError('invalid-ttl', `ttl_minutes must be one of ${LEASE_MINUTES.join(', ')} (minutes), or left out for the whole run`);
+  return value;
+}
 const KEY_RE = /^[0-9a-f]{64}$/;
 
 // The file appears only complete: the key is written to a temporary file in the same directory and

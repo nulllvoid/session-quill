@@ -7,7 +7,7 @@ import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
 import { outstandingObligations } from '../core/transitions.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
 import { budgetFor } from '../handoff/runner.js';
-import { scopeValidator, loadScopeCatalog, resolveScopes } from '../handoff/scopes.js';
+import { scopeValidator, loadScopeCatalog, resolveScopes, leaseMinutes } from '../handoff/scopes.js';
 import { attachedFiles, undoFileEffect } from '../handoff/files.js';
 import { validateKey } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
@@ -156,6 +156,9 @@ function approvalRefusal(req, p, kind) {
 // pin object's guard string, ruling R43), so the guard allows only that action (R48).
 function approveCritical(worker, req, ticket, p) {
   const fail = (code, message) => ({ outcome: 'failed', error: { code, message, retryable: false, current_revision: ticket.revision } });
+  // ADR 0031: checked again here, since a request may reach the worker without submit validation.
+  let lease;
+  try { lease = leaseMinutes((req.payload ?? {}).ttl_minutes); } catch (err) { return fail(err.code, err.message); }
   const id8 = String(p.from_handoff_id ?? '').slice(0, 8);
   const pin = p.action_pin && typeof p.action_pin.guard === 'string' && p.action_pin.guard.trim() ? p.action_pin.guard : null;
   const listed = Array.isArray(p.scopes) ? p.scopes : [];
@@ -175,7 +178,7 @@ function approveCritical(worker, req, ticket, p) {
   const builtin = catalogFor(worker).builtin(p.recipe.name);
   const recipeNote = builtin && p.recipe.hash && builtin.hash !== p.recipe.hash ? 'recipe updated since proposed' : null;
   const actionPins = specs.map((scope) => ({ scope, pin }));
-  return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote });
+  return evaluateHandoff(worker, req, ticket, { recipe: { name: p.recipe.name, source: 'builtin', hash: null }, note: '', permissions: p.permissions, access: 'autonomous', scopes: specs, suggest: true }, { actionPins, scopeFingerprints: fingerprints, originProposalId: p.id, recipeNote, leaseMinutes: lease });
 }
 
 // The interrupted run a resume-run request names (spec §5.4, Task 19): a run of the target ticket
@@ -226,7 +229,7 @@ function evaluateResume(worker, req, ticket) {
   // must still have the reviewed hash.
   const ref = fields.recipe ? { name: fields.recipe.name, source: fields.recipe.source, hash: fields.recipe.source === 'builtin' ? null : fields.recipe.hash } : undefined;
   const payload = { ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
-  const critical = fields.action_pins ? { actionPins: fields.action_pins, scopeFingerprints: fields.scope_fingerprints, originProposalId: fields.origin_proposal_id } : null;
+  const critical = fields.action_pins ? { actionPins: fields.action_pins, scopeFingerprints: fields.scope_fingerprints, originProposalId: fields.origin_proposal_id, leaseMinutes: fields.lease_minutes ?? null } : null;
   const evaluation = evaluateHandoff(worker, req, ticket, payload, critical);
   if (evaluation.outcome !== 'applied') return evaluation;
   const h = evaluation.mutation.handoff;
@@ -338,9 +341,16 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       break;
     }
     case 'approve-run':
-    case 'dismiss-run':
-      normalized = { proposal_id: findProposal(state, target, payload, nowIso).id };
+    case 'dismiss-run': {
+      const p = findProposal(state, target, payload, nowIso);
+      normalized = { proposal_id: p.id };
+      // ADR 0031: a critical approval may be valid for 5, 15 or 60 minutes instead of the whole run.
+      if (body.kind === 'approve-run' && payload.ttl_minutes !== undefined && payload.ttl_minutes !== null) {
+        if (p.origin !== 'run') throw new TrackerError('invalid-ttl', 'only the approval of a critical change takes ttl_minutes');
+        normalized.ttl_minutes = leaseMinutes(payload.ttl_minutes);
+      }
       break;
+    }
     case 'handoff-cancel': {
       const h = typeof payload.handoff_id === 'string' ? state.handoffs.get(payload.handoff_id) : null;
       if (!h || h.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'handoff_id must name a handoff of the target ticket');
@@ -554,6 +564,8 @@ function evaluateHandoff(worker, req, ticket, payload, critical = null) {
     // An approved critical change (ADR 0028): its pinned action per scope, the fingerprints dispatch
     // checks again before the grant is frozen, and the proposal. Never exported (allow-lists).
     ...(critical ? { action_pins: critical.actionPins, scope_fingerprints: critical.scopeFingerprints, origin_proposal_id: critical.originProposalId } : {}),
+    // ADR 0031: the approval's "Valid for" minutes; dispatch freezes the end as the grant's notAfter.
+    ...(critical && critical.leaseMinutes ? { lease_minutes: critical.leaseMinutes } : {}),
   };
   return { outcome: 'applied', mutation: { type: 'handoff-create', handoff }, result: { handoff_id: handoff.id, ...(critical && critical.recipeNote ? { note: critical.recipeNote } : {}) } };
 }
@@ -664,6 +676,7 @@ export function evaluateRequest(worker, req) {
       if (refusal) return { outcome: 'failed', error: { code: refusal.code, message: refusal.message, retryable: false, current_revision: ticket.revision } };
       if (req.kind === 'dismiss-run') return { outcome: 'applied', mutation: { type: 'run-proposal-dismiss', proposal_id: p.id }, result: { proposal_id: p.id } };
       const critical = p.origin === 'run';
+      if (!critical && req.payload && req.payload.ttl_minutes !== undefined && req.payload.ttl_minutes !== null) return { outcome: 'failed', error: { code: 'invalid-ttl', message: 'only the approval of a critical change takes ttl_minutes', retryable: false, current_revision: ticket.revision } };
       // The recipe this ticket would run must still be the one the page offered (same layer and
       // text); a repository recipe of that name shadows it and is refused.
       const shadow = critical ? null : shadowProblem(p.recipe, catalogFor(worker).get(p.recipe.name, ticket.repo_id ?? null, { fresh: true }), p.recipe.name);

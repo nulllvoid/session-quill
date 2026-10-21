@@ -656,7 +656,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     let auto = null;
     let observe = null;
     if (access === 'autonomous') {
-      try { auto = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, scopes, env }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
+      try { auto = prepareAutonomous({ storeEnv: worker.env, config: ctx.config, handoff: h, cwd, checkout: worktreePath, repoCfg, scopes, env, startedAt: started }); } catch (err) { return fail(worker, h, err.code ?? 'grant-failed', `could not prepare the autonomous run: ${err.message}`); }
     } else if (access === 'full' && await observerSupported()) {
       // Full access is observed, never refused (spec §3, §7): the guard records what it would have
       // refused, and the run's prod_effects come from that ledger when it finishes. A Claude Code

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { writeGrant, readGrant, canonicalJson } from '../../src/handoff/grant.js';
+import { writeGrant, readGrant, canonicalJson, leaseNotAfter, LEASE_MINUTES } from '../../src/handoff/grant.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'quill-grant-'));
 after(() => fs.rmSync(base, { recursive: true, force: true }));
@@ -90,4 +90,26 @@ test('writeGrant refuses anything but a plain object', () => {
 test('the grant file is owner-only where the OS supports modes', { skip: process.platform === 'win32' && 'Windows has no POSIX file modes' }, () => {
   const { path: file } = writeGrant(runDir(), GRANT);
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+// ADR 0031: the lease end and the dry-run rule are part of the frozen, hashed grant.
+test('notAfter and requireDryRun are hashed with the grant: changing either changes the hash, and editing the file is tampering', () => {
+  const leased = { ...GRANT, notAfter: '2026-10-21T10:15:00.000Z', requireDryRun: true };
+  const a = writeGrant(runDir(), leased);
+  assert.notEqual(a.sha256, writeGrant(runDir(), { ...leased, notAfter: '2026-10-21T11:00:00.000Z' }).sha256);
+  assert.notEqual(a.sha256, writeGrant(runDir(), { ...leased, requireDryRun: false }).sha256);
+  assert.notEqual(a.sha256, writeGrant(runDir(), GRANT).sha256);
+  assert.equal(readGrant(a.path, a.sha256).notAfter, '2026-10-21T10:15:00.000Z');
+  fs.writeFileSync(a.path, fs.readFileSync(a.path, 'utf8').replace('10:15:00', '23:59:00'));
+  assert.throws(() => readGrant(a.path, a.sha256), { code: 'grant-tampered' });
+});
+
+test('leaseNotAfter is the dispatch time plus 5, 15 or 60 minutes; no lease is null; anything else is invalid-ttl', () => {
+  assert.deepEqual(LEASE_MINUTES, [5, 15, 60]);
+  assert.equal(leaseNotAfter('2026-10-21T10:00:00.000Z', 15), '2026-10-21T10:15:00.000Z');
+  assert.equal(leaseNotAfter('2026-10-21T10:00:00.000Z', 60), '2026-10-21T11:00:00.000Z');
+  assert.equal(leaseNotAfter('2026-10-21T10:00:00.000Z', undefined), null);
+  assert.equal(leaseNotAfter('2026-10-21T10:00:00.000Z', null), null);
+  for (const bad of [7, 0, -5, '15', 15.5, 1440, true]) assert.throws(() => leaseNotAfter('2026-10-21T10:00:00.000Z', bad), { code: 'invalid-ttl' }, String(bad));
+  assert.throws(() => leaseNotAfter('not a time', 15), { code: 'invalid-ttl' });
 });
