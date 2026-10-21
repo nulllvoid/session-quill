@@ -183,3 +183,17 @@ test('doctor: git older than 2.31 and Claude Code older than 2.1.295 are warning
   assert.match(oldClaude.detail, /autonomous runs need 2\.1\.295/);
   assert.equal(claudeCheck(null).level, 'warn');
 });
+
+test('doctor prints a Recipes section of counts, and --json carries it (ADR 0033)', async () => {
+  const fx = makeHome();
+  const w = await startWorker(fx);
+  try {
+    const r = await cli(['doctor'], fx.env);
+    assert.match(r.out, /Recipes \(last 30 days; counts from this machine's journal, not a score\):\n {2}no agent runs in the last 30 days/);
+    const j = await cli(['doctor', '--json'], fx.env);
+    const report = JSON.parse(j.out);
+    assert.deepEqual(report.recipes, { days: 30, recipes: [] });
+  } finally {
+    await w.stop();
+  }
+});

@@ -351,7 +351,26 @@ _Not yet filled._
 
 ### Task 5 Evidence receipt and recipe stats
 
-_Not yet filled._
+ADR 0033. No new event kind; every field below is local to the owner's machine (never in `src/export/sanitize.js`, the mirror, vault notes or publishers) unless a line says otherwise.
+
+Run record (handoff) fields:
+- `test_gate.runs[]`: `{ status (passed, failed, timeout), exit_code (nullable), ms }` for every attempt of the worker's test gate, in order. `test_gate.tail` stays the last attempt's output only. Exports keep `test_gate` as before (status, exit_code, ms, attempts, repaired).
+- `tested_tree` (nullable): the 40-hex tree id the final passing test run saw, written with `git write-tree` on a temporary index.
+- `commit_tree` (nullable): the tree of `commit_sha`.
+- `guard_summary` (nullable): `{ allow, deny, critical, by_class: { <class>: n } }`, counts of the guard hook's `guard` ledger lines; autonomous and full-access runs only. Classes: local, read, external.write, write, unknown-prod, unparseable, privileged, other.
+- `change_summary` (nullable): `{ files, config, tests, code, docs, critical_paths (null when the repository configures none) }`, counts of `changed_files`.
+- `receipt` (nullable): `{ sha256, through_sequence }` of the receipt appended to the run's draft PR body.
+- `pr_observed` (nullable): `{ state, merged_at, merge_commit, reverted_by, reverted_at, revert_checked_at, observed_at, error }`, what reconciliation saw of the run's own `pr_url`. Never ticket evidence.
+
+Journaling: a committed fix run journals `test_gate`, `tested_tree`, `commit_sha`, `commit_tree`, `guard_summary`, `change_summary` and `changed_files` in one `handoff-tx` update before its push and draft PR; the terminal `handoff-tx` repeats them.
+
+Receipt (`buildReceipt(state, handoffId) -> { markdown, sha256, through_sequence }`, pure): Markdown under `### Session Quill evidence receipt`, ending with the line `Not a deployment.`; `sha256` is over canonical JSON (sorted keys) of `{ v: 1, run, ticket, recipe, access, scopes (count), test_gate { status, command, runs, repaired }, tested_tree, commit_sha, commit_tree, guard, approvals, changes }`; `through_sequence` is the state's last applied journal sequence. A digest, never proof. The Markdown leaves the machine in the PR body: it holds no scope names, targets, local paths (absolute paths in the test command read `<local path>`), test output or agent text.
+
+`reconcile` payload: `pr_updates[]` entries for a ticket PR may carry `merge_commit` (the reducer does not store it on the ticket PR). An entry with `handoff_id` (and `url` equal to the run's `pr_url`) is a run PR observation: `state`, `merged_at`, `merge_commit`, `reverted_by`, `reverted_at`, `revert_checked_at`, `observed_at`, or `error`; the reducer stores it as the run's `pr_observed` and never touches the ticket. `reverted_by` is the sha of a default-branch commit whose message has `This reverts commit <merge_commit>`, or the merge commit of a merged PR titled `Revert "<title>"`, within 48 h of `merged_at`.
+
+Configuration: `[repos.<id>] critical_paths` and `config_globs`, lists of globs (`*`, `**`, `?`; case-insensitive; at most 100). A value that is not a list of non-empty strings is ignored.
+
+CLI: `quill receipt <run-id> [--json]` prints the receipt rebuilt from the journal (through the recorded `through_sequence` when the run has a `receipt`) and says on stderr whether the digest matches; exit 1 when it differs. Refused inside an agent run. `quill doctor` prints a Recipes section; `--json` adds `recipes: { days: 30, recipes: [{ recipe, runs, done, failed, tests_first_pass, tests_after_repair, interventions, merged, reverted_48h, pending_48h, median_done_to_merge_ms }] }` (and `error` when the journal could not be read). Counts only.
 
 ### Task 6 Hook latency
 

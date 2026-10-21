@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { loadContext, workerStatus, commandName, latestSnapshot } from '../context.js';
-import { usageStats, usageItems, readJournalTail } from '../../core/usage.js';
+import { usageStats, usageItems, readJournalTail, recipeStats, recipeLines, RECIPE_STATS_DAYS } from '../../core/usage.js';
+import { replayState } from './sync.js';
 import { nowIso } from '../../lib/time.js';
 import { isLocked } from '../../worker/lock.js';
 import { Journal } from '../../core/journal.js';
@@ -93,6 +94,13 @@ export async function collect(env, { autostart = {} } = {}) {
   const snap = latestSnapshot(ctx);
   report.usage = usageStats({ events: readJournalTail(journalPath(env)), healthErrors: readHealthErrors(env, { limit: 5000 }), sessions: snap ? snap.sessions : [], nowIso: nowIso() });
   for (const item of usageItems(report.usage)) report.items.push(item);
+  // Recipe stats (ADR 0033): counts per recipe from this machine's journal; never fail the doctor.
+  try {
+    const { state } = replayState(ctx, { readOnly: true });
+    report.recipes = { days: RECIPE_STATS_DAYS, recipes: recipeStats({ handoffs: state.handoffs, tickets: state.tickets, requests: state.requests, nowIso: nowIso() }) };
+  } catch (err) {
+    report.recipes = { days: RECIPE_STATS_DAYS, recipes: [], error: err.message };
+  }
   return { ctx, report };
 }
 
@@ -102,6 +110,11 @@ export async function run({ flags, io, env }) {
   for (const item of report.items) {
     const mark = item.level === 'ok' ? '✓' : item.level === 'warn' ? '!' : '✗';
     io.println(`${mark} ${item.label}: ${item.detail}`);
+  }
+  if (report.recipes) {
+    io.println(`Recipes (last ${report.recipes.days} days; counts from this machine's journal, not a score):`);
+    if (report.recipes.error) io.println(`  ! not available: ${report.recipes.error}`);
+    else for (const line of recipeLines(report.recipes.recipes, { days: report.recipes.days })) io.println(`  ${line}`);
   }
   io.println(report.ok ? 'doctor: OK' : 'doctor: problems found');
   return report.ok ? 0 : 1;

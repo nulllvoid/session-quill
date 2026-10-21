@@ -6,7 +6,9 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
-import { git, createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr } from './worktree.js';
+import { git, createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr, workingTree } from './worktree.js';
+import { buildReceipt, guardSummary, changeSummary, publicCommand } from './receipt.js';
+import { changeGlobs } from '../config/config.js';
 import { buildPrompt, budgetFor, recipeCaps, allowedToolsFor, selfCheckTools, runtimeAccess, parseAgentResult, spawnAgent, killTree, repairPrompt, SELF_CHECK_PROMPT, childEnvFor } from './runner.js';
 import { runTestCommand, testGateSettings, testRepairPrompt } from './test-gate.js';
 import { gatherContext, gatherDiff, gatherMemory, inlineBudget, writeContext } from './context.js';
@@ -44,9 +46,10 @@ export function concurrencyLimits(config = {}) {
   return { readonly: pick(h.max_concurrent_readonly, DEFAULT_CONCURRENCY.readonly), fix: pick(h.max_concurrent_fix, DEFAULT_CONCURRENCY.fix) };
 }
 
-// What a draft PR says about tests: "passed (worker)" only after a real pass of the gate.
+// What a draft PR says about tests: "passed (worker)" only after a real pass of the gate. The
+// command leaves the machine, so absolute paths in it are replaced (ADR 0033).
 export function gateLine(gate) {
-  if (gate && gate.status === 'passed') return `Tests passed (worker): \`${gate.command}\` exited 0${gate.repaired ? ' after one repair turn' : ''}.`;
+  if (gate && gate.status === 'passed') return `Tests passed (worker): \`${publicCommand(gate.command)}\` exited 0${gate.repaired ? ' after one repair turn' : ''}.`;
   return 'Not test-verified by the worker: no test command is configured for this repository.';
 }
 
@@ -114,7 +117,7 @@ function grantedFingerprints(scopes) {
   } catch { return null; }
 }
 
-export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
+export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDraftPrFn = openDraftPr, claudePath = 'claude', claudeArgs = [], spawnEnv = {}, deadlineMs = null, maxConcurrent, maxReadonly, maxFix, runtimeAvailable, model = null, resolveScopes = catalogScopes } = {}) {
   // Ticket worktree teardown (ADR 0036): at start, then at most hourly from the tick.
   const ticketWorktrees = createTicketWorktreeSweep();
   const running = new Map(); // handoff id -> { child, done, reason, fix }
@@ -293,6 +296,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     const testMs = gate && Number.isFinite(gate.total_ms) ? gate.total_ms : null;
     const timings = entry && entry.spawnedAt !== undefined ? { ...(current.timings ?? {}), agent_ms: Math.max(0, Math.round(performance.now() - entry.spawnedAt - (testMs ?? 0))), ...(testMs !== null ? { test_ms: testMs } : {}) } : null;
     if (gate) delete gate.total_ms;
+    // ADR 0033: the tested tree is its own field on the run, never inside the gate record.
+    const testedTree = gate && gate.tested_tree ? gate.tested_tree : null;
+    if (gate) delete gate.tested_tree;
     // A turn that produced no result event (killed by the deadline or a cancel) leaves usage unknown: recorded as null, not omitted.
     const usage = entry && entry.env ? { num_turns: entry.usage ? entry.usage.turns : null, cost_usd: entry.usage && entry.usage.costSeen ? Math.round(entry.usage.cost * 10000) / 10000 : null, cost_estimated: !((entry.spawnExtras && entry.spawnExtras.childEnv) ?? { ...process.env, ...entry.env }).ANTHROPIC_API_KEY } : null;
     // Spec §5.4: what the agent says it tried is checked against the run's tool ledger, and calls
@@ -350,8 +356,9 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       await record(worker, h.id, parsed, { state: 'failed', error: { code: gate.status === 'timeout' ? 'tests-timeout' : 'tests-failed', message: `the test command ${why}${gate.attempts > 1 ? ' again after one repair turn' : ' and no repair turn was possible'}; no fix is suggested` }, extra });
       return;
     }
-    const extras = await fixExtras(worker, current, { finalize: true, gate });
+    const extras = await fixExtras(worker, current, { finalize: true, gate, testedTree });
     if (gate) extras.test_gate = gate;
+    if (testedTree) extras.tested_tree = testedTree;
     if (quality) extras.result_quality = { ...quality, problems: parsed.problems };
     // Only a run that finished cleanly changes files; a failed, cancelled or timed-out one leaves
     // every original untouched.
@@ -513,11 +520,14 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
   }
 
   // For fix runs: collect changed files and a patch; perform explicitly permitted commit/push/PR.
-  async function fixExtras(worker, h, { finalize = false, gate = null } = {}) {
+  async function fixExtras(worker, h, { finalize = false, gate = null, testedTree = null } = {}) {
     const out = {};
+    // ADR 0033: counts of the guard's decisions, for a run the guard watched (autonomous, full).
+    if (['autonomous', 'full'].includes(h.access)) { try { out.guard_summary = guardSummary(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { /* no summary */ } }
     if (!h.worktree_path || !fs.existsSync(h.worktree_path)) return out;
     try {
       out.changed_files = await changedFiles(h.worktree_path);
+      out.change_summary = changeSummary(out.changed_files, changeGlobs(ctx.config.repos[h.repo_id]));
       const patch = await diffPatch(h.worktree_path);
       const patchPath = path.join(handoffsDir(worker.env), 'results', `${h.id}.patch`);
       fs.mkdirSync(path.dirname(patchPath), { recursive: true });
@@ -530,13 +540,28 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     if (!finalize || !out.changed_files.length) return out;
     const p = h.permissions ?? {};
     const repo = ctx.config.repos[h.repo_id] ? { id: h.repo_id, ...ctx.config.repos[h.repo_id] } : null;
+    let receipt = null;
     try {
       if (p.commit) await takeSnapshot(worker, h.id, 'before-commit');
       if (p.commit) out.commit_sha = await commitAll(h.worktree_path, `handoff(${h.id.slice(0, 8)}): ${h.note || 'attempt fix'}`);
+      // ADR 0033: the evidence is journaled before anything leaves the machine, so the receipt a
+      // draft PR carries is built from journaled facts only.
+      if (out.commit_sha) {
+        try { out.commit_tree = await git(h.worktree_path, ['rev-parse', `${out.commit_sha}^{tree}`]); } catch { /* compared as not recorded */ }
+        // A receipt is built only from evidence that reached the journal; without it the PR has none.
+        try {
+          updateHandoff(worker, h.id, { ...(gate ? { test_gate: gate } : {}), ...(testedTree ? { tested_tree: testedTree } : {}), commit_sha: out.commit_sha, ...(out.commit_tree ? { commit_tree: out.commit_tree } : {}), ...(out.guard_summary ? { guard_summary: out.guard_summary } : {}), change_summary: out.change_summary, changed_files: out.changed_files });
+          if (p.push_branch && p.open_draft_pr) receipt = buildReceipt(worker.state, h.id);
+        } catch (err) { worker.log(`evidence receipt not built for ${h.id}: ${err.message}`); }
+      }
       if (p.push_branch && out.commit_sha) {
         try { await pushBranch(h.worktree_path, h.branch, repo); out.branch = h.branch; out.pushed_branch = h.branch; } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `push may have partially happened: ${err.message}`]; out.error = { code: 'push-failed', message: err.message }; return out; }
         if (p.open_draft_pr) {
-          try { out.pr_url = await openDraftPr(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body: `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.\n\n${gateLine(gate)}` }); } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
+          const body = `Draft opened by Session Quill handoff ${h.id} for ticket ${h.ticket_id}. Not a deployment.\n\n${gateLine(gate)}${receipt ? `\n\n${receipt.markdown}` : ''}`;
+          try {
+            out.pr_url = await openDraftPrFn(h.worktree_path, { branch: h.branch, base: repo ? repo.default_branch : 'main', title: `Handoff: ${h.note || h.id.slice(0, 8)}`, body });
+            if (receipt) out.receipt = { sha256: receipt.sha256, through_sequence: receipt.through_sequence };
+          } catch (err) { out.uncertain_effects = [...(h.uncertain_effects ?? []), `draft PR creation uncertain: ${err.message}`]; }
         }
       }
     } catch (err) {
@@ -569,6 +594,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
     await takeSnapshot(worker, h.id, 'before-tests');
     let result = await once();
     total += result.ms;
+    // Every attempt's exit code and time is kept (ADR 0033); the output tail only for the last.
+    const runs = [{ status: result.status, exit_code: result.exit_code, ms: result.ms }];
     const timeLeft = () => !entry.deadlineAt || Date.parse(entry.deadlineAt) - Date.parse(worker.now()) >= 60_000;
     if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft() && remainingUsd(entry) <= 0) (entry.budgetNotes ??= []).push('test-repair-skipped-budget-spent');
     else if (result.status !== 'passed' && !entry.reason && entry.sessionId && timeLeft()) {
@@ -580,9 +607,14 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, claude
       attempts = 2;
       result = await once();
       total += result.ms;
+      runs.push({ status: result.status, exit_code: result.exit_code, ms: result.ms });
     }
     if (entry.reason) return { outcome, gate: null };
-    return { outcome, gate: { status: result.status, command, exit_code: result.exit_code, ms: result.ms, tail: result.tail, attempts, repaired: attempts > 1 && result.status === 'passed', total_ms: total } };
+    // The tree the passing run saw, written with a temporary index so the checkout's own index is
+    // untouched (ADR 0033); compared later with the commit's tree. Carried out of the gate record.
+    let testedTree = null;
+    if (result.status === 'passed') { try { testedTree = await workingTree(h.worktree_path); } catch (err) { worker.log(`tested tree not recorded for ${h.id}: ${err.message}`); } }
+    return { outcome, gate: { status: result.status, command, exit_code: result.exit_code, ms: result.ms, tail: result.tail, attempts, repaired: attempts > 1 && result.status === 'passed', runs, total_ms: total, ...(testedTree ? { tested_tree: testedTree } : {}) } };
   }
 
   async function dispatch(worker, h) {

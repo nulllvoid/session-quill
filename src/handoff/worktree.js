@@ -1,7 +1,9 @@
 // Isolated Git worktrees for attempt-fix runs: a clean detached checkout at the recorded base
 // commit that never incorporates the live session's dirty changes (TRD §Handoff execution).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { TrackerError } from '../lib/errors.js';
 import { isProtectedBranch } from './permissions.js';
@@ -129,6 +131,20 @@ export async function commitAll(dir, message) {
   await git(dir, ['add', '-A']);
   await git(dir, ['-c', 'user.name=Session Quill handoff', '-c', 'user.email=quill@localhost', 'commit', '-q', '-m', message]);
   return git(dir, ['rev-parse', 'HEAD']);
+}
+
+// The tree of the checkout as `commitAll` would commit it, written with a temporary index so the
+// checkout's own index and HEAD are untouched (ADR 0033: the tested tree).
+export async function workingTree(dir) {
+  const index = path.join(os.tmpdir(), `quill-index-${randomUUID()}`);
+  const env = { GIT_INDEX_FILE: index };
+  try {
+    await git(dir, ['read-tree', 'HEAD'], { env });
+    await git(dir, ['add', '-A'], { env });
+    return await git(dir, ['write-tree'], { env });
+  } finally {
+    try { fs.rmSync(index, { force: true }); } catch { /* ignore */ }
+  }
 }
 
 export function isProtectedTarget(branch, repo) {
