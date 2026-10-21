@@ -570,6 +570,11 @@ table.sessions th { font-size: 12px; color: var(--text-faint); font-weight: 500;
 /* "Approve and queue (scopes: …)" names each scope target, which may be long: the button wraps. */
 .proposal[data-kind="critical"] .proposal-actions { flex-wrap: wrap; max-width: 100%; min-width: 0; }
 .proposal[data-kind="critical"] .proposal-actions .btn { white-space: normal; overflow-wrap: anywhere; text-align: start; max-width: 100%; }
+/* ADR 0031: "Valid for" before Approve and queue; its help wraps under it on a narrow screen. */
+.proposal[data-kind="critical"] .proposal-actions { align-items: center; }
+.proposal[data-kind="critical"] .lease-field { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.proposal[data-kind="critical"] .lease-field select { min-height: 36px; }
+@media (pointer: coarse) { .proposal[data-kind="critical"] .lease-field select { min-height: 44px; } }
 .today-day { margin-bottom: 24px; max-width: 920px; }
 .today-day h3 { font-size: 16px; margin-bottom: 6px; }
 .today-tickets, .today-items { list-style: none; margin: 0; padding: 0; }

@@ -22,8 +22,8 @@ export function runRow(snapshot, h, { now, tz, selected = false }) {
   return `<li class="run-row" data-state="${attr(h.state)}"><button type="button" class="run-open" data-action="open-run" data-run="${attr(h.id)}" aria-label="${attr(label)}" aria-pressed="${selected ? 'true' : 'false'}">${handoffChip({ ...h, error: null })}<span class="run-ticket">${ticket}</span><span class="run-recipe">${esc(name)}</span><span class="run-badges">${accessBadge(h)} ${testGateBadge(h.test_gate)}</span><span class="run-facts small muted">${esc(facts.join(' · '))}</span><span class="run-time small muted">${timeEl(h.requested_at, now, tz)}</span></button></li>`;
 }
 
-function proposalRow(snapshot, p, { now, pending }) {
-  if (p.state !== 'expired') return proposalItem(p, snapshot, { now, pending, withTicket: true }).replace('<li class="proposal"', '<li class="proposal run-row" data-state="proposed"');
+function proposalRow(snapshot, p, { now, pending, leases = null }) {
+  if (p.state !== 'expired') return proposalItem(p, snapshot, { now, pending, withTicket: true, leases }).replace('<li class="proposal"', '<li class="proposal run-row" data-state="proposed"');
   const t = ticketById(snapshot, p.ticket_id);
   const why = !t ? 'ticket not found' : t.status === 'done' ? 'ticket is done' : 'older than 7 days';
   return `<li class="proposal run-row" data-proposal="${attr(p.id)}" data-state="expired"><strong>${esc(p.recipe.name)}</strong> <span class="muted small">${t ? esc(t.key) : ''} proposed ${timeEl(p.proposed_at, now, snapshot.meta.timezone)}</span> <span class="chip small">Expired · ${esc(why)}</span></li>`;
@@ -40,7 +40,7 @@ function batchGroup(snapshot, g, { now, tz, caps, selectedRun }) {
   return `<li class="run-batch" data-batch="${attr(g.id)}"><div class="run-batch-head"><span class="eyebrow">Batch ${esc(g.id.slice(0, 8))}</span><span class="small">${esc(names.length === 1 ? names[0] : 'mixed')} · ${esc(parts.join(' · '))}</span><div class="batch-bar" role="progressbar" aria-label="${attr(`Batch ${g.id.slice(0, 8)}: ${finished} of ${p.total} runs finished`)}" aria-valuemin="0" aria-valuenow="${finished}" aria-valuemax="${p.total}"><span style="width:${pct}%"></span></div>${cancel}</div><ul class="run-list">${g.items.map((i) => runRow(snapshot, i.run, { now, tz, selected: selectedRun === i.id })).join('')}</ul></li>`;
 }
 
-export function renderRuns(rawSnapshot, filters, { now, pending = [], tab = null, selectedRun = null, memory = null } = {}) {
+export function renderRuns(rawSnapshot, filters, { now, pending = [], tab = null, selectedRun = null, memory = null, leases = null } = {}) {
   const snapshot = normalizeSnapshot(rawSnapshot);
   const tz = snapshot.meta.timezone;
   const caps = snapshot.capabilities ?? {};
@@ -50,7 +50,7 @@ export function renderRuns(rawSnapshot, filters, { now, pending = [], tab = null
   const tablist = `<div class="run-tabs" role="tablist" aria-label="Run filters">${names.map((n) => `<button type="button" role="tab" id="run-tab-${n}" data-action="run-tab" data-tab="${n}" aria-selected="${n === current}" aria-controls="run-panel" tabindex="${n === current ? 0 : -1}">${esc(RUN_TAB_LABELS[n])}${n === 'all' ? '' : ` <span class="count">${esc(tabs[n].length)}</span>`}</button>`).join('')}</div>`;
   const entries = groupRuns(tabs[current]);
   const body = entries.length
-    ? `<ul class="run-list">${entries.map((e) => (e.kind === 'batch' ? batchGroup(snapshot, e, { now, tz, caps, selectedRun }) : e.kind === 'proposal' ? proposalRow(snapshot, e.proposal, { now, pending }) : e.kind === 'learning' ? learningItem(e.entry, snapshot, { now }) : e.kind === 'memory-conflict' ? memoryConflictItem(e.conflict, snapshot) : runRow(snapshot, e.run, { now, tz, selected: selectedRun === e.id }))).join('')}</ul>`
+    ? `<ul class="run-list">${entries.map((e) => (e.kind === 'batch' ? batchGroup(snapshot, e, { now, tz, caps, selectedRun }) : e.kind === 'proposal' ? proposalRow(snapshot, e.proposal, { now, pending, leases }) : e.kind === 'learning' ? learningItem(e.entry, snapshot, { now }) : e.kind === 'memory-conflict' ? memoryConflictItem(e.conflict, snapshot) : runRow(snapshot, e.run, { now, tz, selected: selectedRun === e.id }))).join('')}</ul>`
     : emptyState(EMPTY[current][0], EMPTY[current][1]);
   return `<section class="view view-runs" aria-labelledby="tab-runs">${tablist}<div id="run-panel" role="tabpanel" aria-labelledby="run-tab-${current}">${body}</div></section>`;
 }

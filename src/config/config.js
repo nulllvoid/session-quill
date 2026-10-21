@@ -21,6 +21,8 @@ const USER_ONLY_FIELDS = new Set([
   'handoff', 'prod', 'mcp_policy', 'scopes', 'memory',
   // 2.0.0: which files reach a ticket worktree and when it goes (ADR 0036).
   'worktree',
+  // ADR 0031: whether an approved critical run must dry-run its pinned writes first.
+  'critical',
 ]);
 
 // `[worktree]` (ADR 0036), user config only: `auto` makes `ticket work|bind` mount a ticket worktree
@@ -139,6 +141,16 @@ export function resolveConfig({ cli = {}, session = {}, repo = {}, user = {} } =
     key_prefix: user.key_prefix ?? 'LOCAL',
     timezone: user.timezone ?? 'UTC',
   };
+}
+
+/**
+ * `[critical]` (ADR 0031): `require_dry_run` (default true) makes an approved critical run's pinned
+ * k8s.write or db.write action wait for its server-side dry run. Only an explicit `false` turns it
+ * off; any other value keeps it on. User config only.
+ */
+export function criticalSettings(config = {}) {
+  const c = config && typeof config.critical === 'object' && config.critical !== null ? config.critical : {};
+  return { requireDryRun: c.require_dry_run !== false };
 }
 
 export const GATE_MODES = ['off', 'nudge', 'strict'];

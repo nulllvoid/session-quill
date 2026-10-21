@@ -523,11 +523,11 @@ const IN_FLIGHT = new Set(['sending', 'pending', 'applying']);
 
 // One proposed run: recipe, access, who proposed it on which page, and Approve / Dismiss for the
 // owner. The editor is what the page reported, so it is shown as data, never as a name we vouch for.
-export function proposalItem(p, snapshot, { now, pending = [], withTicket = false } = {}) {
+export function proposalItem(p, snapshot, { now, pending = [], withTicket = false, leases = null } = {}) {
   const caps = snapshot.capabilities ?? {};
   const tz = snapshot.meta ? snapshot.meta.timezone : 'UTC';
   const sent = pending.find((r) => (r.kind === 'approve-run' || r.kind === 'dismiss-run') && r.payload && r.payload.proposal_id === p.id && IN_FLIGHT.has(r.state));
-  if (p.origin === 'run') return criticalItem(p, snapshot, { now, tz, caps, sent });
+  if (p.origin === 'run') return criticalItem(p, snapshot, { now, tz, caps, sent, withTicket, leases });
   const t = withTicket ? ticketById(snapshot, p.ticket_id) : null;
   const access = p.access === 'full' ? '<span class="chip warning small">Full access</span>' : p.access === 'settings' ? '<span class="chip small">My settings</span>' : p.access === 'autonomous' ? '<span class="chip small">Autonomous</span>' : '<span class="chip small">Standard access</span>';
   const perms = p.permissions ?? {};
@@ -543,8 +543,10 @@ export function proposalItem(p, snapshot, { now, pending = [], withTicket = fals
 // is and which run of which ticket proposed it, the write scopes it needs as warning chips (in
 // words), the exact action the guard would allow as code, the proposal's verify and rollback, and
 // Approve and queue (scopes: …) / Dismiss. Every word came from an agent or config: all escaped.
-// Verify, rollback and risk are omitted when the record has none.
-function criticalItem(p, snapshot, { now, tz, caps, sent }) {
+// Verify, rollback and risk are omitted when the record has none. ADR 0031: "Valid for" before
+// approving (`leases` keeps a choice across polling renders), and, when the worker projected
+// `dry_run`, the dry run the approved run must pass first, or that the action has none.
+function criticalItem(p, snapshot, { now, tz, caps, sent, withTicket = false, leases = null }) {
   const child = ticketById(snapshot, p.ticket_id);
   const spec = child && child.critical_spec && typeof child.critical_spec === 'object' ? child.critical_spec : {};
   const run = (snapshot.handoffs ?? []).find((h) => h.id === p.from_handoff_id) ?? null;
@@ -557,10 +559,23 @@ function criticalItem(p, snapshot, { now, tz, caps, sent }) {
   const line = (label, v) => (typeof v === 'string' && v.trim() ? `<p class="small">${label}: ${esc(v)}</p>` : '');
   const what = child ? `<button type="button" class="link" data-open="${attr(child.id)}">${keyEl(child.key)} ${esc(child.title)}</button>` : keyEl(key);
   const scopeText = scopes.join(', ');
+  // ADR 0031: how long the approval holds; the worker freezes the end in the run's grant.
+  const where = withTicket ? 'runs' : 'detail';
+  const chosen = leases && Object.hasOwn(leases, p.id) ? String(leases[p.id]) : '';
+  const leaseId = `lease-${where}-${p.id}`;
+  const lease = `<label class="lease-field small">Valid for <select id="${attr(leaseId)}" data-lease="${attr(p.id)}" aria-describedby="${attr(`${leaseId}-help`)}">${LEASE_CHOICES.map(([v, label]) => `<option value="${v}"${v === chosen ? ' selected' : ''}>${label}</option>`).join('')}</select></label> <span class="muted small" id="${attr(`${leaseId}-help`)}">The run's writes after it are refused; reads still run.</span>`;
   const actions = !caps.handoff ? '' : sent
     ? ` <span class="muted small">${sent.kind === 'approve-run' ? 'Approval sent' : 'Dismissal queued'}${sent.kind === 'dismiss-run' && sent.state === 'pending' ? ` <button type="button" class="btn small" data-action="cancel-request" data-request="${attr(sent.id)}" aria-label="${attr(`Undo dismissing the critical change on ${key}`)}">${icon('undo')}Undo</button>` : ''}</span>`
-    : ` <span class="proposal-actions"><button type="button" class="btn small" data-action="approve-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Approve and queue (scopes: ${scopeText}): the critical change on ${key}`)}">Approve and queue (scopes: ${esc(scopeText)})</button> <button type="button" class="btn small ghost" data-action="dismiss-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Dismiss the critical change on ${key}`)}">Dismiss</button></span>`;
-  return `<li class="proposal" data-kind="critical" data-proposal="${attr(p.id)}"><span class="critical-head"><strong>Critical change</strong> · ${what} · <span class="muted small">proposed by run <code>${esc(id8)}</code>${parent ? ` of ${esc(parent.key)}` : ''} ${timeEl(p.proposed_at, now, tz)}</span></span>${chips ? ` <span class="critical-scopes">${chips}</span>` : ''}<div class="critical-body"><p class="small">Action: <code class="critical-action">${esc(action)}</code></p>${line('Verify', spec.verify)}${line('Rollback', spec.rollback)}${line('Risk', spec.risk)}</div>${actions}</li>`;
+    : ` <span class="proposal-actions">${lease} <button type="button" class="btn small" data-action="approve-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Approve and queue (scopes: ${scopeText}): the critical change on ${key}`)}">Approve and queue (scopes: ${esc(scopeText)})</button> <button type="button" class="btn small ghost" data-action="dismiss-run" data-ticket="${attr(p.ticket_id)}" data-proposal="${attr(p.id)}" aria-label="${attr(`Dismiss the critical change on ${key}`)}">Dismiss</button></span>`;
+  return `<li class="proposal" data-kind="critical" data-proposal="${attr(p.id)}"><span class="critical-head"><strong>Critical change</strong> · ${what} · <span class="muted small">proposed by run <code>${esc(id8)}</code>${parent ? ` of ${esc(parent.key)}` : ''} ${timeEl(p.proposed_at, now, tz)}</span></span>${chips ? ` <span class="critical-scopes">${chips}</span>` : ''}<div class="critical-body"><p class="small">Action: <code class="critical-action">${esc(action)}</code></p>${dryRunLine(p.dry_run)}${line('Verify', spec.verify)}${line('Rollback', spec.rollback)}${line('Risk', spec.risk)}</div>${actions}</li>`;
+}
+
+const LEASE_CHOICES = [['', 'Whole run'], ['5', '5 min'], ['15', '15 min'], ['60', '1 h']];
+
+function dryRunLine(d) {
+  if (!d || typeof d !== 'object') return '';
+  if (typeof d.twin === 'string' && d.twin) return `<p class="small">Dry run required in run: the guard refuses the action until <code class="critical-action">${esc(d.twin)}</code> exits 0 in the same run.</p>`;
+  return `<p class="small"><span class="chip warning small">${icon('alert')}Dry run required in run</span> This action has no dry run Quill accepts, so the approved run refuses it while [critical] require_dry_run is on.</p>`;
 }
 
 // Whether the ticket already has a run, which an approval would then report instead of queueing.

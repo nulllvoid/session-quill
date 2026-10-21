@@ -79,3 +79,62 @@ test('spec §7.6: on a critical child, the Run dialog says write scopes are a sc
   assert.match(form, /scope grant without a pinned action/);
   assert.doesNotMatch(renderRecipeRunDialog(recipes[0], parent, s), /scope grant without a pinned action/, 'only on a critical child');
 });
+
+// ADR 0031: "Valid for" on the approval (Whole run by default, 5 min, 15 min, 1 h) and the
+// "Dry run required in run" note the worker projects for a pinned k8s or db write.
+test('the critical item offers Valid for: Whole run (default), 5 min, 15 min, 1 h, labelled, and keeps a choice across renders', () => {
+  const s = snap();
+  const html = proposalItem(s.run_proposals[0], s, { now: NOW, withTicket: true });
+  assert.match(html, /<label[^>]*>Valid for <select [^>]*data-lease="55555555-0000-4000-8000-000000000009"/);
+  const opts = [...html.matchAll(/<option value="([^"]*)"( selected)?>([^<]+)<\/option>/g)].map((m) => [m[1], m[3], !!m[2]]);
+  assert.deepEqual(opts, [['', 'Whole run', true], ['5', '5 min', false], ['15', '15 min', false], ['60', '1 h', false]]);
+  assert.match(text(html), /writes after it are refused; reads still run/);
+  assert.ok(html.indexOf('data-lease=') < html.indexOf('data-action="approve-run"'), 'chosen before approving');
+  const kept = proposalItem(s.run_proposals[0], s, { now: NOW, leases: { [proposal.id]: '15' } });
+  assert.match(kept, /<option value="15" selected>15 min<\/option>/);
+  assert.doesNotMatch(kept, /<option value="" selected>/);
+  // Ids differ between Runs and the ticket detail, which can show the same item at once.
+  const idOf = (h) => /<select id="([^"]+)"/.exec(h)[1];
+  assert.notEqual(idOf(html), idOf(kept));
+  // A read-only copy and an approval in flight show no select.
+  const ro = normalizeSnapshot({ ...s, capabilities: { read: true } });
+  assert.doesNotMatch(proposalItem(ro.run_proposals[0], ro, { now: NOW }), /data-lease/);
+  const sent = proposalItem(s.run_proposals[0], s, { now: NOW, pending: [{ id: 'r1', kind: 'approve-run', state: 'pending', payload: { proposal_id: proposal.id, ttl_minutes: 15 } }] });
+  assert.doesNotMatch(sent, /data-lease/);
+  assert.match(sent, /Approval sent/);
+});
+
+test('a pinned k8s or db write shows "Dry run required in run" with its twin as escaped code, or that it has none', () => {
+  const twin = 'kubectl --context stg scale deployment/api --replicas=3 --dry-run=server <b>';
+  const withTwin = snap({ run_proposals: [{ ...proposal, dry_run: { twin } }] });
+  const html = proposalItem(withTwin.run_proposals[0], withTwin, { now: NOW });
+  assert.match(text(html), /Dry run required in run: the guard refuses the action until kubectl --context stg scale deployment\/api --replicas=3 --dry-run=server &lt;b&gt; exits 0 in the same run/);
+  assert.ok(html.includes('<code class="critical-action">kubectl --context stg scale deployment/api --replicas=3 --dry-run=server &lt;b&gt;</code>'));
+  const none = snap({ run_proposals: [{ ...proposal, dry_run: { twin: null } }] });
+  const nh = proposalItem(none.run_proposals[0], none, { now: NOW });
+  assert.match(nh, /<span class="chip warning small">[^<]*(?:<svg[^]*?<\/svg>)?Dry run required in run<\/span>/);
+  assert.match(text(nh), /has no dry run Quill accepts, so the approved run refuses it while \[critical\] require_dry_run is on/);
+  // Not projected (another scope, or require_dry_run off): no note.
+  assert.doesNotMatch(proposalItem(snap().run_proposals[0], snap(), { now: NOW }), /Dry run required/);
+  // The note is information, so a read-only copy shows it too.
+  const ro = normalizeSnapshot({ ...withTwin, capabilities: { read: true } });
+  assert.match(proposalItem(ro.run_proposals[0], ro, { now: NOW }), /Dry run required in run/);
+});
+
+test('the worker projects dry_run for a run-origin k8s or db pin only while [critical] require_dry_run is on', async () => {
+  const { newState } = await import('../core/helpers.js');
+  const { buildSnapshot } = await import('../../src/worker/projections.js');
+  const k8s = { ...proposal, scopes: [{ name: 'k8s.write', target: 'stg', fingerprint: 'f'.repeat(64) }], action_pin: { kind: 'bash', normalized: 'n', guard: 'kubectl --context stg scale deployment/api --replicas=3' } };
+  const rollout = { ...k8s, id: '55555555-0000-4000-8000-00000000000a', action_pin: { ...k8s.action_pin, guard: 'kubectl --context stg rollout restart deployment/api' } };
+  const argo = { ...proposal, id: '55555555-0000-4000-8000-00000000000b' };
+  const project = (critical_dry_run) => {
+    const state = newState();
+    for (const p of [k8s, rollout, argo]) state.runProposals.set(p.id, p);
+    return Object.fromEntries(buildSnapshot(state, { generation_id: 'g', generated_at: NOW, critical_dry_run }).run_proposals.map((p) => [p.id, p.dry_run]));
+  };
+  const on = project(true);
+  assert.deepEqual(on[k8s.id], { twin: 'kubectl --context stg scale deployment/api --replicas=3 --dry-run=server' });
+  assert.deepEqual(on[rollout.id], { twin: null });
+  assert.equal(on[argo.id], undefined);
+  assert.deepEqual(Object.values(project(false)), [undefined, undefined, undefined]);
+});

@@ -30,6 +30,8 @@ function fixture() {
     cred_report: { kubernetes: 'readonly', residual: [S], scope_errors: [S] }, max_turns: 7, max_budget_usd: 1,
     memory_filing: { filed: 1, problems: [{ code: S, count: 1 }] },
     critical_notes: [{ index: 0, reason: S }],
+    // ADR 0031: a critical approval's "Valid for" minutes stay on the run record.
+    lease_minutes: 15,
     // R55: what an interrupted run's ledger shows may have run (prod target, MCP tool, scope name).
     possible_writes: [`kubectl apply on ${S}-ctx may have run`, `mcp__${S}__editIssue on X-1 may have run`, `a ${S}.write call may have run`],
     // Run snapshots (ADR 0035): refs, trees, commits and labels stay on the owner's dashboard.
@@ -51,7 +53,7 @@ function fixture() {
   s.sessions[0].ticket_ids = [s.sessions[0].ticket_ids[0], local.id];
   // A critical-change proposal (spec §7.3): its action pin, scopes and local-only child stay on the dashboard.
   local.critical_spec = { action: S, action_pin: { guard: S, normalized: S }, scopes: [{ name: 'argo.sync', target: S, fingerprint: S }] };
-  s.run_proposals = [{ id: 'p-critical', ticket_id: local.id, origin: 'run', from_handoff_id: h.id, recipe: { name: 'critical-change', source: 'builtin', hash: null }, access: 'autonomous', scopes: [{ name: 'argo.sync', target: S, fingerprint: S }], action_pin: { guard: S, normalized: S }, state: 'proposed', ticket_key: local.key }];
+  s.run_proposals = [{ id: 'p-critical', ticket_id: local.id, origin: 'run', from_handoff_id: h.id, recipe: { name: 'critical-change', source: 'builtin', hash: null }, access: 'autonomous', scopes: [{ name: 'argo.sync', target: S, fingerprint: S }], action_pin: { guard: S, normalized: S }, dry_run: { twin: `${S} --dry-run=server` }, state: 'proposed', ticket_key: local.key }];
   return s;
 }
 
@@ -78,7 +80,7 @@ test('exported handoffs carry counts and the stage, not the records', () => {
   delete forged.handoffs[0].scopes;
   forged.handoffs[0].scope_count = 'k8s.write:prod';
   assert.equal('scope_count' in sanitizeSnapshot(forged, ALL).handoffs[0], false, 'only a numeric count travels');
-  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots']) assert.equal(k in out, false, k);
+  for (const k of ['attempts', 'learnings', 'critical_changes', 'tool_ledger', 'prod_effects', 'scopes', 'action_pin', 'inventory', 'cred_report', 'snapshots', 'lease_minutes']) assert.equal(k in out, false, k);
   assert.equal(sanitizeSnapshot(fixture(), ALL).meta.autonomy, null, 'the machine summary never leaves the dashboard');
   assert.ok(Object.keys(out).every((k) => HANDOFF_EXPORT_FIELDS.includes(k)));
 });

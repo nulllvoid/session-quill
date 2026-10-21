@@ -12,12 +12,13 @@ import { TrackerError } from '../lib/errors.js';
 import { handoffRunDir } from '../lib/paths.js';
 import { MINUTE } from '../lib/time.js';
 import { buildChildEnv, CRED_SYSTEMS } from './cred-env.js';
-import { writeGrant } from './grant.js';
+import { writeGrant, leaseNotAfter } from './grant.js';
 import { writeRunSettings } from './run-settings.js';
 import { MCP_SERVERS_FILE } from './mcp-sources.js';
 import { loadScopeCatalog, resolveScopes, scopeReferences } from './scopes.js';
 import { credentialSettings } from '../config/credentials.js';
 import { mcpSettings } from '../config/mcp-policy.js';
+import { criticalSettings } from '../config/config.js';
 
 // R13: paths inside a checkout no run may change (also named on the context card, ADR 0038).
 export const PROTECTED_CHECKOUT_PATHS = Object.freeze(['.mcp.json', '.claude', '.git']);
@@ -57,7 +58,7 @@ export function createVersionProbe({ claudePath = 'claude', claudeArgs = [], spa
 
 // The run's frozen grant (spec §4.1, §4.2): what the guard reads on every call. Scopes carry name,
 // target, matchers and fingerprint only; a scope's credentials never enter the grant.
-function grantFor({ access, permissions, scopes, actionPins = [], cwd, runDir, contextDir, checkout, repoCfg, config, envOf, credentialSystems }) {
+function grantFor({ access, permissions, scopes, actionPins = [], cwd, runDir, contextDir, checkout, repoCfg, config, envOf, credentialSystems, notAfter = null }) {
   const { mcpPolicy, trustedMcpServers } = mcpSettings(config);
   const temps = [...new Set([envOf('TEMP'), envOf('TMP'), envOf('TMPDIR'), os.tmpdir()].filter((t) => typeof t === 'string' && path.isAbsolute(t)))];
   const home = envOf('USERPROFILE') ?? envOf('HOME') ?? os.homedir();
@@ -69,6 +70,10 @@ function grantFor({ access, permissions, scopes, actionPins = [], cwd, runDir, c
     scopes: scopes.map((x) => ({ name: x.name, ...(x.target ? { target: x.target } : {}), matchers: x.matchers ?? {}, fingerprint: x.fingerprint ?? null })),
     // An approved critical change's pinned action per scope (ADR 0028, R43: the exact pin string).
     actionPins: actionPins.filter((a) => a && typeof a.scope === 'string' && typeof a.pin === 'string').map((a) => ({ scope: a.scope, pin: a.pin })),
+    // ADR 0031: a run with action pins dry-runs its pinned k8s/db writes first unless the owner
+    // turned that off, and an approval's lease ends at notAfter; both are frozen with the grant.
+    ...(actionPins.length ? { requireDryRun: criticalSettings(config).requireDryRun } : {}),
+    ...(notAfter ? { notAfter } : {}),
     // Spec §4.2: the checkout or sandbox, the run dir and its context snapshot, temp, and Claude's
     // plugin and skill directories; the checkout is writable only with an edit permission.
     // R25: a covered shell write must run with the agent's working directory inside this root.
@@ -91,13 +96,16 @@ const grantedPermissions = (permissions) => Object.keys(permissions).filter((k) 
 /**
  * Prepares one autonomous run and returns what spawnAgent needs plus the credential report.
  * @param {{ storeEnv: object, config: object, handoff: object, cwd: string, checkout: string|null,
- *   repoCfg: object|null, scopes: object[], env: object }} opts  storeEnv: the worker's env (locates
- *   the run dir); env: the run's own variables (QUILL_HANDOFF_ID, …), merged over process.env;
- *   scopes: resolveScopes() entries.
+ *   repoCfg: object|null, scopes: object[], env: object, startedAt?: string }} opts  storeEnv: the
+ *   worker's env (locates the run dir); env: the run's own variables (QUILL_HANDOFF_ID, …), merged
+ *   over process.env; scopes: resolveScopes() entries; startedAt: the dispatch time an approval's
+ *   lease (`lease_minutes`) counts from.
+ * Throws `invalid-ttl` when the run records a lease it cannot have.
  * Throws `scope-credentials-missing` when a granted scope whose commands need credentials of their
  * own got none (for example an `env:NAME` reference that is not set when the run starts).
  */
-export function prepareAutonomous({ storeEnv, config, handoff: h, cwd, checkout, repoCfg, scopes, env }) {
+export function prepareAutonomous({ storeEnv, config, handoff: h, cwd, checkout, repoCfg, scopes, env, startedAt = new Date().toISOString() }) {
+  const notAfter = leaseNotAfter(startedAt, h.lease_minutes);
   const runDir = handoffRunDir(storeEnv, h.id);
   fs.mkdirSync(runDir, { recursive: true });
   const contextDir = path.join(runDir, 'context');
@@ -117,7 +125,7 @@ export function prepareAutonomous({ storeEnv, config, handoff: h, cwd, checkout,
   // CLI read on any other is refused with the onboarding hint (spec §3).
   const credentialSystems = CRED_SYSTEMS.filter((sys) => built.report[sys] && built.report[sys] !== 'stub');
   const actionPins = Array.isArray(h.action_pins) ? h.action_pins : [];
-  const grant = grantFor({ access: 'autonomous', permissions, scopes, actionPins, cwd, runDir, contextDir, checkout, repoCfg, config, envOf: lookup(built.env), credentialSystems });
+  const grant = grantFor({ access: 'autonomous', permissions, scopes, actionPins, cwd, runDir, contextDir, checkout, repoCfg, config, envOf: lookup(built.env), credentialSystems, notAfter });
   const { sha256 } = writeGrant(runDir, grant);
   const settingsPath = writeRunSettings(runDir);
   const childEnv = {
