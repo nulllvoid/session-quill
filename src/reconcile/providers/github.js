@@ -3,7 +3,7 @@ import { toIso } from '../../lib/time.js';
 import { TrackerError } from '../../lib/errors.js';
 
 const GITHUB_PR_URL = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/;
-const GITHUB_PR_PARTS = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/pull\/\d+$/;
+const GITHUB_PR_PARTS = /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d+)$/;
 const SHA = /^[0-9a-f]{40}$/;
 // ADR 0033: a revert counts against a merge only when it lands within this long of the merge.
 export const REVERT_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -27,14 +27,29 @@ export function mapGithubPr(json) {
 
 const parse = (out) => { try { return JSON.parse(out); } catch { throw new TrackerError('provider-error', 'gh returned malformed JSON'); } };
 
+const escapeRe = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// A merged PR is the revert of PR <number> of <owner>/<repo> only when it names that PR the way
+// GitHub's Revert button does: "Reverts <owner>/<repo>#<number>" in its body, or a head branch
+// `revert-<number>-…`. A title is never enough: a bulk dispatch gives many runs' PRs one title.
+export function namesRevertOf(pr, { owner, repo, number }) {
+  if (!pr || typeof pr !== 'object') return false;
+  const body = typeof pr.body === 'string' ? pr.body : '';
+  const head = typeof pr.headRefName === 'string' ? pr.headRefName : '';
+  const named = new RegExp(`(?:^|\\s)Reverts ${escapeRe(owner)}/${escapeRe(repo)}#${number}(?!\\d)`, 'i');
+  return named.test(body) || head.startsWith(`revert-${number}-`);
+}
+
 // ADR 0033: the revert of a merged PR within REVERT_WINDOW_MS of its merge, if any: a commit on
-// the default branch whose message says "This reverts commit <merge commit>", or a merged PR
-// titled `Revert "<title>"`. Only shas and times are read from what GitHub returns.
+// the default branch whose message says "This reverts commit <merge commit>", or a merged PR that
+// names this one as the PR it reverts (namesRevertOf). Only shas and times are read from what
+// GitHub returns.
 export async function findGithubRevert(exec, { url, merged_at = null, merge_commit = null }) {
   const m = GITHUB_PR_PARTS.exec(url ?? '');
   if (!m) throw new TrackerError('provider-error', `unsupported GitHub PR URL ${url}`);
   const slug = `${m[1]}/${m[2]}`;
-  const view = parse(await exec('gh', ['pr', 'view', url, '--json', 'title,mergeCommit,mergedAt']));
+  const self = { owner: m[1], repo: m[2], number: m[3] };
+  const view = parse(await exec('gh', ['pr', 'view', url, '--json', 'mergeCommit,mergedAt']));
   const merge = sha(merge_commit) ?? sha(view && view.mergeCommit && view.mergeCommit.oid);
   const mergedAt = merged_at ?? (view && view.mergedAt ? toIso(view.mergedAt) : null);
   if (!merge || !mergedAt) return { reverted_by: null, reverted_at: null, merge_commit: merge };
@@ -48,13 +63,10 @@ export async function findGithubRevert(exec, { url, merged_at = null, merge_comm
     const at = c && c.commit && c.commit.committer ? c.commit.committer.date : null;
     if (sha(c && c.sha) && message.includes(marker) && within(at)) return { reverted_by: c.sha, reverted_at: toIso(at), merge_commit: merge };
   }
-  const title = view && typeof view.title === 'string' ? view.title : null;
-  if (title) {
-    const list = parse(await exec('gh', ['pr', 'list', '--repo', slug, '--state', 'merged', '--search', 'Revert in:title', '--limit', '30', '--json', 'title,mergedAt,mergeCommit']));
-    for (const p of Array.isArray(list) ? list : []) {
-      const oid = sha(p && p.mergeCommit && p.mergeCommit.oid);
-      if (oid && p.title === `Revert "${title}"` && within(p.mergedAt)) return { reverted_by: oid, reverted_at: toIso(p.mergedAt), merge_commit: merge };
-    }
+  const list = parse(await exec('gh', ['pr', 'list', '--repo', slug, '--state', 'merged', '--search', 'Revert in:title', '--limit', '50', '--json', 'title,body,headRefName,mergedAt,mergeCommit']));
+  for (const p of Array.isArray(list) ? list : []) {
+    const oid = sha(p && p.mergeCommit && p.mergeCommit.oid);
+    if (oid && namesRevertOf(p, self) && within(p.mergedAt)) return { reverted_by: oid, reverted_at: toIso(p.mergedAt), merge_commit: merge };
   }
   return { reverted_by: null, reverted_at: null, merge_commit: merge };
 }
