@@ -75,3 +75,75 @@ export function usageItems(stats, { hookBudgetMs = 200 } = {}) {
   }
   return items;
 }
+
+// Recipe stats for `quill doctor` (ADR 0033, FR-5.2): plain counts per recipe over the last `days`,
+// from the journaled run records and owner requests on this machine. Counts, never a score.
+export const RECIPE_STATS_DAYS = 30;
+export const REVERT_WINDOW_MS = 48 * 60 * 60 * 1000;
+// Owner requests that step into a run: stopping it or undoing a file it changed. A retry or a
+// resume is counted from the new run's `retry_of`, once.
+export const INTERVENTION_KINDS = new Set(['handoff-cancel', 'undo-file-effect']);
+
+const values = (x) => (x instanceof Map ? [...x.values()] : Array.isArray(x) ? x : []);
+
+/**
+ * @returns {Array<{ recipe: string, runs: number, done: number, failed: number, tests_first_pass: number,
+ *   tests_after_repair: number, interventions: number, merged: number, reverted_48h: number,
+ *   pending_48h: number, median_done_to_merge_ms: number|null }>}
+ */
+export function recipeStats({ handoffs = [], tickets = [], requests = [], nowIso, days = RECIPE_STATS_DAYS }) {
+  const now = Date.parse(nowIso);
+  const runs = values(handoffs).filter((h) => h && h.requested_at && ageMs(h.requested_at, nowIso) <= days * DAY && ageMs(h.requested_at, nowIso) >= 0);
+  // A PR the run opened, as the run observed it, else as its ticket's evidence shows it.
+  const ticketPrs = new Map();
+  for (const t of values(tickets)) for (const pr of t && Array.isArray(t.prs) ? t.prs : []) if (pr && pr.url) ticketPrs.set(pr.url, pr);
+  const interventions = new Map();
+  for (const r of values(requests)) {
+    if (!r || r.state !== 'applied') continue;
+    const id = r.payload && typeof r.payload.handoff_id === 'string' ? r.payload.handoff_id : null;
+    if (id && INTERVENTION_KINDS.has(r.kind)) interventions.set(id, (interventions.get(id) ?? 0) + 1);
+  }
+  // A retry (or a resume) is the owner queuing the run again: it counts against the run it retries.
+  for (const h of values(handoffs)) if (h && typeof h.retry_of === 'string') interventions.set(h.retry_of, (interventions.get(h.retry_of) ?? 0) + 1);
+  const by = new Map();
+  for (const h of runs) {
+    const recipe = h.recipe && typeof h.recipe.name === 'string' ? h.recipe.name : h.mode ?? 'unknown';
+    const s = by.get(recipe) ?? { recipe, runs: 0, done: 0, failed: 0, tests_first_pass: 0, tests_after_repair: 0, interventions: 0, merged: 0, reverted_48h: 0, pending_48h: 0, merge_ms: [] };
+    s.runs += 1;
+    if (h.state === 'done') s.done += 1;
+    else if (h.state === 'failed' || h.state === 'timed-out') s.failed += 1;
+    const g = h.test_gate;
+    if (g && g.status === 'passed') {
+      const attempts = Array.isArray(g.runs) && g.runs.length ? g.runs.length : g.attempts ?? 1;
+      if (attempts === 1) s.tests_first_pass += 1;
+      else if (g.repaired) s.tests_after_repair += 1;
+    }
+    s.interventions += interventions.get(h.id) ?? 0;
+    const obs = h.pr_observed && h.pr_observed.state ? h.pr_observed : h.pr_url ? ticketPrs.get(h.pr_url) ?? null : null;
+    if (obs && obs.state === 'merged' && obs.merged_at) {
+      s.merged += 1;
+      const merged = Date.parse(obs.merged_at);
+      const revertedIn = obs.reverted_by && obs.reverted_at ? Date.parse(obs.reverted_at) - merged : null;
+      if (revertedIn !== null && revertedIn >= 0 && revertedIn <= REVERT_WINDOW_MS) s.reverted_48h += 1;
+      // Not yet known: the window is still open, or nothing checked it after the window closed.
+      else if (now < merged + REVERT_WINDOW_MS || !(obs.revert_checked_at && Date.parse(obs.revert_checked_at) >= merged + REVERT_WINDOW_MS)) s.pending_48h += 1;
+      if (h.finished_at && merged >= Date.parse(h.finished_at)) s.merge_ms.push(merged - Date.parse(h.finished_at));
+    }
+    by.set(recipe, s);
+  }
+  return [...by.values()].sort((a, b) => b.runs - a.runs || a.recipe.localeCompare(b.recipe)).map(({ merge_ms, ...s }) => {
+    const sorted = merge_ms.sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return { ...s, median_done_to_merge_ms: sorted.length ? (sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2)) : null };
+  });
+}
+
+// One line per recipe for the doctor report.
+export function recipeLines(stats, { days = RECIPE_STATS_DAYS } = {}) {
+  if (!stats.length) return [`no agent runs in the last ${days} days`];
+  const hours = (ms) => (ms === null ? null : ms < 3_600_000 ? `${Math.round(ms / 60_000)} min` : `${(ms / 3_600_000).toFixed(1)} h`);
+  return stats.map((s) => {
+    const merge = s.merged ? `${s.merged} PR(s) merged, ${s.reverted_48h} reverted within 48 h${s.pending_48h ? `, ${s.pending_48h} not yet known` : ''}${s.median_done_to_merge_ms !== null ? `, median ${hours(s.median_done_to_merge_ms)} from run end to merge` : ''}` : 'no PR merged';
+    return `${String(s.recipe).replace(/[\p{Cc}\p{Cf}]+/gu, '').slice(0, 60)}: ${s.runs} run(s), ${s.done} done, ${s.failed} failed · tests passed (worker) first time ${s.tests_first_pass}, after a repair ${s.tests_after_repair} · ${s.interventions} owner intervention(s) · ${merge}`;
+  });
+}

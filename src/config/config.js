@@ -182,6 +182,15 @@ export function resolveTracker(user = {}, repo = null, { warnings = [] } = {}) {
   return merged;
 }
 
+// `[repos.<id>] critical_paths` and `config_globs` (ADR 0033): glob lists that only count a run's
+// changed files on its evidence receipt. A value that is not a list of non-empty strings is
+// ignored: `critical_paths` then means "none configured" and `config_globs` the built-in list.
+export const MAX_CHANGE_GLOBS = 100;
+export function changeGlobs(repo) {
+  const list = (v) => (Array.isArray(v) && v.length && v.every((g) => typeof g === 'string' && g.trim() && g.length <= 300) ? v.slice(0, MAX_CHANGE_GLOBS).map((g) => g.trim()) : null);
+  return { critical_paths: list(repo && repo.critical_paths), config_globs: list(repo && repo.config_globs) };
+}
+
 export function findRepoByPath(cfg, cwd) {
   const resolved = path.resolve(cwd).toLowerCase();
   for (const [id, repo] of Object.entries(cfg.repos || {})) {

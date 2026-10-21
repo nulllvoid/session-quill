@@ -37,7 +37,9 @@ async function sync(ctx, io, flags) {
 // The state the journal replays to. readOnly (commands that only read while the worker may be
 // appending) never opens the journal: open() would rewrite a torn last line, which may be the line
 // the worker is writing; read() stops before it instead.
-export function replayState(ctx, { readOnly = false } = {}) {
+// `throughSequence` stops the replay after that journal sequence (ADR 0033: `quill receipt`
+// rebuilds a receipt from the facts journaled up to the sequence it was built through).
+export function replayState(ctx, { readOnly = false, throughSequence = null } = {}) {
   const j = new Journal(journalPath(ctx.env));
   const info = readOnly || !fs.existsSync(journalPath(ctx.env)) ? { lastSequence: 0 } : j.open();
   j.close();
@@ -47,7 +49,10 @@ export function replayState(ctx, { readOnly = false } = {}) {
     timezone: ctx.storeMeta.timezone, key_prefix: ctx.config.key_prefix, stale_days: ctx.config.stale_days, sync_interval_hours: ctx.config.sync_interval_hours,
     approval_phrases_enabled: ctx.config.approval_phrases_enabled, projects: ctx.config.projects, repos: ctx.config.repos,
   });
-  for (const ev of j.read()) applyEvent(state, ev);
+  for (const ev of j.read()) {
+    if (Number.isInteger(throughSequence) && ev.sequence > throughSequence) break;
+    applyEvent(state, ev);
+  }
   return { state, info };
 }
 

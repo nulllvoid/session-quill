@@ -56,3 +56,42 @@ test('the hook process records its own duration on tool events', () => {
   assert.equal(ev.kind, 'pre-tool');
   assert.ok(Number.isInteger(ev.payload.hook_ms) && ev.payload.hook_ms > 0 && ev.payload.hook_ms < 5000, `hook_ms ${ev.payload.hook_ms}`);
 });
+
+// ADR 0033: recipe stats are counts per recipe from run records and owner requests.
+test('recipeStats counts runs, outcomes, first-time and repaired test passes, interventions, merges and reverts', async () => {
+  const { recipeStats, recipeLines } = await import('../../src/core/usage.js');
+  const at = '2026-10-05T12:00:00Z';
+  const fix = { name: 'attempt-fix' };
+  const merged = (mergedAt, extra = {}) => ({ state: 'merged', merged_at: mergedAt, merge_commit: 'c'.repeat(40), reverted_by: null, revert_checked_at: null, ...extra });
+  const handoffs = [
+    { id: 'r1', recipe: fix, requested_at: at, finished_at: '2026-10-05T13:00:00Z', state: 'done', test_gate: { status: 'passed', attempts: 1, runs: [{ exit_code: 0 }] }, pr_url: 'u1', pr_observed: merged('2026-10-06T13:00:00Z', { revert_checked_at: '2026-10-09T00:00:00Z' }) },
+    // Reverted 10 h after merge: counts as reverted within 48 h.
+    { id: 'r2', recipe: fix, requested_at: at, finished_at: '2026-10-05T13:00:00Z', state: 'done', test_gate: { status: 'passed', attempts: 2, repaired: true, runs: [{ exit_code: 1 }, { exit_code: 0 }] }, pr_url: 'u2', pr_observed: merged('2026-10-05T15:00:00Z', { reverted_by: 'd'.repeat(40), reverted_at: '2026-10-06T01:00:00Z' }) },
+    // Reverted 3 days after merge: outside the window, and checked after it closed.
+    { id: 'r3', recipe: fix, requested_at: at, finished_at: '2026-10-05T13:00:00Z', state: 'done', pr_url: 'u3', pr_observed: merged('2026-10-05T14:00:00Z', { reverted_by: 'e'.repeat(40), reverted_at: '2026-10-08T15:00:00Z', revert_checked_at: '2026-10-08T15:00:00Z' }) },
+    // Merged 10 h ago: the window is still open, so pending.
+    { id: 'r4', recipe: fix, requested_at: at, finished_at: '2026-10-11T01:00:00Z', state: 'done', pr_url: 'u4', pr_observed: merged('2026-10-11T02:00:00Z', { revert_checked_at: '2026-10-11T02:00:00Z' }) },
+    { id: 'r5', recipe: fix, requested_at: at, state: 'failed', test_gate: { status: 'failed', attempts: 2 } },
+    { id: 'r6', recipe: fix, requested_at: at, state: 'cancelled' },
+    { id: 'r7', recipe: fix, requested_at: at, state: 'done', retry_of: 'r5' },
+    // A PR only its ticket's evidence shows as merged; never checked for a revert: pending.
+    { id: 'r8', mode: 'analyse', requested_at: at, finished_at: '2026-10-05T13:00:00Z', state: 'timed-out', pr_url: 'https://github.com/acme/demo/pull/8' },
+    { id: 'old', recipe: fix, requested_at: '2026-08-01T00:00:00Z', state: 'done' },
+  ];
+  const tickets = [{ prs: [{ url: 'https://github.com/acme/demo/pull/8', state: 'merged', merged_at: '2026-10-06T00:00:00Z' }] }];
+  const requests = [
+    { kind: 'handoff-cancel', state: 'applied', payload: { handoff_id: 'r6' } },
+    { kind: 'handoff-cancel', state: 'failed', payload: { handoff_id: 'r1' } },
+    { kind: 'undo-file-effect', state: 'applied', payload: { handoff_id: 'r1', effect_id: 'x' } },
+    { kind: 'accept-suggestion', state: 'applied', payload: { handoff_id: 'r1' } },
+  ];
+  const stats = recipeStats({ handoffs, tickets, requests, nowIso: NOW });
+  assert.deepEqual(stats.map((s) => s.recipe), ['attempt-fix', 'analyse']);
+  const [f, a] = stats;
+  assert.deepEqual({ ...f, median_done_to_merge_ms: undefined }, { recipe: 'attempt-fix', runs: 7, done: 5, failed: 1, tests_first_pass: 1, tests_after_repair: 1, interventions: 3, merged: 4, reverted_48h: 1, pending_48h: 1, median_done_to_merge_ms: undefined });
+  assert.equal(f.median_done_to_merge_ms, 1.5 * 3600_000, 'median of 24 h, 2 h, 1 h and 1 h');
+  assert.deepEqual([a.runs, a.failed, a.merged, a.pending_48h], [1, 1, 1, 1]);
+  const lines = recipeLines(stats);
+  assert.match(lines[0], /^attempt-fix: 7 run\(s\), 5 done, 1 failed · tests passed \(worker\) first time 1, after a repair 1 · 3 owner intervention\(s\) · 4 PR\(s\) merged, 1 reverted within 48 h, 1 not yet known/);
+  assert.deepEqual(recipeLines([]), ['no agent runs in the last 30 days']);
+});

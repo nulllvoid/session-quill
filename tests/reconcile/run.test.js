@@ -153,3 +153,65 @@ test('scheduler: catch-up run on start when never synced, next run due after the
   assert.equal(w.state.lastSync, f.iso());
   await w.stop();
 });
+
+// ADR 0033: merge commits, revert detection within 48 hours, and a run's own draft PR.
+const MERGE = 'c'.repeat(40);
+const REVERT = 'd'.repeat(40);
+
+test('mapGithubPr keeps the merge commit of a merged PR only', () => {
+  assert.equal(mapGithubPr({ state: 'MERGED', mergedAt: '2026-10-02T00:00:00Z', mergeCommit: { oid: MERGE } }).merge_commit, MERGE);
+  assert.equal(mapGithubPr({ state: 'OPEN', mergeCommit: { oid: MERGE } }).merge_commit, null);
+  assert.equal(mapGithubPr({ state: 'MERGED', mergeCommit: { oid: 'not-a-sha' } }).merge_commit, null);
+});
+
+function ghFake({ commits = [], prs = [], title = 'Fix retries' } = {}) {
+  const calls = [];
+  const exec = async (cmd, args) => {
+    calls.push(args);
+    if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify({ title, mergedAt: '2026-10-02T08:00:00Z', mergeCommit: { oid: MERGE } });
+    if (args[0] === 'api') return JSON.stringify(commits);
+    if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify(prs);
+    throw new Error(`unexpected gh ${args.join(' ')}`);
+  };
+  return { exec, calls };
+}
+
+test('findGithubRevert: a revert commit or a Revert PR inside 48 h of the merge counts; one outside does not', async () => {
+  const { findGithubRevert } = await import('../../src/reconcile/providers/github.js');
+  const inside = ghFake({ commits: [{ sha: REVERT, commit: { message: `Revert "Fix retries"\n\nThis reverts commit ${MERGE}.`, committer: { date: '2026-10-03T08:00:00Z' } } }] });
+  assert.deepEqual(await findGithubRevert(inside.exec, { url: PR_URL, merged_at: '2026-10-02T08:00:00Z', merge_commit: MERGE }), { reverted_by: REVERT, reverted_at: '2026-10-03T08:00:00Z', merge_commit: MERGE });
+  assert.match(inside.calls.find((a) => a[0] === 'api')[1], /^repos\/acme\/demo\/commits\?since=.*&until=2026-10-04T08%3A00%3A00Z/);
+  const late = ghFake({ commits: [{ sha: REVERT, commit: { message: `This reverts commit ${MERGE}.`, committer: { date: '2026-10-04T09:00:00Z' } } }], prs: [{ title: 'Revert "Fix retries"', mergedAt: '2026-10-05T00:00:00Z', mergeCommit: { oid: REVERT } }] });
+  assert.equal((await findGithubRevert(late.exec, { url: PR_URL, merged_at: '2026-10-02T08:00:00Z', merge_commit: MERGE })).reverted_by, null);
+  const byPr = ghFake({ prs: [{ title: 'Revert "Other"', mergedAt: '2026-10-02T09:00:00Z', mergeCommit: { oid: 'e'.repeat(40) } }, { title: 'Revert "Fix retries"', mergedAt: '2026-10-02T20:00:00Z', mergeCommit: { oid: REVERT } }] });
+  assert.equal((await findGithubRevert(byPr.exec, { url: PR_URL, merged_at: '2026-10-02T08:00:00Z', merge_commit: MERGE })).reverted_by, REVERT);
+  await assert.rejects(findGithubRevert(inside.exec, { url: 'https://example.com/x' }), /unsupported/);
+});
+
+test('a run PR is observed on the run, checked for a revert until its 48 h window closes, and never moves the ticket', async () => {
+  const f = fixture();
+  const w = new Worker({ config: f.config, storeMeta: f.meta, env: f.env, clock: f.clock, derive });
+  await w.start();
+  writeIngress(f.mk('ticket-create', { ticket: { id: T1, key: 'LOCAL-demo-00000001', title: 'Demo', project_id: 'demo', project_name: 'Demo', category: 'feature', priority: 'P2', parent_id: null, repo_id: 'demo', due: null, jira: null } }), f.env);
+  w.tick();
+  const HID = '99999999-0000-4000-8000-000000000001';
+  w.state.handoffs.set(HID, { id: HID, ticket_id: T1, repo_id: 'demo', state: 'done', finished_at: f.iso(), pr_url: PR_URL, recipe: { name: 'attempt-fix' } });
+  let fetches = 0;
+  let reverts = 0;
+  const providers = { for: () => ({ name: 'github', fetchPr: async () => { fetches += 1; return { state: 'merged', merged_at: '2026-10-02T07:00:00Z', merge_commit: MERGE }; }, findRevert: async () => { reverts += 1; return { reverted_by: null, reverted_at: null, merge_commit: MERGE }; } }) };
+  const before = w.state.tickets.get(T1).status;
+  await runReconciliation(w, { reason: 'test', providers });
+  const h = w.state.handoffs.get(HID);
+  assert.equal(h.pr_observed.state, 'merged');
+  assert.equal(h.pr_observed.merge_commit, MERGE);
+  assert.equal(h.pr_observed.reverted_by, null);
+  assert.equal(h.pr_observed.revert_checked_at, f.iso());
+  assert.equal(w.state.tickets.get(T1).status, before, 'a run PR is not ticket evidence');
+  assert.equal(w.state.tickets.get(T1).prs.length, 0);
+  f.advance(49 * 60 * 60 * 1000);
+  await runReconciliation(w, { reason: 'test', providers });
+  assert.equal(reverts, 2, 'checked once more after the window closed');
+  await runReconciliation(w, { reason: 'test', providers });
+  assert.equal(fetches, 2, 'a settled run PR is not polled again');
+  await w.stop();
+});

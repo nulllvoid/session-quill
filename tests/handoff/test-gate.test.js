@@ -92,6 +92,11 @@ test('a failing gate gets one repair turn with the failing output, then passes',
     assert.equal(h.test_gate.status, 'passed');
     assert.equal(h.test_gate.attempts, 2);
     assert.equal(h.test_gate.repaired, true);
+    // ADR 0033: every attempt keeps its exit code and time; the tested tree is its own field.
+    assert.deepEqual(h.test_gate.runs.map((r) => [r.status, r.exit_code]), [['failed', 1], ['passed', 0]]);
+    assert.ok(h.test_gate.runs.every((r) => Number.isInteger(r.ms)));
+    assert.match(h.tested_tree, /^[0-9a-f]{40}$/);
+    assert.equal('tested_tree' in h.test_gate, false);
     const turns = fs.readFileSync(`${capture}.resume`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const repair = turns.find((t) => /tests failed/i.test(t.prompt));
     assert.ok(repair, 'the repair turn was asked to fix the failing tests');
@@ -205,4 +210,50 @@ test('a worker stopped during the test gate waits for it and ends the run as sto
     assert.equal(h.error.code, 'interrupted');
     assert.match(h.error.message, /worker stopped while the run was in progress/);
   } finally { if (!stopped) await b.w.stop(); }
+});
+
+test('a committed fix journals its evidence before the draft PR, whose body carries the receipt', async () => {
+  const repo = makeRepo();
+  const origin = fs.mkdtempSync(path.join(os.tmpdir(), 'st-origin-'));
+  git(origin, 'init', '-q', '--bare');
+  git(repo.dir, 'remote', 'add', 'origin', origin);
+  const seen = [];
+  const openDraftPrFn = async (dir, opts) => { seen.push({ opts, h: structuredClone(b.w.state.handoffs.get(hid)) }); return 'https://github.com/acme/demo/pull/9'; };
+  let hid = null;
+  const b = await bootWorker({ repo, runtimeAvailable: true, repoExtra: { test_command: gateScript('pass'), provider: 'github', critical_paths: ['src.js'] }, fakeEnv: { FAKE_CLAUDE_EDIT: 'src.js' }, openDraftPrFn });
+  try {
+    const t = b.ticket(T1, 'LOCAL-a-00000001');
+    b.request(RID(30), { target_id: T1, expected_revision: t.revision, payload: { ...fix, permissions: { ...fix.permissions, commit: true, push_branch: true, open_draft_pr: true }, branch: 'quill/receipt-1' } });
+    b.w.tick();
+    hid = b.w.state.requests.get(RID(30)).result.handoff_id;
+    const h = await until(() => { b.w.tick(); const x = b.w.state.handoffs.get(hid); return ['done', 'failed', 'timed-out', 'cancelled'].includes(x.state) ? x : null; }, { timeoutMs: 20_000 });
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.equal(h.pr_url, 'https://github.com/acme/demo/pull/9');
+    assert.match(h.tested_tree, /^[0-9a-f]{40}$/);
+    assert.equal(h.commit_tree, h.tested_tree, 'the committed tree is the tree the tests passed on');
+    assert.equal(h.commit_tree, git(repo.dir, 'rev-parse', `${h.commit_sha}^{tree}`));
+    assert.deepEqual(h.change_summary, { files: 1, config: 0, tests: 0, code: 1, docs: 0, critical_paths: 1 });
+    assert.equal(seen.length, 1);
+    const before = seen[0].h;
+    assert.equal(before.state, 'running', 'the PR opens while the run is still running');
+    assert.equal(before.commit_sha, h.commit_sha, 'the commit was journaled before the PR');
+    assert.equal(before.test_gate.status, 'passed');
+    const body = seen[0].opts.body;
+    assert.match(body, /Draft opened by Session Quill handoff [\s\S]*Not a deployment\./);
+    assert.match(body, /Tests passed \(worker\)/);
+    assert.match(body, /### Session Quill evidence receipt/);
+    assert.match(body, new RegExp(`Tested tree matches commit ${h.commit_sha.slice(0, 7)}`));
+    assert.match(body, new RegExp(`Digest sha256 ${h.receipt.sha256} over the run's journaled facts through sequence ${h.receipt.through_sequence}\\.`));
+    assert.equal(body.trimEnd().split('\n').pop(), 'Not a deployment.');
+    assert.equal(body.includes(repo.dir), false, 'no local path');
+    assert.equal(body.includes(b.home), false, 'no local path');
+    assert.equal(body.includes(os.tmpdir()) || body.includes(process.execPath), false, 'the test command names no local path');
+    assert.match(body, /`<local path> <local path>`/);
+    assert.equal(body.includes('ok 3 tests'), false, 'no test output');
+    // `quill receipt` rebuilds the same receipt from the journal, through the recorded sequence.
+    const { receiptFor } = await import('../../src/cli/commands/receipt.js');
+    const again = receiptFor({ env: b.env, storeMeta: b.meta, config: b.config }, hid.slice(0, 8));
+    assert.equal(again.matches, true);
+    assert.ok(body.endsWith(again.receipt.markdown), 'the PR carries exactly the rebuilt receipt');
+  } finally { await b.w.stop(); }
 });

@@ -27,6 +27,33 @@ function replayDeferred(state, key, toolCallId, result) {
   for (const id of sub.changed) result.changed.add(id);
 }
 
+// What reconciliation observed of the draft PR a run opened (ADR 0033): local to the run record,
+// never exported. Only shas and times are kept; a failed poll keeps the last observation.
+const SHA40 = /^[0-9a-f]{40}$/;
+function applyRunPrObservation(state, upd, ev, result) {
+  const h = state.handoffs.get(upd.handoff_id);
+  if (!h || h.pr_url !== upd.url) return;
+  const prev = h.pr_observed && typeof h.pr_observed === 'object' ? h.pr_observed : {};
+  const iso = (v) => (typeof v === 'string' && v ? v : null);
+  if (upd.error) {
+    h.pr_observed = { ...prev, error: String(upd.error).slice(0, 300) };
+  } else {
+    const sha = (v) => (typeof v === 'string' && SHA40.test(v) ? v : null);
+    const reverted = sha(upd.reverted_by);
+    h.pr_observed = {
+      state: typeof upd.state === 'string' ? upd.state : prev.state ?? 'unknown',
+      merged_at: iso(upd.merged_at) ?? prev.merged_at ?? null,
+      merge_commit: sha(upd.merge_commit) ?? prev.merge_commit ?? null,
+      reverted_by: reverted ?? prev.reverted_by ?? null,
+      reverted_at: (reverted ? iso(upd.reverted_at) : null) ?? prev.reverted_at ?? null,
+      revert_checked_at: iso(upd.revert_checked_at) ?? prev.revert_checked_at ?? null,
+      observed_at: iso(upd.observed_at) ?? ev.occurred_at,
+      error: null,
+    };
+  }
+  result.handoffsChanged.add(h.id);
+}
+
 export function applyEvent(state, ev) {
   return applyEventInner(state, ev, {});
 }
@@ -256,6 +283,8 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       if (p.last_sync) state.lastSync = p.last_sync;
       if (Array.isArray(p.provider_health)) state.providerHealth = p.provider_health;
       for (const upd of Array.isArray(p.pr_updates) ? p.pr_updates : []) {
+        // A run's own draft PR (ADR 0033) is observed on the run, never as ticket evidence.
+        if (upd && typeof upd.handoff_id === 'string') { applyRunPrObservation(state, upd, ev, result); continue; }
         const ticket = state.tickets.get(upd.ticket_id);
         if (!ticket) continue;
         let pr = ticket.prs.find((x) => x.id === upd.pr_id || x.url === upd.url);
