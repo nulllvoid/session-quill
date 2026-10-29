@@ -4,6 +4,32 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-30
+
+Reliable reconciliation and explicit task completion, with dashboard fixes and clearer follow-up ownership.
+
+### Added
+
+- Closure reviews in **Runs → Needs you** and ticket detail explain remaining obligations, provider errors and available retry times. **Reviewed — keep open** keeps unchanged decisions quiet and returns them when material evidence changes.
+- Completion settings distinguish evidence-based tasks from grouping parents, and required children from independent follow-ups. Resolve work as completed, duplicate, superseded or abandoned with a reason; duplicate/superseded resolutions link another ticket.
+- Owner-only reconciliation coverage and task outcome counters distinguish delivered work from other resolutions.
+
+### Fixed
+
+- A merged PR cannot close a ticket while another linked PR, deployment, required child, active run or unresolved run effect remains. New writes and commits cannot reuse older merge evidence; unchanged polling cannot override a manual reopen.
+- Cleanup rechecks current worker state before applying and never treats age alone as completion. Required children propagate completion through explicitly configured grouping parents.
+- Polling fairly rotates bounded batches, backs off failed checks and revisits unresolved work older than 30 days. Refresh can retry immediately within batch limits.
+- Provider-confirmed PRs from runs can reach their exact originating tickets. Shared or reused branches stay conservative when attribution is ambiguous.
+- Exact repeated follow-up findings are suppressed or linked to existing children. New follow-ups require acceptance, a concrete description and an explicit parent relationship; excess proposals remain in the run summary. Private parents retain private children.
+- Dashboard edits survive refresh; dialog focus, accessibility, offline handling and Fieldnotes design guidance are corrected.
+
+### Upgrade notes
+
+- Both package and Claude plugin versions are **2.1.0**. Reducer version 3 rebuilds older state checkpoints from the journal on first start.
+- Legacy children keep an unknown relationship until reviewed. Previously unsafe automatic completion may rebuild as an open review candidate; explicit manual decisions remain authoritative.
+- New analyse-followups results are proposals rather than automatic child tickets. CLI acceptance requires `--blocks-parent` or `--independent` and a valid Goal / Context / Done when description.
+- Closure never deletes workspaces or publishes tracker updates. This release adds no Jev dependency. See [ADR 0042](docs/decisions/0042-reconciliation-closure.md).
+
 ## [2.0.0] - 2026-10-21
 
 Isolation, review and evidence. A ticket can have its own worktree. A fix run's checkout is snapshotted at each step and can be restored. Its diff, an optional critic's notes and an evidence receipt are there to review. CI failures on Quill's own pull requests become fix proposals you approve. Critical approvals can expire and wait for a server-side dry run. Memory goes stale when the code or run environment it describes changes. Secrets are redacted before they reach the journal. Every PRD requirement was adopted inside the existing safety contracts: [docs/research/2.0.0/01-gap-analysis.md](docs/research/2.0.0/01-gap-analysis.md) says how, and [ADR 0029](docs/decisions/0029-ingress-redaction.md) to [ADR 0041](docs/decisions/0041-run-environment-disclosure.md) record the decisions. Every new field, event and error code is in DATA-CONTRACT, section "2.0.0 index"; README "What's new in 2.0" has the setup.
@@ -419,7 +445,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/nulllvoid/session-quill/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/nulllvoid/session-quill/compare/v1.1.1...v2.0.0
 [1.1.1]: https://github.com/nulllvoid/session-quill/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/nulllvoid/session-quill/compare/v1.0.0...v1.1.0
