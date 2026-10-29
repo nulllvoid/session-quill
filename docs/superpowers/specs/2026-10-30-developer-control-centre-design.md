@@ -8,7 +8,9 @@ Help an individual developer finish software work with less context reconstructi
 
 The user asked to explore SWE productivity, agent efficiency, session and issue tracking, Jira and local setups, then said to proceed after the recommendation of a personal developer control centre. This document adopts that recommendation. Details below are design choices proposed by the builder, not preferences explicitly stated by the user.
 
-The first release makes one task flow coherent: **select a linked issue → prepare its workspace → investigate or implement → inspect verification → review the result → preview a tracker update**. Multiple registered repositories are supported; a task continues to have one primary repository. Team coordination and cross-repository execution follow later.
+The first release makes one task flow coherent: **select a linked issue → prepare its workspace → investigate or implement → inspect verification → review the result → reconcile completion**. Multiple registered repositories are supported; a task continues to have one primary repository. Team coordination and cross-repository execution follow later.
+
+Owner refinement, 2026-10-30: reconciliation must reliably retire completed work and track any extra work agents introduce. It must not become a source of more administrative tasks. Reconciliation correctness is now milestone 0, ahead of the workspace UI. Jev remains deferred.
 
 ## Approaches considered
 
@@ -27,6 +29,7 @@ Goals:
 - Bring task context, sessions, execution and evidence together without duplicating their records.
 - Make recovery from interrupted work, missing setup, failed tests and unavailable providers understandable.
 - Reduce unnecessary model calls, repeated context gathering and unbounded repair attempts.
+- Close the work loop: every accepted task has a completion rule and every unresolved task has a reason and a next check or decision. Reconciliation itself creates no tickets.
 - Separate observed evidence, agent claims, user decisions and remote tracker status.
 - Preserve the local-first model and the existing Fieldnotes design system.
 
@@ -55,9 +58,82 @@ These are present in the repository, not new promises:
 
 Keep the single-writer journal/reducer/projection architecture. UI mutations use authenticated, CSRF-protected, validated requests. Hooks remain fast local capture paths; never place network classification or setup checks in hooks.
 
+## Milestone 0: trustworthy reconciliation and closure
+
+### Findings in the current code
+
+On 2026-10-30, isolated in-memory probes reproduced these defects without reading or mutating the owner's task store:
+
+| Finding | Observed behavior | Required correction |
+| --- | --- | --- |
+| `src/core/transitions.js`, merge transition | With `deploy_on = merge`, one merged PR can move a ticket to done while a second PR is still open | Evaluate all outstanding work before deriving completion |
+| `src/core/cleanup.js`, children-done fallback | A blocked parent with an open PR and a pending deployment is labelled closable when its child is done | Child completion must not bypass the parent's blockers, PRs or delivery obligations |
+| `src/reconcile/run.js`, fixed iteration order | Two passes over 201 open PRs made 400 calls to the first 200; the last PR was never checked | Persist fair scheduling of eligible checks across bounded passes |
+
+Additional code-confirmed coverage gaps: run PR observations are explicitly excluded from ticket evidence; branch discovery and run PR observation have 30-day age cutoffs; any existing PR with the same head branch suppresses further branch discovery; tracker sync stores remote status separately without reconciling local completion; the stale flag covers only active tickets. Existing CLI cleanup is not a scheduled lifecycle sweep. These are a mix of deliberate contracts and missing capabilities, not all coding bugs.
+
+The probes establish reproducible logic defects, not their frequency in the owner's live data. No live tickets were closed during this investigation.
+
+### 0A: correctness before broader automation
+
+First fix the three reproduced defects with focused regression tests. Preserve manual status decisions and deployment policy. Introduce one shared pure closure assessment used by evidence transitions and cleanup, with enough complete worker state to inspect runs, dependencies and sessions when available. CLI snapshots lacking required data must return a review candidate, not assert safe automatic completion.
+
+The assessment returns a disposition, evidence references and explicit blockers. Its baseline rules are:
+
+- An open/draft/unknown required PR, pending required deployment, active run or known unfinished required child prevents automatic completion.
+- Missing deployment records are not proof that delivery is complete. Use the repository's explicit completion/deployment policy and journal its evaluated version. Never silently change an existing repository to merge-means-done.
+- A blocked ticket retains its blocker until explicitly resolved. A manual reopen or newer material work invalidates earlier closure evidence. Preserve the manual evidence floor; old evidence cannot be made new by polling again.
+- Closed-unmerged PRs are not successful delivery. Missing, inaccessible or stale provider evidence is unknown, not done.
+- Finishing all children is enough only for a parent explicitly designated as a grouping task with no remaining obligations of its own. Legacy parents are review candidates; do not infer grouping-only intent from the absence of captured edits.
+- Completion is idempotent, journaled with its reason and evidence, and revalidated immediately before application. Replaying or repeating a sweep creates neither duplicate transitions nor new work.
+
+For fair polling, persist per-target last-attempt/last-success and retry eligibility, selecting the oldest eligible check first with stable tie-breaking. Failed checks back off without starving healthy targets. Retain bounded batch sizes; include how many were checked, failed, deferred and remain eligible in the run outcome. A poll count alone is not a successful reconciliation. Aggregate errors across a pass rather than letting one later successful response erase an earlier failure.
+
+### 0B: close the execution-to-ticket gap
+
+Record an explicit relationship between a worker-created PR and its originating ticket/run using the worker's recorded repository, branch and PR URL. Only worker/provider observations qualify as merge evidence; an agent's free-text claim never does. Amend ADR 0033's intentional separation before letting this path affect ticket status. Existing run PR observations remain useful for statistics.
+
+Backfill old run-to-ticket links from trustworthy stored identities and confirmed provider results. Do not infer that all tasks sharing a branch are complete: a reused branch or a PR predating a ticket's work is insufficient. Branch matching supplies candidates; explicit associations and captured contribution evidence decide whether a PR covers a task. If attribution is ambiguous, show one review item on the existing task.
+
+An unresolved task does not disappear from reconciliation after 30 days. Shift old targets to a lower-frequency sweep and expose their next check, last successful evidence and current failure. Continue discovering a newer PR on a reused branch after a previous PR was closed. An explicit Refresh retries within provider limits and does not silently change closure policy.
+
+Tracker status remains separately visible. Remote Done/Closed can produce a closure candidate; local code/deployment obligations still govern automatic completion. Repository-less work needs owner-confirmed acceptance or a separately configured authoritative tracker policy. A mismatch is reconciled on the existing ticket; it never creates a new ticket. Tracker write-back still requires the preview/confirmation flow in 1B.
+
+### Prevent task growth without an exit path
+
+Every accepted agent follow-up records its originating run, parent, reason, concrete Done when condition, and whether it is required to finish the parent or independent follow-up work. New follow-ups must explicitly choose that relationship. Legacy children with unknown intent remain completion-review candidates rather than being automatically reclassified.
+
+Reuse an existing matching task when there is a stable external identity or the same source finding. Detect exact repeated proposals across retries; present similar-title candidates for linking instead of automatically merging different work. Preserve dismissed/resolved source findings so an unchanged run cannot recreate them. A genuinely new finding can be proposed again with its new evidence.
+
+New follow-ups stay suggestions until accepted. Preserve critical-change approval handling, and audit legacy automatic child creation so it cannot bypass this rule. A remediation attempt, transient provider error or failed poll updates its existing run/ticket; it does not create a child. Limit outstanding proposals per root task and consolidate excess findings into the originating run's review, without silently deleting them.
+
+Required children propagate readiness upward to a fixed point in the same reconciliation batch, with cycle protection. Independent follow-ups do not keep delivered parent work open. Reopening a required child raises one closure-conflict item on a completed parent; it never silently reverses a manual completion. Distinguish successful completion from an owner-confirmed duplicate, superseded or abandoned resolution; those outcomes leave active queues but do not count as delivered work. Preserve history rather than deleting tickets.
+
+### One closure queue, not another backlog
+
+Expose reconciliation items within the existing task/attention experience, keyed to task plus evidence version:
+
+| Disposition | Behavior |
+| --- | --- |
+| Complete with sufficient current evidence | Close locally under the existing configured policy; record why |
+| Likely complete, missing attribution or owner acceptance | Show the missing evidence and one review action |
+| Still active or blocked | Show the remaining obligation, who/what can resolve it, and next check |
+| Duplicate / superseded / abandoned | Offer link-and-resolve with explicit reason, distinct from successful delivery |
+| Provider/configuration failure | Show what cannot be verified and retry eligibility; preserve last known facts |
+
+Age alone never marks work done. Include stuck review, deploy-pending and blocked work in the closure queue even though the existing `stale` flag only describes active tickets. Repeated identical observations do not refresh work activity, create repeated notifications, or create duplicate queue items. Acknowledged unchanged decisions stay quiet; new material evidence can bring them back.
+
+After closure, lapse obsolete proposals and remove the task from active planning. Keep receipts and sessions. Workspace cleanup remains a separate existing retention process with dirty-file, ignored-file, active-session and branch protections; closing a ticket never deletes a checkout immediately.
+
+### Acceptance and operating measures
+
+Regression scenarios must cover: multiple PRs with one still open; blocked/unfinished parents with done children; grouping-only parents; run PR merge reaching its task; old unresolved tickets; reused branches; more targets than one polling budget; provider failure/recovery; repeated findings; manual reopen; restart/replay; and separate delivery versus abandoned/duplicate resolutions.
+
+Measure tasks opened, completed and otherwise resolved; age of unresolved work; completion-to-local-closure delay; oldest unchecked target; provider failures; reopened/incorrect closures; and repeated follow-up proposals suppressed. Report these as task outcomes, not agent productivity scores. The milestone succeeds when old work gets a correct disposition, repeated sweeps converge without new tickets, and every unresolved item remains explainable and revisitable.
+
 ## Milestone 1A: task workspace and review
 
-This is the first implementation increment. It is useful without Jev, a new tracker account, or setup automation.
+This follows reconciliation correctness in milestone 0. It is useful without Jev, a new tracker account, or setup automation.
 
 ### One task, one workspace
 
@@ -190,6 +266,6 @@ Choose exact helper names, endpoint spelling, reducer operation naming, file bou
 
 ## Review status
 
-Prepared from the current repository and official Jev/LangChain sources. An independent builder check on 2026-10-30 found no important unanswered planning questions, including after checking current run eligibility and attention handling. Owner design approval remains pending before the implementation plan.
+Prepared from the current repository and official Jev/LangChain sources. An independent builder check on 2026-10-30 found no important unanswered planning questions in the original workspace design, including after checking current run eligibility and attention handling. The later reconciliation milestone is an owner-requested scope refinement. A second independent check inspected the transition, cleanup, reconciliation and reducer paths and found no important unanswered questions for 0A or material contradictions in 0B. Owner design approval remains pending before the implementation plan.
 
 No product implementation, dependencies, external writes or live Jev benchmark are included in this design change. The builder check did not execute tests or validate live external APIs. After the owner deferred Jev, temporary benchmark scaffolding was removed. One tool-disabled Claude connectivity probe completed before cancellation; it was not a routing benchmark and establishes no performance comparison.
