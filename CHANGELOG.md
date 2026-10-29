@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-30
+
+Unified task management, explicit agent modes and daily work continuity.
+
 ### Added
 
 - Unified Work hierarchy with parent completion, pending required subtasks, independent follow-ups, ancestry-preserving filters, priority controls and revision-safe relationship edits.
@@ -13,6 +17,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Compatibility
 
+- Both package and Claude plugin versions are **2.2.0**. Restart the worker after upgrading; Daily scheduling remains opt-in.
 - Legacy routes, recipes, standup/digest schedules and static exports remain supported. Reducer version 5 rebuilds checkpoints; older binaries cannot project new update events and request mutations. See ADR 0043 before downgrading.
 
 ### Fixed
@@ -22,6 +27,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Run change detection includes agent commits since the recorded base plus pending edits. The patch preserves the real staging area, and Git inspection failures are reported instead of treated as no changes.
 - Source-edit runs distinguish no changes, changes not test-verified, changes tested, and unknown outcomes. Doctor labels terminated successful processes as finished and reports these outcomes separately.
 - Doctor validates all nine declared command files and reports missing or malformed installation content.
+- Advanced agent templates are searchable without losing the objective draft or keyboard focus. Windows verification fixtures correctly handle hidden Git pointer files.
 
 ## [2.1.0] - 2026-10-30
 
@@ -464,7 +470,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/nulllvoid/session-quill/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/nulllvoid/session-quill/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/nulllvoid/session-quill/compare/v1.1.1...v2.0.0
 [1.1.1]: https://github.com/nulllvoid/session-quill/compare/v1.1.0...v1.1.1

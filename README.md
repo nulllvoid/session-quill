@@ -12,13 +12,23 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Unlinked work inbox.** Files and commits from a session with no ticket wait on Pick next. Attach them to a ticket, create the ticket from its key, or dismiss them; each action has a 10-second undo. Tracker keys open their ticket in a new tab and copy with one click.
 - **Ticket gate modes.** `nudge` (default) never blocks and asks once at the end of a turn about unlinked work. `strict` denies supported write tools, unknown shell commands and unregistered tools until the session is bound, while dedicated reads and a tested read-only shell subset pass through. `off` only captures. The gate is a workflow aid, not a sandbox: `/session-quill:ticket off` disables it per session, audibly.
 - **Durable capture.** Hooks persist events to local ingress before acknowledging; one worker per store journals them, rebuilds generated state, and writes markdown notes (plain folder or Obsidian vault) within 30 seconds. Your own Summary and Notes sections are preserved byte-for-byte.
-- **Dashboard.** Pick next, Board, Tree, Sessions, Deployments and Today views with revision-checked edits, a 10-second undo window, explicit conflicts, scheduled reconciliation (every two hours unless you set your own schedules) and a Refresh that runs immediately.
+- **Dashboard.** Unified Work with expandable subtasks, priorities and filters, plus Runs, Sessions, Deployments and Daily updates. Edits check revisions, offer a 10-second undo window and surface conflicts; reconciliation runs every two hours unless you set your own schedules.
 - **Schedules and providers.** Named jobs run on cron or interval schedules in your time zone, with a Schedules panel and Run now. PR state comes from GitHub (`gh`) or Bitbucket Cloud and Server.
 - **Sharing.** Read-only standalone HTML snapshots with an export time; no credentials, request code or local paths.
 - **Agent recipes.** Analyse, analyse with follow-ups, attempt a fix, check deployments or write a standup, or add your own recipes as Markdown files. Each runs in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions that the recipe caps, and its suggestions wait for you to accept them.
 - **Environments and Today.** Each merged PR owes a deployment per environment, shown as a PR-by-environment matrix with the evidence for each. Today lists what happened on each day of the last week, and a digest job writes the same summary into your daily note.
 - **Publishers.** Share a roll-up note, a read-only HTML copy or a live claude.ai artifact page. Each sends only the fields and projects you list, and only after you confirm the destination.
 - **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear on a schedule; sync never writes. Opt in to push one ticket's status back yourself, previewed and confirmed. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline. With Run agent on, they can propose an agent run that waits for your Approve.
+
+## What's new in 2.2
+
+**Work** combines the board and relationship views into one expandable hierarchy: see whether a parent is complete, which required subtasks remain, and which follow-ups are independent. Filter and prioritize work without losing its ancestry.
+
+**Run agent** offers Read only, Plan, Auto and Full access, with visible Cancel/Close controls and searchable advanced templates. Plans can be reviewed and edited before execution; source edits and publishing use explicit grants. Finished runs distinguish no changes from verified fixes.
+
+**Daily updates** summarize a day, the last 24 hours or work since the last update, retaining long-task context, blockers and remaining work. Review and edit local drafts, preview a filtered sharing copy, or opt into daily generation.
+
+Restart the worker after upgrading. Its checkpoint rebuilds from the journal; existing routes, recipes and digest schedules remain supported. Before downgrading, back up the Quill home: older workers cannot project the new events. See the [2.2.0 changelog](CHANGELOG.md#220---2026-10-30), [compatibility notes](docs/decisions/0043-unified-work-and-daily-continuity.md#compatibility-and-recovery) and [verification report](docs/CONTROL-CENTRE-VERIFICATION.md).
 
 ## What's new in 2.1
 
