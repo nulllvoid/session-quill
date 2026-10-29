@@ -53,6 +53,8 @@ function fixture() {
   // The Run dialog's machine summary (ADR 0026): inventory, credential report, configured profiles, scope catalog.
   s.meta.autonomy = { inventory: { mcpServers: [{ name: S, status: 'connected', source: 'project' }] }, credentials: { report: { residual: [S], removed: [`${S}_TOKEN`], env_fingerprint: S } }, readonly_configured: ['kubernetes'], trusted_mcp_servers: [S], scopes: [{ name: 'k8s.write', label: S, permits: S, switches: S, targets: [S] }] };
   s.tickets[0].run_notes = [S];
+  s.reconciliation = { items: [{ reason: S }], coverage: { error: S } };
+  Object.assign(s.tickets[0], { closure_review: { evidence_version: S }, resolution: { kind: 'duplicate', reason: S, related_ticket_id: S }, source_run_id: S, source_suggestion_id: S, finding_key: S });
   // ADR 0037: a session's planned files and its last drifting path stay local.
   Object.assign(s.sessions[0], { planned_paths: [`src/${S}.js`], drift: { count: 2, last_path: `src/${S}/x.js`, at: '2026-10-12T00:00:00Z' } });
   s.tickets[0].critical_spec = { rule: S };

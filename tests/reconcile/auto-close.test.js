@@ -65,9 +65,9 @@ function providers({ byBranch = {}, byUrl = {} } = {}) {
   };
 }
 
-const merged = { url: PR, state: 'merged', opened_at: '2026-10-10T20:00:00Z', merged_at: '2026-10-11T07:00:00Z', base_branch: 'main', head_branch: 'fix/polish' };
+const merged = { url: PR, state: 'merged', opened_at: '2026-10-10T20:00:00Z', merged_at: '2026-10-11T08:00:00Z', base_branch: 'main', head_branch: 'fix/polish' };
 
-test('a merged PR found by branch closes every ticket that worked on it when deploy_on = "merge"', async () => {
+test('a merged PR found on a shared branch leaves ambiguous tickets for review', async () => {
   const f = fixture({ deployOn: 'merge' });
   await f.w.start();
   try {
@@ -80,10 +80,9 @@ test('a merged PR found by branch closes every ticket that worked on it when dep
     await runReconciliation(f.w, { providers: p });
     for (const id of [a, b]) {
       const t = f.w.state.tickets.get(id);
-      assert.equal(t.status, 'done', `${t.key} closed by the merge`);
-      assert.equal(t.prs[0].url, PR);
-      assert.equal(t.deployments[0].state, 'deployed');
-      assert.equal(t.deployments[0].evidence_kind, 'merge');
+      assert.equal(t.status, id === a ? 'review' : 'active', `${t.key} retains its status until attribution is confirmed`);
+      assert.equal(t.prs.length, 0);
+      assert.equal(t.deployments.length, 0);
     }
     assert.equal(f.w.state.tickets.get(other).status, 'review');
     assert.equal(f.w.state.tickets.get(onMain).prs.length, 0);
@@ -92,7 +91,23 @@ test('a merged PR found by branch closes every ticket that worked on it when dep
     assert.equal(finds[0][2], f.home, 'gh runs in the repository checkout');
     // A second run finds nothing new and changes nothing.
     await runReconciliation(f.w, { providers: p });
-    assert.equal(f.w.state.tickets.get(a).prs.length, 1);
+    assert.equal(f.w.state.tickets.get(a).prs.length, 0);
+  } finally {
+    await f.w.stop();
+  }
+});
+
+test('a merged PR on an unambiguous captured branch closes its ticket under merge deployment policy', async () => {
+  const f = fixture({ deployOn: 'merge' });
+  await f.w.start();
+  try {
+    const id = ticketOnBranch(f, 3, 'fix/polish');
+    await runReconciliation(f.w, { providers: providers({ byBranch: { 'fix/polish': [merged] } }) });
+    const t = f.w.state.tickets.get(id);
+    assert.equal(t.status, 'done');
+    assert.equal(t.prs[0].url, PR);
+    assert.equal(t.deployments[0].state, 'deployed');
+    assert.equal(t.deployments[0].evidence_kind, 'merge');
   } finally {
     await f.w.stop();
   }

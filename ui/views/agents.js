@@ -35,7 +35,7 @@ function recipeRow(r, ticket, canRun) {
   const head = `<strong>${esc(r.name)}</strong> <span class="chip small" data-source="${attr(r.source)}">${esc(SOURCE_LABELS[r.source] ?? r.source)}</span>`;
   if (r.error) return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small critical">${icon('alert')}Invalid: ${esc(r.error)}</span></li>`;
   const run = canRun ? ` <button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(ticket.id)}" data-recipe="${attr(r.name)}">${icon('play')}Run…</button>` : '';
-  return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small">${esc(r.description)}</span><div class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(recipeCap(r))} min${r.legacy ? '' : ' · results are suggestions'}</div>${run}</li>`;
+  return `<li class="recipe" data-recipe-row="${attr(r.name)}">${head} <span class="small">${esc(r.description)}</span><div class="small muted">${esc(permissionSummary(r.permissions))} · ${esc(recipeCap(r))} min${r.legacy ? ' · follow-ups need your acceptance' : ' · results are suggestions'}</div>${run}</li>`;
 }
 
 function suggestionText(s) {
@@ -51,7 +51,7 @@ function suggestionText(s) {
 export function suggestionItem(s, h, ticket, { canEdit, pending }) {
   const req = pending.find((r) => (r.kind === 'accept-suggestion' || r.kind === 'dismiss-suggestion') && ACTIVE.has(r.state) && r.payload && r.payload.handoff_id === h.id && r.payload.suggestion_id === s.id);
   let controls = '';
-  if (s.state !== 'proposed') controls = ` <span class="chip small" data-suggestion-state="${attr(s.state)}">${s.state === 'accepted' ? 'Accepted' : 'Dismissed'}</span>`;
+  if (s.state !== 'proposed') controls = ` <span class="chip small" data-suggestion-state="${attr(s.state)}">${esc(({ accepted: 'Accepted', dismissed: 'Dismissed', suppressed: 'Suppressed', deferred: 'Deferred' })[s.state] ?? s.state)}</span>`;
   else if (req) controls = ` <span class="muted small">${req.kind === 'accept-suggestion' ? 'Accepting…' : 'Dismissing…'}</span>`;
   else if (canEdit) {
     const ids = `data-ticket="${attr(ticket.id)}" data-handoff="${attr(h.id)}" data-suggestion="${attr(s.id)}"`;
@@ -177,7 +177,7 @@ export function runSummary(recipe, c = {}, repo = null) {
   if (c.edit_source) parts.push(repo && repo.test_command ? `tests: ${repo.test_command} run by the worker` : 'not test-verified (no test command)');
   const delivery = [c.commit ? 'commits' : null, c.push_branch ? 'pushes a branch' : null, c.open_draft_pr ? 'opens a draft PR' : null].filter(Boolean);
   if (c.edit_source) parts.push(delivery.length ? delivery.join(', ') : 'no commit, push or PR');
-  parts.push(recipe.legacy ? 'applies its next action and follow-ups directly' : 'result needs your acceptance');
+  parts.push(recipe.legacy ? 'applies its next action; follow-ups need your acceptance' : 'result needs your acceptance');
   return cap(parts.join(' · '));
 }
 
@@ -236,7 +236,7 @@ ${boxes.length || advanced.length ? `<fieldset><legend>Permissions for this run<
 ${recipe.mode === 'files' ? '' : accessFieldset(snapshot, { scopes: true })}
 <label class="label" for="recipe-note">Note <span class="muted">(max 280)</span></label>
 <textarea id="recipe-note" name="note" maxlength="280" rows="2" placeholder="Anything the agent should focus on?">${typeof note === 'string' ? esc(note.slice(0, 280)) : ''}</textarea>
-<p class="muted small">Capped at <span class="run-cap"${['standard', 'settings', 'autonomous', 'full'].map((a) => ` data-cap-${a}="${attr(recipeCap(recipe, a))}"`).join('')}>${esc(recipeCap(recipe))}</span> minutes. ${recipe.legacy ? 'This built-in recipe applies its next action and follow-ups directly, as the handoff form always has.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>
+<p class="muted small">Capped at <span class="run-cap"${['standard', 'settings', 'autonomous', 'full'].map((a) => ` data-cap-${a}="${attr(recipeCap(recipe, a))}"`).join('')}>${esc(recipeCap(recipe))}</span> minutes. ${recipe.legacy ? 'This built-in recipe applies its next action; follow-ups need your acceptance and an explicit parent relationship.' : `Results arrive as suggestions you accept or dismiss on this ticket${(recipe.outputs ?? []).length ? ` (${esc(recipe.outputs.join(', '))})` : ''}.`}</p>
 ${blockers.length ? `<ul class="issues">${blockers.map((b) => `<li data-level="${b.level}">${icon('alert')}${esc(b.text)}</li>`).join('')}</ul>` : ''}
 <p class="run-summary" aria-live="polite">${esc(runSummary(recipe, defaults, repo))}</p>
 <div class="dialog-actions"><button type="submit" class="btn primary"${blocked ? ` disabled data-blocked="true" title="${attr(blockers.find((b) => b.level === 'blocker').text)}"` : ''}>Queue run</button><button type="button" class="btn ghost" data-action="run-agent-back" data-ticket="${attr(ticket.id)}">Back</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>

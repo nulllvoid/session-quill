@@ -8,6 +8,7 @@ import { validateKey, validateParent, allocateInternalKey } from '../keys.js';
 import { externalTicketId } from '../external-keys.js';
 import { applyStatusChange, deriveStatusFromEvidence, recordDeployment } from '../transitions.js';
 import { timelineEntry, touch } from './common.js';
+import { closureContext, validateCompletionFields, validateClosureAcknowledgement } from '../closure.js';
 import { bindSession } from './sessions.js';
 
 // Reserved quill/ tags the owner may set and clear through ticket-update (ADR 0024).
@@ -16,14 +17,28 @@ const OWNER_TAGS = new Set([NO_CODE_TAG]);
 
 export function applyTicketFields(state, ticket, fields, ev, source, result) {
   // Validate before mutating so a rejected update leaves the ticket untouched.
+  validateCompletionFields(state, ticket, fields);
   if (fields.repo_id !== undefined && fields.repo_id !== null && !state.meta.repos[fields.repo_id]) throw new TrackerError('repo-unknown', `repository ${fields.repo_id} is not registered`);
+  if (fields.parent_id !== undefined) validateParent(state, ticket.id, fields.parent_id);
+  if (fields.status !== undefined && !TICKET_STATUSES.includes(fields.status)) throw new TrackerError('status-invalid', 'invalid ticket status');
+  if (fields.status === 'blocked' && !(typeof (fields.blocker ?? ticket.blocker) === 'string' && (fields.blocker ?? ticket.blocker).trim())) throw new TrackerError('blocker-required', 'blocked requires blocker text');
+  // Validate the whole deployment batch before changing completion policy or status.
+  if (Array.isArray(fields.deployments)) {
+    const preview = { deployments: (ticket.deployments ?? []).map(d => ({ ...d })) };
+    for (const item of fields.deployments) recordDeployment(preview, item);
+  }
+  const review = fields.closure_review ? validateClosureAcknowledgement(state, ticket, fields.closure_review.evidence_version, ev.occurred_at) : null;
   const seq = ev.sequence ?? 0;
+  if (fields.completion_mode !== undefined && fields.completion_mode !== ticket.completion_mode) { ticket.completion_mode = fields.completion_mode; ticket.completion_policy_seq = seq; }
+  if (review) ticket.closure_review = review;
+  if (fields.blocks_parent !== undefined) ticket.blocks_parent = fields.blocks_parent;
   if (fields.status !== undefined) {
     applyStatusChange(ticket, { status: fields.status, source, seq, blocker: fields.blocker ?? ticket.blocker, evidence_id: fields.status_evidence_id ?? null });
     ticket.timeline.push(timelineEntry(ev, 'status', `Status set to ${fields.status} (${source})`));
   } else if (fields.blocker !== undefined && ticket.status === 'blocked') {
     ticket.blocker = fields.blocker;
   }
+  if (fields.resolution) ticket.resolution = { kind: fields.resolution.kind, reason: fields.resolution.reason.trim(), ...(['duplicate', 'superseded'].includes(fields.resolution.kind) ? { related_ticket_id: fields.resolution.related_ticket_id } : {}) };
   if (fields.next_action !== undefined) ticket.next_action = String(fields.next_action ?? '');
   if (fields.title !== undefined && fields.title) ticket.title = String(fields.title);
   if (fields.priority !== undefined && PRIORITIES.includes(fields.priority)) ticket.priority = fields.priority;
@@ -55,7 +70,7 @@ export function applyTicketFields(state, ticket, fields, ev, source, result) {
   if (fields.validation_issues !== undefined) ticket.validation_issues = fields.validation_issues;
   if (Array.isArray(fields.deployments)) {
     for (const item of fields.deployments) recordDeployment(ticket, item);
-    deriveStatusFromEvidence(ticket, { type: 'obligations-cleared', seq, evidence_id: ev.event_id }, repoFor(state, ticket.repo_id));
+    deriveStatusFromEvidence(ticket, { type: 'obligations-cleared', seq, evidence_id: ev.event_id }, repoFor(state, ticket.repo_id), closureContext(state, ev.occurred_at));
     ticket.timeline.push(timelineEntry(ev, 'deployment', `Deployment evidence recorded for ${fields.deployments.length} obligation(s)`));
   }
   touch(state, ticket, ev, result);
@@ -71,6 +86,7 @@ export function createTicket(state, ev, t, source, result) {
   if (state.keyIndex.has(t.key)) return { rejected: 'key-collision' };
   if (!CATEGORIES.includes(t.category ?? 'research')) return { rejected: 'category-invalid' };
   if (!PRIORITIES.includes(t.priority ?? 'P2')) return { rejected: 'priority-invalid' };
+  try { validateCompletionFields(state, t, t); } catch (err) { return { rejected: err.code }; }
   try {
     validateParent(state, t.id, t.parent_id ?? null);
   } catch {
@@ -81,6 +97,8 @@ export function createTicket(state, ev, t, source, result) {
     category: t.category ?? 'research', priority: t.priority ?? 'P2', parent_id: t.parent_id ?? null, repo_id: t.repo_id ?? null,
     due: t.due ?? null, jira: t.jira ?? null, external: t.external ?? null, created_at: ev.occurred_at, status_source: source,
   });
+  for (const key of ['completion_mode', 'blocks_parent', 'source_run_id', 'source_suggestion_id', 'finding_key']) if (t[key] !== undefined) ticket[key] = t[key];
+  if (t.completion_mode) ticket.completion_policy_seq = ev.sequence ?? 0;
   if (t.status && TICKET_STATUSES.includes(t.status) && t.status !== 'todo') {
     applyStatusChange(ticket, { status: t.status, source, seq: ev.sequence ?? 0, blocker: t.blocker });
   }

@@ -1165,3 +1165,7 @@ button.run-strip:hover { box-shadow: inset 0 0 0 1px var(--hairline-strong); }
   .topbar .search input, input[type="text"], input[type="datetime-local"], select,
   .filters select { min-height: 44px; }
 }
+
+/* Closure facts can contain long provider reasons or ticket keys. */
+.closure-review { min-width: 0; overflow-wrap: anywhere; }
+.closure-review > p, .closure-review > ul { flex-basis: 100%; }

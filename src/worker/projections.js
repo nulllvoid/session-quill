@@ -10,6 +10,7 @@ import { addMs, HOUR } from '../lib/time.js';
 import { environmentStatus } from '../deploy/environments.js';
 import { descriptionProblems, parseDescription } from '../core/description.js';
 import { pinnedTwin, DRY_RUN_SCOPES } from '../gate/dry-run.js';
+import { reconciliationItems, reconciliationSummary } from '../core/closure.js';
 
 export const SNAPSHOT_TIMELINE_LIMIT = 20;
 
@@ -107,6 +108,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     // credential report, for the owner's run detail; no export allow-list names it.
     handoffs: [...state.handoffs.values()].map(({ inventory, cred_report, ...h }) => { const env = runEnvSummary(cred_report); return env ? { ...h, run_env: env } : h; }),
     requests,
+    reconciliation: { items: reconciliationItems(state, generated_at), summary: reconciliationSummary(state, generated_at), coverage: state.reconcileCoverage ?? null },
     schedules,
     recipes,
     publishers,

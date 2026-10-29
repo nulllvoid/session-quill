@@ -235,9 +235,8 @@ export function createJobs({ providers, artifactClientFor = defaultArtifactClien
     },
     async reconcile(worker, { run_id, reason }) {
       const r = await runReconciliation(worker, { reason, providers, run_id });
-      const errors = r.provider_health.filter((h) => h.error).length;
-      const checks = r.pr_updates.length;
-      return { summary: `${checks} PR check${checks === 1 ? '' : 's'}${errors ? `, ${errors} provider error${errors === 1 ? '' : 's'}` : ''}`, last_sync: r.last_sync };
+      const c = r.coverage;
+      return { summary: `${c.checked} checks, ${c.failed} failed, ${c.deferred} deferred (${c.remaining_eligible} eligible for the next pass)`, last_sync: r.last_sync };
     },
     // Writes one store-local day of the Today feed as markdown (ADR 0009): into the store's daily
     // note, a file, or both. Never overwrites a digest section someone edited.

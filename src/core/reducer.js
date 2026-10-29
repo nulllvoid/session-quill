@@ -17,13 +17,39 @@ import { applyCriticalProposal } from './reduce/critical.js';
 import { applyWorktree } from './reduce/worktrees.js';
 import { applySnapshotTx } from './reduce/snapshots.js';
 import { applyCiObservation, applyCiProposal, lapseCiProposalsOnEndedPr } from './reduce/ci.js';
+import { assessClosure, closureContext } from './closure.js';
+import { applyReconcileChecks } from '../reconcile/checks.js';
 
 export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 
 // The shape and meaning of reduced state (ADR 0030). A state checkpoint written under another value
 // is ignored and the journal replays in full, so bump it in any change that makes existing events
 // reduce differently or adds, removes or reshapes a state field.
-export const REDUCER_VERSION = 2;
+export const REDUCER_VERSION = 3;
+
+function settleClosures(state, ev, result) {
+  const context = closureContext(state, ev.occurred_at);
+  // Fixed point handles children before parents regardless of insertion order; each closes once.
+  let changed;
+  do {
+    changed = false;
+    for (const ticket of state.tickets.values()) {
+      if (ticket.status === 'done') continue;
+      const assessment = assessClosure(ticket, context);
+      if (!assessment.closable || !assessment.evidence_seq) continue;
+      ticket.status = 'done'; ticket.status_source = 'evidence';
+      ticket.status_evidence_id = ticket.completion_evidence_id ?? `children:${assessment.evidence_seq}`;
+      ticket.closed_sequence = ev.sequence ?? assessment.evidence_seq;
+      ticket.resolution = { kind: 'completed', reason: assessment.reason };
+      ticket.timeline.push(timelineEntry(ev, 'status', `Completed: ${assessment.reason}`));
+      bumpRevision(ticket, ev.occurred_at); refreshDerived(state, ticket);
+      result.changed.add(ticket.id);
+      if (ticket.parent_id) result.changed.add(ticket.parent_id);
+      changed = true;
+    }
+  } while (changed);
+  for (const ticket of state.tickets.values()) if (ticket.children_ids?.length) refreshDerived(state, ticket);
+}
 
 function replayDeferred(state, key, toolCallId, result) {
   if (!state.deferredResults) return;
@@ -233,6 +259,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       // Optional: callers that decided from a snapshot (ticket stale --apply) refuse to overwrite a
       // ticket that changed since. Events without it keep their original meaning on replay.
       if (Number.isInteger(ev.payload.expected_revision) && ev.payload.expected_revision !== ticket.revision) { result.rejected = 'revision-conflict'; break; }
+      if (ev.payload.reconcile_close === true && !assessClosure(ticket, closureContext(state, ev.occurred_at)).closable) { result.rejected = 'closure-not-ready'; break; }
       try {
         applyTicketFields(state, ticket, ev.payload.fields ?? {}, ev, ev.payload.source ?? 'manual', result);
       } catch (err) {
@@ -287,6 +314,8 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       break;
     case 'reconcile': {
       const p = ev.payload;
+      applyReconcileChecks(state, p.checks);
+      if (p.coverage) state.reconcileCoverage = { ...p.coverage, at: ev.occurred_at };
       sweepDeferred(state, ev);
       if (p.last_sync) state.lastSync = p.last_sync;
       if (Array.isArray(p.provider_health)) state.providerHealth = p.provider_health;
@@ -295,6 +324,10 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
         if (upd && typeof upd.handoff_id === 'string') { applyRunPrObservation(state, upd, ev, result); continue; }
         const ticket = state.tickets.get(upd.ticket_id);
         if (!ticket) continue;
+        if (upd.origin_handoff_id) {
+          const h = state.handoffs.get(upd.origin_handoff_id);
+          if (!h || h.ticket_id !== ticket.id || h.repo_id !== ticket.repo_id || h.pr_url !== upd.url || !h.branch || h.branch !== upd.head_branch || ticket.local_only) continue;
+        }
         let pr = ticket.prs.find((x) => x.id === upd.pr_id || x.url === upd.url);
         // A PR found from the branch the ticket's work landed on (ADR 0021).
         if (!pr && upd.link === true && typeof upd.url === 'string' && !upd.error) {
@@ -310,12 +343,13 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
         }
         const before = `${pr.state}:${pr.merged_at}`;
         Object.assign(pr, { state: upd.state ?? pr.state, merged_at: upd.merged_at ?? pr.merged_at, opened_at: upd.opened_at ?? pr.opened_at, base_branch: upd.base_branch ?? pr.base_branch, head_branch: upd.head_branch ?? pr.head_branch, observed_at: upd.observed_at ?? ev.occurred_at, error: upd.error ?? null });
+        result.changed.add(ticket.id); // Persist freshness/error recovery without inventing work activity.
         const evidenceId = upd.evidence_id ?? `${pr.url}:${pr.state}:${pr.merged_at ?? ''}`;
         const changedEvidence = pr.evidence_id !== evidenceId;
         pr.evidence_id = evidenceId;
         const repo = repoFor(state, ticket.repo_id);
         if (changedEvidence || before !== `${pr.state}:${pr.merged_at}`) {
-          if (pr.state === 'merged') deriveStatusFromEvidence(ticket, { type: 'pr-merged', seq: ev.sequence ?? 0, evidence_id: evidenceId, pr_id: pr.id, merged_at: pr.merged_at ?? ev.occurred_at, source_event_id: ev.event_id, environments: Array.isArray(upd.environments) ? upd.environments : null, deploy_on: upd.deploy_on === 'merge' ? 'merge' : null }, repo);
+          if (pr.state === 'merged') deriveStatusFromEvidence(ticket, { type: 'pr-merged', seq: ev.sequence ?? 0, evidence_id: evidenceId, pr_id: pr.id, merged_at: pr.merged_at ?? ev.occurred_at, source_event_id: ev.event_id, environments: Array.isArray(upd.environments) ? upd.environments : null, deploy_on: upd.deploy_on === 'merge' ? 'merge' : null }, repo, { deferCompletion: true });
           else if (pr.state === 'open') deriveStatusFromEvidence(ticket, { type: 'pr-open', seq: ev.sequence ?? 0, evidence_id: evidenceId }, repo);
           else if (pr.state === 'draft') deriveStatusFromEvidence(ticket, { type: 'pr-draft', seq: ev.sequence ?? 0, evidence_id: evidenceId }, repo);
           ticket.timeline.push(timelineEntry(ev, 'pr', `PR ${pr.url} observed ${pr.state}`));
@@ -331,6 +365,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     default:
       result.rejected = 'kind-unknown';
   }
+  if (!result.rejected && ['reconcile', 'ticket-update', 'request-tx', 'handoff-tx', 'session-end'].includes(ev.kind)) settleClosures(state, ev, result);
   if (result.changed.size) lapseProposals(state, ev, result);
   return result;
 }

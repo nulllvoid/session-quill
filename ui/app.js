@@ -12,7 +12,7 @@ import { renderDeployments } from './views/deployments.js';
 import { renderToday } from './views/today.js';
 import { renderDetail, DETAIL_TABS } from './views/detail.js';
 import { renderRunAgentDialog } from './views/run-dialog.js';
-import { renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderCloneDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
+import { renderCompletionDialog, renderFollowupDialog, renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderCloneDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 import { createDashboardMotion } from './lib/motion.js';
 import { effectiveRecipes, runSummary } from './views/agents.js';
@@ -461,7 +461,14 @@ function renderDialog() {
   if (!d) { if (host.open) host.close(); host.innerHTML = ''; return; }
   const s = appState.snapshot;
   let html = '';
-  if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status);
+  if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status, { snapshot: s, resolve: d.resolve });
+  else if (d.type === 'completion') html = renderCompletionDialog(ticketById(s, d.ticket));
+  else if (d.type === 'followup') {
+    const run = s.handoffs.find((h) => h.id === d.handoff);
+    const suggestion = run?.suggestions?.find((x) => x.id === d.suggestion);
+    if (!suggestion || suggestion.state !== 'proposed') { appState.dialog = null; return renderDialog(); }
+    html = renderFollowupDialog(ticketById(s, d.ticket), run, suggestion);
+  }
   else if (d.type === 'deployment') html = renderDeploymentDialog(ticketById(s, d.ticket), { mode: d.mode, deploymentId: d.deploymentId });
   else if (d.type === 'export') html = renderExportDialog(s, d.preview);
   else if (d.type === 'help') html = renderHelpDialog();
@@ -734,6 +741,22 @@ function handleAction(el) {
     case 'cancel-next': appState.editingNext = null; render(); break;
     case 'toggle-blocked': appState.blockedExpanded = !appState.blockedExpanded; render(); break;
     case 'close-dialog': closeDialog(); break;
+    case 'acknowledge-closure': {
+      if (!s.capabilities.edit_tickets || s.meta.exported_at) break;
+      const t = ticketById(s, el.dataset.ticket);
+      const item = s.reconciliation?.items?.find((x) => x.ticket_id === el.dataset.ticket);
+      if (!t || t.status === 'done' || !item || item.evidence_version !== el.dataset.evidenceVersion) { announce('Closure evidence changed. Review the current item.'); render(); break; }
+      if ([...appState.requests.values()].some((r) => r.target_id === t.id && ['acknowledge-closure', 'set-status', 'set-completion'].includes(r.kind) && ['sending', 'pending', 'applying'].includes(r.state))) break;
+      submit({ kind: 'acknowledge-closure', target_id: t.id, expected_revision: Number(el.dataset.revision), payload: { evidence_version: el.dataset.evidenceVersion } }, { announceText: 'Closure review acknowledgement queued; the ticket stays open' });
+      break;
+    }
+    case 'completion-settings':
+    case 'resolve-ticket': {
+      if (!s.capabilities.edit_tickets || s.meta.exported_at) break;
+      if ([...appState.requests.values()].some((r) => r.target_id === el.dataset.ticket && ['set-completion', 'set-status', 'acknowledge-closure'].includes(r.kind) && ['sending', 'pending', 'applying'].includes(r.state))) break;
+      appState.dialog = a === 'completion-settings' ? { type: 'completion', ticket: el.dataset.ticket } : { type: 'status', ticket: el.dataset.ticket, status: 'done', resolve: true };
+      render(); break;
+    }
     case 'handoff':
     case 'run-agent': appState.dialog = { type: 'run-agent', ticket: el.dataset.ticket, recipe: el.dataset.recipe ?? null, retryOf: el.dataset.retryOf ?? null, note: el.dataset.note ?? null }; render(); break;
     case 'run-agent-pick': appState.dialog = { ...appState.dialog, recipe: el.dataset.recipe }; render(); break;
@@ -784,6 +807,15 @@ function handleAction(el) {
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
       const accept = el.dataset.action === 'accept-suggestion';
+      if (accept) {
+        if (!s.capabilities.edit_tickets || s.meta.exported_at) break;
+        const run = s.handoffs.find((h) => h.id === el.dataset.handoff);
+        const suggestion = run?.suggestions?.find((x) => x.id === el.dataset.suggestion);
+        if (!suggestion || suggestion.state !== 'proposed') break;
+        if (suggestion.type === 'followup') {
+          appState.dialog = { type: 'followup', ticket: el.dataset.ticket, handoff: run.id, suggestion: suggestion.id }; render(); break;
+        }
+      }
       submit({ kind: el.dataset.action, target_id: el.dataset.ticket, expected_revision: accept ? ticketRevision(el.dataset.ticket) : null, payload: { handoff_id: el.dataset.handoff, suggestion_id: el.dataset.suggestion } }, { announceText: accept ? 'Accepting the suggestion; undo within 10 seconds' : 'Dismissing the suggestion; undo within 10 seconds' });
       break;
     }
@@ -935,12 +967,44 @@ function handleSubmit(form) {
   const revision = Number(form.dataset.revision);
   const t = ticketId ? ticketById(appState.snapshot, ticketId) : null;
   const fd = new FormData(form);
-  if (kind === 'next-action') {
+  const formError = (message) => {
+    let error = form.querySelector('[data-form-error]');
+    if (!error) { error = document.createElement('p'); error.dataset.formError = ''; error.className = 'critical small'; error.setAttribute('role', 'alert'); form.append(error); }
+    error.textContent = message;
+  };
+  if (kind === 'completion' || kind === 'followup' || (kind === 'status' && fd.has('resolution_kind'))) {
+    if (!appState.online) { formError('Offline: the request was not sent and is not queued.'); return; }
+    if (!t || appState.snapshot.meta.exported_at || !appState.snapshot.capabilities.edit_tickets) return;
+    const busy = [...appState.requests.values()].some((r) => r.target_id === ticketId && ['sending', 'pending', 'applying'].includes(r.state) && (kind === 'followup' ? r.kind === 'accept-suggestion' && r.payload?.suggestion_id === form.dataset.suggestion : ['set-completion', 'set-status', 'acknowledge-closure'].includes(r.kind)));
+    if (busy) { formError('An edit is already pending for this ticket. Wait for its result.'); return; }
+  }
+  if (kind === 'completion') {
+    const completion_mode = fd.get('completion_mode');
+    const relationship = fd.get('blocks_parent');
+    if (!['evidence', 'children'].includes(completion_mode) || (relationship !== null && !['true', 'false', 'unknown'].includes(relationship))) { formError('Choose a completion mode and parent relationship.'); return; }
+    const payload = { completion_mode, ...(relationship !== null ? { blocks_parent: relationship === 'unknown' ? null : relationship === 'true' } : {}) };
+    closeDialog(); submit({ kind: 'set-completion', target_id: ticketId, expected_revision: revision, payload });
+  } else if (kind === 'followup') {
+    const relationship = fd.get('blocks_parent');
+    const description = String(fd.get('description') ?? '').trim();
+    if (!['true', 'false'].includes(relationship) || !description) { formError('Choose the parent relationship and provide Goal, Context and Done when.'); return; }
+    const payload = { handoff_id: form.dataset.handoff, suggestion_id: form.dataset.suggestion, blocks_parent: relationship === 'true', description };
+    closeDialog(); submit({ kind: 'accept-suggestion', target_id: ticketId, expected_revision: revision, payload }, { announceText: 'Accepting the follow-up; undo within 10 seconds' });
+  } else if (kind === 'next-action') {
     appState.editingNext = null;
     submit({ kind: 'set-next-action', target_id: ticketId, expected_revision: revision, payload: { next_action: String(fd.get('next_action') ?? '').trim() } }, { original: { next_action: t.next_action } });
   } else if (kind === 'status') {
     const status = form.dataset.status;
     const payload = { status };
+    if (fd.has('resolution_kind')) {
+      const kind = fd.get('resolution_kind');
+      const reason = String(fd.get('resolution_reason') ?? '').trim();
+      const related = String(fd.get('related_ticket_id') ?? '');
+      const linked = ['duplicate', 'superseded'].includes(kind);
+      if (!['completed', 'duplicate', 'superseded', 'abandoned'].includes(kind) || (!reason || reason.length > 500)) { formError('Provide a reason between 1 and 500 characters for this resolution.'); return; }
+      if (linked && (!related || related === ticketId || !ticketById(appState.snapshot, related))) { formError('Choose another existing ticket for this resolution.'); return; }
+      payload.resolution = { kind, reason, ...(linked ? { related_ticket_id: related } : {}) };
+    }
     if (status === 'blocked') payload.blocker = String(fd.get('blocker') ?? '').trim();
     const choice = fd.get('deployment_choice');
     if (choice) {
@@ -1138,6 +1202,11 @@ function scopeBlockers(form, scoped) {
 
 function onChange(e) {
   const el = e.target;
+  if (el.name === 'resolution_kind') {
+    const form = el.closest('form');
+    form.querySelector('[name="resolution_reason"]').required = true;
+    form.querySelector('[name="related_ticket_id"]').required = ['duplicate', 'superseded'].includes(el.value);
+  }
   if (el.dataset && el.dataset.lease !== undefined) { appState.leases[el.dataset.lease] = el.value; return; }
   if (el.dataset && el.dataset.memoryRepo !== undefined) { appState.memoryRepo = el.value || null; appState.memoryEditing = null; render(); $('#memory-repo')?.focus(); return; }
   if (el.dataset.filter) {
@@ -1232,6 +1301,7 @@ export function startApp() {
   document.addEventListener('submit', (e) => { const form = e.target.closest('form[data-form]'); if (form) { e.preventDefault(); handleSubmit(form); } });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
   window.addEventListener('online', () => poll());
+  window.addEventListener('offline', () => { appState.online = false; render(); });
   window.addEventListener('hashchange', () => { readHash(); render(); });
   window.addEventListener('resize', () => render());
   $('#dialog').addEventListener('close', () => { if (appState.dialog) { appState.dialog = null; render(); } });

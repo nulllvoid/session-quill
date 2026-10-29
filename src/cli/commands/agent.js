@@ -9,8 +9,9 @@ import { attachedFiles } from '../../handoff/files.js';
 import { TrackerError } from '../../lib/errors.js';
 import { submitCliRequest, runOptions, accessNotice } from './handoff.js';
 import { capMinutes, recipeCaps } from '../../handoff/runner.js';
+import { descriptionProblems, normalizeDescription } from '../../core/description.js';
 
-const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--planned glob]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent resume <run-id> | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id> [--reason text (dismiss, at most 280 characters)]';
+const USAGE = 'usage: agent list [--ticket KEY] [--json] | agent install <https git URL | folder> [--ref r] [--only a,b] [--replace] [--confirm] | agent uninstall <recipe> [--force] | agent show <recipe> [--ticket KEY] | agent run <recipe> <KEY> [--note text] [--no-read-source] [--commit] [--push-branch <b>] [--draft-pr] [--edit-files] [--delete-files] [--access autonomous|standard|settings|full] [--scope s]... [--planned glob]... [--max-turns n] [--budget usd] [--retry-of <id>] | agent resume <run-id> | agent suggestions <KEY> [--json] | agent accept|dismiss <run-id> <suggestion-id> [--reason text (dismiss, at most 280 characters)] [--blocks-parent|--independent (accept followup)] [--description text]';
 
 const grants = (p) => (p ? PERMISSION_KEYS.filter((k) => p[k]).join(', ') : '') || 'none';
 
@@ -130,7 +131,7 @@ function suggestions(ctx, io, args, flags) {
   if (flags.json) { io.json(rows); return 0; }
   if (!rows.length) { io.println(`No suggestions for ${ticket.key}.`); return 0; }
   for (const r of rows) io.println(`${r.run.slice(0, 8)} ${r.id.padEnd(4)} ${r.type.padEnd(16)} ${describe(r)}  [${r.state}, ${r.recipe}]`);
-  io.println('Resolve one with `quill agent accept <run> <id>` or `quill agent dismiss <run> <id>`. A comment draft is never posted for you.');
+  io.println('Resolve one with `quill agent accept <run> <id>` or `quill agent dismiss <run> <id>`. Follow-ups require --blocks-parent or --independent; use --description to supply Goal, Context and Done when. A comment draft is never posted for you.');
   return 0;
 }
 
@@ -142,7 +143,19 @@ async function resolve(ctx, io, verb, args, flags) {
   if (!h) throw new TrackerError('handoff-unknown', `unknown run ${runId}`);
   const ticket = snap.tickets.find((t) => t.id === h.ticket_id);
   const kind = verb === 'accept' ? 'accept-suggestion' : 'dismiss-suggestion';
-  const terminal = await submitCliRequest(ctx, io, { kind, target_id: h.ticket_id, expected_revision: kind === 'accept-suggestion' && ticket ? ticket.revision : null, payload: { handoff_id: h.id, suggestion_id: sid, ...(kind === 'dismiss-suggestion' && typeof flags.reason === 'string' ? { reason: flags.reason } : {}) } }, flags);
+  const payload = { handoff_id: h.id, suggestion_id: sid, ...(kind === 'dismiss-suggestion' && typeof flags.reason === 'string' ? { reason: flags.reason } : {}) };
+  const suggestion = (h.suggestions ?? []).find((s) => s.id === sid);
+  if (kind === 'accept-suggestion' && suggestion?.type === 'followup') {
+    const blocks = flags['blocks-parent'] === true;
+    const independent = flags.independent === true;
+    if (blocks === independent) throw new TrackerError('followup-relationship-required', 'choose exactly one of --blocks-parent or --independent for this follow-up');
+    if (flags.description !== undefined && typeof flags.description !== 'string') throw new TrackerError('description-invalid', '--description needs the Goal, Context and Done when text');
+    const description = normalizeDescription(flags.description ?? suggestion.description);
+    const problems = descriptionProblems(description);
+    if (problems.length) throw new TrackerError('description-invalid', `the follow-up description needs Goal, Context and Done when: ${problems.join('; ')}`);
+    Object.assign(payload, { blocks_parent: blocks, description });
+  }
+  const terminal = await submitCliRequest(ctx, io, { kind, target_id: h.ticket_id, expected_revision: kind === 'accept-suggestion' && ticket ? ticket.revision : null, payload }, flags);
   if (terminal.state !== 'applied') {
     const err = terminal.error ?? {};
     throw new TrackerError(err.code ?? terminal.state, `${verb} ${terminal.state}: ${err.message ?? ''}`);

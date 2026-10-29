@@ -35,6 +35,7 @@ function frontmatterFor(ticket, state) {
   delete fm.critical_spec;
   // Ticket worktree records hold local paths (ADR 0036).
   delete fm.worktrees;
+  for (const key of ['closure_review', 'resolution', 'source_run_id', 'source_suggestion_id', 'finding_key', 'completion_evidence_seq', 'completion_evidence_id', 'completion_policy_seq', 'closed_sequence', 'last_work_sequence', 'last_work_at']) delete fm[key];
   // Local-only timeline lines (the CI watch's proposal line, ADR 0039) stay on the dashboard.
   if (Array.isArray(fm.timeline)) fm.timeline = exportableTimeline(fm.timeline);
   fm.plans = ticket.plans.map(({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }) => ({ id, session_id, checkpoint_id, content_ref, approved_at, provenance }));

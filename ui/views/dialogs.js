@@ -111,13 +111,17 @@ ${ok ? '' : `<p class="small warning-text">${icon('alert')}${remote ? `Add ${esc
 </form>`;
 }
 
-export function renderStatusDialog(rawTicket, status) {
+export function renderStatusDialog(rawTicket, status, { snapshot = null, resolve = false } = {}) {
   const ticket = normalizeTicket(rawTicket);
   const outstanding = ticket.deployments.filter((d) => d.state === 'pending');
   const needsBlocker = status === 'blocked';
   const needsChoice = status === 'done' && outstanding.length > 0;
   return `<form class="dialog-form" data-form="status" data-ticket="${attr(ticket.id)}" data-revision="${attr(ticket.revision)}" data-status="${attr(status)}">
 <h2 id="dialog-title">Set ${keyEl(ticket.key)} to ${esc(STATUS_LABELS[status] ?? status)}</h2>
+${resolve ? `<label class="label" for="resolution-kind">Outcome</label><select id="resolution-kind" name="resolution_kind"><option value="completed">Completed</option><option value="duplicate">Duplicate</option><option value="superseded">Superseded</option><option value="abandoned">Abandoned</option></select>
+<p class="small muted">Duplicate, superseded and abandoned leave active work without counting as delivered. Deployment obligations still need your choice below.</p>
+<label class="label" for="resolution-reason">Reason (required for every outcome)</label><textarea id="resolution-reason" name="resolution_reason" rows="2" required maxlength="500"></textarea>
+<label class="label" for="resolution-related">Related ticket (required for duplicate or superseded)</label><select id="resolution-related" name="related_ticket_id"><option value="">Choose an existing ticket</option>${(snapshot?.tickets ?? []).filter((t) => t.id !== ticket.id).map((t) => `<option value="${attr(t.id)}">${esc(t.key)} · ${esc(t.title)}</option>`).join('')}</select>` : ''}
 ${needsBlocker ? `<label class="label" for="blocker-text">Blocker (required)</label><textarea id="blocker-text" name="blocker" rows="2" required maxlength="500" placeholder="What is blocking this work?"></textarea>` : ''}
 ${needsChoice ? `<fieldset><legend>${icon('alert')}${esc(outstanding.length)} deployment obligation${outstanding.length === 1 ? '' : 's'} outstanding. Choose one</legend>
   <label><input type="radio" name="deployment_choice" value="record" required> Record deployment evidence for each</label>
@@ -203,4 +207,25 @@ export function renderPublishDialog(rawSnapshot, { now, pending = [] } = {}) {
 <p class="small muted">A <strong>Live</strong> page is a claude.ai artifact that updates on each publish; a <strong>Copy</strong> or <strong>Note</strong> is a file. Every publisher sends only its fields and projects, through the same filter as exports. Configure them under <code>[[publish]]</code>.</p>
 ${items ? `<ul class="publishers">${items}</ul>` : '<p class="muted">No publishers are configured.</p>'}
 <div class="dialog-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div></div>`;
+}
+
+// Dialog markup remains stable while polling: the form retains the revision it opened with.
+export function renderCompletionDialog(rawTicket) {
+  const t = normalizeTicket(rawTicket);
+  return `<form class="dialog-form" data-form="completion" data-ticket="${attr(t.id)}" data-revision="${attr(t.revision)}">
+<h2 id="dialog-title">Completion settings for ${keyEl(t.key)}</h2>
+<label class="label" for="completion-mode">Completion mode</label><select id="completion-mode" name="completion_mode"><option value="evidence"${t.completion_mode !== 'children' ? ' selected' : ''}>Evidence or owner acceptance</option><option value="children"${t.completion_mode === 'children' ? ' selected' : ''}>Grouping only — finish required children</option></select>
+<p class="small muted">Choose grouping only if this ticket has no work of its own. Open PRs, deployments, blockers and runs still prevent automatic completion.</p>
+${t.parent_id ? `<label class="label" for="completion-parent">Relationship to parent</label><select id="completion-parent" name="blocks_parent"><option value="unknown"${t.blocks_parent == null ? ' selected' : ''}>Not yet decided</option><option value="true"${t.blocks_parent === true ? ' selected' : ''}>Required to finish parent</option><option value="false"${t.blocks_parent === false ? ' selected' : ''}>Independent follow-up</option></select>` : ''}
+<div class="dialog-actions"><button type="submit" class="btn primary">Save settings</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div></form>`;
+}
+
+export function renderFollowupDialog(rawTicket, run, suggestion) {
+  const t = normalizeTicket(rawTicket);
+  return `<form class="dialog-form" data-form="followup" data-ticket="${attr(t.id)}" data-revision="${attr(t.revision)}" data-handoff="${attr(run.id)}" data-suggestion="${attr(suggestion.id)}">
+<h2 id="dialog-title">Accept follow-up</h2><p>${esc(suggestion.title)}</p>
+<fieldset><legend>Relationship to ${keyEl(t.key)} (required)</legend><label><input type="radio" name="blocks_parent" value="true" required> Required to finish parent</label><label><input type="radio" name="blocks_parent" value="false" required> Independent follow-up</label></fieldset>
+<label class="label" for="followup-description">Description: Goal, Context, Done when</label><textarea id="followup-description" name="description" rows="8" required maxlength="12000">${esc(suggestion.description || 'Goal:\n\nContext:\n\nDone when:\n- ')}</textarea>
+<p class="small muted">State the concrete acceptance condition under Done when. The worker validates the description before accepting.</p>
+<div class="dialog-actions"><button type="submit" class="btn primary">Accept follow-up</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div></form>`;
 }

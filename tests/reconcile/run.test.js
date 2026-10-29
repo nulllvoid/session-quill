@@ -188,7 +188,7 @@ test('findGithubRevert: a revert commit or a Revert PR inside 48 h of the merge 
   await assert.rejects(findGithubRevert(inside.exec, { url: 'https://example.com/x' }), /unsupported/);
 });
 
-test('a run PR is observed on the run, checked for a revert until its 48 h window closes, and never moves the ticket', async () => {
+test('a legacy run PR without branch identity is observed for reverts but cannot move its ticket', async () => {
   const f = fixture();
   const w = new Worker({ config: f.config, storeMeta: f.meta, env: f.env, clock: f.clock, derive });
   await w.start();
@@ -206,7 +206,7 @@ test('a run PR is observed on the run, checked for a revert until its 48 h windo
   assert.equal(h.pr_observed.merge_commit, MERGE);
   assert.equal(h.pr_observed.reverted_by, null);
   assert.equal(h.pr_observed.revert_checked_at, f.iso());
-  assert.equal(w.state.tickets.get(T1).status, before, 'a run PR is not ticket evidence');
+  assert.equal(w.state.tickets.get(T1).status, before, 'a legacy run without matching recorded branch is not ticket evidence');
   assert.equal(w.state.tickets.get(T1).prs.length, 0);
   f.advance(49 * 60 * 60 * 1000);
   await runReconciliation(w, { reason: 'test', providers });

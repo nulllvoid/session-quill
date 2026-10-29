@@ -1,13 +1,13 @@
 // Runs (spec §2): every agent run and proposed run, by what needs the owner, grouped by batch. Rows
 // open the run detail; nothing here acts except batch cancel and proposal approve or dismiss. Needs
 // you also lists quarantined learnings and memory conflicts, which open the Memory page (spec §6.4).
-import { esc, attr, timeEl, handoffChip, ticketById, normalizeSnapshot, emptyState, proposalItem, shortKey, HANDOFF_LABELS, learningItem, memoryConflictItem, ciItem } from '../components.js';
+import { closureReviewExtras, esc, attr, timeEl, handoffChip, ticketById, normalizeSnapshot, emptyState, proposalItem, shortKey, HANDOFF_LABELS, learningItem, memoryConflictItem, ciItem } from '../components.js';
 import { batchProgress } from '../lib/bulk.js';
 import { runTabs, visibleRunTabs, defaultRunTab, groupRuns, runFacts, batchBudgetState, attentionGroups, RUN_TAB_LABELS } from '../lib/runs.js';
 import { testGateBadge, accessBadge, accessWords } from './agents.js';
 
 const EMPTY = {
-  needs: ['Nothing needs you', 'Proposed runs, results with suggestions to decide on, recent failures, CI failures on pull requests Quill opened, finished fixes ready to review, quarantined learnings and memory conflicts appear here.'],
+  needs: ['Nothing needs you', 'Proposed runs, results with suggestions to decide on, recent failures, CI failures on pull requests Quill opened, finished fixes ready to review, quarantined learnings, memory conflicts and closure reviews appear here.'],
   live: ['No runs queued or running', 'Start one with Run agent on a ticket, or select tickets on Board for a bulk run.'],
   failed: ['No failed runs', 'Failed, timed-out and cancelled runs appear here with what went wrong.'],
   all: ['No runs in the last 30 days', 'Agent runs and proposed runs appear here as they are requested.'],
@@ -51,6 +51,7 @@ function batchGroup(snapshot, g, { now, tz, caps, selectedRun }) {
 
 // One Needs you, Live, Failed or All entry: a batch, a proposal, a CI failed item, a memory item or a run row.
 function entryHtml(snapshot, e, { now, tz, caps, pending, leases, selectedRun }) {
+  if (e.kind === 'closure') return `<li class="proposal run-row closure-review" data-closure="${attr(e.item.ticket_id)}"><strong>Closure review · ${esc(e.item.key)} ${esc(e.item.title)}</strong><p>${esc(e.item.reason)}</p>${e.item.blockers?.length ? `<ul class="small">${e.item.blockers.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}<button type="button" class="btn small" data-open="${attr(e.item.ticket_id)}">Open ticket</button>${closureReviewExtras(e.item, snapshot, { now, pending })}</li>`;
   if (e.kind === 'batch') return batchGroup(snapshot, e, { now, tz, caps, selectedRun });
   if (e.kind === 'proposal') return proposalRow(snapshot, e.proposal, { now, pending, leases });
   if (e.kind === 'ci') return ciItem(e.run, snapshot, { proposal: e.proposal, now, pending });

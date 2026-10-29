@@ -169,7 +169,7 @@ export function hasUnlinkedWork(session) {
 }
 
 export function requestFeedback(req, { now }) {
-  const label = { 'set-next-action': 'next action', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'restore-snapshot': 'restore', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run', 'memory-approve': 'approve learning', 'memory-edit': 'memory edit', 'memory-forget': 'retire', 'memory-pin': req.payload && req.payload.pinned === false ? 'unpin' : 'pin', 'memory-note': 'owner note' }[req.kind] ?? req.kind;
+  const label = { 'set-next-action': 'next action', 'set-completion': 'completion settings', 'acknowledge-closure': 'closure review', 'set-status': 'status', 'record-deployment': 'deployment', 'attach-unbound': 'attach', 'dismiss-unbound': 'dismiss', 'link-external': 'link', 'run-job': 'run', 'accept-suggestion': 'suggestion', 'dismiss-suggestion': 'dismissal', publish: 'publish', 'undo-file-effect': 'undo', 'restore-snapshot': 'restore', 'repo-clone': 'clone', 'approve-run': 'approve run', 'dismiss-run': 'dismiss run', 'memory-approve': 'approve learning', 'memory-edit': 'memory edit', 'memory-forget': 'retire', 'memory-pin': req.payload && req.payload.pinned === false ? 'unpin' : 'pin', 'memory-note': 'owner note' }[req.kind] ?? req.kind;
   const memory = typeof req.kind === 'string' && req.kind.startsWith('memory-');
   let body = '';
   if (req.state === 'sending') body = 'Sending to the worker…';
@@ -686,4 +686,16 @@ export function tracksSnapshotRequest(r, local, dismissed) {
   if (dismissed && dismissed.has(r.id)) return false;
   if (local && local.state === 'already-applied') return false;
   return !!local || ['pending', 'applying', 'conflict', 'failed'].includes(r.state);
+}
+
+// Owner-only closure review facts and acknowledgement, shared by Runs and ticket detail.
+export function closureReviewExtras(item, snapshot, { now, pending = [] } = {}) {
+  if (!item || !snapshot.capabilities?.edit_tickets || snapshot.meta?.exported_at) return '';
+  const tz = snapshot.meta?.timezone;
+  const error = typeof item.error === 'string' ? item.error : item.error?.message;
+  const facts = [item.last_success_at ? `Last successful check: ${timeEl(item.last_success_at, now, tz, { absolute: true })}` : '', item.next_check_at ? `Next check: ${timeEl(item.next_check_at, now, tz, { absolute: true })}` : ''].filter(Boolean);
+  const t = ticketById(snapshot, item.ticket_id);
+  const busy = pending.some((r) => r.target_id === item.ticket_id && ['acknowledge-closure', 'set-status', 'set-completion'].includes(r.kind) && ['sending', 'pending', 'applying'].includes(r.state));
+  const action = t && t.status !== 'done' && item.status !== 'done' && item.evidence_version ? `<button type="button" class="btn small ghost" data-action="acknowledge-closure" data-ticket="${attr(t.id)}" data-revision="${attr(t.revision)}" data-evidence-version="${attr(item.evidence_version)}"${busy ? ' disabled' : ''}>Reviewed — keep open</button>` : '';
+  return `${facts.length ? `<p class="small muted">${facts.join(' · ')}</p>` : ''}${error ? `<p class="small critical">Cannot verify: ${esc(error)}</p>` : ''}${action}`;
 }

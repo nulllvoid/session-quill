@@ -36,7 +36,7 @@ test('step 2 is the recipe form with Advanced side effects, a summary and a Back
   const html = renderRunAgentDialog(s.tickets[0], s, { recipe: 'attempt-fix', retryOf: 'run-9' });
   assert.match(html, /<form class="handoff-form" data-form="recipe-run"[^>]*data-recipe="attempt-fix"[^>]*data-retry-of="run-9"/);
   assert.match(html, /<details class="advanced"><summary>Advanced: commit, push, PR<\/summary>[\s\S]*name="commit"/);
-  assert.match(html, /<p class="run-summary"[^>]*>Edits in an isolated checkout · tests: npm test run by the worker · no commit, push or PR · applies its next action and follow-ups directly<\/p>/);
+  assert.match(html, /<p class="run-summary"[^>]*>Edits in an isolated checkout · tests: npm test run by the worker · no commit, push or PR · applies its next action; follow-ups need your acceptance<\/p>/);
   assert.match(html, /data-action="run-agent-back"/);
 });
 
@@ -51,9 +51,9 @@ test('Advanced options say what they require and start disabled until their pare
 
 test('runSummary says what the run will do', () => {
   const [analyse, fix, standup] = recipes;
-  assert.equal(runSummary(analyse, { read_source: true }, REPO), 'Reads source · applies its next action and follow-ups directly');
-  assert.equal(runSummary(fix, { read_source: true, edit_source: true, commit: true, push_branch: true }, { ...REPO, test_command: 'npm test' }), 'Edits in an isolated checkout · tests: npm test run by the worker · commits, pushes a branch · applies its next action and follow-ups directly');
-  assert.equal(runSummary(fix, { edit_source: true }, REPO), 'Edits in an isolated checkout · not test-verified (no test command) · no commit, push or PR · applies its next action and follow-ups directly');
+  assert.equal(runSummary(analyse, { read_source: true }, REPO), 'Reads source · applies its next action; follow-ups need your acceptance');
+  assert.equal(runSummary(fix, { read_source: true, edit_source: true, commit: true, push_branch: true }, { ...REPO, test_command: 'npm test' }), 'Edits in an isolated checkout · tests: npm test run by the worker · commits, pushes a branch · applies its next action; follow-ups need your acceptance');
+  assert.equal(runSummary(fix, { edit_source: true }, REPO), 'Edits in an isolated checkout · not test-verified (no test command) · no commit, push or PR · applies its next action; follow-ups need your acceptance');
   assert.equal(runSummary(standup, {}, REPO), 'Notes only · result needs your acceptance');
 });
 

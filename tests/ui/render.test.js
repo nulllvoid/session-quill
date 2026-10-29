@@ -437,7 +437,7 @@ test('the recipe run dialog shows what the run may do and pre-selects only sourc
   assert.match(fix, /name="commit"(?! checked)/);
   assert.match(fix, /name="push_branch"(?! checked)/);
   assert.match(fix, /name="branch"/);
-  assert.match(fix, /applies its next action and follow-ups directly/);
+  assert.match(fix, /applies its next action; follow-ups need your acceptance/);
   const hasProvider = !!(s.repos ?? []).find((r) => r.id === t.repo_id)?.provider;
   const noProvider = /\(no PR provider configured for this repository\)/;
   assert.match(fix, /name="open_draft_pr" disabled> Open a draft PR <span class="muted small">\(requires push branch\)<\/span>/, 'PR starts disabled until Push is ticked');

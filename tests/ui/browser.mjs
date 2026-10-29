@@ -47,6 +47,7 @@ test('Enter on a card action opens its dialog, not ticket detail', async () => {
   await page.locator('.card [data-action="handoff"]').first().focus();
   await page.keyboard.press('Enter');
   assert.equal(await page.locator('#dialog').evaluate(el => el.open), true);
+  assert.equal(await page.locator('#dialog [data-form="status"]').count(), 0, 'a run action must never open ticket resolution');
   assert.equal(await page.locator('#detail').isVisible(), false);
 });
 
@@ -239,4 +240,118 @@ test('phone navigation skips hidden tabs and keeps More views reachable', async 
   assert.equal(await page.locator('.nav-more').evaluate(el => el === document.activeElement), true);
   await page.keyboard.press('Shift+Tab');
   assert.equal(await page.locator('#tab-picknext').evaluate(el => el === document.activeElement), true);
+});
+
+async function captureEdits() {
+  const edits = [];
+  await page.route('**/v1/requests', async route => {
+    const body = route.request().postDataJSON(); edits.push(body);
+    await route.fulfill({ json: { ...body, state: 'pending', created_at: '2026-10-02T12:30:00Z', not_before: '2099-10-02T12:30:10Z' } });
+  });
+  return edits;
+}
+
+test('closure controls retain drafts and their opening revision, then submit explicit settings once', async () => {
+  page.setDefaultTimeout(2000);
+  const edits = await captureEdits();
+  await open('#view=board&ticket=' + data.tickets[6].id);
+  await page.locator('[data-action="completion-settings"]').click();
+  await page.locator('[name="completion_mode"]').selectOption('children');
+  await page.locator('[name="blocks_parent"]').selectOption('false');
+  data.tickets[6].revision = 2; data.generation_id += '-new'; await refresh();
+  assert.equal(await page.locator('[name="completion_mode"]').inputValue(), 'children');
+  const sent = page.waitForResponse(r => r.url().endsWith('/v1/requests'));
+  await page.getByRole('button', { name: 'Save settings' }).click(); await sent;
+  assert.equal(edits.length, 1);
+  assert.equal(edits[0].kind, 'set-completion');
+  assert.equal(edits[0].expected_revision, 1);
+  assert.deepEqual(edits[0].payload, { completion_mode: 'children', blocks_parent: false });
+  assert.equal(await page.locator('[data-action="completion-settings"]').isDisabled(), true);
+});
+
+test('closure resolution validates reason and related ticket, preserves pending deployment confirmation', async () => {
+  page.setDefaultTimeout(2000);
+  const edits = await captureEdits();
+  await open('#view=board&ticket=' + data.tickets[5].id);
+  await page.locator('[data-action="resolve-ticket"]').click();
+  await page.locator('[name="resolution_kind"]').selectOption('duplicate');
+  await page.locator('[name="deployment_choice"][value="leave"]').check();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
+  assert.equal(edits.length, 0);
+  await page.locator('[name="resolution_reason"]').fill('Same task and acceptance condition');
+  await page.locator('[name="related_ticket_id"]').selectOption(data.tickets[0].id);
+  const sent = page.waitForResponse(r => r.url().endsWith('/v1/requests'));
+  await page.getByRole('button', { name: 'Apply', exact: true }).click(); await sent;
+  assert.deepEqual(edits[0].payload, { status: 'done', resolution: { kind: 'duplicate', reason: 'Same task and acceptance condition', related_ticket_id: data.tickets[0].id }, deployment_choice: 'leave' });
+});
+
+test('follow-up acceptance asks relationship and description before sending the existing request', async () => {
+  page.setDefaultTimeout(2000);
+  const edits = await captureEdits();
+  data.handoffs[0].state = 'done';
+  data.handoffs[0].suggestions = [{ id: 'followup-1', type: 'followup', state: 'proposed', title: 'Add coverage' }];
+  await open('#view=runs&run=h1');
+  await page.locator('[data-action="accept-suggestion"]').click();
+  assert.equal(edits.length, 0);
+  await page.locator('[name="blocks_parent"][value="true"]').check();
+  const description = 'Goal: Cover the fix\n\nContext: A regression was found\n\nDone when:\n- The regression test passes';
+  await page.locator('textarea[name="description"]').fill(description);
+  const sent = page.waitForResponse(r => r.url().endsWith('/v1/requests'));
+  await page.getByRole('button', { name: 'Accept follow-up', exact: true }).click(); await sent;
+  assert.equal(edits[0].kind, 'accept-suggestion');
+  assert.equal(edits[0].expected_revision, 1);
+  assert.deepEqual(edits[0].payload, { handoff_id: 'h1', suggestion_id: 'followup-1', blocks_parent: true, description });
+});
+
+test('closure review supports keyboard at phone width and never queues settings offline', async () => {
+  page.setDefaultTimeout(2000);
+  const edits = await captureEdits();
+  await page.setViewportSize({ width: 390, height: 844 });
+  data.reconciliation = { items: [{ ticket_id: data.tickets[0].id, key: data.tickets[0].key, title: 'Long'.repeat(120), reason: 'Missing'.repeat(100), blockers: ['Required'.repeat(100)], kind: 'review', closable: false }] };
+  await open('#view=runs&tab=needs');
+  await page.getByRole('button', { name: 'Open ticket', exact: true }).focus(); await page.keyboard.press('Enter');
+  await page.locator('[data-action="completion-settings"]').click();
+  await context.setOffline(true);
+  await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+  await page.getByRole('button', { name: 'Save settings' }).click();
+  assert.equal(edits.length, 0);
+  assert.equal(await page.locator('#dialog').evaluate(el => el.open), true, 'offline preserves the form');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+});
+
+test('closure acknowledgement submits the displayed evidence version once and waits for snapshot confirmation', async () => {
+  page.setDefaultTimeout(2000);
+  const edits = await captureEdits();
+  data.handoffs = [];
+  data.reconciliation = { items: [{ ticket_id: data.tickets[0].id, key: data.tickets[0].key, title: 'Review closure', status: 'todo', reason: 'Needs owner acceptance', blockers: [], evidence_version: 'closure-v1' }] };
+  await open('#view=runs&tab=needs');
+  const button = page.getByRole('button', { name: 'Reviewed — keep open', exact: true });
+  await button.focus();
+  const sent = page.waitForResponse(r => r.url().endsWith('/v1/requests'));
+  await page.keyboard.press('Enter'); await sent;
+  assert.equal(edits.length, 1);
+  assert.equal(edits[0].kind, 'acknowledge-closure');
+  assert.equal(edits[0].target_id, data.tickets[0].id);
+  assert.equal(edits[0].expected_revision, 1);
+  assert.deepEqual(edits[0].payload, { evidence_version: 'closure-v1' });
+  assert.equal(await button.isDisabled(), true);
+  assert.equal(await page.locator('[data-closure]').count(), 1, 'a pending acknowledgement does not hide evidence');
+  data.reconciliation.items = []; data.generation_id += '-ack'; await refresh();
+  assert.equal(await page.locator('[data-closure]').count(), 0);
+});
+
+
+test('completed resolution also requires a reason and sends the supported limit', async () => {
+  page.setDefaultTimeout(2000);
+  const edits = await captureEdits();
+  await open('#view=board&ticket=' + data.tickets[0].id);
+  await page.locator('[data-action="resolve-ticket"]').click();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
+  assert.equal(edits.length, 0);
+  const reason = page.locator('[name="resolution_reason"]');
+  assert.equal(await reason.getAttribute('maxlength'), '500');
+  await reason.fill('Acceptance criteria verified by the owner');
+  const sent = page.waitForResponse(r => r.url().endsWith('/v1/requests'));
+  await page.getByRole('button', { name: 'Apply', exact: true }).click(); await sent;
+  assert.deepEqual(edits[0].payload.resolution, { kind: 'completed', reason: 'Acceptance criteria verified by the owner' });
 });

@@ -100,14 +100,14 @@ test('each selected ticket is listed as ready, already running, no repo or not e
   assert.match(form, /<input type="checkbox" name="confirm_edit" required>/, 'bulk fixes need an explicit edit_source confirmation');
   assert.match(form, /name="access"/, 'access is chosen once');
   assert.match(form, /Tests: <code>npm test<\/code>/);
-  assert.match(form, /<p class="run-summary">Edits in an isolated checkout · not test-verified \(no test command\) · no commit, push or PR · applies its next action and follow-ups directly<\/p>/);
+  assert.match(form, /<p class="run-summary">Edits in an isolated checkout · not test-verified \(no test command\) · no commit, push or PR · applies its next action; follow-ups need your acceptance<\/p>/);
   const a = renderBulkHandoffForm(s, ids, { mode: 'analyse' });
   assert.match(a, /name="mode" value="analyse" checked/);
   assert.match(a, /name="mode" value="analyse-followups"/);
   assert.match(a, /At most 2 read-only runs at a time/);
   assert.doesNotMatch(a, /confirm_edit/);
   assert.match(a, /4 runs/);
-  assert.match(a, /<p class="run-summary">Reads source · applies its next action and follow-ups directly<\/p>/);
+  assert.match(a, /<p class="run-summary">Reads source · applies its next action; follow-ups need your acceptance<\/p>/);
 });
 
 test('selecting 5 cards and choosing Analyze sends 5 requests with one batch id and shows 5 outcomes', () => {

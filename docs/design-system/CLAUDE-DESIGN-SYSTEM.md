@@ -252,3 +252,7 @@ Repository bindings belong to the checkpoint/event that recorded them. A session
 ## 11. Suggested Claude task preamble
 
 > Implement the requested Quill UI change using the Fieldnotes design system in `docs/design-system/CLAUDE-DESIGN-SYSTEM.md`. Preserve the current green/Geist identity, existing state and permission contracts, and static-export privacy. Reuse current renderers and assets. Distinguish shipped behavior from proposed Runs patterns. Verify the affected user flow at laptop and mobile sizes, including keyboard and failure states, and report the exact tests run.
+
+### Completion review (ADR 0042)
+
+Use the existing Runs “Needs you” decision list and ticket-detail sections for closure review. Each row references the existing ticket and states the blocker in plain text; available check times and provider failures explain what can happen next. “Reviewed — keep open” acknowledges unchanged evidence without claiming delivery. Completion settings and resolution dialogs retain focus/error behavior, revision guards and the pending-request state. Every resolution requires a reason (1–500 characters); duplicate/superseded additionally links another ticket. Required/independent follow-up choices must be explicit. These controls are owner-only and absent from read-only exports.

@@ -28,3 +28,7 @@ After the 0.7.0 release, nine tickets stayed in review and the release PR still 
 
 - **Match PR commits against captured commit SHAs.** Rejected as the only mechanism: quiet, amended and rebased commits are not captured or change SHA, which is exactly how 0.7.0's tickets were missed.
 - **Treat an empty environment list as "no deployment".** Rejected: ADR 0009 defaults an empty list to production, and changing its meaning would silently close tickets in existing setups. `deploy_on` is explicit.
+
+## Amendment — 2026-10-30
+
+[ADR 0042](0042-reconciliation-closure.md) narrows automatic branch attribution: a branch captured by more than one ticket, including completed tickets, is ambiguous and cannot auto-link its discovered PRs. A single-ticket contribution must predate the merge and pass reused-branch checks. Exact worker-recorded PR origins remain a separate trustworthy association. Every automatic completion now passes the shared closure assessment.

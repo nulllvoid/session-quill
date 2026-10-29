@@ -59,7 +59,8 @@ test('all obligations deployed or waived moves deploy-pending -> done', () => {
   deriveStatusFromEvidence(t, { type: 'obligations-cleared', seq: 5, evidence_id: 'e5' }, repo);
   assert.equal(t.status, 'deploy-pending');
   t.deployments[1].state = 'waived';
-  deriveStatusFromEvidence(t, { type: 'obligations-cleared', seq: 6, evidence_id: 'e6' }, repo);
+  t.prs = [{ id: 'pr1', state: 'merged', merged_at: '2026-10-02T09:00:00Z' }];
+  deriveStatusFromEvidence(t, { type: 'obligations-cleared', seq: 6, evidence_id: 'e6' }, repo, { complete: true, tickets: [t], handoffs: [] });
   assert.equal(t.status, 'done');
 });
 
@@ -69,4 +70,12 @@ test('applyStatusChange requires blocker text for blocked and records provenance
   assert.throws(() => applyStatusChange(t, { status: 'parked', source: 'manual', seq: 1 }), (e) => e.code === 'status-invalid');
   applyStatusChange(t, { status: 'review', source: 'migration', seq: 1 });
   assert.equal(t.status_source, 'migration');
+});
+
+
+test('attaching older work never moves the material-work watermark backwards', () => {
+  const t = createTicket(newState());
+  deriveStatusFromEvidence(t, { type: 'write', seq: 10, at: '2026-10-30T12:00:00Z' }, repo);
+  deriveStatusFromEvidence(t, { type: 'write', seq: 11, at: '2026-10-01T12:00:00Z' }, repo);
+  assert.equal(t.last_work_at, '2026-10-30T12:00:00Z');
 });

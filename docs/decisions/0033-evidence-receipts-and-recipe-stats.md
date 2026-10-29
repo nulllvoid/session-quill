@@ -43,3 +43,7 @@ The PRD asks for a "cryptographic-style" receipt built from the journal (FR-5.1)
 - **Sign the receipt.** Rejected for now: a key on the same machine as the store proves nothing about the facts, and the word "cryptographic" would overclaim.
 - **An autonomy score.** Rejected: a single number hides which runs it counts; the doctor shows the counts it would be computed from.
 - **Link a run's PR to its ticket as evidence.** Rejected here: it would change ticket statuses (open → review, merged → done) for runs that never did before. Recorded on the run, the observation feeds the stats without changing ticket behaviour.
+
+## Amendment — 2026-10-30
+
+[ADR 0042](0042-reconciliation-closure.md) supersedes the separation between run PR observations and ticket completion. Provider-confirmed evidence can now reach the exact originating ticket after validating the recorded run, repository, branch and PR URL. Free-text agent claims remain insufficient; metrics keep their separate run observation. Shared closure checks still gate task completion.

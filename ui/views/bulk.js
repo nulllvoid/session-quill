@@ -58,7 +58,7 @@ export function renderBulkHandoffForm(rawSnapshot, ids, { mode = 'analyse' } = {
     ? '<input type="hidden" name="mode" value="attempt-fix"><p class="small"><strong>Recipe:</strong> attempt-fix, each in its own isolated checkout.</p>'
     : `<fieldset><legend>Recipe</legend>
   <label><input type="radio" name="mode" value="analyse" checked> Analyse: summarize and recommend; no children</label>
-  <label><input type="radio" name="mode" value="analyse-followups"> Analyse with follow-ups: may create child tickets and suggest a next action</label>
+  <label><input type="radio" name="mode" value="analyse-followups"> Analyse with follow-ups: proposes child tickets for your acceptance and suggests a next action</label>
 </fieldset>`;
   // The built-in recipe's defaults; the repository varies per ticket, so the test line stays generic.
   const builtin = (snapshot.recipes ?? []).find((r) => r.source === 'builtin' && r.name === mode) ?? { legacy: true };

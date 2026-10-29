@@ -119,3 +119,30 @@ test('quill agent run and quill handoff default to autonomous access; --access, 
     assert.equal(byTicket(T4).access, 'autonomous');
   } finally { await stop(); }
 });
+
+test('agent accept requires a followup relationship and forwards the description', async () => {
+  const fx = makeHome();
+  const { w, stop } = await start(fx);
+  try {
+    const run = await cli(['agent', 'run', 'analyse-followups', 'PROJ-1', '--no-read-source'], fx.env);
+    assert.equal(run.code, 0, run.err);
+    const h = [...w.state.handoffs.values()][0];
+    recordResult(w, h.id, { children: [{ title: 'Verify retry behavior', next_action: 'Run the retry tests' }] });
+    w.publishGeneration();
+    const missing = await cli(['agent', 'accept', h.id, 's1'], fx.env);
+    assert.notEqual(missing.code, 0);
+    assert.match(missing.err, /blocks-parent.*independent/);
+    const conflicting = await cli(['agent', 'accept', h.id, 's1', '--blocks-parent', '--independent'], fx.env);
+    assert.notEqual(conflicting.code, 0);
+    const invalid = await cli(['agent', 'accept', h.id, 's1', '--independent', '--description', 'Just fix it'], fx.env);
+    assert.notEqual(invalid.code, 0);
+    assert.match(invalid.err, /Goal|description/);
+    const description = '**Goal:** Verify retry behavior.\n\n**Context:** Retry handling may regress.\n\n**Done when:**\n- Retry tests pass.';
+    const accepted = await cli(['agent', 'accept', h.id, 's1', '--independent', '--description', description], fx.env);
+    assert.equal(accepted.code, 0, accepted.err);
+    const child = w.state.tickets.get(w.state.handoffs.get(h.id).suggestions[0].child_id);
+    assert.equal(child.blocks_parent, false);
+    assert.equal(child.summary, description);
+    assert.equal(child.source_run_id, h.id);
+  } finally { await stop(); }
+});

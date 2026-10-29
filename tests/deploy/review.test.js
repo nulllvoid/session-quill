@@ -24,7 +24,7 @@ test('review 1: a [tracker] table with only environments lists environments with
   assert.deepEqual(bad.identity.environments, ['stage'], 'a broken key pattern does not lose the environments');
 });
 
-test('review 2: when a repository\'s environments cannot be resolved, a merge is not recorded with a guessed list; it is retried once config is fixed', async () => {
+test('review 2: when a repository\'s environments cannot be resolved, a merge is not recorded with a guessed list; Refresh retries immediately once config is fixed', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-env-'));
   fs.writeFileSync(path.join(dir, '.quill.toml'), '[tracker\nenvironments = ["stage"]\n');
   const merged = { state: 'merged', opened_at: '2026-10-01T00:00:00Z', merged_at: '2026-10-02T06:00:00Z' };
@@ -44,7 +44,8 @@ test('review 2: when a repository\'s environments cannot be resolved, a merge is
     assert.match(t.prs[0].error, /deployment environments for demo are unresolved/);
     fs.writeFileSync(path.join(dir, '.quill.toml'), '[tracker]\nenvironments = ["stage"]\n');
     s.w.publishIdentity();
-    await runReconciliation(s.w, { providers });
+    // Scheduled retries respect backoff; an explicit Refresh bypasses eligibility.
+    await runReconciliation(s.w, { providers, reason: 'refresh' });
     t = s.w.state.tickets.get(T1);
     assert.deepEqual(t.deployments.map((d) => d.environment), ['stage']);
   } finally { await s.stop(); }

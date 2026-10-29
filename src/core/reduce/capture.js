@@ -1,7 +1,7 @@
 // Tool capture: attribution of tool results, deferred results, unlinked work and stop checkpoints.
 import { deterministicId } from '../../lib/ids.js';
 import { sessionKey, repoFor, registerCheckpoint } from '../state.js';
-import { deriveStatusFromEvidence } from '../transitions.js';
+import { deriveStatusFromEvidence, recordWorkEvidence } from '../transitions.js';
 import { WRITE_TOOLS, timelineEntry, touch, UNBOUND_FILE_CAP, UNBOUND_COMMIT_CAP } from './common.js';
 import { getOrCreateSession, bindSession, recomputeUnpromoted, approveCheckpoint, ticketEffort } from './sessions.js';
 import { createTicket } from './tickets.js';
@@ -41,7 +41,8 @@ export function attachUnboundWork(state, ev, m, result) {
   const commits = `${w.commits.length} commit${w.commits.length === 1 ? '' : 's'}`;
   ticket.timeline.push(timelineEntry(ev, 'write', `Attached unlinked work from session ${session.host_session_id}: ${files}, ${commits}`));
   // Attached writes are the same evidence a linked session would have produced.
-  if (w.files.length) deriveStatusFromEvidence(ticket, { type: 'write', seq: ev.sequence ?? 0, evidence_id: ev.event_id }, repoFor(state, ticket.repo_id));
+  recordWorkEvidence(ticket, { seq: ev.sequence ?? 0, at: [...w.files.map(f => f.last_seen), ...w.commits.map(c => c.at)].filter(Boolean).sort().at(-1) ?? ev.occurred_at });
+  if (w.files.length) deriveStatusFromEvidence(ticket, { type: 'write', seq: ev.sequence ?? 0, evidence_id: ev.event_id, at: w.files.map(f => f.last_seen).filter(Boolean).sort().at(-1) ?? ev.occurred_at }, repoFor(state, ticket.repo_id));
   for (const id of state.checkpointsBySession.get(session.id) ?? []) {
     const cp = state.checkpoints.get(id);
     if (cp && !cp.ticket_id) cp.ticket_id = ticket.id;
@@ -159,8 +160,9 @@ export function handlePostTool(state, ev, result) {
     }
     ticket.timeline.push(timelineEntry(ev, 'write', `${p.tool_name} ${writePaths.join(', ')}`, { coverage: 'complete' }));
     session.successful_write_count += 1;
-    deriveStatusFromEvidence(ticket, { type: 'write', seq: ev.sequence ?? 0, evidence_id: ev.event_id }, repo);
+    deriveStatusFromEvidence(ticket, { type: 'write', seq: ev.sequence ?? 0, evidence_id: ev.event_id, at: ev.occurred_at }, repo);
   } else if (p.commit && typeof p.commit.sha === 'string' && p.commit.sha) {
+    recordWorkEvidence(ticket, { seq: ev.sequence ?? 0, at: ev.occurred_at });
     ticket.timeline.push(timelineEntry(ev, 'commit', `Commit ${p.commit.sha.slice(0, 10)}${typeof p.commit.message === 'string' && p.commit.message ? `: ${p.commit.message}` : ''}`, { coverage: 'complete' }));
     session.successful_write_count += 1;
   } else if (p.pr && p.pr.url) {

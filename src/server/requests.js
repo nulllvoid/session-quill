@@ -22,6 +22,7 @@ import { onboardSettings } from '../onboard/settings.js';
 import { proposalState, proposalProvenance, shadowProblem } from '../publish/run-proposals.js';
 import { resumeProblem, resumeFields, isCiFix } from '../handoff/resume.js';
 import { restoreTarget, evaluateRestore } from '../handoff/snapshots.js';
+import { assessClosure, closureContext, validateCompletionFields, validateClosureAcknowledgement } from '../core/closure.js';
 
 export const EDIT_DELAY_MS = 10_000;
 export const KINDS = ['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'refresh', 'attach-unbound', 'dismiss-unbound', 'link-external', 'run-job', 'accept-suggestion', 'dismiss-suggestion', 'publish', 'repo-clone', 'approve-run', 'dismiss-run', 'memory-approve', 'memory-edit', 'memory-forget', 'memory-pin', 'memory-note', 'resume-run'];
@@ -47,6 +48,11 @@ const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 // revision check, with the 10 s undo; applied on the owner's dashboard only (evaluateRestore).
 KINDS.push('restore-snapshot');
 for (const set of [TICKET_KINDS, REVISION_OPTIONAL, DELAYED_KINDS]) set.add('restore-snapshot');
+KINDS.push('set-completion', 'acknowledge-closure');
+TICKET_KINDS.add('set-completion');
+TICKET_KINDS.add('acknowledge-closure');
+DELAYED_KINDS.add('set-completion');
+DELAYED_KINDS.add('acknowledge-closure');
 
 // Tracker keys are uppercase (PROJ-123). Requests normalize them, and lookups also match legacy
 // keys that differ only in case, so "proj-42" can never become a second ticket beside PROJ-42.
@@ -373,6 +379,15 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'set-status': {
       if (!TICKET_STATUSES.includes(payload.status)) throw new TrackerError('status-invalid', `status must be one of ${TICKET_STATUSES.join(', ')}`);
       normalized = { status: payload.status };
+      if (payload.resolution !== undefined) {
+        validateCompletionFields(state, target, { status: payload.status, resolution: payload.resolution });
+        const r = payload.resolution;
+        normalized.resolution = { kind: r.kind, reason: r.reason.trim(), ...(['duplicate', 'superseded'].includes(r.kind) ? { related_ticket_id: r.related_ticket_id } : {}) };
+      }
+      if (payload.reconcile_close === true) {
+        if (payload.status !== 'done') throw new TrackerError('request-invalid', 'reconcile_close requires done');
+        normalized.reconcile_close = true;
+      }
       if (payload.status === 'blocked') {
         if (!(typeof payload.blocker === 'string' && payload.blocker.trim())) throw new TrackerError('blocker-required', 'blocked requires blocker text');
         normalized.blocker = payload.blocker.trim().slice(0, 500);
@@ -387,6 +402,18 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
       }
       break;
     }
+    case 'acknowledge-closure': {
+      validateClosureAcknowledgement(state, target, payload.evidence_version, nowIso);
+      normalized.evidence_version = payload.evidence_version;
+      break;
+    }
+    case 'set-completion': {
+      if (payload.completion_mode === undefined && payload.blocks_parent === undefined) throw new TrackerError('request-invalid', 'choose a completion mode or child relationship');
+      validateCompletionFields(state, target, payload);
+      if (payload.completion_mode !== undefined) normalized.completion_mode = payload.completion_mode;
+      if (payload.blocks_parent !== undefined) normalized.blocks_parent = payload.blocks_parent;
+      break;
+    }
     case 'record-deployment':
       normalized = { items: normalizeDeploymentItems(payload.items, target) };
       break;
@@ -397,6 +424,11 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'dismiss-suggestion': {
       const { h, sug } = findSuggestion(state, target, payload);
       normalized = { handoff_id: h.id, suggestion_id: sug.id };
+      if (body.kind === 'accept-suggestion' && sug.type === 'followup') {
+        suggestionMutation(state, target, h, sug, 'accepted', payload);
+        normalized.blocks_parent = payload.blocks_parent;
+        if (payload.description !== undefined) normalized.description = payload.description;
+      }
       // ADR 0032: an optional reason for a dismissal, kept on the run's local Run note.
       if (body.kind === 'dismiss-suggestion' && payload.reason !== undefined && payload.reason !== null) {
         if (typeof payload.reason !== 'string') throw new TrackerError('request-invalid', 'reason must be a string');
@@ -708,7 +740,7 @@ function evaluateMemoryRequest(worker, req) {
   }
 }
 
-const REVALIDATED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment']);
+const REVALIDATED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'set-completion', 'acknowledge-closure']);
 
 export function evaluateRequest(worker, req) {
   if (SESSION_KINDS.has(req.kind)) return evaluateSessionRequest(worker, req);
@@ -733,10 +765,19 @@ export function evaluateRequest(worker, req) {
     case 'set-next-action':
       return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { next_action: req.payload.next_action } } };
     case 'set-status': {
+      if (req.payload.reconcile_close && !assessClosure(ticket, closureContext(state, worker.now())).closable) return { outcome: 'conflict', error: { code: 'closure-not-ready', message: 'Work changed or completion evidence is incomplete; refresh the ticket', retryable: false, current_revision: ticket.revision } };
+      try { validateCompletionFields(state, ticket, req.payload); } catch (err) { return { outcome: 'failed', error: { code: err.code, message: err.message, retryable: false } }; }
       const fields = { status: req.payload.status };
+      if (req.payload.resolution) fields.resolution = req.payload.resolution;
       if (req.payload.blocker !== undefined) fields.blocker = req.payload.blocker;
       if (Array.isArray(req.payload.deployments)) fields.deployments = req.payload.deployments;
       return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields } };
+    }
+    case 'acknowledge-closure':
+      return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { closure_review: { evidence_version: req.payload.evidence_version, at: worker.now() } } } };
+    case 'set-completion': {
+      try { validateCompletionFields(state, ticket, req.payload); } catch (err) { return { outcome: 'failed', error: { code: err.code, message: err.message, retryable: false } }; }
+      return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: req.payload } };
     }
     case 'record-deployment':
       return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { deployments: req.payload.items } } };
@@ -792,7 +833,7 @@ export function evaluateRequest(worker, req) {
         return { outcome: 'failed', error: { code: err.code, message: err.message, retryable: false, current_revision: ticket.revision } };
       }
       let mutation;
-      try { mutation = suggestionMutation(state, ticket, found.h, found.sug, req.kind === 'accept-suggestion' ? 'accepted' : 'dismissed'); } catch (err) {
+      try { mutation = suggestionMutation(state, ticket, found.h, found.sug, req.kind === 'accept-suggestion' ? 'accepted' : 'dismissed', req.payload); } catch (err) {
         return { outcome: 'failed', error: { code: err.code ?? 'suggestion-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
       }
       if (req.kind === 'dismiss-suggestion' && typeof req.payload.reason === 'string' && req.payload.reason) mutation.reason = req.payload.reason.slice(0, DISMISS_REASON_CHARS);

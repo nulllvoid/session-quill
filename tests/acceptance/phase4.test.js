@@ -66,7 +66,7 @@ test('A36 a fix uses an isolated base-commit worktree and leaves the live dirty 
   } finally { await broken.stop(); }
 });
 
-test('A37 concurrent requests cannot reserve two runs for one ticket; fixes to one repo serialize; duplicate result delivery does not duplicate children', async () => {
+test('A37 concurrent requests cannot reserve two runs for one ticket; fixes to one repo serialize; duplicate result delivery does not duplicate follow-up proposals', async () => {
   const s = await scenario({ withHandoff: true }).start();
   try {
     s.hext.pause();
@@ -92,8 +92,9 @@ test('A37 concurrent requests cannot reserve two runs for one ticket; fixes to o
     const done = await until(() => { s.w.tick(); const h = s.w.state.handoffs.get(hid); return h.state === 'done' ? h : null; }, { timeoutMs: 15000 });
     const { recordResult } = await import('../../src/handoff/results.js');
     recordResult(s.w, hid, { summary: 'again', children: [{ title: 'Add fake timers to retry tests' }, { title: 'Document retry timing contract' }] });
-    assert.equal(s.w.state.tickets.get(t4).children_ids.length, 2);
-    assert.equal(done.children_ids.length, 2);
+    assert.equal(s.w.state.tickets.get(t4).children_ids.length, 0);
+    assert.equal(done.children_ids.length, 0);
+    assert.equal(done.suggestions.filter((x) => x.type === 'followup' && x.state === 'proposed').length, 2);
   } finally { await s.stop(); }
 });
 

@@ -178,8 +178,10 @@ export function runTabs(snapshot, filters, now, { memory = null } = {}) {
     }
     for (const [id, p] of openCi) runNeeds.push(ciNeed((snapshot.handoffs ?? []).find((h) => h.id === id) ?? null, id, p, p.proposed_at ?? ''));
   }
+  const closure = snapshot.capabilities?.edit_tickets && !isStaticSnapshot(snapshot)
+    ? (snapshot.reconciliation?.items ?? []).filter((item) => keep(item.ticket_id)).map((item) => ({ kind: 'closure', id: `closure:${item.ticket_id}`, at: '', item, group: 'decision' })) : [];
   const tabs = {
-    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed' && x.proposal.origin !== 'ci').map((x) => ({ ...x, group: 'decision' })), ...runNeeds, ...memoryNeeds(memory, filters).map((x) => ({ ...x, group: 'decision' }))],
+    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed' && x.proposal.origin !== 'ci').map((x) => ({ ...x, group: 'decision' })), ...runNeeds, ...closure, ...memoryNeeds(memory, filters).map((x) => ({ ...x, group: 'decision' }))],
     live: runs.filter((x) => LIVE.has(x.run.state)),
     failed: runs.filter((x) => FAILED.has(x.run.state)),
     all: [...proposals, ...runs.filter((x) => !Number.isFinite(Date.parse(x.at)) || nowMs - Date.parse(x.at) <= ALL_WINDOW_MS)],

@@ -68,7 +68,7 @@ test('parseAgentResult extracts the structured block from the result text and to
   assert.equal(bad.raw, 'not json');
 });
 
-test('analyse-followups runs the agent in an empty directory, finishes done, creates children once (redelivery-safe) and applies the next action', async () => {
+test('analyse-followups runs the agent in an empty directory, finishes done, proposes follow-ups once and applies the next action', async () => {
   const b = await bootWorker({ runtimeAvailable: true });
   try {
     const t = b.ticket(T1, 'LOCAL-a-00000001');
@@ -76,8 +76,9 @@ test('analyse-followups runs the agent in an empty directory, finishes done, cre
     b.w.tick();
     const hid = b.w.state.requests.get(RID(1)).result.handoff_id;
     const done = await until(() => { b.w.tick(); const h = b.w.state.handoffs.get(hid); return h.state === 'done' ? h : null; });
-    assert.equal(done.children_ids.length, 2);
-    assert.equal(b.w.state.tickets.get(T1).children_ids.length, 2);
+    assert.equal(done.children_ids.length, 0);
+    assert.equal(done.suggestions.length, 2);
+    assert.equal(b.w.state.tickets.get(T1).children_ids.length, 0);
     assert.equal(b.w.state.tickets.get(T1).next_action, 'Use fake timers in the retry tests');
     assert.match(done.result_summary, /shared timer/);
     assert.ok(done.result_ref);
@@ -85,13 +86,11 @@ test('analyse-followups runs the agent in an empty directory, finishes done, cre
     assert.ok(fs.existsSync(done.log_path), 'log preserved');
     assert.match(fs.readFileSync(done.log_path, 'utf8'), /fake-claude cwd=/);
     assert.equal(fs.readFileSync(done.log_path, 'utf8').includes(b.config.repos.demo.canonical_path ?? '__none__'), false);
-    // redelivery of the same result must not duplicate children
+    // Redelivery of the same result must not duplicate proposals or create children.
     recordResult(b.w, hid, { summary: done.result_summary, children: [{ title: 'Add fake timers to retry tests' }, { title: 'Document retry timing contract' }], next_action: 'again' });
-    assert.equal(b.w.state.tickets.get(T1).children_ids.length, 2);
-    const child = b.w.state.tickets.get(done.children_ids[0]);
-    assert.equal(child.parent_id, T1);
-    assert.match(child.key, /^LOCAL-a-00000001\.\d$/);
-    assert.match(child.summary, /^\*\*Goal:\*\* Make the retry tests deterministic/, 'a child an agent proposes carries its description');
+    assert.equal(b.w.state.tickets.get(T1).children_ids.length, 0);
+    assert.equal(done.suggestions.length, 2);
+    assert.match(done.suggestions[0].description, /^\*\*Goal:\*\* Make the retry tests deterministic/, 'a child an agent proposes carries its description');
   } finally { await b.w.stop(); }
 });
 

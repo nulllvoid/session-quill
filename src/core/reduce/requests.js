@@ -139,7 +139,23 @@ export function applySuggestion(state, ev, m, req, result) {
   if (m.fields) applyTicketFields(state, ticket, m.fields, ev, 'manual', result);
   if (m.child && !state.tickets.has(m.child.id)) {
     const r = createTicket(state, ev, { ...m.child, project_id: ticket.project_id, project_name: ticket.project_name, parent_id: ticket.id, repo_id: ticket.repo_id }, 'manual', result);
-    if (!r.rejected) { sug.child_id = m.child.id; h.children_ids = [...(h.children_ids ?? []), m.child.id]; }
+    if (!r.rejected) {
+      // The modern mutation records privacy explicitly, so old journal transactions retain
+      // their original replay semantics and a private run cannot create an exportable child.
+      if (m.child.local_only === true) state.tickets.get(m.child.id).local_only = true;
+      sug.child_id = m.child.id;
+      h.children_ids = [...(h.children_ids ?? []), m.child.id];
+    }
+  }
+  // A retry's identical finding can resolve to a child created by an earlier acceptance.
+  const linkedId = m.child_id ?? m.child?.id;
+  if (linkedId && state.tickets.has(linkedId)) {
+    if (m.child_local_only === true) {
+      state.tickets.get(linkedId).local_only = true;
+      result.changed.add(linkedId);
+    }
+    sug.child_id = linkedId;
+    h.children_ids = [...new Set([...(h.children_ids ?? []), linkedId])];
   }
   req.applied_revision = ticket.revision;
 }

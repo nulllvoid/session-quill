@@ -1,7 +1,8 @@
 // Tickets whose status no longer matches what happened: work that shipped while the ticket stayed
 // open, parents whose children all finished, and open tickets nobody has touched in days. The
-// first two have a safe, mechanical answer (done); idle tickets need the owner's judgment.
+// first two still require the full shared closure assessment; age alone never closes work.
 import { ageMs, DAY } from '../lib/time.js';
+import { assessClosure } from './closure.js';
 
 export const IDLE_DAYS = 5;
 const OPEN = new Set(['todo', 'active', 'review', 'deploy-pending', 'blocked']);
@@ -23,7 +24,7 @@ function childrenDone(ticket, byParent) {
 }
 
 // Suggestions in a stable order: closable first (oldest activity first), then idle.
-export function cleanupSuggestions(tickets, { nowIso, idleDays = IDLE_DAYS } = {}) {
+export function cleanupSuggestions(tickets, { nowIso, idleDays = IDLE_DAYS, ...context } = {}) {
   const byParent = new Map();
   for (const t of tickets) if (t.parent_id) { if (!byParent.has(t.parent_id)) byParent.set(t.parent_id, []); byParent.get(t.parent_id).push(t); }
   const out = [];
@@ -32,8 +33,9 @@ export function cleanupSuggestions(tickets, { nowIso, idleDays = IDLE_DAYS } = {
     const idle = t.last_activity ? Math.floor(ageMs(t.last_activity, nowIso) / DAY) : null;
     const reason = shipped(t) ?? childrenDone(t, byParent);
     if (reason) {
-      out.push({ kind: shipped(t) ? 'shipped' : 'children-done', ticket_id: t.id, key: t.key, title: t.title, status: t.status, idle_days: idle, reason, suggested_status: 'done', closable: true });
-    } else if (idle !== null && idle >= idleDays && t.status !== 'blocked') {
+      const assessment = assessClosure(t, { ...context, tickets, nowIso });
+      out.push({ ...assessment, kind: shipped(t) ? 'shipped' : 'children-done', ticket_id: t.id, key: t.key, title: t.title, status: t.status, idle_days: idle, reason: assessment.closable ? reason : assessment.reason, suggested_status: assessment.closable ? 'done' : null });
+    } else if (idle !== null && idle >= idleDays) {
       out.push({ kind: 'idle', ticket_id: t.id, key: t.key, title: t.title, status: t.status, idle_days: idle, reason: `no activity for ${idle} days`, suggested_status: null, closable: false });
     }
   }

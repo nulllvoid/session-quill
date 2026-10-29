@@ -183,6 +183,16 @@ async function set(ctx, io, args, flags) {
     fields.title = title.slice(0, 200);
   }
   const status = str('status');
+  if (str('completion') !== undefined) fields.completion_mode = str('completion');
+  if (flags['blocks-parent'] !== undefined) {
+    if (!['yes', 'no'].includes(str('blocks-parent'))) throw new TrackerError('child-relationship-invalid', '--blocks-parent requires yes or no');
+    fields.blocks_parent = str('blocks-parent') === 'yes';
+  }
+  if (str('resolution') !== undefined) {
+    const related = str('related') ? findTicketByKey(ctx, str('related')) : null;
+    fields.resolution = { kind: str('resolution'), reason: str('reason') ?? (str('resolution') === 'completed' ? 'Confirmed by owner' : ''), ...(related ? { related_ticket_id: related.id } : {}) };
+    fields.status = 'done';
+  }
   const blocker = str('blocker');
   if (status !== undefined) {
     if (!TICKET_STATUSES.includes(status)) throw new TrackerError('status-invalid', `status must be one of ${TICKET_STATUSES.join(', ')}`);
@@ -265,7 +275,7 @@ async function stale(ctx, io, flags) {
   const snap = latestSnapshot(ctx);
   const idleDays = flags['idle-days'] !== undefined ? Number(flags['idle-days']) : IDLE_DAYS;
   if (!Number.isInteger(idleDays) || idleDays < 1) throw new TrackerError('usage', '--idle-days must be a whole number of days, at least 1');
-  const suggestions = cleanupSuggestions(snap ? snap.tickets : [], { nowIso: nowIso(), idleDays });
+  const suggestions = cleanupSuggestions(snap ? snap.tickets : [], { nowIso: nowIso(), idleDays, handoffs: snap?.handoffs ?? [], complete: !!snap && Array.isArray(snap.handoffs) });
   if (!flags.apply) {
     if (flags.json) { io.json(suggestions); return 0; }
     if (!suggestions.length) { io.println('Nothing to clean up: every open ticket has recent activity or open work.'); return 0; }
@@ -280,7 +290,7 @@ async function stale(ctx, io, flags) {
   const byId = new Map((snap ? snap.tickets : []).map((t) => [t.id, t]));
   const results = [];
   for (const s of suggestions.filter((x) => x.closable)) {
-    const ev = cliEvent(ctx, { kind: 'ticket-update', payload: { ticket_id: s.ticket_id, fields: { status: 'done' }, source: 'manual', expected_revision: byId.get(s.ticket_id).revision }, session: null, ticket_id: s.ticket_id });
+    const ev = cliEvent(ctx, { kind: 'ticket-update', payload: { ticket_id: s.ticket_id, fields: { status: 'done' }, source: 'manual', reconcile_close: true, expected_revision: byId.get(s.ticket_id).revision }, session: null, ticket_id: s.ticket_id });
     const ack = await submitAndWait(ctx, ev, { timeoutMs: timeout(flags) });
     results.push({ key: s.key, closed: !ack.rejected, rejected: ack.rejected ?? null });
   }

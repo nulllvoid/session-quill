@@ -1,11 +1,8 @@
-// Records handoff outcomes as journal transactions. Children use stable (handoff, index) identities
-// so result redelivery cannot duplicate them; next-action suggestions are revision-checked by the
-// reducer against base_ticket_revision (TRD §Handoff execution).
+// Records handoff outcomes as journal transactions. Follow-ups are proposals until accepted;
+// old journaled child items continue replaying under their original semantics.
 import { putBlob } from '../core/blobs.js';
-import { deterministicId } from '../lib/ids.js';
-import { CATEGORIES, PRIORITIES } from '../core/state.js';
 import { recordedStage } from './stage.js';
-import { childKeys, buildSuggestions } from '../agents/suggestions.js';
+import { buildSuggestions, normalizeFollowupSuggestions, FOLLOWUP_PROPOSALS_MAX } from '../agents/suggestions.js';
 import { planCriticalChanges, emitCriticalProposals } from './critical-changes.js';
 
 export { CRITICAL_NO_SCOPE, CRITICAL_NO_PIN, CRITICAL_TRUNCATED, CRITICAL_HIDDEN, planCriticalChanges } from './critical-changes.js';
@@ -17,14 +14,6 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
   const items = [];
   // Recipes other than the built-in modes never edit the ticket: their outputs become suggestions.
   const suggesting = h.legacy === false;
-  const children = !suggesting && state === 'done' && h.mode === 'analyse-followups' && ticket ? (result.children ?? []) : [];
-  const keys = ticket ? childKeys(worker.state, ticket, children.length) : [];
-  children.forEach((c, i) => {
-    items.push({
-      type: 'child', id: deterministicId(`${h.id}:child:${i}`), key: keys[i], title: c.title,
-      category: CATEGORIES.includes(c.category) ? c.category : ticket.category, priority: PRIORITIES.includes(c.priority) ? c.priority : ticket.priority, next_action: c.next_action ?? '', summary: c.description ?? '',
-    });
-  });
   if (!suggesting && state === 'done' && result.next_action) items.push({ type: 'next-action', text: result.next_action });
   if (!suggesting && state === 'done' && result.blocker) items.push({ type: 'blocker', text: result.blocker });
   if (!suggesting && state === 'done' && result.description) items.push({ type: 'description', text: result.description });
@@ -53,7 +42,16 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
   update.critical_count = count('critical_changes', h.critical_count);
   update.stage_reached = result && result.stage_reached ? result.stage_reached : h.stage_reached ?? null;
   update.recorded_stage = recordedStage({ ...h, ...update });
-  if (suggesting && state === 'done' && !(h.suggestions ?? []).length) update.suggestions = buildSuggestions(h.outputs ?? [], result, worker.now());
+  if (state === 'done' && !(h.suggestions ?? []).length) {
+    const outputs = suggesting ? h.outputs ?? [] : h.mode === 'analyse-followups' ? ['followups'] : [];
+    const suggestions = buildSuggestions(outputs, result, worker.now());
+    update.suggestions = ticket ? normalizeFollowupSuggestions(worker.state, ticket, h, suggestions) : suggestions;
+  }
+  const deferred = (update.suggestions ?? h.suggestions ?? []).filter((s) => s.state === 'deferred');
+  if (deferred.length) {
+    const review = [`Follow-up review: ${deferred.length} additional finding(s) retained below because this root task already had ${FOLLOWUP_PROPOSALS_MAX} outstanding proposals when this run finished.`, ...deferred.map((s) => `- ${s.title}\n${s.description}`)].join('\n\n');
+    if (!(update.result_summary ?? '').includes(review)) update.result_summary = [update.result_summary, review].filter(Boolean).join('\n\n');
+  }
   // Spec §7.1–7.2: a done run's critical changes become proposals after the run is recorded done.
   const changes = state === 'done' && ticket && result && Array.isArray(result.critical_changes) ? result.critical_changes : [];
   const critical = changes.length ? planCriticalChanges(worker, changes) : { plans: [], notes: [] };

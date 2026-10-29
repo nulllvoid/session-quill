@@ -3,6 +3,7 @@
 import { TrackerError } from '../lib/errors.js';
 import { TICKET_STATUSES } from './state.js';
 import { deterministicId } from '../lib/ids.js';
+import { assessClosure } from './closure.js';
 
 export function applyStatusChange(ticket, { status, source = 'manual', seq = 0, blocker, evidence_id = null }) {
   if (!TICKET_STATUSES.includes(status)) throw new TrackerError('status-invalid', `unknown status ${status}`);
@@ -13,6 +14,10 @@ export function applyStatusChange(ticket, { status, source = 'manual', seq = 0, 
   ticket.status = status;
   ticket.status_source = source;
   ticket.status_evidence_id = evidence_id;
+  if (status === 'done') {
+    ticket.closed_sequence = seq;
+    ticket.resolution = { kind: 'completed', reason: source === 'evidence' ? 'Completion evidence satisfied' : 'Confirmed by owner' };
+  } else ticket.resolution = null;
   if (status === 'blocked') ticket.blocker = blocker.trim();
   else if (ticket.blocker !== null && status !== 'blocked') ticket.blocker = null;
   if (source === 'manual' || source === 'migration') {
@@ -42,7 +47,12 @@ function ensureObligations(ticket, { pr_id, merged_at, source_event_id, environm
 
 // Evidence may propose/derive statuses but never overrides blocked, explicit done, or a manual
 // decision at or below the recorded evidence floor.
-export function deriveStatusFromEvidence(ticket, evidence, repo) {
+export function recordWorkEvidence(ticket, { seq, at }) {
+  ticket.last_work_sequence = Math.max(ticket.last_work_sequence ?? 0, seq ?? 0);
+  if (Number.isFinite(Date.parse(at)) && (!ticket.last_work_at || Date.parse(at) > Date.parse(ticket.last_work_at))) ticket.last_work_at = at;
+}
+
+export function deriveStatusFromEvidence(ticket, evidence, repo, context = {}) {
   const { type, seq, evidence_id } = evidence;
   const floor = ticket.manual_status_evidence_floor ?? 0;
   const aboveFloor = seq > floor;
@@ -50,6 +60,7 @@ export function deriveStatusFromEvidence(ticket, evidence, repo) {
   let target = null;
 
   if (type === 'write') {
+    recordWorkEvidence(ticket, evidence);
     if (from === 'todo') target = 'active';
   } else if (type === 'pr-open' || type === 'pr-draft') {
     if (from === 'todo' || from === 'active') target = 'review';
@@ -70,12 +81,22 @@ export function deriveStatusFromEvidence(ticket, evidence, repo) {
     throw new TrackerError('evidence-invalid', `unknown evidence type ${type}`);
   }
 
+  if (type === 'pr-merged' || type === 'obligations-cleared') {
+    ticket.completion_evidence_seq = seq;
+    ticket.completion_evidence_id = evidence_id;
+  }
+  if (target === 'done' && (context.deferCompletion || !assessClosure(ticket, context).closable)) target = null;
+
   if (!target || !aboveFloor || from === 'blocked' || (from === 'done' && target !== 'done')) {
     return { changed: false };
   }
   ticket.status = target;
   ticket.status_source = 'evidence';
   ticket.status_evidence_id = evidence_id ?? null;
+  if (target === 'done') {
+    ticket.closed_sequence = seq;
+    ticket.resolution = { kind: 'completed', reason: 'Completion evidence satisfied' };
+  }
   return { changed: true };
 }
 

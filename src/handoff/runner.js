@@ -9,6 +9,7 @@ import { runEnvPromptSection, RUN_ENV_METHOD_LINE } from './run-env.js';
 import { STAGES } from './stage.js';
 import { ACCESS } from './permissions.js';
 import { descriptionProblems, normalizeDescription, DESCRIPTION_TEMPLATE } from '../core/description.js';
+import { followupSourceFingerprint } from '../agents/suggestions.js';
 
 const MODE_INSTRUCTIONS = {
   analyse: 'Analyse the ticket from its notes and recommend what to do next. Do not propose child tickets.',
@@ -450,7 +451,15 @@ export function parseAgentResult(result, { outputs = null } = {}) {
       parsed.summary = typeof obj.summary === 'string' ? obj.summary.slice(0, 4000) : null;
       parsed.next_action = typeof obj.next_action === 'string' && obj.next_action.trim() ? obj.next_action.trim().slice(0, 2000) : null;
       parsed.blocker = typeof obj.blocker === 'string' && obj.blocker.trim() ? obj.blocker.trim().slice(0, 500) : null;
-      parsed.children = Array.isArray(obj.children) ? obj.children.filter((c) => c && typeof c.title === 'string' && c.title.trim()).slice(0, 5).map((c) => ({ title: c.title.trim().slice(0, 200), category: c.category, priority: c.priority, next_action: typeof c.next_action === 'string' ? c.next_action.slice(0, 2000) : '' })) : [];
+      parsed.children = Array.isArray(obj.children) ? obj.children.filter((c) => c && typeof c.title === 'string' && c.title.trim()).map((c) => ({
+        title: c.title.trim().slice(0, 200), category: c.category, priority: c.priority,
+        next_action: typeof c.next_action === 'string' ? c.next_action.slice(0, 2000) : '',
+        evidence: typeof c.evidence === 'string' ? c.evidence : null,
+        sources: Array.isArray(c.sources) ? c.sources.filter((x) => typeof x === 'string') : parsed.sources,
+        // Hash the original values before display truncation; two distinct long findings must
+        // not merge merely because their first 200 title characters happen to match.
+        source_fingerprint: followupSourceFingerprint(c, parsed.sources),
+      })) : [];
       parsed.test_results = Array.isArray(obj.test_results) ? obj.test_results.filter((t) => typeof t === 'string').slice(0, 50) : [];
       parsed.changed_files = Array.isArray(obj.changed_files) ? obj.changed_files.filter((t) => typeof t === 'string').slice(0, 500) : [];
       parsed.deploy_evidence = Array.isArray(obj.deploy_evidence) ? obj.deploy_evidence.filter((d) => d && typeof d.environment === 'string' && d.environment.trim() && ['deployed', 'pending', 'n-a'].includes(d.state)).slice(0, 20).map((d) => ({ environment: d.environment.trim().slice(0, 64), state: d.state, pr: typeof d.pr === 'string' && d.pr.trim() ? d.pr.trim().slice(0, 300) : null, evidence: typeof d.evidence === 'string' ? d.evidence.slice(0, 500) : null, deployed_at: typeof d.deployed_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(d.deployed_at) ? d.deployed_at : null })) : [];
@@ -460,7 +469,7 @@ export function parseAgentResult(result, { outputs = null } = {}) {
         if (issues.length) parsed.problems.push(`"description" does not follow the format: ${issues.join('; ')}`);
         else parsed.description = normalizeDescription(obj.description);
       }
-      const children = declared('followups') && Array.isArray(obj.children) ? obj.children : [];
+      const children = declared('followups') && Array.isArray(obj.children) ? obj.children.filter((c) => c && typeof c.title === 'string' && c.title.trim()) : [];
       children.forEach((c, i) => {
         const issues = c && typeof c.description === 'string' ? descriptionProblems(c.description) : ['it is missing'];
         if (issues.length) parsed.problems.push(`children[${i}].description does not follow the format: ${issues.join('; ')}`);

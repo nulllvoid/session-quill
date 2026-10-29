@@ -1,6 +1,6 @@
 # Quill developer control centre
 
-Date: 2026-10-30 · Status: proposed design, awaiting owner review
+Date: 2026-10-30 · Status: milestone 0 approved for implementation; later milestones remain roadmap
 
 ## Intent and product direction
 
@@ -266,6 +266,6 @@ Choose exact helper names, endpoint spelling, reducer operation naming, file bou
 
 ## Review status
 
-Prepared from the current repository and official Jev/LangChain sources. An independent builder check on 2026-10-30 found no important unanswered planning questions in the original workspace design, including after checking current run eligibility and attention handling. The later reconciliation milestone is an owner-requested scope refinement. A second independent check inspected the transition, cleanup, reconciliation and reducer paths and found no important unanswered questions for 0A or material contradictions in 0B. Owner design approval remains pending before the implementation plan.
+Prepared from the current repository and official Jev/LangChain sources. An independent builder check on 2026-10-30 found no important unanswered planning questions in the original workspace design, including after checking current run eligibility and attention handling. The later reconciliation milestone is an owner-requested scope refinement. A second independent check inspected the transition, cleanup, reconciliation and reducer paths and found no important unanswered questions for 0A or material contradictions in 0B. The owner approved milestone 0 implementation on 2026-10-30. Implementation is specified in `../plans/2026-10-30-reconciliation-loop.md` and ADR 0042; later workspace and tracker-write milestones remain outside this change.
 
 No product implementation, dependencies, external writes or live Jev benchmark are included in this design change. The builder check did not execute tests or validate live external APIs. After the owner deferred Jev, temporary benchmark scaffolding was removed. One tool-disabled Claude connectivity probe completed before cancellation; it was not a routing benchmark and establishes no performance comparison.

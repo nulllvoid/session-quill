@@ -140,8 +140,8 @@ test('the handoff form and quill handoff still work: a mode request runs the bui
     const h = await runToDone(b, RID(6), { mode: 'analyse-followups', note: '', permissions: NONE, branch: null }, t);
     assert.equal(h.state, 'done');
     assert.deepEqual([h.recipe.name, h.recipe.source], ['analyse-followups', 'builtin']);
-    assert.equal(b.w.state.tickets.get(T1).children_ids.length, 2, 'built-in modes keep applying their results directly');
-    assert.equal((h.suggestions ?? []).length, 0);
+    assert.equal(b.w.state.tickets.get(T1).children_ids.length, 0, 'built-in follow-ups wait for owner acceptance');
+    assert.equal(h.suggestions.filter((s) => s.type === 'followup' && s.state === 'proposed').length, 2);
   } finally { await b.w.stop(); }
 });
 

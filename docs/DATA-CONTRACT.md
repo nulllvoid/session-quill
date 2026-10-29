@@ -715,3 +715,20 @@ Source: `docs/research/2.0.0/02-issue-mcp-credentials.md`, fixes 2 and 4. No new
 | `memoryListing` | `stale_reason`, `observed_in` | `stale_reason` may be `'run-env-changed'`; `observed_in` is `'autonomous'` or `null` |
 
 Delivery: an entry staled by `run-env-changed` is not delivered; the "Left out" line counts it under "Run environment changed since recorded, not delivered". The projection's `## Stale` list says "run environment changed since recorded"; `quill memory list` labels it "Stale (run environment changed)".
+
+## Reconciliation lifecycle (ADR 0042)
+
+Reducer version: **3**. These are journal-derived owner fields; replay does not perform network calls.
+
+- Ticket `completion_mode`: `evidence` (default) or explicitly selected `children`. `completion_policy_seq` records a changed selection.
+- Child `blocks_parent`: `true` (required), `false` (independent), or `null` (legacy/unknown). Unknown relationships require review. Required non-delivery resolutions do not satisfy parent completion.
+- Ticket `resolution`: null or `{kind, reason, related_ticket_id?}`. Kinds: completed, duplicate, superseded, abandoned. Explicit reasons contain 1–500 characters. Duplicate/superseded require another existing ticket. Reopening clears the resolution.
+- Ticket `completion_evidence_seq`, `completion_evidence_id`, `closed_sequence`, `last_work_sequence`, `last_work_at`: evidence bookkeeping, distinct from observed-at and work activity. Identical polls never advance closure evidence past a manual status floor.
+- Follow-up ticket `source_run_id`, `source_suggestion_id`, `finding_key`: exact provenance. Accepted proposals explicitly carry `blocks_parent` and a valid description; local-only visibility is inherited. Suggestions can be `suppressed` (with duplicate linkage) or `deferred` in addition to existing lifecycle states.
+- Ticket `closure_review`: `{evidence_version, at}` acknowledges current material evidence only. It does not change status or completion policy.
+- Owner snapshot `reconciliation`: `{items, coverage, summary}`. Items reference existing tickets, with disposition/reason/blockers, `closable`, `evidence_version`, optional polling times and error. Acknowledged unchanged items are omitted. Coverage contains `targets`, `checked`, `failed`, `deferred`, `remaining_eligible`, `oldest_unchecked_at`, `by_kind`, and its journal time. Summary is cumulative over retained local records, distinguishes successful completion from other resolutions, and includes measured merge-to-closure delay.
+- Worker `reconcileChecks`: Map keyed by JSON `[kind, repo_id, target_id]`, one bounded record per target with last attempt/success, next check, failure count and error. Kinds are ticket-pr, run-pr, branch. Persisted in journal/checkpoints, absent from external projections.
+
+Revision-checked requests: `set-completion` accepts only completion mode/child relationship; `set-status` optionally carries resolution; `acknowledge-closure` accepts only an evidence version. Both submission and application validate them. Automatic cleanup additionally rechecks complete worker state immediately before applying. Completion controls retain the existing undo delay and explicit outstanding-deployment choice.
+
+Resolution reasons/references, closure acknowledgements, follow-up source identities and closure evidence bookkeeping stay out of vault front matter. External snapshot, mirror and publisher allow-lists omit these and the entire reconciliation section. Historical legacy child-result mutations still replay; new live results become proposals.
