@@ -2,6 +2,7 @@
 import { ageMs, DAY } from '../lib/time.js';
 import { contentHash } from '../lib/ids.js';
 import { TrackerError } from '../lib/errors.js';
+import { completionIndex } from './hierarchy.js';
 
 export function validateCompletionFields(state, ticket, fields) {
   if (fields.completion_mode !== undefined && !['evidence', 'children'].includes(fields.completion_mode)) throw new TrackerError('completion-mode-invalid', 'completion_mode must be evidence or children');
@@ -16,14 +17,13 @@ export function validateCompletionFields(state, ticket, fields) {
 
 const values = x => x instanceof Map ? [...x.values()] : x ?? [];
 export function closureContext(state, nowIso) {
-  const tickets = values(state.tickets), handoffs = values(state.handoffs), byParent = new Map(), runsByTicket = new Map();
-  for (const t of tickets) if (t.parent_id) { if (!byParent.has(t.parent_id)) byParent.set(t.parent_id, []); byParent.get(t.parent_id).push(t); }
-  for (const h of handoffs) { if (!runsByTicket.has(h.ticket_id)) runsByTicket.set(h.ticket_id, []); runsByTicket.get(h.ticket_id).push(h); }
-  return { tickets, handoffs, byParent, runsByTicket, nowIso, complete: true };
+  const tickets = values(state.tickets), handoffs = values(state.handoffs);
+  return { tickets, handoffs, ...completionIndex(tickets, handoffs), nowIso, complete: true };
 }
 
 export function assessClosure(ticket, context = {}) {
   const { nowIso, complete = false } = context;
+  const conflicts = context.conflicts ?? completionIndex(values(context.tickets), values(context.handoffs)).conflicts;
   const children = context.byParent?.get(ticket.id) ?? values(context.tickets).filter(c => c.parent_id === ticket.id);
   const runs = context.runsByTicket?.get(ticket.id) ?? values(context.handoffs).filter(h => h.ticket_id === ticket.id);
   const prs = ticket.prs ?? [], deployments = ticket.deployments ?? [], blockers = [];
@@ -35,6 +35,7 @@ export function assessClosure(ticket, context = {}) {
   const required = children.filter(c => c.blocks_parent === true);
   if (required.some(c => c.status !== 'done')) blockers.push('Required child work remains open');
   if (required.some(c => c.status === 'done' && c.resolution && c.resolution.kind !== 'completed')) blockers.push('Required child work was resolved without delivery');
+  for (const conflict of conflicts.get(ticket.id) ?? []) if (!blockers.includes(conflict.text)) blockers.push(conflict.text);
   if (prs.some(p => p.state !== 'merged')) blockers.push('A linked PR is open, unmerged or unknown');
   if (prs.some(p => p.error)) blockers.push('PR evidence could not be refreshed');
   if (nowIso && prs.some(p => !p.observed_at || ageMs(p.observed_at, nowIso) > DAY)) blockers.push('PR evidence needs a fresh check');
@@ -55,13 +56,11 @@ export function assessClosure(ticket, context = {}) {
     reason: blockers.length ? blockers[0] : grouping && !merged.length ? 'All required child work is complete' : 'All linked PRs and required deployments are complete' };
 }
 
-export function reconciliationItems(state, nowIso, { includeAcknowledged = false } = {}) {
-  const context = closureContext(state, nowIso);
+export function reconciliationItems(state, nowIso, { includeAcknowledged = false, context = closureContext(state, nowIso) } = {}) {
   return context.tickets.flatMap(t => {
     if (t.status === 'done') {
-      const reopened = (context.byParent.get(t.id) ?? []).some(c => c.blocks_parent === true && c.status !== 'done');
-      const reverted = (context.runsByTicket.get(t.id) ?? []).some(h => h.pr_observed?.reverted_by);
-      return reopened || reverted ? [{ ticket_id: t.id, key: t.key, title: t.title, status: t.status, kind: 'closure-conflict', reason: reverted ? 'Delivered work was reverted' : 'Required child work reopened after completion', blockers: ['Review the completion decision'], closable: false }] : [];
+      const conflicts = context.conflicts.get(t.id) ?? [];
+      return conflicts.length ? [{ ticket_id: t.id, key: t.key, title: t.title, status: t.status, kind: 'closure-conflict', reason: conflicts[0].text, blockers: conflicts.map(c => c.text), closable: false }] : [];
     }
     const result = assessClosure(t, context);
     const idle = t.last_activity && ageMs(t.last_activity, nowIso) >= 5 * DAY;
@@ -78,7 +77,7 @@ export function reconciliationItems(state, nowIso, { includeAcknowledged = false
     const evidence_version = contentHash(JSON.stringify([t.status, t.blocker, t.completion_mode, t.last_work_at, t.manual_status_evidence_floor, item.blockers,
       (t.prs ?? []).map(p => [p.id, p.state, p.merged_at, p.error]),
       (t.deployments ?? []).map(d => [d.id, d.state]),
-      (context.byParent.get(t.id) ?? []).map(c => [c.id, c.status, c.blocks_parent, c.resolution?.kind]),
+      (context.byParent.get(t.id) ?? []).map(c => [c.id, c.status, c.blocks_parent, c.resolution?.kind]), context.conflicts.get(t.id),
       runs.map(h => [h.id, h.state, h.finished_at, h.uncertain_effects, h.pr_observed?.reverted_by]), t.external?.remote?.status, checks.filter(c => c.error).map(c => [c.key, c.error]).sort((a, b) => a[0].localeCompare(b[0]))]));
     return { ...item, evidence_version, last_success_at: checks.map(c => c.last_success_at).filter(Boolean).sort().at(-1) ?? null,
       next_check_at: checks.map(c => c.next_check_at).filter(Boolean).sort()[0] ?? null, error: checks.find(c => c.error)?.error ?? null };
@@ -92,8 +91,7 @@ export function validateClosureAcknowledgement(state, ticket, version, nowIso) {
 }
 
 // Cumulative local outcomes, not agent productivity scores. Unknown history stays unknown.
-export function reconciliationSummary(state, nowIso) {
-  const context = closureContext(state, nowIso);
+export function reconciliationSummary(state, nowIso, { context = closureContext(state, nowIso) } = {}) {
   const tickets = context.tickets, runs = context.handoffs;
   const open = tickets.filter(t => t.status !== 'done');
   const completed = tickets.filter(t => t.status === 'done' && (!t.resolution || t.resolution.kind === 'completed'));
@@ -106,7 +104,7 @@ export function reconciliationSummary(state, nowIso) {
   });
   return { tasks_created: tickets.length, open: open.length, completed: completed.length, otherwise_resolved: otherwise.length,
     oldest_open_at: open.map(t => t.created_at).filter(Boolean).sort()[0] ?? null,
-    closure_conflicts: tickets.filter(t => t.status === 'done' && ((context.byParent.get(t.id) ?? []).some(c => c.blocks_parent === true && c.status !== 'done') || (context.runsByTicket.get(t.id) ?? []).some(h => h.pr_observed?.reverted_by))).length,
+    closure_conflicts: tickets.filter(t => t.status === 'done' && context.conflicts.has(t.id)).length,
     suppressed_followups: runs.reduce((n, h) => n + (h.suggestions ?? []).filter(s => s.type === 'followup' && s.state === 'suppressed').length, 0),
     merge_to_closure: { measured: delays.length, mean_ms: delays.length ? Math.round(delays.reduce((a, b) => a + b, 0) / delays.length) : null } };
 }

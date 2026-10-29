@@ -35,7 +35,7 @@ export function attachUnboundWork(state, ev, m, result) {
     }
   }
   w.commits.forEach((c, i) => {
-    ticket.timeline.push(timelineEntry(ev, 'commit', `Commit ${c.sha.slice(0, 10)}${c.message ? `: ${c.message}` : ''} (attached)`, { index: i }));
+    ticket.timeline.push({ ...timelineEntry(ev, 'commit', `Commit ${c.sha.slice(0, 10)}${c.message ? `: ${c.message}` : ''} (attached)`, { index: i }), commit_sha: c.sha, commit_repo_id: c.repo_id ?? ticket.repo_id ?? null });
   });
   const files = `${w.files.length} file${w.files.length === 1 ? '' : 's'}`;
   const commits = `${w.commits.length} commit${w.commits.length === 1 ? '' : 's'}`;
@@ -100,8 +100,8 @@ export function recordUnboundWork(session, ev, { writePaths, commit, repo_id }) 
     if (existing) existing.last_seen = ev.occurred_at;
     else if (w.files.length < UNBOUND_FILE_CAP) w.files.push({ repo_id, relative_path: rel, first_seen: ev.occurred_at, last_seen: ev.occurred_at });
   }
-  if (commit && !w.commits.some((c) => c.sha === commit.sha) && w.commits.length < UNBOUND_COMMIT_CAP) {
-    w.commits.push({ sha: commit.sha, message: typeof commit.message === 'string' ? commit.message.slice(0, 200) : '', at: ev.occurred_at });
+  if (commit && !w.commits.some((c) => c.sha === commit.sha && (c.repo_id ?? null) === (repo_id ?? null)) && w.commits.length < UNBOUND_COMMIT_CAP) {
+    w.commits.push({ sha: commit.sha, ...(repo_id ? { repo_id } : {}), message: typeof commit.message === 'string' ? commit.message.slice(0, 200) : '', at: ev.occurred_at });
   }
   if (ev.occurred_at > w.last_at) w.last_at = ev.occurred_at;
   w.revision += 1;
@@ -163,7 +163,7 @@ export function handlePostTool(state, ev, result) {
     deriveStatusFromEvidence(ticket, { type: 'write', seq: ev.sequence ?? 0, evidence_id: ev.event_id, at: ev.occurred_at }, repo);
   } else if (p.commit && typeof p.commit.sha === 'string' && p.commit.sha) {
     recordWorkEvidence(ticket, { seq: ev.sequence ?? 0, at: ev.occurred_at });
-    ticket.timeline.push(timelineEntry(ev, 'commit', `Commit ${p.commit.sha.slice(0, 10)}${typeof p.commit.message === 'string' && p.commit.message ? `: ${p.commit.message}` : ''}`, { coverage: 'complete' }));
+    ticket.timeline.push({ ...timelineEntry(ev, 'commit', `Commit ${p.commit.sha.slice(0, 10)}${typeof p.commit.message === 'string' && p.commit.message ? `: ${p.commit.message}` : ''}`, { coverage: 'complete' }), commit_sha: p.commit.sha, commit_repo_id: p.repo_id ?? ticket.repo_id ?? null });
     session.successful_write_count += 1;
   } else if (p.pr && p.pr.url) {
     const pr = { id: deterministicId(`${ev.event_id}:pr:${p.pr.url}`), provider: p.pr.provider ?? 'unknown', url: p.pr.url, state: p.pr.state ?? 'unknown', opened_at: ev.occurred_at, merged_at: null, base_branch: p.pr.base_branch ?? null, head_branch: p.pr.head_branch ?? null, observed_at: ev.occurred_at, error: null, evidence_id: ev.event_id };

@@ -2,6 +2,7 @@
 // old journaled child items continue replaying under their original semantics.
 import { putBlob } from '../core/blobs.js';
 import { recordedStage } from './stage.js';
+import { planArtifact } from './plans.js';
 import { buildSuggestions, normalizeFollowupSuggestions, FOLLOWUP_PROPOSALS_MAX } from '../agents/suggestions.js';
 import { planCriticalChanges, emitCriticalProposals } from './critical-changes.js';
 
@@ -13,7 +14,7 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
   const ticket = worker.state.tickets.get(h.ticket_id);
   const items = [];
   // Recipes other than the built-in modes never edit the ticket: their outputs become suggestions.
-  const suggesting = h.legacy === false;
+  const suggesting = !!h.intent || h.legacy === false;
   if (!suggesting && state === 'done' && result.next_action) items.push({ type: 'next-action', text: result.next_action });
   if (!suggesting && state === 'done' && result.blocker) items.push({ type: 'blocker', text: result.blocker });
   if (!suggesting && state === 'done' && result.description) items.push({ type: 'description', text: result.description });
@@ -34,6 +35,15 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
     changed_files: extra.changed_files ?? (result && result.changed_files && result.changed_files.length ? result.changed_files : h.changed_files ?? []),
     ...extra,
   };
+  if (h.intent === 'plan' && state === 'done') {
+    try {
+      update.plan_ref = putBlob(planArtifact(result, h, ticket), worker.env).hash;
+      update.plan_revision = (h.plan_revision ?? 0) + 1;
+    } catch {
+      update.state = 'failed';
+      update.error = { code: 'plan-save-failed', message: 'The plan could not be saved; retry when storage is available' };
+    }
+  }
   // The record carries counts and the stage only; the items live in the result blob (spec §5.3).
   // `recorded_stage` comes from facts the worker observed, never from the agent's claim.
   const count = (k, prior) => (result && Array.isArray(result[k]) ? result[k].length : prior ?? 0);
@@ -53,7 +63,7 @@ export function recordResult(worker, handoffId, result, { state = 'done', error 
     if (!(update.result_summary ?? '').includes(review)) update.result_summary = [update.result_summary, review].filter(Boolean).join('\n\n');
   }
   // Spec §7.1–7.2: a done run's critical changes become proposals after the run is recorded done.
-  const changes = state === 'done' && ticket && result && Array.isArray(result.critical_changes) ? result.critical_changes : [];
+  const changes = !h.intent && state === 'done' && ticket && result && Array.isArray(result.critical_changes) ? result.critical_changes : [];
   const critical = changes.length ? planCriticalChanges(worker, changes) : { plans: [], notes: [] };
   if (critical.notes.length) update.critical_notes = critical.notes;
   const out = worker.emit('handoff-tx', { handoff_id: h.id, update, result_items: items }, { source_identity: `handoff-tx:${h.id}:${state}:${worker.now()}` });

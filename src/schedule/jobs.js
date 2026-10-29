@@ -123,6 +123,15 @@ function defaultArtifactClient(publisher, worker) {
 
 export function createJobs({ providers, artifactClientFor = defaultArtifactClient, trackerFetch = globalThis.fetch }) {
   return {
+    async 'daily-update'(worker, { settings, due_at, trigger }) {
+      if (!worker.generateDailyUpdate) throw new Error('Daily update worker extension unavailable');
+      const slotDate = localDate(due_at ?? worker.now(), worker.state.meta.timezone ?? 'UTC');
+      const slot = `daily:${settings.name}:${slotDate}:${settings.settings_version}`;
+      const interrupted = trigger === 'catch-up' && !due_at ? [...(worker.state.updates?.values() ?? [])].filter(u => u.slot_identity?.startsWith(`daily:${settings.name}:`) && u.state === 'failed' && u.error?.code === 'interrupted').sort((a, b) => b.created_at.localeCompare(a.created_at))[0] : null;
+      const u = await worker.generateDailyUpdate(interrupted ? { retry_id: interrupted.id } : settings, { slot });
+      if (u.state === 'failed') throw new Error(u.error?.message ?? 'Daily update failed');
+      return { update_id: u.id, summary: `${u.state} local Daily update for ${slotDate}${trigger === 'catch-up' ? ' (catch-up; includes unreported interval)' : ''}` };
+    },
     // Reads title, status, assignee and fix versions of tracker-linked tickets (ADR 0011). Only the
     // user config's [tracker] is used, so a repository can never point a token at another host.
     // Remote data is recorded beside the ticket; the ticket's own fields are never changed.

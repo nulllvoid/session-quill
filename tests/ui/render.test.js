@@ -177,7 +177,7 @@ test('renderRunAgentDialog step 1 offers the three built-in recipes as cards', (
   s.recipes = ['analyse', 'analyse-followups', 'attempt-fix'].map((name) => ({ name, source: 'builtin', mode: name, description: name, permissions: { read_source: true }, timeout_min: 20, legacy: true, repo_id: null }));
   const html = renderRunAgentDialog(s.tickets[0], s, { recipe: null });
   for (const name of ['analyse', 'analyse-followups', 'attempt-fix']) assert.match(html, new RegExp(`data-action="run-agent-pick"[^>]*data-recipe="${name}"`));
-  assert.doesNotMatch(html, /<form/);
+  assert.match(html, /data-form="intent-run"/);
 });
 
 test('every view renders a field-restricted sanitized export without throwing', async () => {
@@ -213,11 +213,11 @@ test('renderHeader exposes freshness, worker, capture, provider error, receipt a
   const never = renderHeader(snapshot({ meta: { ...s.meta, last_sync: null } }), { now: NOW, online: true, refresh: null, theme: 'light' });
   assert.match(never, /Never synced/);
   const { renderSidebar } = await import('../../ui/views/header.js');
-  const side = renderSidebar(s, { view: 'board', endpoint: '127.0.0.1:4321' });
-  for (const v of ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today']) assert.match(side, new RegExp(`data-view="${v}"`));
+  const side = renderSidebar(s, { view: 'work', endpoint: '127.0.0.1:4321' });
+  for (const v of ['work', 'runs', 'updates', 'sessions', 'deployments', 'today']) assert.match(side, new RegExp(`data-view="${v}"`));
   assert.match(side, /data-view="today"[^>]*aria-keyshortcuts="6"/);
   assert.match(side, /aria-keyshortcuts="2"/);
-  assert.match(side, /aria-selected="true"[^>]*aria-controls="main" aria-keyshortcuts="2"/);
+  assert.match(side, /aria-selected="true"[^>]*aria-controls="main" aria-keyshortcuts="1"/);
   const score = scoreBadge({ score: 100, raw_score: 115, reasons: [] });
   assert.match(score, /100/);
   const card = ticketCard(s.tickets[0], s, { variant: 'board', now: NOW });
@@ -637,9 +637,9 @@ test('the sidebar lists Runs with shortcut 7 and a live count; 1 to 6 keep their
   const { renderSidebar, SHORTCUT_VIEWS } = await import('../../ui/views/header.js');
   const s = snapshot({ handoffs: [{ ...snapshot().handoffs[0], id: 'q1', state: 'queued' }] });
   const side = renderSidebar(s, { view: 'runs' });
-  assert.match(side, /data-view="runs"[^>]*aria-selected="true"[^>]*aria-keyshortcuts="7"/);
+  assert.match(side, /data-view="runs"[^>]*aria-selected="true"[^>]*aria-keyshortcuts="2"/);
   assert.match(side, /data-view="runs"[\s\S]*?<span class="badge"[^>]*>1<\/span>/);
-  assert.deepEqual(SHORTCUT_VIEWS, { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs', 8: 'memory' });
+  assert.deepEqual(SHORTCUT_VIEWS, { 1: 'work', 2: 'runs', 3: 'updates', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs', 8: 'memory' });
 });
 
 test('ticket detail: a run strip under the title and a Runs tab with runs, proposals and recipes', () => {
@@ -668,15 +668,15 @@ test('ticket detail: a run strip under the title and a Runs tab with runs, propo
 
 test('navigation is grouped, Runs has a live count and an attention dot, phones get More', async () => {
   const { renderSidebar, NAV_ITEMS, PHONE_PRIMARY } = await import('../../ui/views/header.js');
-  assert.deepEqual(NAV_ITEMS.map((n) => n[0]), ['picknext', 'board', 'runs', 'today', 'sessions', 'deployments', 'tree', 'memory']);
-  assert.deepEqual([...PHONE_PRIMARY], ['picknext', 'board', 'runs', 'today']);
+  assert.deepEqual(NAV_ITEMS.map((n) => n[0]), ['work', 'runs', 'updates', 'sessions', 'today', 'deployments', 'memory']);
+  assert.deepEqual([...PHONE_PRIMARY], ['work', 'runs', 'updates', 'sessions']);
   const base = snapshot();
   const s = { ...base, handoffs: [{ ...base.handoffs[0], id: 'f', ticket_id: base.tickets[0].id, state: 'failed', finished_at: '2026-10-02T11:00:00Z' }] };
-  const side = renderSidebar(s, { view: 'sessions', now: NOW });
-  assert.match(side, /<span class="nav-caption">Work<\/span>[\s\S]*data-view="runs"[\s\S]*<span class="nav-caption">Track<\/span>/);
+  const side = renderSidebar(s, { view: 'deployments', now: NOW });
+  assert.match(side, /<span class="nav-caption">Workspace<\/span>[\s\S]*data-view="runs"[\s\S]*<span class="nav-caption">More<\/span>/);
   assert.match(side, /aria-label="Runs, \d+ live, 1 needs you" data-view="runs"/);
   assert.match(side, /data-view="runs"[\s\S]*?class="attention-dot" aria-hidden="true"/);
-  assert.match(side, /data-view="sessions"[^>]*class="nav-item nav-overflow"|class="nav-item nav-overflow"[^>]*data-view="sessions"/);
+  assert.match(side, /data-view="deployments"[^>]*class="nav-item nav-overflow"|class="nav-item nav-overflow"[^>]*data-view="deployments"/);
   assert.match(side, /data-action="toggle-more" aria-expanded="false" aria-controls="more-sheet" aria-current="page"/, 'More is current when an overflow view is open');
   const open = renderSidebar(s, { view: 'board', now: NOW, moreOpen: true });
   assert.match(open, /id="more-sheet" class="more-sheet" role="dialog" aria-label="More views"/);

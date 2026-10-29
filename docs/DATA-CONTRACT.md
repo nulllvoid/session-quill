@@ -741,3 +741,34 @@ Reducer version **4** rejects `bind-external` events sourced from a branch or pr
 A source-edit run's owner-only `fix_outcome` is `no-changes`, `changed-unverified`, `tests-passed`, or `unknown`. Lifecycle `state: done` means the process finished; it does not establish a successful fix or completion of its ticket. New outcomes use worker-observed changes relative to `base_commit`, including agent commits. Historical empty change lists without an explicit outcome remain unknown. `tests-passed` asserts that the configured worker test command passed, not that every requirement is satisfied.
 
 `test_gate.status: error` means the worker could not inspect the checkout/base before verification. The run fails with `change-inspection-failed`; no worker commit, push, PR or successful fix is inferred. Missing repository test configuration remains visibly unverified. Doctor recipe counters add `fixes_tested`, `fixes_no_changes`, `fixes_unverified`, and `fixes_unknown`; the existing `done` count remains a count of finished processes.
+
+## Unified Work and Daily update additions (ADR 0043)
+
+These additive fields supersede the earlier Board/Tree presentation without changing stored ticket status or identity. Reducer version is 5; the journal remains authoritative.
+
+Owner ticket summaries include `work_rollup`: `required_total`, `completed`, `remaining`, `resolved_without_delivery`, `independent`, `unclassified`, `pending_descendants`, `closure_state` (`closed|ready|not-ready|needs-review`), `reasons` (`code,text,ticket_id?`), `evidence_version`, `active_run_count`, `attention_count`. Required completed means done with delivery resolution and no nested closure conflict. Counts use the whole authorized tree, independent of filters/paging. The export allowlist omits this field.
+
+New `/v1/requests` kinds:
+
+| Kind | Target/revision | Payload |
+| --- | --- | --- |
+| `set-priority` | ticket + expected revision | `priority: P0..P3` |
+| `create-subtask` | parent + expected revision | `title`, structured `description`, explicit boolean `blocks_parent`, optional `priority`, `repo_id` |
+| `set-parent` | child + expected revision | `parent_id` or null, `blocks_parent` boolean or null when unlinking, `old_parent_revision`, `new_parent_revision` (null for an absent parent) |
+| `revise-run-plan` | source ticket; plan revision in payload | `handoff_id`, `expected_plan_revision`, `text` (1–20,000 characters) |
+| `generate-update` | no ticket | `window_kind`, optional custom UTC bounds, `scope:{project_ids,repo_ids}`, `synthesis`, optional `retry_id` or `regenerate_id` |
+| `edit-update` | no ticket | `update_id`, `expected_revision`, `text` |
+| `cancel-update` | no ticket | `update_id` |
+| `set-update-schedule` | no ticket | `expected_fingerprint`, `enabled`, `time`, `weekdays` (0=Sunday), `scope`, `window_kind`, `synthesis`, spend/time limits |
+
+The first three actions have the existing ten-second undo window. Reparent validates cycles and all revisions before applying; creation uses a request-derived deterministic ID, inherits project/privacy/repository defaults, and bumps the parent revision. Affected parents record `relationship_review_seq`; old evidence can make them ready but cannot automatically close them after a relationship change. Explicit reviewed closure or newer qualifying evidence is required. New owner plan/update actions cannot be authorized by a forged ingress actor.
+
+Handoff payloads optionally carry `intent: read-only|plan|auto|full` and `instructions` (maximum 4,000 characters). The server resolves mode/access/permissions and a pinned built-in recipe. New-intent records have `legacy:false`; results are suggestions only. Owner instruction text is not an export field. Legacy no-intent payloads retain their prior contract.
+
+A Plan run has `plan_ref`, `plan_revision`, `plan_context` (manifest reference/fingerprint, repository and base commit). Executing one pins `source_plan_run_id`, `source_plan_ref`, `source_plan_revision`, `reviewed_context_fingerprint`, `reviewed_base_commit`, `reviewed_context_ref`, `reviewed_repo_id`. Owner reads `/v1/handoffs/:id/plan-review`; a changed review baseline requires another explicit review. Plan edits persist a new immutable blob; previous refs remain in the journal.
+
+`updates` and `updateCursors` are durable reducer Maps. Worker-only `update-tx` handles create/attempt/finish/edit/regenerate. Update metadata includes scope, timezone, exact bounds, frozen source sequence, input/content/share/edit refs, coverage, attempts, state and revision history. States: queued, running, ready, partial, failed, cancelled. Finishing a complete contributing artifact and monotonically advancing its cursor is atomic. Retry uses frozen evidence; regeneration preserves earlier owner revisions and does not advance the cursor.
+
+Owner reads `/v1/updates` (paged metadata plus schedule config/fingerprint) and `/v1/updates/:id?revision=N&share=1` (selected content). Normal snapshots exclude update content and sensitive update/plan-edit request payloads. Static exports exclude updates/cursors/plan artifacts entirely. Missing content produces an explicit coverage error. The optional sharing content is generated from eligible source facts and never includes owner edits or task memory.
+
+Schedule configuration is stored in the existing named `daily-update` schedule; the HTTP budget remains dollars and persistence uses integer cents. It is disabled until configured by the owner. Legacy `digest` and `standup` are independent and unchanged.

@@ -176,10 +176,10 @@ test('several repositories get a selector; one repository does not', () => {
 test('Memory sits under Track on shortcut 8, outside the phone bar; 1 to 7 keep their views', () => {
   assert.deepEqual(NAV_ITEMS.find((n) => n[0] === 'memory'), ['memory', 'Memory', 'research', '8', 'track']);
   assert.equal(PHONE_PRIMARY.has('memory'), false);
-  assert.deepEqual(SHORTCUT_VIEWS, { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs', 8: 'memory' });
+  assert.deepEqual(SHORTCUT_VIEWS, { 1: 'work', 2: 'runs', 3: 'updates', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs', 8: 'memory' });
   const side = renderSidebar(snapshot(), { view: 'memory', now: NOW, memory: memory() });
-  assert.match(side, /<span class="nav-caption">Track<\/span>[\s\S]*aria-label="Memory, 7 items" data-view="memory" id="tab-memory" aria-selected="true"[^>]*aria-keyshortcuts="8"/);
-  assert.match(side, /data-view="memory"[\s\S]*?<span class="badge" aria-hidden="true"[^>]*>7<\/span>/);
+  assert.match(side, /<span class="nav-caption">More<\/span>[\s\S]*aria-label="Memory" data-view="memory" id="tab-memory" aria-selected="true"[^>]*aria-keyshortcuts="8"/);
+  assert.doesNotMatch(side, /aria-label="Memory, \d+ items"/);
   assert.match(renderSidebar(snapshot(), { view: 'board', now: NOW, moreOpen: true, memory: memory() }), /class="more-panel"[\s\S]*data-view="memory"/, 'phones reach Memory through More');
   assert.match(renderHelpDialog(), /8 opens Memory/);
 });

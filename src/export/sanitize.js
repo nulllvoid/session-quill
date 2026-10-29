@@ -8,7 +8,7 @@ const ALWAYS = ['schema_version', 'id', 'revision', 'created_at', 'updated_at', 
 // Any absolute path: Windows drive paths, UNC paths, `~/…`, and POSIX paths with at least one
 // directory segment. URLs survive because their slashes follow `:` or another `/`; relative paths
 // like `src/a.js` and ratios like `1/2` survive because their `/` follows a word character.
-const ABS_PATH_RE = /(?:[A-Za-z]:\\(?:[^\\\s"'<>|]+\\?)+|\\\\[^\s"'<>|]+|~\/[^\s"'<>|]*|(?<![\w:/.~])\/(?:[^\s"'<>|/]+\/)+[^\s"'<>|/]*)/g;
+const ABS_PATH_RE = /(?:(?<![\w])[A-Za-z]:\/[^\s"'<>|]+|[A-Za-z]:\\(?:[^\\\s"'<>|]+\\?)+|\\\\[^\s"'<>|]+|~\/[^\s"'<>|]*|(?<![\w:/.~])\/(?:[^\s"'<>|/]+\/)+[^\s"'<>|/]*)/g;
 const INTERNAL_URI_RE = /quill:\/\/[^\s)]*/g;
 
 export function redactText(value) {
@@ -194,10 +194,20 @@ function sanitizeHandoff(h, o) {
 
 export function sanitizeSnapshot(snapshot, options = {}) {
   const o = normalizeOptions(options);
-  const hidden = new Set(snapshot.tickets.filter((t) => !isExportableTicket(t)).map((t) => t.id));
   const tickets = snapshot.tickets.filter((t) => isExportableTicket(t) && (!o.projects || o.projects.includes(t.project_id)));
   const ids = new Set(tickets.map((t) => t.id));
+  const hidden = new Set(snapshot.tickets.filter(t => !ids.has(t.id)).map(t => t.id));
+  const completedChildren = new Map();
+  const counts = { todo: 0, active: 0, blocked: 0, review: 0, 'deploy-pending': 0, done: 0 };
+  for (const t of tickets) {
+    counts[t.status] = (counts[t.status] ?? 0) + 1;
+    if (t.parent_id && t.status === 'done') completedChildren.set(t.parent_id, (completedChildren.get(t.parent_id) ?? 0) + 1);
+  }
   const meta = { ...snapshot.meta, onboarding: null, autonomy: null, owner_machine_id: null, exported_at: o.exportedAt, active_sync_request_id: null, oldest_pending_event_at: null };
+  // Aggregate counts cover only shared tasks; omitted work must not be inferable from totals.
+  meta.counts_by_status = counts;
+  meta.stale_ticket_count = tickets.filter(t => t.stale).length;
+  delete meta.unresolved_event_count;
   // The slot caps stay; the batch budget is the owner's spend setting and never leaves (spec §9).
   if (meta.handoff_limits && typeof meta.handoff_limits === 'object') meta.handoff_limits = { readonly: meta.handoff_limits.readonly, fix: meta.handoff_limits.fix };
   const out = {
@@ -205,7 +215,7 @@ export function sanitizeSnapshot(snapshot, options = {}) {
     generation_id: snapshot.generation_id,
     generated_at: snapshot.generated_at,
     capabilities: { read: true, edit_tickets: false, handoff: false, refresh: false, cancel_requests: false, export: false },
-    tickets: tickets.map((t) => hideLinks(sanitizeTicket(t, o), hidden)),
+    tickets: tickets.map((t) => hideLinks(sanitizeTicket({ ...t, children_done_count: completedChildren.get(t.id) ?? 0 }, o), hidden)),
     sessions: (snapshot.sessions ?? []).filter((s) => !((s.ticket_ids ?? []).length && (s.ticket_ids ?? []).every((id) => hidden.has(id)))).filter((s) => !o.projects || (s.ticket_ids ?? []).some((id) => ids.has(id)) || !(s.ticket_ids ?? []).length).map((s) => sanitizeSession(dropHidden(s, hidden), o)),
     checkpoints: o.includeCheckpoints ? (snapshot.checkpoints ?? []).filter((c) => !c.ticket_id || ids.has(c.ticket_id)).map(({ content_ref, ...c }) => c) : [],
     handoffs: (snapshot.handoffs ?? []).filter((h) => ids.has(h.ticket_id)).map((h) => sanitizeHandoff(h, o)),
@@ -216,7 +226,7 @@ export function sanitizeSnapshot(snapshot, options = {}) {
     meta,
     repos: (snapshot.repos ?? []).map(({ id, project_id, display_name, default_branch, deployment_environments }) => ({ id, project_id, display_name, default_branch, deployment_environments })),
     unresolved: [],
-    export: { fields: o.fields, projects: o.projects, include_links: o.includeLinks, include_checkpoints: o.includeCheckpoints },
+    export: { coverage: 'shared-tasks-only', fields: o.fields, projects: o.projects, include_links: o.includeLinks, include_checkpoints: o.includeCheckpoints },
   };
   return redactDeep(out);
 }

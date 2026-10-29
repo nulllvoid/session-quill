@@ -214,6 +214,7 @@ test('detail and content endpoints are generation-consistent and return 410 for 
     assert.equal(detail.status, 200);
     assert.equal((await detail.json()).id, T1);
     const { hash } = putBlob('full checkpoint body', b.env);
+    b.w.state.checkpoints.set('content-checkpoint', { content_ref: hash });
     const content = await b.get(`/v1/content/${hash}?generation=${snap.generation_id}`);
     assert.equal(content.status, 200);
     assert.equal(await content.text(), 'full checkpoint body');
@@ -261,4 +262,90 @@ test('the owner cookie lasts as long as the 7-day sliding session and is renewed
     assert.match(renewed, /HttpOnly/);
     assert.equal((await fetch(`${b.base}/v1/snapshot`)).headers.get('set-cookie'), null, 'no cookie without a session');
   } finally { await b.w.stop(); }
+});
+
+test('plan review and plan content require owner authentication and expose compared manifests',async()=>{
+  const {capturePlanContext}=await import('../../src/handoff/plans.js');
+  const b=await boot();
+  try {
+    const ticket=b.w.state.tickets.get(T1);ticket.repo_id=null;
+    const run={id:RID(70),ticket_id:T1,repo_id:null,intent:'plan',state:'done',plan_ref:putBlob('Owner-only plan',b.env).hash,plan_revision:1,plan_context:capturePlanContext(b.w.state,ticket,{env:b.env})};
+    b.w.state.handoffs.set(run.id,run);
+    const url=`/v1/handoffs/${run.id}/plan-review`;
+    assert.equal((await fetch(`${b.base}${url}`)).status,401);
+    const response=await b.get(url);assert.equal(response.status,200);
+    const review=await response.json();assert.equal(review.source_plan_ref,run.plan_ref);assert.equal(review.context_changed,false);assert.equal(review.current_manifest.ticket.id,T1);
+    assert.equal(await(await b.get(`/v1/content/${run.plan_ref}`)).text(),'Owner-only plan');
+    assert.equal((await fetch(`${b.base}/v1/content/${run.plan_ref}`)).status,401);
+    ticket.next_action='Changed';assert.equal((await(await b.get(url)).json()).context_changed,true);
+    assert.equal((await b.get(`${url}?generation=expired`)).status,410);
+    assert.equal((await b.get(`/v1/handoffs/${RID(71)}/plan-review`)).status,404);
+  }finally{await b.w.stop();}
+});
+
+test('Daily list/detail are owner-only and sharing uses its sanitized artifact, with generation checks',async()=>{
+  const b=await boot();
+  try {
+    const content_ref=putBlob('Private owner detail',b.env).hash,share_ref=putBlob('Eligible public facts',b.env).hash;
+    b.w.state.updates??=new Map();b.w.state.updates.set(RID(80),{id:RID(80),revision:1,state:'ready',created_at:b.iso(),content_ref,share_ref});
+    for(const url of ['/v1/updates',`/v1/updates/${RID(80)}`]) assert.equal((await fetch(`${b.base}${url}`)).status,401);
+    const listing=await b.get('/v1/updates?limit=1');assert.equal(listing.status,200);const list=await listing.json();assert.equal(list.total,1);assert.equal(list.updates.length,1);assert.equal(list.schedule.config.enabled,false);
+    assert.equal((await(await b.get(`/v1/updates/${RID(80)}`)).json()).content,'Private owner detail');
+    assert.equal((await(await b.get(`/v1/updates/${RID(80)}?share=1`)).json()).content,'Eligible public facts');
+    assert.equal((await b.get('/v1/updates?generation=expired')).status,410);
+    assert.equal((await b.get(`/v1/updates/${RID(81)}`)).status,404);
+    assert.equal((await b.get(`/v1/updates/${RID(80)}?revision=99`)).status,404);
+  }finally{await b.w.stop();}
+});
+
+test('intent submissions resolve pinned guarded templates and owner plan revisions persist immutable blobs',async()=>{
+  const {capturePlanContext}=await import('../../src/handoff/plans.js');
+  const {getBlob}=await import('../../src/core/blobs.js');
+  const b=await boot();
+  try {
+    const ticket=b.w.state.tickets.get(T1);ticket.repo_id=null;
+    const rejected=await b.post('/v1/requests',{id:RID(90),kind:'handoff',target_id:T1,expected_revision:ticket.revision,payload:{intent:'plan',access:'full'}});
+    assert.equal(rejected.status,400);assert.equal((await rejected.json()).error.code,'intent-access-mismatch');
+    const submitted=await b.post('/v1/requests',{id:RID(91),kind:'handoff',target_id:T1,expected_revision:ticket.revision,payload:{intent:'plan',instructions:'Owner objective'}});
+    assert.equal(submitted.status,202);await b.settle();
+    const req=b.w.state.requests.get(RID(91));assert.equal(req.state,'applied',JSON.stringify(req.error));
+    const run=b.w.state.handoffs.get(req.result.handoff_id);
+    assert.deepEqual([run.intent,run.access,run.legacy,run.recipe.source,run.recipe.name,run.instructions,run.permissions.read_source],['plan','autonomous',false,'builtin','plan','Owner objective',false]);
+    Object.assign(run,{state:'done',plan_ref:putBlob('Original plan',b.env).hash,plan_revision:1,plan_context:capturePlanContext(b.w.state,ticket,{env:b.env})});
+    const old=run.plan_ref;
+    const edit=await b.post('/v1/requests',{id:RID(92),kind:'revise-run-plan',target_id:T1,payload:{handoff_id:run.id,expected_plan_revision:1,text:'Owner revised plan'}});
+    assert.equal(edit.status,202);await b.settle();assert.equal(b.w.state.requests.get(RID(92)).state,'applied');assert.equal(run.plan_revision,2);
+    assert.equal(getBlob(old,b.env),'Original plan');assert.equal(getBlob(run.plan_ref,b.env),'Owner revised plan');
+    const stale=await b.post('/v1/requests',{id:RID(93),kind:'revise-run-plan',target_id:T1,payload:{handoff_id:run.id,expected_plan_revision:1,text:'Stale edit'}});
+    assert.equal(stale.status,202);await b.settle();assert.equal(b.w.state.requests.get(RID(93)).state,'conflict');assert.equal(run.plan_revision,2);
+  }finally{await b.w.stop();}
+});
+
+test('content access rejects orphan blobs and untrusted hash mentions while preserving referenced artifacts',async()=>{
+  const b=await boot();
+  try {
+    const orphan=putBlob('Unreferenced private content',b.env).hash;
+    b.w.state.requests.set(RID(120),{id:RID(120),payload:{content_ref:orphan}});
+    b.w.state.tickets.get(T1).user_notes=`content_ref: ${orphan}`;
+    const generated=putBlob(JSON.stringify({content_ref:orphan}),b.env).hash;
+    b.w.state.handoffs.set(RID(119),{ticket_id:T1,result_ref:generated});
+    const unreferenced=await b.get(`/v1/content/${orphan}`);
+    assert.equal(unreferenced.status,404);
+    assert.equal((await b.get(`/v1/content/${orphan}?generation=expired`)).status,410);
+    const fields=['result_ref','patch_ref','critic_ref','plan_ref','source_plan_ref','reviewed_context_ref'];
+    const refs=Object.fromEntries(fields.map(k=>[k,putBlob(`Artifact ${k}`,b.env).hash]));
+    const manifest=putBlob('Plan baseline manifest',b.env).hash;
+    b.w.state.handoffs.set(RID(121),{id:RID(121),ticket_id:T1,...refs,plan_context:{manifest_ref:manifest}});
+    const ticket=b.w.state.tickets.get(T1);
+    for(const key of ['timeline','plans','conclusions']) ticket[key].push({content_ref:putBlob(`Ticket ${key}`,b.env).hash});
+    const checkpoint=putBlob('Checkpoint',b.env).hash;b.w.state.checkpoints.set('cp',{content_ref:checkpoint});
+    const current=putBlob('Current update',b.env).hash,prior=putBlob('Earlier owner revision',b.env).hash,input=putBlob('Frozen update input',b.env).hash,shared=putBlob('Shareable update',b.env).hash;
+    b.w.state.updates.set(RID(122),{content_ref:current,input_ref:input,share_ref:shared,revisions:[{owner_edit_ref:prior}]});
+    const allowed=[generated,...Object.values(refs),manifest,checkpoint,current,prior,input,shared,...['timeline','plans','conclusions'].map(k=>ticket[k].at(-1).content_ref)];
+    for(const hash of allowed) assert.equal((await b.get(`/v1/content/${hash}`)).status,200,hash);
+    const missing='b'.repeat(64);ticket.timeline.push({content_ref:missing});assert.equal((await b.get(`/v1/content/${missing}`)).status,404);
+    assert.equal((await fetch(`${b.base}/v1/content/${current}`)).status,401);
+    delete b.w.state.handoffs.get(RID(121)).patch_ref;
+    assert.equal((await b.get(`/v1/content/${refs.patch_ref}`)).status,404,'a removed reference no longer authorizes its blob');
+  }finally{await b.w.stop();}
 });

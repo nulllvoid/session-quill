@@ -10,6 +10,11 @@ export const TITLE_CHARS = 80;
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
 export function sanitizeTitle(text) {
+  const raw = String(text ?? '').trim();
+  // Transport envelopes and temporary file references describe capture, not the user's task.
+  if (/^<(?:tool_result|tool_use|function_results|function_calls)(?:\s|>)/i.test(raw)
+    || /^\{\s*"(?:tool_name|tool_input|tool_use_id|function_call)"\s*:/.test(raw)
+    || /^(?:\/tmp\/|\/private\/(?:tmp|var\/folders)\/|[A-Za-z]:\\(?:Users\\[^\\]+\\AppData\\Local\\Temp|Windows\\Temp)\\)\S+$/i.test(raw)) return '';
   return stripMarkupTags(text)
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]+/g, ' ')

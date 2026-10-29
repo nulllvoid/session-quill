@@ -1,15 +1,20 @@
 // Durable, revision-checked mutation requests (DATA-CONTRACT §Mutation request).
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import { isUuid, uuid, deterministicId } from '../lib/ids.js';
 import { addMs, isIsoZ } from '../lib/time.js';
 import { TrackerError } from '../lib/errors.js';
-import { TICKET_STATUSES, repoFor, hasUnboundWork } from '../core/state.js';
+import { TICKET_STATUSES, PRIORITIES, repoFor, hasUnboundWork } from '../core/state.js';
+import { descriptionProblems } from '../core/description.js';
 import { outstandingObligations } from '../core/transitions.js';
+import { UPDATE_KINDS, validateUpdateRequest } from '../updates/extension.js';
+import { resolveIntentPayload } from '../handoff/intents.js';
+import { validatePlanExecution, reviseRunPlan, PLAN_TEXT_MAX } from '../handoff/plans.js';
 import { validateHandoffRequest } from '../handoff/permissions.js';
 import { budgetFor } from '../handoff/runner.js';
 import { scopeValidator, loadScopeCatalog, resolveScopes, leaseMinutes } from '../handoff/scopes.js';
 import { attachedFiles, undoFileEffect } from '../handoff/files.js';
-import { validateKey } from '../core/keys.js';
+import { validateKey, validateParent } from '../core/keys.js';
 import { renderUrl, isSafeExternalUrl, externalTicketId, TRACKER_SYSTEMS } from '../core/external-keys.js';
 import { scopeFor } from '../hooks/scope.js';
 import { catalogFor } from '../agents/recipes.js';
@@ -37,7 +42,8 @@ const QUARANTINED_PIN = 'a quarantined learning is not delivered to runs, so it 
 // Run by the scheduler extension rather than by applyDueRequests (ADR 0007).
 const SCHEDULER_KINDS = new Set(['refresh', 'run-job', 'publish']);
 // Long-running requests owned by an extension: the scheduler's, and repo-clone (ADR 0024).
-const EXTENSION_KINDS = new Set([...SCHEDULER_KINDS, 'repo-clone']);
+const EXTENSION_KINDS = new Set([...SCHEDULER_KINDS, 'repo-clone', ...UPDATE_KINDS]);
+KINDS.push(...UPDATE_KINDS);
 const TICKET_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'handoff', 'handoff-cancel', 'link-external', 'accept-suggestion', 'dismiss-suggestion', 'undo-file-effect', 'repo-clone', 'approve-run', 'dismiss-run', 'resume-run']);
 // Inbox actions target a session and are revision-checked against its unlinked work (ADR 0006).
 const SESSION_KINDS = new Set(['attach-unbound', 'dismiss-unbound']);
@@ -48,6 +54,8 @@ const EXTERNAL_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*-\d+$/;
 // revision check, with the 10 s undo; applied on the owner's dashboard only (evaluateRestore).
 KINDS.push('restore-snapshot');
 for (const set of [TICKET_KINDS, REVISION_OPTIONAL, DELAYED_KINDS]) set.add('restore-snapshot');
+for (const kind of ['set-priority', 'create-subtask', 'set-parent']) { KINDS.push(kind); TICKET_KINDS.add(kind); DELAYED_KINDS.add(kind); }
+KINDS.push('revise-run-plan'); TICKET_KINDS.add('revise-run-plan'); REVISION_OPTIONAL.add('revise-run-plan');
 KINDS.push('set-completion', 'acknowledge-closure');
 TICKET_KINDS.add('set-completion');
 TICKET_KINDS.add('acknowledge-closure');
@@ -296,8 +304,8 @@ function evaluateResume(worker, req, ticket) {
   }
   // A built-in is pinned by name and source (an upgrade may change its text); any other recipe
   // must still have the reviewed hash.
-  const ref = fields.recipe ? { name: fields.recipe.name, source: fields.recipe.source, hash: fields.recipe.source === 'builtin' ? null : fields.recipe.hash } : undefined;
-  const payload = { ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.planned_paths ? { planned_paths: fields.planned_paths } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
+  const ref = fields.recipe ? { name: fields.recipe.name, source: fields.recipe.source, hash: fields.recipe.source === 'builtin' && !fields.intent ? null : fields.recipe.hash } : undefined;
+  const payload = { ...Object.fromEntries(['intent','instructions','source_plan_run_id','source_plan_ref','source_plan_revision','reviewed_context_fingerprint','reviewed_base_commit'].filter(k => fields[k] !== undefined).map(k => [k,fields[k]])), ...(ref ? { recipe: ref } : {}), mode: fields.mode, note: fields.note, permissions: fields.permissions, access: fields.access, branch: fields.branch, ...(fields.scopes ? { scopes: fields.scopes } : {}), ...(fields.max_turns !== undefined ? { max_turns: fields.max_turns } : {}), ...(fields.max_budget_usd !== undefined ? { max_budget_usd: fields.max_budget_usd } : {}), ...(fields.planned_paths ? { planned_paths: fields.planned_paths } : {}), ...(fields.legacy === false ? { suggest: true } : {}) };
   const critical = fields.action_pins ? { actionPins: fields.action_pins, scopeFingerprints: fields.scope_fingerprints, originProposalId: fields.origin_proposal_id, leaseMinutes: fields.lease_minutes ?? null } : null;
   const evaluation = evaluateHandoff(worker, req, ticket, payload, critical);
   if (evaluation.outcome !== 'applied') return evaluation;
@@ -341,7 +349,7 @@ function memoryNotePayload(payload, state) {
   return out;
 }
 
-export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null, scopeCheck = null } = {}) {
+export function validateRequestBody(body, state, nowIso, { scheduleNames = null, recipes = null, publisherNames = null, cloneHosts = null, scopeCheck = null, config = null, env = process.env } = {}) {
   if (!body || typeof body !== 'object' || !isUuid(body.id)) throw new TrackerError('request-invalid', 'request id must be a UUID');
   if (!KINDS.includes(body.kind)) throw new TrackerError('kind-invalid', `request kind must be one of ${KINDS.join(', ')}`);
   const payload = body.payload ?? {};
@@ -370,6 +378,44 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
   }
   let normalized = {};
   switch (body.kind) {
+    case 'generate-update':
+    case 'edit-update':
+    case 'cancel-update':
+    case 'set-update-schedule':
+      normalized = validateUpdateRequest(body.kind, payload, {state, now:nowIso});
+      break;
+    case 'revise-run-plan':
+      if (!isUuid(payload.handoff_id) || state.handoffs.get(payload.handoff_id)?.ticket_id !== target.id) throw new TrackerError('handoff-unknown', 'choose a run of this ticket');
+      if (!Number.isInteger(payload.expected_plan_revision) || payload.expected_plan_revision < 1) throw new TrackerError('expected-revision-required', 'plan revision is required');
+      if (typeof payload.text !== 'string' || !payload.text.trim() || payload.text.length > PLAN_TEXT_MAX) throw new TrackerError('plan-text-invalid', 'plan text is empty or too long');
+      normalized = {handoff_id:payload.handoff_id,expected_plan_revision:payload.expected_plan_revision,text:payload.text};
+      break;
+    case 'set-priority':
+      if (!PRIORITIES.includes(payload.priority)) throw new TrackerError('priority-invalid', 'choose a valid priority');
+      normalized = { priority: payload.priority };
+      break;
+    case 'create-subtask': {
+      if (typeof payload.title !== 'string' || !payload.title.trim() || payload.title.trim().length > 200) throw new TrackerError('request-invalid', 'subtask title must contain 1–200 characters');
+      if (typeof payload.description !== 'string' || descriptionProblems(payload.description).length) throw new TrackerError('description-invalid', 'subtask description needs Goal, Context and Done when');
+      if (typeof payload.blocks_parent !== 'boolean') throw new TrackerError('relationship-required', 'choose required or independent');
+      const priority = payload.priority ?? target.priority;
+      const repo_id = payload.repo_id === undefined ? target.repo_id : payload.repo_id;
+      if (!PRIORITIES.includes(priority)) throw new TrackerError('priority-invalid', 'choose a valid priority');
+      if (repo_id !== null && !state.meta.repos[repo_id]) throw new TrackerError('repo-unknown', 'repository is not registered');
+      normalized = { title: payload.title.trim(), description: payload.description.trim(), blocks_parent: payload.blocks_parent, priority, repo_id };
+      break;
+    }
+    case 'set-parent': {
+      if (payload.parent_id !== null && typeof payload.parent_id !== 'string') throw new TrackerError('parent-invalid', 'choose a parent or null');
+      validateParent(state, target.id, payload.parent_id);
+      if (payload.parent_id ? typeof payload.blocks_parent !== 'boolean' : payload.blocks_parent !== null) throw new TrackerError('relationship-required', 'choose required or independent for a linked subtask');
+      for (const [field, id] of [['old_parent_revision', target.parent_id], ['new_parent_revision', payload.parent_id]]) {
+        const parent = id ? state.tickets.get(id) : null;
+        if (parent ? !Number.isInteger(payload[field]) || payload[field] < 0 : payload[field] !== null) throw new TrackerError('expected-revision-required', `${field} is required (null for a missing parent)`);
+      }
+      normalized = { parent_id: payload.parent_id, blocks_parent: payload.blocks_parent, old_parent_revision: payload.old_parent_revision, new_parent_revision: payload.new_parent_revision };
+      break;
+    }
     case 'set-next-action': {
       if (typeof payload.next_action !== 'string') throw new TrackerError('request-invalid', 'next_action must be a string');
       if (payload.next_action.length > 2000) throw new TrackerError('request-invalid', 'next_action too long');
@@ -417,9 +463,12 @@ export function validateRequestBody(body, state, nowIso, { scheduleNames = null,
     case 'record-deployment':
       normalized = { items: normalizeDeploymentItems(payload.items, target) };
       break;
-    case 'handoff':
-      normalized = validateHandoffRequest(payload, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, payload, target.repo_id), attachedFileCount: attachedFiles(target).length, scopeCheck });
+    case 'handoff': {
+      const resolved = resolveIntentPayload(payload, {repo:repoFor(state,target.repo_id),recipes,sourceAvailable:sourceAvailable(config,target)});
+      normalized = validateHandoffRequest(resolved, { repo: repoFor(state, target.repo_id), recipe: resolveRecipe(recipes, resolved, target.repo_id), attachedFileCount: attachedFiles(target).length, scopeCheck });
+      Object.assign(normalized, validatePlanExecution(state,target,resolved,{repo:planRepo(config,target),env}));
       break;
+    }
     case 'accept-suggestion':
     case 'dismiss-suggestion': {
       const { h, sug } = findSuggestion(state, target, payload);
@@ -571,7 +620,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
     if (existing.body_hash && existing.body_hash === bodyHash(body)) return { status: 202, request: existing };
     throw new TrackerError('request-mismatch', 'a request with this id already exists with different content', { status: 409 });
   }
-  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts, scopeCheck: (names) => scopeValidator(worker.config ?? {}, { env: worker.env })(names) });
+  const request = validateRequestBody(body, worker.state, now, { scheduleNames: worker.scheduleInfo ? worker.scheduleInfo().map((s) => s.name) : null, recipes: catalogFor(worker), publisherNames: worker.publishInfo ? worker.publishInfo().map((p) => p.name) : null, cloneHosts: onboardSettings(worker.config && worker.config.tracker).clone_hosts, scopeCheck: (names) => scopeValidator(worker.config ?? {}, { env: worker.env })(names), config: worker.config, env: worker.env });
   request.actor_id = actor;
   const { result } = worker.emit('request', request, { source_identity: `request:${request.id}` });
   if (result.rejected) throw new TrackerError(result.rejected, `request rejected: ${result.rejected}`, { status: 400 });
@@ -581,7 +630,7 @@ export function submitRequest(worker, body, { actor = 'owner' } = {}) {
 }
 
 function currentValues(ticket) {
-  return { revision: ticket.revision, next_action: ticket.next_action, status: ticket.status, blocker: ticket.blocker, deployments: ticket.deployments, updated_at: ticket.updated_at };
+  return { revision: ticket.revision, priority: ticket.priority, parent_id: ticket.parent_id, blocks_parent: ticket.blocks_parent, next_action: ticket.next_action, status: ticket.status, blocker: ticket.blocker, deployments: ticket.deployments, updated_at: ticket.updated_at };
 }
 
 function trackerFor(worker, { cwd = null, repo_id = null } = {}) {
@@ -637,18 +686,24 @@ function evaluateSessionRequest(worker, req) {
 // A handoff request, or an approved proposal, becomes a queued run (TRD §Handoff execution).
 // `critical` (ADR 0028) comes only from approveCritical, never from a request payload: the action
 // pins, the fingerprints the scopes must still have at dispatch, and the proposal it came from.
+function sourceAvailable(config,ticket) { const dir = config?.repos?.[ticket.repo_id]?.canonical_path; return config ? !!dir && fs.existsSync(dir) : undefined; }
+function planRepo(config, ticket) { const repo = config?.repos?.[ticket.repo_id]; return repo ? {...repo,id:ticket.repo_id} : null; }
+
 function evaluateHandoff(worker, req, ticket, payload, critical = null) {
   const { state } = worker;
   // Re-checked here because CLI requests arrive through ingress without submit validation, and
   // the recipe file may have changed during the request's lifetime.
   let recipe;
   let checked;
+  let planFields;
   try {
+    payload = resolveIntentPayload(payload, {repo:repoFor(state,ticket.repo_id),recipes:catalogFor(worker),sourceAvailable:sourceAvailable(worker.config,ticket)});
+    planFields = validatePlanExecution(state,ticket,payload,{repo:planRepo(worker.config,ticket),env:worker.env});
     recipe = resolveRecipe(catalogFor(worker), payload, ticket.repo_id);
     // Write scopes are checked against the worker's catalog here too (spec §4.3).
     checked = validateHandoffRequest({ ...payload, recipe: payload.recipe ? payload.recipe.name ?? payload.recipe : undefined }, { repo: repoFor(state, ticket.repo_id), recipe, attachedFileCount: attachedFiles(ticket).length, scopeCheck: scopeValidator(worker.config ?? {}, { env: worker.env }), actionPins: critical ? critical.actionPins : null });
   } catch (err) {
-    return { outcome: 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
+    return { outcome: ['plan-revision-conflict','plan-context-changed'].includes(err.code) ? 'conflict' : 'failed', error: { code: err.code ?? 'request-invalid', message: err.message, retryable: false, current_revision: ticket.revision } };
   }
   if (payload.recipe && payload.recipe.hash && payload.recipe.hash !== recipe.hash) {
     return { outcome: 'failed', error: { code: 'recipe-changed', message: `recipe ${recipe.name} changed after the request was made; review it and queue it again`, retryable: true, current_revision: ticket.revision } };
@@ -657,6 +712,7 @@ function evaluateHandoff(worker, req, ticket, payload, critical = null) {
   if (existing) return { outcome: 'failed', error: { code: 'handoff-reserved', message: `handoff ${existing.id} is already ${existing.state} for this ticket`, retryable: true, current_revision: ticket.revision }, result: { existing_handoff_id: existing.id } };
   const handoff = {
     schema_version: 1, store_id: state.meta.store_id, id: uuid(), revision: 1, created_at: worker.now(), updated_at: worker.now(),
+    ...(checked.intent ? {intent:checked.intent,instructions:checked.instructions} : {}), ...planFields,
     ticket_id: ticket.id, request_id: req.id, mode: checked.mode, note: checked.note, permissions: checked.permissions, access: checked.access ?? 'standard',
     // The next action as queued: a run's own suggestion conflicts only if someone changed it since.
     base_ticket_revision: ticket.revision, base_next_action: ticket.next_action ?? '', repo_id: ticket.repo_id ?? null, base_commit: null, branch: checked.branch ?? null, state: 'queued',
@@ -740,7 +796,7 @@ function evaluateMemoryRequest(worker, req) {
   }
 }
 
-const REVALIDATED_KINDS = new Set(['set-next-action', 'set-status', 'record-deployment', 'set-completion', 'acknowledge-closure']);
+const REVALIDATED_KINDS = new Set(['set-priority', 'create-subtask', 'set-parent', 'set-next-action', 'set-status', 'record-deployment', 'set-completion', 'acknowledge-closure']);
 
 export function evaluateRequest(worker, req) {
   if (SESSION_KINDS.has(req.kind)) return evaluateSessionRequest(worker, req);
@@ -762,6 +818,24 @@ export function evaluateRequest(worker, req) {
     }
   }
   switch (req.kind) {
+    case 'revise-run-plan': {
+      if (!fromOwnerDashboard(req)) return {outcome:'failed',error:{code:'plan-owner-only',message:'Plan edits require the owner dashboard',retryable:false}};
+      try { const fields=reviseRunPlan(state,ticket,req.payload,{env:worker.env}); return {outcome:'applied',mutation:{type:'run-plan-edit',handoff_id:req.payload.handoff_id,fields},result:fields}; }
+      catch(err) {return {outcome:err.code==='plan-revision-conflict'?'conflict':'failed',error:{code:err.code??'plan-edit-failed',message:err.message,retryable:false}};}
+    }
+    case 'set-priority':
+      return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: req.payload } };
+    case 'create-subtask': {
+      const child = { id: deterministicId(`${req.id}:subtask`), allocate_internal_key: true, title: req.payload.title, summary: req.payload.description, project_id: ticket.project_id, project_name: ticket.project_name, category: ticket.category, priority: req.payload.priority, repo_id: req.payload.repo_id, parent_id: ticket.id, blocks_parent: req.payload.blocks_parent, local_only: ticket.local_only === true };
+      return { outcome: 'applied', mutation: { type: 'subtask-create', child }, result: { ticket_id: child.id } };
+    }
+    case 'set-parent': {
+      for (const [field, id] of [['old_parent_revision', ticket.parent_id], ['new_parent_revision', req.payload.parent_id]]) {
+        const parent = id ? state.tickets.get(id) : null;
+        if ((parent?.revision ?? null) !== req.payload[field]) return { outcome: 'conflict', error: { code: 'revision-conflict', message: 'A parent changed; refresh before moving this subtask', retryable: false, current_revision: ticket.revision }, result: { current: currentValues(ticket) } };
+      }
+      return { outcome: 'applied', mutation: { type: 'ticket-reparent', ticket_id: ticket.id, fields: { parent_id: req.payload.parent_id, blocks_parent: req.payload.blocks_parent } } };
+    }
     case 'set-next-action':
       return { outcome: 'applied', mutation: { type: 'ticket-fields', ticket_id: ticket.id, fields: { next_action: req.payload.next_action } } };
     case 'set-status': {

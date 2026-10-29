@@ -186,7 +186,7 @@ export function reemitMissingCriticalProposals(worker) {
   const now = Date.parse(worker.now());
   let emitted = 0;
   for (const h of worker.state.handoffs.values()) {
-    if (h.state !== 'done' || !(h.critical_count > 0) || !h.result_ref || !h.finished_at || now - Date.parse(h.finished_at) > PROPOSAL_TTL_MS) continue;
+    if (h.intent || h.state !== 'done' || !(h.critical_count > 0) || !h.result_ref || !h.finished_at || now - Date.parse(h.finished_at) > PROPOSAL_TTL_MS) continue;
     const noted = new Set((Array.isArray(h.critical_notes) ? h.critical_notes : []).map((n) => n && n.index));
     const missing = [];
     for (let i = 0; i < h.critical_count; i += 1) if (!noted.has(i) && !proposed(worker, deterministicId(`${h.id}:critical:${i}`))) missing.push(i);

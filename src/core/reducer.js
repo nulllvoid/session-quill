@@ -12,6 +12,7 @@ import { applyTicketFields, createTicket, bindExternal, relinkTicket } from './r
 import { applyTrackerSync, applyTrackerPush, applyArtifactComment, applyPublishRun, applyScheduleRun, applyRunProposal, lapseProposals } from './reduce/integrations.js';
 import { resolveAttribution, sweepDeferred, handlePostTool, handleStop } from './reduce/capture.js';
 import { handleRequest, handleRequestTx, handleHandoffTx } from './reduce/requests.js';
+import { handleUpdateTx } from './reduce/updates.js';
 import { applyMemoryTx } from './reduce/memory.js';
 import { applyCriticalProposal } from './reduce/critical.js';
 import { applyWorktree } from './reduce/worktrees.js';
@@ -25,7 +26,7 @@ export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 // The shape and meaning of reduced state (ADR 0030). A state checkpoint written under another value
 // is ignored and the journal replays in full, so bump it in any change that makes existing events
 // reduce differently or adds, removes or reshapes a state field.
-export const REDUCER_VERSION = 4;
+export const REDUCER_VERSION = 5;
 
 function settleClosures(state, ev, result) {
   const context = closureContext(state, ev.occurred_at);
@@ -36,7 +37,8 @@ function settleClosures(state, ev, result) {
     for (const ticket of state.tickets.values()) {
       if (ticket.status === 'done') continue;
       const assessment = assessClosure(ticket, context);
-      if (!assessment.closable || !assessment.evidence_seq) continue;
+      // Moving/classifying work changes readiness, not authority to close on old evidence.
+      if (!assessment.closable || !assessment.evidence_seq || assessment.evidence_seq <= (ticket.relationship_review_seq ?? 0)) continue;
       ticket.status = 'done'; ticket.status_source = 'evidence';
       ticket.status_evidence_id = ticket.completion_evidence_id ?? `children:${assessment.evidence_seq}`;
       ticket.closed_sequence = ev.sequence ?? assessment.evidence_seq;
@@ -49,6 +51,19 @@ function settleClosures(state, ev, result) {
     }
   } while (changed);
   for (const ticket of state.tickets.values()) if (ticket.children_ids?.length) refreshDerived(state, ticket);
+}
+
+// Agent intents and Daily artifacts grant no task closure authority through bookkeeping.
+function artifactLifecycle(state, ev) {
+  if (ev.kind === 'handoff-tx') return !!state.handoffs.get(ev.payload.handoff_id)?.intent;
+  if (ev.kind !== 'request-tx') return false;
+  const mutation = ev.payload.mutation;
+  if (mutation?.type === 'handoff-create') return !!mutation.handoff?.intent;
+  if (['handoff-cancel', 'run-plan-edit'].includes(mutation?.type)) return !!state.handoffs.get(mutation.handoff_id)?.intent;
+  const request = state.requests.get(ev.payload.request_id);
+  return ['generate-update','edit-update','cancel-update','set-update-schedule','revise-run-plan'].includes(request?.kind)
+    || request?.kind === 'handoff' && !!request.payload?.intent
+    || request?.kind === 'handoff-cancel' && !!state.handoffs.get(request.payload?.handoff_id)?.intent;
 }
 
 function replayDeferred(state, key, toolCallId, result) {
@@ -292,6 +307,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     case 'request-tx':
       Object.assign(result, handleRequestTx(state, ev, result));
       break;
+    case 'update-tx': Object.assign(result, handleUpdateTx(state, ev, result)); break;
     case 'handoff-tx':
       Object.assign(result, handleHandoffTx(state, ev, result));
       break;
@@ -366,7 +382,7 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
     default:
       result.rejected = 'kind-unknown';
   }
-  if (!result.rejected && ['reconcile', 'ticket-update', 'request-tx', 'handoff-tx', 'session-end'].includes(ev.kind)) settleClosures(state, ev, result);
+  if (!result.rejected && !artifactLifecycle(state, ev) && ['reconcile', 'ticket-update', 'request-tx', 'handoff-tx', 'session-end'].includes(ev.kind)) settleClosures(state, ev, result);
   if (result.changed.size) lapseProposals(state, ev, result);
   return result;
 }

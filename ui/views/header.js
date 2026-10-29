@@ -4,19 +4,16 @@ import { needsYouCount } from '../lib/runs.js';
 
 const FRESH_LABELS = { 'never-synced': 'Never synced', fresh: 'Fresh', ageing: 'Ageing', stale: 'Stale' };
 export const NAV_ITEMS = [
-  ['picknext', 'Pick next', 'ticket', '1', 'work'], ['board', 'Board', 'machine', '2', 'work'], ['runs', 'Runs', 'play', '7', 'work'],
-  ['today', 'Activity', 'clock', '6', 'track'], ['sessions', 'Sessions', 'user', '4', 'track'], ['deployments', 'Deployments', 'rocket', '5', 'track'], ['tree', 'Relationships', 'branch', '3', 'track'],
-  // Owner-only (spec §6.4): an export or read-only snapshot never lists it (OWNER_ONLY_VIEWS).
-  ['memory', 'Memory', 'research', '8', 'track'],
+  ['work', 'Work', 'ticket', '1', 'work'], ['runs', 'Runs', 'play', '2', 'work'], ['updates', 'Daily update', 'clock', '3', 'work'], ['sessions', 'Sessions', 'user', '4', 'work'],
+  ['today', 'Activity', 'clock', '6', 'track'], ['deployments', 'Deployments', 'rocket', '5', 'track'], ['memory', 'Memory', 'research', '8', 'track'],
 ];
-export const OWNER_ONLY_VIEWS = new Set(['memory']);
-// The phone bottom bar holds these four plus More (at most five items).
-export const PHONE_PRIMARY = new Set(['picknext', 'board', 'runs', 'today']);
-const GROUP_LABELS = { work: 'Work', track: 'Track' };
-export const SHORTCUT_VIEWS = { 1: 'picknext', 2: 'board', 3: 'tree', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs', 8: 'memory' };
+export const OWNER_ONLY_VIEWS = new Set(['memory', 'updates']);
+export const PHONE_PRIMARY = new Set(['work', 'runs', 'updates', 'sessions']);
+const GROUP_LABELS = { work: 'Workspace', track: 'More' };
+export const SHORTCUT_VIEWS = { 1: 'work', 2: 'runs', 3: 'updates', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs', 8: 'memory' };
 
 export function renderPageHeading(view, snapshot) {
-  const label = NAV_ITEMS.find(([id]) => id === view)?.[1] ?? 'Pick next';
+  const label = NAV_ITEMS.find(([id]) => id === view)?.[1] ?? 'Work';
   return `<header class="page-heading"><h1>${esc(label)}</h1><span class="workspace-label">${icon('branch')}${esc(snapshot.meta.store_name || 'Local workspace')}</span></header>`;
 }
 
@@ -28,8 +25,8 @@ function navButton(item, { view, counts, needs }) {
   const [id, label, ic, key] = item;
   const badge = counts[id] ?? 0;
   const dot = id === 'runs' && needs ? '<span class="attention-dot" aria-hidden="true"></span>' : '';
-  const name = id === 'runs' ? `${label}, ${badge} live${needs ? `, ${needs} need${needs === 1 ? 's' : ''} you` : ''}` : `${label}, ${badge} items`;
-  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${attr(name)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}" tabindex="${view === id ? 0 : -1}">${icon(ic)}<span class="nav-label">${esc(label)}</span>${dot}<span class="badge" aria-hidden="true" title="Shortcut ${key}">${esc(badge)}</span></button>`;
+  const name = id === 'runs' ? `${label}, ${badge} live${needs ? `, ${needs} need${needs === 1 ? 's' : ''} you` : ''}` : label;
+  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${attr(name)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}" tabindex="${view === id ? 0 : -1}">${icon(ic)}<span class="nav-label">${esc(label)}</span>${dot}${id === 'runs' && badge ? `<span class="badge" aria-hidden="true" title="Live runs">${esc(badge)}</span>` : ''}</button>`;
 }
 
 // The views this dashboard offers: an export or read-only snapshot leaves out the owner-only ones.
@@ -42,7 +39,7 @@ function navGroups(opts) {
 function moreControl({ view, moreOpen, counts, isStatic }) {
   const overflow = navItems({ isStatic }).filter(([id]) => !PHONE_PRIMARY.has(id));
   const current = overflow.some(([id]) => id === view);
-  const sheet = moreOpen ? `<div id="more-sheet" class="more-sheet" role="dialog" aria-label="More views"><button type="button" class="more-backdrop" data-action="toggle-more" aria-label="Close"></button><div class="more-panel">${overflow.map(([id, label, ic]) => `<button type="button" class="nav-item" data-view="${id}"${view === id ? ' aria-current="page"' : ''}>${icon(ic)}<span class="nav-label">${esc(label)}</span><span class="badge">${esc(counts[id] ?? 0)}</span></button>`).join('')}</div></div>` : '';
+  const sheet = moreOpen ? `<div id="more-sheet" class="more-sheet" role="dialog" aria-label="More views"><button type="button" class="more-backdrop" data-action="toggle-more" aria-label="Close"></button><div class="more-panel">${overflow.map(([id, label, ic]) => `<button type="button" class="nav-item" data-view="${id}"${view === id ? ' aria-current="page"' : ''}>${icon(ic)}<span class="nav-label">${esc(label)}</span>${id === 'runs' && counts[id] ? `<span class="badge">${esc(counts[id])}</span>` : ''}</button>`).join('')}</div></div>` : '';
   return `<button type="button" class="nav-item nav-more" data-action="toggle-more" aria-expanded="${moreOpen}" aria-controls="more-sheet"${current ? ' aria-current="page"' : ''}>${icon('chevron')}<span class="nav-label">More</span></button>${sheet}`;
 }
 
@@ -154,10 +151,10 @@ export function receiptLifetime(tone) {
 }
 
 export function activeFilterCount(f = {}) {
-  return ['project', 'category', 'tag', 'repo', 'machine', 'q'].filter((k) => f[k]).length + (f.stale ? 1 : 0);
+  return ['project', 'category', 'tag', 'repo', 'machine', 'q', 'status', 'priority', 'blocked', 'attention', 'active_run', 'ready', 'unresolved'].filter((k) => f[k]).length + (f.stale ? 1 : 0);
 }
 
-export function renderFilterBar(rawSnapshot, f = EMPTY_FILTERS) {
+export function renderFilterBar(rawSnapshot, f = EMPTY_FILTERS, { work = false } = {}) {
   const s = normalizeSnapshot(rawSnapshot);
   const tokens = [];
   for (const [k, v] of Object.entries(f)) {
@@ -175,7 +172,10 @@ export function renderFilterBar(rawSnapshot, f = EMPTY_FILTERS) {
   ${repos.length || needsClone ? `<label>Repo <select data-filter="repo"><option value="">All</option>${repos.map((r) => `<option value="${attr(r.id)}" ${f.repo === r.id ? 'selected' : ''}>${esc(r.display_name)}</option>`).join('')}${needsClone || f.repo === NEEDS_CLONE_FILTER ? `<option value="${NEEDS_CLONE_FILTER}" ${f.repo === NEEDS_CLONE_FILTER ? 'selected' : ''}>Needs clone</option>` : ''}</select></label>` : ''}
   ${tags.length ? `<label>Tag <select data-filter="tag"><option value="">All</option>${tags.map((t) => `<option value="${attr(t)}" ${f.tag === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>` : ''}
   <label class="check"><input type="checkbox" data-filter="stale" ${f.stale ? 'checked' : ''}> Stale only</label>`;
-  return `<details class="filter-pop health-pop"><summary class="btn small ghost">${icon('search')}Filter${n ? ` · ${n}` : ''}</summary><div class="popover filter-popover" role="group" aria-label="Filters">${controls}</div></details>${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
+  const workControls = work ? [['status', 'Status', STATUS_ORDER], ['priority', 'Priority', ['P0','P1','P2','P3']]].map(([key, label, choices]) => `<details class="health-pop work-filter"><summary class="btn small">${label}${f[key] ? ` · ${esc(f[key])}` : ''}</summary><div class="popover" role="group" aria-label="${label} filter">${choices.map(value => `<label class="check"><input type="checkbox" data-filter="${key}" data-filter-value="${value}"${String(f[key] || '').split(',').includes(value) ? ' checked' : ''}>${esc(value)}</label>`).join('')}</div></details>`).join('') : '';
+
+  const workMore = work ? ['blocked','attention','active_run','ready','unresolved'].map(k => `<label class="check"><input type="checkbox" data-filter="${k}"${f[k] ? ' checked' : ''}>${({ blocked: 'Blocked', attention: 'Needs attention', active_run: 'Active run', ready: 'Ready to close', unresolved: 'Unresolved parent or repository' })[k]}</label>`).join('') : '';
+  return `${workControls}<details class="filter-pop health-pop"><summary class="btn small ghost">${icon('search')}Filter${n ? ` · ${n}` : ''}</summary><div class="popover filter-popover" role="group" aria-label="Filters">${controls}${workMore}</div></details>${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
 }
 
 export function renderReceipt(receipt, { online }) {

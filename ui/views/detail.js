@@ -1,3 +1,4 @@
+import { completionText } from '../lib/work.js';
 import { closureReviewExtras, esc, attr, keyEl, trustChip, statusChip, categoryChip, priorityMark, timeEl, handoffChip, handoffLabel, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip, openProposals, proposalItem, hasActiveRun, contentViewer } from '../components.js';
 import { renderAgentsSection, testGateBadge, accessTierBadge, accessWords } from './agents.js';
 import { attemptItem } from './run-detail.js';
@@ -23,16 +24,20 @@ function trackerRemote(t, { now, tz }) {
 // The ticket description (ADR 0014): Goal, Context and Done when as parsed by the worker. A missing
 // or malformed one is shown as such, with how it gets written.
 function descriptionBlock(t) {
+  const rollup = t.work_rollup;
+  const titleRepair = !t.title || /^Untitled task|^<tool|^\{["']?(?:tool|function)|^\/(?:tmp|private\/tmp)\//i.test(t.title) ? `<p class="small">Give this task a clear outcome title: <code>quill ticket set ${esc(t.key)} --title "…"</code>. Existing owner titles are preserved.</p>` : '';
+  const progress = `${titleRepair}<section class="detail-section work-detail"><h3>Completion and remaining work</h3><p>${esc(completionText(t))} · ${esc(t.completion_mode || 'evidence')} completion rule</p>${rollup?.reasons?.length ? `<ul>${rollup.reasons.map(r => `<li>${esc(r.text)}${r.ticket_id && r.ticket_id !== t.id ? ` <button type="button" class="link" data-open="${attr(r.ticket_id)}">Inspect task</button>` : ''}</li>`).join('')}</ul>` : ''}</section>`;
+
   const d = t.description;
   const howTo = `The next Claude session on this ticket is asked to write one, or run <code>quill ticket set ${esc(t.key)} --description "…"</code> in the Goal / Context / Done when format.`;
   if (d && d.valid) {
-    return `<dl class="description"><dt>Goal</dt><dd>${esc(d.goal)}</dd><dt>Context</dt><dd>${esc(d.context)}</dd><dt>Done when</dt><dd><ul>${d.done.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></dd></dl>`;
+    return `${progress}<dl class="description"><dt>Goal</dt><dd>${esc(d.goal)}</dd><dt>Context</dt><dd>${esc(d.context)}</dd><dt>Done when</dt><dd><ul>${d.done.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></dd></dl>`;
   }
   if (t.summary && t.summary.trim()) {
     const problems = d && d.problems ? d.problems : [];
-    return `<p class="chip warning small">${icon('alert')}Description not in the required format</p>${problems.length ? `<p class="small muted">${esc(problems.join('; '))}.</p>` : ''}<p class="prewrap">${esc(t.summary)}</p><p class="small muted">${howTo}</p>`;
+    return `${progress}<p class="chip warning small">${icon('alert')}Description not in the required format</p>${problems.length ? `<p class="small muted">${esc(problems.join('; '))}.</p>` : ''}<p class="prewrap">${esc(t.summary)}</p><p class="small muted">${howTo}</p>`;
   }
-  return `<p class="chip warning small">${icon('alert')}Missing description</p><p class="small muted">${howTo}</p>`;
+  return `${progress}<p class="chip warning small">${icon('alert')}Missing description</p><p class="small muted">${howTo}</p>`;
 }
 
 function timelineItem(e, { now, tz, generation, content, contentStatus }) {
@@ -153,7 +158,7 @@ ${checkpoints.length ? `<section class="latest-checkpoint"><h3>Latest checkpoint
 <div class="detail-tabs" role="tablist" aria-label="Ticket sections">${DETAIL_TABS.map((name) => `<button type="button" role="tab" id="detail-tab-${name}" data-action="detail-tab" data-tab="${name}" aria-selected="${tab === name}" aria-controls="detail-page-${name}" tabindex="${tab === name ? 0 : -1}">${TAB_LABELS[name]}</button>`).join('')}</div>
 <div class="detail-page" id="detail-page-overview" role="tabpanel" aria-labelledby="detail-tab-overview" ${tab !== 'overview' ? 'hidden' : ''}>
 ${completion}
-<section class="detail-section"><h3>Description</h3>${descriptionBlock(t)}</section>
+<section class="detail-section"><h3>Description</h3>${descriptionBlock(t)}${!readOnly ? `<div class="detail-actions"><button class="btn small" data-action="create-subtask" data-ticket="${attr(t.id)}">Add subtask</button><button class="btn small" data-action="link-child" data-ticket="${attr(t.id)}">Link existing child</button><button class="btn small" data-action="set-parent" data-ticket="${attr(t.id)}">Move / classify relationship</button></div>` : ''}</section>
 <section class="detail-section"><h3>Status</h3><p>${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} <span class="muted small">source: ${esc(t.status_source)}</span></p>${t.blocker ? `<p class="card-blocker">${icon('alert')}<span class="label">Blocker</span> ${esc(t.blocker)}</p>` : ''}${t.due ? `<p>${icon('clock')}Due ${esc(t.due)}</p>` : ''}</section>
 <section class="detail-section"><h3>Approved plans <span class="count">${esc(t.plans_count)}</span></h3>${t.plans.length ? t.plans.map((p) => `<details class="plan" data-disclosure="plan-${attr(p.checkpoint_id ?? p.content_ref ?? p.approved_at)}"><summary>${timeEl(p.approved_at, now, tz, { absolute: true })} · ${esc(p.provenance)}</summary><pre class="preview">${esc(p.preview)}</pre>${viewer(p.content_ref, 'Full plan')}</details>`).join('') : '<p class="muted small">No approved plans. Approve the latest checkpoint with <code>/session-quill:approve</code>.</p>'}</section>
 <section class="detail-section"><h3>Follow-ups</h3>${parent ? `<p>Parent: <button type="button" class="link" data-open="${attr(parent.id)}">${keyEl(parent.key)} ${esc(parent.title)}</button></p>` : ''}${children.length ? `<ul class="children">${children.map((c) => `<li><button type="button" class="link" data-open="${attr(c.id)}">${keyEl(c.key)} ${esc(c.title)}</button> ${statusChip(c.status)}</li>`).join('')}</ul><p class="muted small">${esc(t.children_done_count)} of ${esc(children.length)} children done</p>` : '<p class="muted small">No children.</p>'}</section>

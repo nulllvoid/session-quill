@@ -10,7 +10,8 @@ import { addMs, HOUR } from '../lib/time.js';
 import { environmentStatus } from '../deploy/environments.js';
 import { descriptionProblems, parseDescription } from '../core/description.js';
 import { pinnedTwin, DRY_RUN_SCOPES } from '../gate/dry-run.js';
-import { reconciliationItems, reconciliationSummary } from '../core/closure.js';
+import { closureContext, reconciliationItems, reconciliationSummary } from '../core/closure.js';
+import { buildWorkRollups } from '../core/work.js';
 
 export const SNAPSHOT_TIMELINE_LIMIT = 20;
 
@@ -92,14 +93,17 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
   const dayAgo = addMs(generated_at, -24 * HOUR);
   // Memory requests keep their kind and state but not their text: memory never reaches a snapshot (spec §9).
   const requests = [...state.requests.values()].filter((r) => !['applied', 'conflict', 'failed', 'cancelled'].includes(r.state) || r.updated_at >= dayAgo)
-    .map((r) => (typeof r.kind === 'string' && r.kind.startsWith('memory-') ? { ...r, payload: r.payload && typeof r.payload.pinned === 'boolean' ? { pinned: r.payload.pinned } : {} } : r));
+    .map((r) => (typeof r.kind === 'string' && (r.kind.startsWith('memory-') || ['generate-update','edit-update','cancel-update','set-update-schedule','revise-run-plan'].includes(r.kind)) ? { ...r, payload: r.payload && typeof r.payload.pinned === 'boolean' ? { pinned: r.payload.pinned } : {} } : r));
   const cloning = new Set(requests.filter((r) => r.kind === 'repo-clone' && ['pending', 'applying'].includes(r.state)).map((r) => r.target_id));
+  const context = closureContext(state, generated_at);
+  const reviewItems = reconciliationItems(state, generated_at, { includeAcknowledged: true, context });
+  const work = buildWorkRollups(state, { nowIso: generated_at, context, reviewItems });
   return {
     schema_version: 1,
     generation_id,
     generated_at,
     capabilities: capabilities ?? { read: true, edit_tickets: true, handoff: true, refresh: true, cancel_requests: true, export: true },
-    tickets: [...state.tickets.values()].map((t) => ticketSummary(t, { environmentsFor, cloning })),
+    tickets: [...state.tickets.values()].map((t) => ({ ...ticketSummary(t, { environmentsFor, cloning }), work_rollup: work.get(t.id) })),
     sessions: [...state.sessions.values()],
     checkpoints: [...state.checkpoints.values()],
     // A run's init inventory and credential report stay on its record; the dashboard reads only the
@@ -108,7 +112,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     // credential report, for the owner's run detail; no export allow-list names it.
     handoffs: [...state.handoffs.values()].map(({ inventory, cred_report, ...h }) => { const env = runEnvSummary(cred_report); return env ? { ...h, run_env: env } : h; }),
     requests,
-    reconciliation: { items: reconciliationItems(state, generated_at), summary: reconciliationSummary(state, generated_at), coverage: state.reconcileCoverage ?? null },
+    reconciliation: { items: reviewItems.filter(item => state.tickets.get(item.ticket_id).closure_review?.evidence_version !== item.evidence_version), summary: reconciliationSummary(state, generated_at, { context }), coverage: state.reconcileCoverage ?? null },
     schedules,
     recipes,
     publishers,
@@ -119,7 +123,7 @@ export function buildSnapshot(state, { generation_id, generated_at, derived = {}
     deployments_outstanding: derived.deployments_outstanding ?? [],
     today: derived.today ?? null,
     meta: buildMeta(state, { now: generated_at, capture, worker_seen_at, active_sync_request_id, key_example, next_sync_due, handoff_limits, onboarding, autonomy }),
-    repos: Object.entries(state.meta.repos).map(([id, r]) => ({ id, project_id: r.project_id ?? null, display_name: r.display_name ?? id, default_branch: r.default_branch ?? 'main', deployment_environments: r.deployment_environments ?? ['production'], test_command: typeof r.test_command === 'string' && r.test_command.trim() ? r.test_command.trim() : null })),
+    repos: Object.entries(state.meta.repos).map(([id, r]) => ({ id, project_id: r.project_id ?? null, display_name: r.display_name ?? id, provider_configured: !!r.provider, default_branch: r.default_branch ?? 'main', deployment_environments: r.deployment_environments ?? ['production'], test_command: typeof r.test_command === 'string' && r.test_command.trim() ? r.test_command.trim() : null })),
     unresolved: state.unresolved.slice(-200),
   };
 }

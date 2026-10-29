@@ -283,15 +283,15 @@ export function effortText(effort) {
   return [`${time} active`, effort.turns ? `${effort.turns} turn${effort.turns === 1 ? '' : 's'}` : null, total ? `${n(total)} tokens (${n(t.output ?? 0)} output)` : null].filter(Boolean).join(' · ');
 }
 
-export const EMPTY_FILTERS ={ project: '', category: '', tag: '', repo: '', machine: '', stale: false, q: '' };
+export const EMPTY_FILTERS ={ project: '', category: '', tag: '', repo: '', machine: '', stale: false, q: '', status: '', priority: '', blocked: false, attention: false, active_run: false, ready: false, unresolved: false };
 
 // A hash that names a view is the whole state: a shared or bookmarked link opens exactly what
 // it says, never with a filter left over from earlier navigation.
 export function filtersFromHash(hash, current, views) {
   const params = new URLSearchParams(String(hash).replace(/^#/, ''));
-  const filters = views.includes(params.get('view')) ? { ...EMPTY_FILTERS } : { ...current };
-  for (const k of ['project', 'category', 'tag', 'repo', 'machine', 'q']) if (params.has(k)) filters[k] = params.get(k);
-  filters.stale = params.get('stale') === '1';
+  const filters = (views.includes(params.get('view')) || views.includes('work') && ['board', 'tree', 'picknext'].includes(params.get('view'))) ? { ...EMPTY_FILTERS } : { ...current };
+  for (const k of ['project', 'category', 'tag', 'repo', 'machine', 'q', 'status', 'priority']) if (params.has(k)) filters[k] = params.get(k);
+  for (const key of ['stale', 'blocked', 'attention', 'active_run', 'ready', 'unresolved']) if (key === 'stale' || params.has(key) || key in filters) filters[key] = ['1', 'true'].includes(params.get(key));
   return filters;
 }
 

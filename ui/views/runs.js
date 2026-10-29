@@ -51,6 +51,7 @@ function batchGroup(snapshot, g, { now, tz, caps, selectedRun }) {
 
 // One Needs you, Live, Failed or All entry: a batch, a proposal, a CI failed item, a memory item or a run row.
 function entryHtml(snapshot, e, { now, tz, caps, pending, leases, selectedRun }) {
+  if (e.kind === 'work') return `<li class="proposal run-row" data-attention="${attr(e.id)}"><strong>${esc(e.ticket.key)} · ${esc(e.ticket.title)}</strong><p>${esc(e.reason)}</p><button type="button" class="btn small" data-open="${attr(e.ticket.id)}">Review task</button></li>`;
   if (e.kind === 'closure') return `<li class="proposal run-row closure-review" data-closure="${attr(e.item.ticket_id)}"><strong>Closure review · ${esc(e.item.key)} ${esc(e.item.title)}</strong><p>${esc(e.item.reason)}</p>${e.item.blockers?.length ? `<ul class="small">${e.item.blockers.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}<button type="button" class="btn small" data-open="${attr(e.item.ticket_id)}">Open ticket</button>${closureReviewExtras(e.item, snapshot, { now, pending })}</li>`;
   if (e.kind === 'batch') return batchGroup(snapshot, e, { now, tz, caps, selectedRun });
   if (e.kind === 'proposal') return proposalRow(snapshot, e.proposal, { now, pending, leases });

@@ -110,13 +110,13 @@ function autoBind({ plan, source, titleHint, base, key, snapshot, scope, identit
   const ticket_id = externalTicketId(identity.store_id, plan.key);
   const ev = makeEvent({
     ...base, kind: 'bind', ticket_id: plan.ensure_only ? null : ticket_id,
-    payload: { external: { system: tracker.system, key: plan.key, url: renderUrl(plan.key, tracker) }, source, title_hint: titleHint || null, project_id: scope.project_id, repo_id: scope.repo_id, ensure_only: plan.ensure_only },
+    payload: { external: { system: tracker.system, key: plan.key, url: renderUrl(plan.key, tracker) }, source, title_hint: titleHint || null, title_review: !titleHint, project_id: scope.project_id, repo_id: scope.repo_id, ensure_only: plan.ensure_only },
     source_identity: `bind:${key}:${source}:${plan.key}:${occurred_at}`,
   });
   if (!plan.ensure_only) {
     try {
       writeBindingSnapshot(key, {
-        session_id: snapshot ? snapshot.session_id ?? null : null, ticket_id, ticket_key: plan.key, ticket_title: titleHint || plan.key, ticket_aliases: [],
+        session_id: snapshot ? snapshot.session_id ?? null : null, ticket_id, ticket_key: plan.key, ticket_title: titleHint || `Untitled task · ${plan.key}`, ticket_aliases: [],
         project_id: scope.project_id, binding_revision: (snapshot ? snapshot.binding_revision ?? 0 : 0) + 1, gate_enabled: !(snapshot && snapshot.gate_enabled === false),
         has_title: !!(snapshot && snapshot.has_title), provisional: true, provisional_event_id: ev.event_id, provisional_at: occurred_at,
       }, env);

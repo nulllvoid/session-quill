@@ -193,6 +193,8 @@ ${String(ctx.docs).replace(/-{5,}/g, '----').slice(0, 16 * 1024)}`);
     '',
     '----- TASK -----',
     task,
+    ...(handoff.instructions ? [`Owner objective for this run (within the permissions above):\n${String(handoff.instructions).replace(/-{5,}/g, '----')}`] : []),
+    ...(ctx.execution_plan ? [`Execute this exact owner-reviewed plan (revision ${handoff.source_plan_revision}); its scope remains subject to the permissions above:\n${String(ctx.execution_plan).replace(/-{5,}/g, '----')}`] : []),
     '----- END TASK -----',
     '',
     ...(outputs.includes('description') || outputs.includes('followups') ? [`Ticket descriptions (this ticket's when its Description status is not valid, and each follow-up child's) use exactly this format:

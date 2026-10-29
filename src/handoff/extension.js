@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { nextDispatchable } from './reserve.js';
 import { validateHandoffRequest } from './permissions.js';
+import { capturePlanContext, planBaseCommit, validatePlanDispatch } from './plans.js';
 import { git, createWorktree, removeWorktree, isUnder, pruneWorktrees, worktreeBase, headCommit, changedFiles, diffPatch, commitAll, pushBranch, openDraftPr, workingTree } from './worktree.js';
 import { buildReceipt, guardSummary, changeSummary, publicCommand } from './receipt.js';
 import { changeGlobs } from '../config/config.js';
@@ -727,11 +728,12 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     // was queued, and the current built-in is what this release runs. Only personal and repository
     // recipes, which anyone can edit on disk, must still match the reviewed hash.
     const builtin = h.recipe && h.recipe.source === 'builtin';
-    if (h.recipe && (!recipe || recipe.error || (!builtin && recipe.hash !== h.recipe.hash))) return fail(worker, h, 'recipe-changed', `recipe ${h.recipe.name} changed or was removed after this run was queued; review it and queue a new run`);
+    if (h.recipe && (!recipe || recipe.error || ((!builtin || h.intent) && recipe.hash !== h.recipe.hash))) return fail(worker, h, 'recipe-changed', `recipe ${h.recipe.name} changed or was removed after this run was queued; review it and queue a new run`);
     // A queued run keeps the access it was queued with.
     const access = h.access ?? 'standard';
     try {
-      validateHandoffRequest({ mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, access, scopes: h.scopes ?? null, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null, actionPins: h.action_pins ?? null });
+      validatePlanDispatch(worker.state, worker.state.tickets.get(h.ticket_id), h, { env: worker.env });
+      validateHandoffRequest({ intent: h.intent, instructions: h.instructions, mode: h.mode, note: h.note, permissions: h.permissions, branch: h.branch, access, scopes: h.scopes ?? null, ...(h.recipe ? { recipe: h.recipe.name } : {}) }, { repo: repoCfg, recipe: h.recipe ? recipe : null, actionPins: h.action_pins ?? null });
     } catch (err) {
       return fail(worker, h, err.code ?? 'permission-invalid', err.message);
     }
@@ -760,8 +762,18 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
         // A CI fix (ADR 0039) starts from the commit CI failed on, on the branch it pushes to.
         const ci = h.origin === 'ci' && h.ci_fix && typeof h.ci_fix === 'object' ? { branch: h.ci_fix.head_branch, commit: h.ci_fix.head_sha } : null;
         if (ci && ci.branch !== h.branch) return fail(worker, h, 'ci-branch-mismatch', 'this CI fix pushes to a different branch than the one CI failed on, so it did not start');
-        base = await worktreeBase(ticket, repoCfg, { ci });
-        baseCommit = base.ref === 'HEAD' ? await headCommit(repoCfg.canonical_path) : base.ref;
+        if (h.source_plan_ref) {
+          baseCommit = h.reviewed_base_commit;
+          if (!/^[0-9a-f]{40,64}$/.test(baseCommit ?? '')) return fail(worker, h, 'plan-base-unavailable', 'The reviewed base commit is missing; review this plan again');
+          try { await git(repoCfg.canonical_path, ['cat-file', '-e', `${baseCommit}^{commit}`]); } catch { return fail(worker, h, 'plan-base-unavailable', 'The reviewed commit is unavailable locally; recover it or review a new base'); }
+          base = { ref: baseCommit, label: `checkout pinned to owner-reviewed commit ${baseCommit}` };
+        } else if (h.intent === 'read-only' || h.intent === 'plan') {
+          baseCommit = planBaseCommit(ticket, repoCfg);
+          base = { ref: baseCommit, label: `checkout based on local commit ${baseCommit}` };
+        } else {
+          base = await worktreeBase(ticket, repoCfg, { ci });
+          baseCommit = base.ref === 'HEAD' ? await headCommit(repoCfg.canonical_path) : base.ref;
+        }
         worktreePath = path.join(handoffsDir(worker.env), 'worktrees', h.id);
         const worktreeStarted = performance.now();
         try {
@@ -812,8 +824,14 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     // read-only profile, a stub or a scope, and what no redirect can close.
     // A scoped run records the fingerprints its grant was frozen with, so a resume of it (Task 19)
     // gets the scopes exactly as granted or is refused with scope-changed.
+    let planContext = null;
+    try {
+      const liveTicket = worker.state.tickets.get(h.ticket_id);
+      validatePlanDispatch(worker.state, liveTicket, h, { env: worker.env });
+      if (h.intent === 'plan') planContext = capturePlanContext(worker.state, liveTicket, { repoId: h.repo_id, baseCommit, env: worker.env });
+    } catch (err) { return fail(worker, h, err.code ?? 'plan-context-failed', err.message); }
     const prints = access === 'autonomous' && scopes.length && !h.scope_fingerprints ? grantedFingerprints(scopes) : null;
-    updateHandoff(worker, h.id, { state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings, ...(auto ? { cred_report: auto.report } : {}), ...(prints ? { scope_fingerprints: prints } : {}) });
+    updateHandoff(worker, h.id, { ...(planContext ? { plan_context: planContext } : {}), state: 'running', started_at: started, deadline_at: deadlineAt, base_commit: baseCommit, worktree_path: worktreePath, log_path: logPath, timings, ...(auto ? { cred_report: auto.report } : {}), ...(prints ? { scope_fingerprints: prints } : {}) });
     const current = worker.state.handoffs.get(h.id);
     if (!current || current.state !== 'running') return undefined;
     // ADR 0041: memory learned in another run environment goes stale before this run's Memory is gathered.
@@ -822,6 +840,7 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     const environments = worker.environmentsFor ? worker.environmentsFor(ticket.repo_id) : repoCfg ? repoCfg.deployment_environments ?? [] : [];
     const render = (r) => renderRecipe(r, { ticket, url, note: h.note, prs: ticket.prs ?? [], deployments: ticket.deployments ?? [], environments });
     const context = gatherContext(worker.state, ticket, { env: worker.env, currentId: h.id, now: worker.now() });
+    if (h.source_plan_ref) context.execution_plan = getBlob(h.source_plan_ref, worker.env);
     const inputs = !recipe || recipe.legacy ? null : new Set(recipe.inputs);
     // The diff is read from the run's own checkout, so it exists only with source access.
     if (worktreePath && (!inputs || inputs.has('work'))) context.diff = await gatherDiff(worktreePath, context.commits);

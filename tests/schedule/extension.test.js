@@ -170,3 +170,12 @@ test('review: a crash mid-run fails its Run now request as interrupted and rerun
     assert.equal(second.w.scheduleInfo()[0].next_due, '2026-10-03T19:30:00Z');
   } finally { await second.w.stop(); }
 });
+
+test('Daily updates catch up only the latest local slot and keep other scheduled jobs unchanged', async () => {
+  const f=fixture({start:'2026-10-02T17:59:00Z',schedule:[{name:'daily-update',job:'daily-update',cron:'0 18 * * *',enabled:true}]});
+  const calls=[];const fake={jobs:{async 'daily-update'(worker,options){calls.push(options);return {summary:'draft'};}}};
+  const first=await boot(f,fake);f.set('2026-10-02T18:00:00Z');await first.tick();await first.w.stop();
+  f.set('2026-10-05T19:00:00Z');const second=await boot(f,fake);
+  try {await second.tick();await second.tick();assert.equal(calls.length,2);assert.equal(calls[1].due_at,'2026-10-05T18:00:00Z');assert.equal(calls[1].trigger,'catch-up');}
+  finally {await second.w.stop();fs.rmSync(f.home,{recursive:true,force:true});}
+});

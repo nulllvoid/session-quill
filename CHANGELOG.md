@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- Unified Work hierarchy with parent completion, pending required subtasks, independent follow-ups, ancestry-preserving filters, priority controls and revision-safe relationship edits.
+- Four agent modes with visible Cancel/Close controls, explicit delivery grants, durable Plan review/edit/execution and separate run cancellation.
+- Local Daily updates from frozen evidence, long-task continuity, explicit coverage, editable history, safe sharing previews and optional bounded synthesis. Daily scheduling is opt-in and catches up without a backlog.
+- Nested completion conflicts remain visible without rewriting manual ticket status; tool-envelope and temporary-path title inference is suppressed.
+
+### Compatibility
+
+- Legacy routes, recipes, standup/digest schedules and static exports remain supported. Reducer version 5 rebuilds checkpoints; older binaries cannot project new update events and request mutations. See ADR 0043 before downgrading.
+
 ### Fixed
 
 - Opening an initialized dashboard no longer reruns setup, changes a session's working directory, or binds it from another repository's branch. It also works outside Git repositories.

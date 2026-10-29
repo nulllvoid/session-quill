@@ -157,7 +157,7 @@ export function bindExternal(state, session, ev, result) {
     const id = externalTicketId(state.meta.store_id, ext.key);
     // Hints journalled before hooks stripped prompt markup are cleaned on replay too.
     const hint = typeof p.title_hint === 'string' ? stripMarkupTags(p.title_hint).replace(/\s+/g, ' ').trim() : '';
-    const title = hint ? hint.slice(0, 200) : ext.key;
+    const title = hint ? hint.slice(0, 200) : p.title_review === true ? `Untitled task · ${ext.key}` : ext.key;
     const created = createTicket(state, ev, {
       id, key: ext.key, title, project_id, category: 'research', priority: 'P2', repo_id: p.repo_id ?? null, external,
       jira: external.system === 'jira' ? { key: ext.key, url: external.url, validation: 'pending', validated_at: null, error: external.error } : null,

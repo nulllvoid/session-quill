@@ -129,3 +129,31 @@ test('the static bundle contains every module app.js imports, dependencies first
   const bundle = bundleUiModules({ staticMode: true });
   for (const name of ['renderAgentsSection', 'renderToday', 'renderBatchStrips', 'freshProposals', 'activeBatches']) assert.ok(bundle.includes(`function ${name}(`), `${name} present`);
 });
+
+test('shared hierarchy and workspace counts exclude private and out-of-scope tasks', () => {
+  const s=privateSnapshot();
+  s.tickets=[
+    {id:'parent',project_id:'visible',status:'active',children_ids:['visible','private','other'],children_done_count:3,work_rollup:{required_total:3,completed:3},stale:false},
+    {id:'visible',project_id:'visible',parent_id:'parent',status:'done',stale:true},
+    {id:'private',project_id:'visible',parent_id:'parent',status:'done',local_only:true,stale:true},
+    {id:'other',project_id:'excluded',parent_id:'parent',status:'done',stale:true},
+  ];
+  s.meta.counts_by_status={active:1,done:3};s.meta.stale_ticket_count=3;s.meta.unresolved_event_count=19;
+  const out=sanitizeSnapshot(s,{projects:['visible']});
+  assert.equal(out.tickets.length,2);
+  const parent=out.tickets.find(t=>t.id==='parent');
+  assert.deepEqual(parent.children_ids,['visible']);assert.equal(parent.children_done_count,1);assert.equal(parent.work_rollup,undefined);
+  assert.equal(out.meta.counts_by_status.done,1);assert.equal(out.meta.counts_by_status.active,1);assert.equal(out.meta.stale_ticket_count,1);
+  assert.equal(out.meta.unresolved_event_count,undefined);assert.equal(out.export.coverage,'shared-tasks-only');
+  assert.equal(JSON.stringify(out).includes('private'),false);assert.equal(JSON.stringify(out).includes('other'),false);
+});
+
+test('a parent whose children are all private exports zero shared completed children',()=>{
+  const s=privateSnapshot();s.tickets=[{id:'p',project_id:'demo',status:'todo',children_ids:['hidden'],children_done_count:1},{id:'hidden',project_id:'demo',parent_id:'p',status:'done',local_only:true}];
+  const out=sanitizeSnapshot(s);assert.deepEqual(out.tickets[0].children_ids,[]);assert.equal(out.tickets[0].children_done_count,0);assert.equal(out.meta.counts_by_status.done,0);
+});
+
+test('sharing redacts forward-slash Windows paths without removing opted-in web URLs or relative paths', async () => {
+  const { redactText } = await import('../../src/export/sanitize.js');
+  assert.equal(redactText('See https://example.com/path/to/file and C:/Company/private.txt and src/a.js'), 'See https://example.com/path/to/file and [path redacted] and src/a.js');
+});

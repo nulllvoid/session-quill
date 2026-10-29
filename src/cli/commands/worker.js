@@ -21,20 +21,21 @@ export async function buildWorker(ctx, { log } = {}) {
 // Options a worker passes to one extension. The handoff extension runs the configured Claude Code
 // binary; an unset `claude_path` keeps the extension's own default ("claude").
 export function extensionOptions(spec, ctx) {
-  if (spec === '../../handoff/extension.js') {
+  if (['../../handoff/extension.js', '../../updates/extension.js'].includes(spec)) {
     const claudePath = ctx.config && typeof ctx.config.claude_path === 'string' ? ctx.config.claude_path.trim() : '';
     return claudePath ? { claudePath } : {};
   }
   return undefined;
 }
 
-const EXTENSIONS = ['../../reconcile/extension.js', '../../server/extension.js', '../../handoff/extension.js', '../../mirror/mirror.js', '../../onboard/extension.js'];
+const EXTENSIONS = ['../../updates/extension.js', '../../reconcile/extension.js', '../../server/extension.js', '../../handoff/extension.js', '../../mirror/mirror.js', '../../onboard/extension.js'];
 
 export async function attachExtensions(w, ctx, { only = null } = {}) {
   for (const spec of only ?? EXTENSIONS) {
     try {
       const mod = await import(spec);
-      if (mod.createExtension) w.use(mod.createExtension(ctx, extensionOptions(spec, ctx)));
+      const create = mod.createExtension ?? mod.createUpdatesExtension;
+      if (create) w.use(create(ctx, extensionOptions(spec, ctx)));
     } catch (err) {
       if (!err || err.code !== 'ERR_MODULE_NOT_FOUND') throw err;
     }

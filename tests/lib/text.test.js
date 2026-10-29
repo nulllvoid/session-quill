@@ -10,3 +10,9 @@ test('prompt markup never becomes a title: tags go, words stay, slash commands r
   assert.equal(sanitizeTitle('compare a < b and c > d'), 'compare a < b and c > d', 'comparisons are not tags');
   assert.equal(stripMarkupTags('<scheduled-task/>').trim(), '');
 });
+
+test('inferred titles reject tool envelopes and standalone temporary paths without rejecting technical requests', () => {
+  for (const text of ['{"tool_name":"Read","tool_input":{"file_path":"/tmp/task"}}', '<tool_result>done</tool_result>', '/private/var/folders/abc/T/agent-result.txt', '/tmp/agent-123.json']) assert.equal(sanitizeTitle(text), '');
+  assert.equal(sanitizeTitle('Fix cleanup for /tmp/cache in worker.js'), 'Fix cleanup for /tmp/cache in worker.js');
+  assert.equal(sanitizeTitle('Implement tool_result parsing'), 'Implement tool_result parsing');
+});

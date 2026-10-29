@@ -14,21 +14,14 @@ const recipes = [
 const REPO = { id: 'demo', project_id: 'demo', display_name: 'demo', default_branch: 'main', deployment_environments: [] };
 const snap = (extra = {}) => normalizeSnapshot({ ...snapshot(), recipes, repos: [{ ...REPO, test_command: 'npm test' }], ...extra });
 
-test('step 1 shows a card per recipe with what it may do', () => {
-  const s = snap();
-  const html = renderRunAgentDialog(s.tickets[0], s, { recipe: null });
-  assert.match(html, /data-action="run-agent-pick" data-ticket="[^"]+" data-recipe="analyse"/);
-  const card = (name) => new RegExp(`data-recipe="${name}"[^]*?</button>`).exec(html)[0];
-  assert.match(card('attempt-fix'), /<span class="chip small warning">Edits source<\/span>/);
-  assert.match(card('analyse'), /<span class="chip small">Reads source<\/span>/);
-  assert.match(card('standup'), /<span class="chip small">Notes only<\/span>/);
-  assert.doesNotMatch(html, /Reads only/);
-  assert.match(html, /Standup &lt;b&gt;/);
-  const tidy = { name: 'tidy', source: 'personal', mode: 'files', description: 'Tidy', permissions: { edit_files: true }, timeout_min: 10, legacy: false, repo_id: null };
-  const withFiles = snap({ recipes: [...recipes, tidy] });
-  const files = renderRunAgentDialog({ ...withFiles.tickets[0], files_touched: ['C:/notes/a.txt'] }, withFiles, { recipe: null });
-  assert.match(/data-recipe="tidy"[\s\S]*?<\/button>/.exec(files)[0], /<span class="chip small warning">Changes files<\/span>/);
-  assert.doesNotMatch(html, /<form/);
+test('the default composer keeps legacy templates under Advanced with their limits', () => {
+ const s = snap(), html = renderRunAgentDialog(s.tickets[0], s);
+ assert.match(html, /data-form="intent-run"/);
+ assert.match(html, /<details class="advanced"><summary>Advanced: templates and environment/);
+ for (const name of ['analyse', 'attempt-fix', 'standup']) assert.match(html, new RegExp(`data-recipe="${name}"`));
+ assert.match(html, /Standup &lt;b&gt;/);
+ assert.match(html, /20 min/);
+ assert.match(html, /value="read-only" checked/);
 });
 
 test('step 2 is the recipe form with Advanced side effects, a summary and a Back button', () => {

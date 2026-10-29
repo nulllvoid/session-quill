@@ -34,6 +34,8 @@ export function createState(meta) {
     sessions: new Map(),
     checkpoints: new Map(),
     handoffs: new Map(),
+    updates: new Map(),
+    updateCursors: new Map(),
     requests: new Map(),
     pendingToolCalls: new Map(),
     unresolved: [],

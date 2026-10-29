@@ -226,7 +226,7 @@ export function renderRecipeRunDialog(recipe, rawTicket, rawSnapshot, { retryOf 
     if (p.delete_files) boxes.push('<label><input type="checkbox" name="delete_files"> Delete these files <span class="muted small">(moved to the Quill trash folder, with Undo)</span></label>');
   }
   // The worker refuses a draft PR without a PR provider, so the box is offered only when one is set.
-  const provider = !!(repo && repo.provider);
+  const provider = !!(repo && (repo.provider_configured ?? repo.provider));
   if (p.open_draft_pr) advanced.push(`<label><input type="checkbox" name="open_draft_pr" disabled> Open a draft PR <span class="muted small">(requires push branch)</span>${provider ? '' : ' <span class="muted small">(no PR provider configured for this repository)</span>'}</label>`);
   const blockers = runBlockers(ticket, snapshot, recipe);
   const blocked = blockers.some((b) => b.level === 'blocker');

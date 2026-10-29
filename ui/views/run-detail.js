@@ -448,14 +448,16 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
   const learned = learningsFiled(h, snapshot, memory);
 
   const actions = [];
-  if (caps.handoff && ['queued', 'running'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="cancel-handoff" data-handoff="${attr(h.id)}">Cancel</button>`);
+  if (caps.handoff && h.intent === 'plan' && h.plan_ref) actions.push(`<button type="button" class="btn small" data-action="review-plan" data-run="${attr(h.id)}">Review plan</button>`);
+  if (caps.handoff && ['queued', 'running'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="cancel-handoff" data-handoff="${attr(h.id)}"${h.cancel_requested ? ' disabled' : ''}>${h.cancel_requested ? 'Stopping…' : h.state === 'running' ? 'Stop run' : 'Cancel queued run'}</button>`);
   // A run interrupted by a worker restart or stop, with a recorded session, resumes that session as
   // a new run (spec §5.4); any other failure is retried afresh. Once superseded, neither is offered.
   if (caps.handoff && t && !next && resumable(h)) actions.push(`<button type="button" class="btn small" data-action="resume-run" data-ticket="${attr(t.id)}" data-handoff="${attr(h.id)}">Resume as new run</button>`);
-  else if (caps.handoff && t && !next && ['failed', 'timed-out', 'cancelled'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}" data-recipe="${attr(name)}" data-retry-of="${attr(h.id)}">Retry as new run</button>`);
+  else if (caps.handoff && t && !next && ['failed', 'timed-out', 'cancelled'].includes(h.state)) actions.push(`<button type="button" class="btn small" data-action="run-agent" data-ticket="${attr(t.id)}" ${h.intent ? `data-note="${attr(h.instructions || h.note || '')}"` : `data-recipe="${attr(name)}"`} data-retry-of="${attr(h.id)}">Retry as new run</button>`);
 
   return `<article class="detail run-detail" data-run="${attr(h.id)}" aria-labelledby="detail-title">
 ${head}
+${actions.length ? `<div class="run-actions sticky-run-actions">${actions.join(' ')}</div>` : ''}
 ${recordStatusLine(h, recordStatus, snapshot.generation_id)}
 ${section('Result', result)}
 ${section('Recorded stage', stageLine(h))}
@@ -474,6 +476,5 @@ ${section('Turns & cost', turnsAndCost(h))}
 ${section('Where it is', where)}
 ${section(`Snapshots (${recordRows(h.snapshots).length})`, runSnapshots(h, t, caps, pending, { now, tz }))}
 ${section('Suggestions', suggestions)}
-${actions.length ? `<div class="run-actions">${actions.join(' ')}</div>` : ''}
 </article>`;
 }

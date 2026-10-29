@@ -9,6 +9,9 @@ import { getBlob } from '../core/blobs.js';
 import { TrackerError } from '../lib/errors.js';
 import { submitRequest, cancelRequest } from './requests.js';
 import { memoryListing } from '../core/memory.js';
+import { planReview } from '../handoff/plans.js';
+import { authorizedContentRefs } from './content.js';
+import { listUpdates, updateDetail, updateScheduleInfo } from '../updates/extension.js';
 
 const UI_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ui');
 const MAX_BODY = 256 * 1024;
@@ -121,6 +124,26 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
         // so no export, mirror or publisher built from a snapshot can carry it.
         if (url.pathname === '/v1/memory') return json(res, 200, { generated_at: worker.now(), ...memoryListing(worker.state, Date.parse(worker.now())) });
         let m;
+        if (url.pathname === '/v1/updates' || /^\/v1\/updates\/[0-9a-f-]{36}$/.test(url.pathname) || /^\/v1\/handoffs\/[0-9a-f-]{36}\/plan-review$/.test(url.pathname)) {
+          const gen = url.searchParams.get('generation');
+          if (gen && gen !== worker.getSnapshot().generation_id) return fail(res, 410, 'generation-expired', 'generation is no longer current; reload the snapshot');
+        }
+        if (url.pathname === '/v1/updates') {
+          const info = updateScheduleInfo(worker);
+          return json(res, 200, { generated_at: worker.now(), ...listUpdates(worker.state, Object.fromEntries(url.searchParams)), schedule: { fingerprint: info.fingerprint, config: info } });
+        }
+        if ((m = /^\/v1\/updates\/([0-9a-f-]{36})$/.exec(url.pathname))) {
+          if (!worker.state.updates?.has(m[1])) return fail(res, 404, 'update-unknown', 'update not found');
+          try { return json(res, 200, updateDetail(worker.state, m[1], { env: worker.env, revision: url.searchParams.get('revision'), share: url.searchParams.get('share') === '1' })); }
+          catch (err) { if (err.code === 'update-revision-unknown') return fail(res, 404, err.code, err.message); throw err; }
+        }
+        if ((m = /^\/v1\/handoffs\/([0-9a-f-]{36})\/plan-review$/.exec(url.pathname))) {
+          const run = worker.state.handoffs.get(m[1]);
+          const ticket = run && worker.state.tickets.get(run.ticket_id);
+          if (!ticket) return fail(res, 404, 'plan-unknown', 'plan run not found');
+          const repo = ticket.repo_id && worker.config.repos?.[ticket.repo_id] ? { id: ticket.repo_id, ...worker.config.repos[ticket.repo_id] } : null;
+          return json(res, 200, planReview(worker.state, ticket, run, { repo, env: worker.env }));
+        }
         if ((m = /^\/v1\/tickets\/([0-9a-f-]{36})$/.exec(url.pathname))) {
           const gen = url.searchParams.get('generation');
           const current = worker.getSnapshot().generation_id;
@@ -133,6 +156,7 @@ export function createServer(worker, { auth, uiDir = UI_DIR, exportHandler = nul
           const gen = url.searchParams.get('generation');
           const current = worker.getSnapshot().generation_id;
           if (gen && gen !== current) return fail(res, 410, 'generation-expired', `generation ${gen} is no longer current (${current})`);
+          if (!authorizedContentRefs(worker.state).has(m[1])) return fail(res, 404, 'not-found', 'content unavailable (not referenced by current state)');
           const text = getBlob(m[1], worker.env);
           if (text === null) return fail(res, 404, 'not-found', 'content unavailable (capture incomplete)');
           return send(res, 200, text, { 'Content-Type': 'text/plain; charset=utf-8' });

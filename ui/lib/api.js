@@ -26,6 +26,9 @@ export function createApi({ staticSnapshot = null } = {}) {
       cancel: async () => { throw new Error('read-only snapshot'); },
       getRequest: async () => null,
       getMemory: async () => null,
+      getUpdates: async () => null,
+      getUpdate: async () => null,
+      getPlanReview: async () => null,
       exportPreview: async () => null,
       exportRun: async () => null,
     };
@@ -46,6 +49,9 @@ export function createApi({ staticSnapshot = null } = {}) {
     getRequest: (id) => call('GET', `/v1/requests/${encodeURIComponent(id)}`),
     // Owner-only (spec §6.4): memory is never in the snapshot.
     getMemory: () => call('GET', '/v1/memory'),
+    getPlanReview: (id) => call('GET', `/v1/handoffs/${encodeURIComponent(id)}/plan-review`),
+    getUpdates: (offset = 0) => call('GET', `/v1/updates${offset ? `?offset=${encodeURIComponent(offset)}` : ''}`),
+    getUpdate: (id, share = false) => call('GET', `/v1/updates/${encodeURIComponent(id)}${share ? '?share=1' : ''}`),
     exportPreview: (params) => call('GET', `/v1/export/preview?${new URLSearchParams(params)}`),
     exportRun: (body) => call('POST', '/v1/export', body),
   };

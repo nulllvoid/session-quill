@@ -274,3 +274,8 @@ Duplicate keys: when several notes resolve to one key, the note whose filename s
 Pause old hooks/agents before enabling the new writer; snapshot settings and switch atomically to avoid double capture. Verify ticket counts, links, checkpoints and deployment obligations. Rollback restores original settings and untouched source notes; newer quill events are preserved/exported for reconciliation, not discarded.
 
 Keep the old PMLA dashboard read-only until at least one week of verified operation, then retire only through an explicit operator action. Follow the [PRD phase gates](PRD.md#release-plan) and [acceptance scenarios](ACCEPTANCE.md); no one-session implementation estimate is asserted.
+
+
+## Unified control centre (2026-10-30)
+
+[ADR 0043](decisions/0043-unified-work-and-daily-continuity.md) supersedes earlier Board/Tree and handoff-composer presentation. The existing worker request transport now also owns hierarchy edits, pinned-plan execution and Daily update generation. See [DATA-CONTRACT](DATA-CONTRACT.md#unified-work-and-daily-update-additions-adr-0043) for exact additive payloads, owner-only read endpoints and replay behavior. Daily updates are immutable source-backed local drafts; the scheduler adds a separate opt-in daily-update job. No external posting or automatic task expansion occurs.

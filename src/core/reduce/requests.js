@@ -42,8 +42,31 @@ export function handleRequestTx(state, ev, result) {
       const ticket = state.tickets.get(m.ticket_id);
       if (ticket) {
         applyTicketFields(state, ticket, m.fields, ev, 'manual', result);
+        if (Object.hasOwn(m.fields, 'blocks_parent') && ticket.parent_id) {
+          const parent = state.tickets.get(ticket.parent_id);
+          if (parent) { parent.relationship_review_seq = ev.sequence; touch(state, parent, ev, result); }
+        }
         req.applied_revision = ticket.revision;
       }
+    } else if (m.type === 'subtask-create') {
+      const created = createTicket(state, ev, m.child, 'manual', result);
+      if (created.rejected) return created;
+      const child = state.tickets.get(m.child.id);
+      child.local_only = m.child.local_only === true;
+      const parent = state.tickets.get(child.parent_id);
+      parent.relationship_review_seq = ev.sequence;
+      touch(state, parent, ev, result);
+      req.applied_revision = parent.revision;
+    } else if (m.type === 'ticket-reparent') {
+      const ticket = state.tickets.get(m.ticket_id);
+      const parents = new Set([ticket.parent_id, m.fields.parent_id]);
+      applyTicketFields(state, ticket, m.fields, ev, 'manual', result);
+      for (const id of parents) { const parent = state.tickets.get(id); if (parent) { parent.relationship_review_seq = ev.sequence; touch(state, parent, ev, result); } }
+      req.applied_revision = ticket.revision;
+    } else if (m.type === 'run-plan-edit') {
+      const run = state.handoffs.get(m.handoff_id);
+      Object.assign(run, m.fields, {revision:run.revision+1,updated_at:ev.occurred_at});
+      result.handoffsChanged.add(run.id);
     } else if (m.type === 'handoff-create') {
       const handoff = { ...m.handoff };
       state.handoffs.set(handoff.id, handoff);
@@ -243,7 +266,7 @@ export function handleHandoffTx(state, ev, result) {
   h.revision = (h.revision ?? 1) + 1;
   h.updated_at = ev.occurred_at;
   const ticket = state.tickets.get(h.ticket_id);
-  if (Array.isArray(p.result_items) && ticket) {
+  if (!h.intent && Array.isArray(p.result_items) && ticket) {
     for (const [index, item] of p.result_items.entries()) {
       const identity = `${h.id}:${index}`;
       if (item.type === 'child') {
@@ -278,7 +301,7 @@ export function handleHandoffTx(state, ev, result) {
   }
   // A files run's changes (ADR 0015) join the timeline, and a ticket it changed waits for the
   // owner in review; it is never closed for them.
-  if (ticket && p.update && Array.isArray(p.update.file_effects) && p.update.file_effects.length) {
+  if (!h.intent && ticket && p.update && Array.isArray(p.update.file_effects) && p.update.file_effects.length) {
     for (const [i, e] of p.update.file_effects.entries()) {
       ticket.timeline.push(timelineEntry(ev, 'write', `${e.action === 'deleted' ? 'Deleted (moved to Quill trash)' : 'Edited'} ${e.path}`, { index: i }));
     }

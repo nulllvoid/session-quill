@@ -53,7 +53,11 @@ test('dashboard bootstraps a fresh home and an explicit stop stays paused until 
   const result = await cli(['ui', '--repo', fx.repo, '--session', 'first-dashboard-session', '--no-open'], fx.env);
   assert.equal(result.code, 0, result.err);
   assert.match(result.out, /http:\/\/127\.0\.0\.1:\d+\/auth\?secret=/);
-  assert.ok(latestSnapshot(loadContext(fx.env)).sessions.some((s) => s.host_session_id === 'first-dashboard-session'));
+  const captured = () => latestSnapshot(loadContext(fx.env))?.sessions.some((s) => s.host_session_id === 'first-dashboard-session');
+  const captureDeadline = Date.now() + 5000;
+  // Startup persists ingress; the next worker tick publishes it to the dashboard.
+  while (!captured() && Date.now() < captureDeadline) await new Promise(resolve => setTimeout(resolve, 100));
+  assert.ok(captured());
   assert.equal((await cli(['worker', 'stop'], fx.env)).code, 0);
   const status = await cli(['status', '--session', 'paused-session'], fx.env);
   assert.match(status.out, /paused by you/);

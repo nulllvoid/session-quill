@@ -1,6 +1,7 @@
 // Handoff permissions are an explicit per-request object, never inferred from approval text
 // (TRD §Handoff execution).
 import { TrackerError } from '../lib/errors.js';
+import { validateIntent } from './intents.js';
 import { MAX_PLANNED, normalizePlanned, invalidPlannedEntry } from '../core/planned-paths.js';
 
 // `files` (ADR 0015) works on a ticket's attached files, outside any repository.
@@ -39,12 +40,14 @@ export function isProtectedBranch(branch, repo) {
 // from a request payload: a recipe that requires an action pin runs only with them, and they
 // need autonomous access and a granted scope for each pin.
 export function validateHandoffRequest(payload = {}, { repo = null, providerConfigured, recipe = null, attachedFileCount = null, scopeCheck = null, actionPins = null } = {}) {
+  const intentContract = validateIntent(payload, recipe);
+  const intentFields = intentContract ? { intent: payload.intent, instructions: payload.instructions ?? '', legacy: false, suggest: true } : {};
   if (recipe && payload.mode !== undefined && payload.mode !== null && payload.recipe !== undefined && payload.mode !== recipe.mode) throw new TrackerError('mode-mismatch', `recipe ${recipe.name} runs in mode ${recipe.mode}`);
-  const mode = recipe ? recipe.mode : payload.mode ?? 'analyse-followups';
+  const mode = recipe ? recipe.mode : payload.mode ?? intentContract?.mode ?? 'analyse-followups';
   if (!MODES.includes(mode)) throw new TrackerError('mode-invalid', `handoff mode must be one of ${MODES.join(', ')}`);
   const note = typeof payload.note === 'string' ? payload.note.trim() : '';
   if (note.length > NOTE_MAX) throw new TrackerError('note-too-long', `handoff note exceeds ${NOTE_MAX} characters`);
-  const access = payload.access ?? 'standard';
+  const access = payload.access ?? intentContract?.access ?? 'standard';
   if (!ACCESS.includes(access)) throw new TrackerError('access-invalid', `access must be one of ${ACCESS.join(', ')}`);
   if (access !== 'standard' && mode === 'files') throw new TrackerError('access-invalid', 'a files run always uses standard access: its staging and undo rely on the agent never reaching the originals');
   if (payload.batch_id !== undefined && payload.batch_id !== null && !(typeof payload.batch_id === 'string' && BATCH_ID_RE.test(payload.batch_id))) throw new TrackerError('batch-invalid', 'batch_id must be 1 to 64 letters, digits, dots, colons, underscores or dashes');
@@ -85,9 +88,9 @@ export function validateHandoffRequest(payload = {}, { repo = null, providerConf
   if ((permissions.read_source || permissions.edit_source) && !repo) throw new TrackerError('repo-required', 'source access requires a registered repository on the owner machine');
   const planned = plannedList(payload.planned_paths, access, permissions);
   if (recipe) {
-    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}), ...batch, ...scopes, ...limits, ...planned };
+    return { recipe: { name: recipe.name, source: recipe.source, hash: recipe.hash }, mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...(payload.suggest === true ? { suggest: true } : {}), ...batch, ...scopes, ...limits, ...planned, ...intentFields };
   }
-  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...batch, ...scopes, ...limits, ...planned };
+  return { mode, note, permissions, access, branch: permissions.push_branch ? branch : null, ...batch, ...scopes, ...limits, ...planned, ...intentFields };
 }
 
 // `{ scopes }` when the request names any, else {}. Scopes cover prod and external writes only and

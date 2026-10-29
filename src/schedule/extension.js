@@ -202,7 +202,12 @@ export function createSchedulerExtension(ctx, { providers, jobs, stopWaitMs = 50
         if (!s.enabled || running.has(s.job)) continue;
         const next = nextDueMs(worker, s);
         if (next === null || nowMs < next) continue;
-        start(worker, s, rerun.has(s.name) || (next !== 0 && nowMs - next > CATCH_UP_SLACK_MS) ? 'catch-up' : 'schedule', [], { dueMs: next || null });
+        // A daily catch-up belongs to the latest missed slot, never a backlog of agents.
+        let due = next;
+        if (s.job === 'daily-update' && s.spec && next) {
+          for (;;) { const later = nextAfter(s.spec, due, tz(worker)); if (later === null || later > nowMs) break; due = later; }
+        }
+        start(worker, s, rerun.has(s.name) || (next !== 0 && nowMs - next > CATCH_UP_SLACK_MS) ? 'catch-up' : 'schedule', [], { dueMs: due || null });
       }
     },
     async onStop() {

@@ -83,7 +83,8 @@ function prClosed(snapshot, h) {
  */
 export function ciAttention(snapshot, h, now) {
   if (h.state !== 'done' || h.origin === 'ci' || !h.ci || h.ci.state !== 'failing' || prClosed(snapshot, h)) return null;
-  if (!openTicket(snapshot, h) || !within7Days(h, now) || supersededBy(snapshot, h)) return null;
+  const resolved = (snapshot.handoffs || []).some(next => next.ticket_id === h.ticket_id && next.id !== h.id && next.origin !== 'ci' && next.requested_at > h.requested_at && ['done', 'failed', 'timed-out'].includes(next.state));
+  if (!openTicket(snapshot, h) || !h.intent && !within7Days(h, now) || resolved) return null;
   const forHead = ciProposalsOf(snapshot, h.id).find((p) => p.ci && p.ci.head_sha === h.ci.head_sha) ?? null;
   if (forHead && forHead.state !== 'proposed') return null;
   return { proposal: forHead };
@@ -116,7 +117,8 @@ export function attentionOf(snapshot, h, now) {
     return null;
   }
   if (h.state !== 'failed' && h.state !== 'timed-out') return null;
-  if (!openTicket(snapshot, h) || !within7Days(h, now) || supersededBy(snapshot, h)) return null;
+  const resolved = (snapshot.handoffs || []).some(next => next.ticket_id === h.ticket_id && next.id !== h.id && next.origin !== 'ci' && next.requested_at > h.requested_at && ['done', 'failed', 'timed-out'].includes(next.state));
+  if (!openTicket(snapshot, h) || !h.intent && !within7Days(h, now) || resolved) return null;
   if (isDecisionFailure(h.error && h.error.code)) return 'decision';
   if (isTestFailure(h)) return 'tests';
   return 'failed';
@@ -141,6 +143,13 @@ function memoryNeeds(memory, filters) {
   const learnings = (memory.entries ?? []).filter((e) => e.trust === 'quarantined' && keep(e.repo_id ?? null)).map((e) => ({ kind: 'learning', id: e.id, at: e.created_at ?? '', entry: e }));
   const groups = (memory.conflicts ?? []).filter((c) => keep(c.repo_id ?? null)).map((c) => ({ kind: 'memory-conflict', id: c.id, at: c.at ?? '', conflict: c }));
   return [...learnings, ...groups];
+}
+
+// One task-level attention identity, shared by Work and Runs; recorded run identities remain separate.
+export function workAttentionItems(snapshot) {
+  if (isStaticSnapshot(snapshot)) return [];
+  const closureIds = new Set((snapshot.reconciliation?.items || []).map(item => item.ticket_id));
+  return (snapshot.tickets || []).filter(t => t.work_rollup && !closureIds.has(t.id) && (t.status === 'blocked' || t.repo_state === 'needs-clone' || t.work_rollup.closure_state === 'needs-review' || t.work_rollup.unclassified > 0 || (t.validation_issues || []).some(x => x.startsWith('parent')))).map(t => ({kind:'work',id:`work:${t.id}`,ticket:t,at:t.updated_at || '',group:'decision',reason:t.work_rollup.reasons?.[0]?.text || t.blocker || (t.repo_state === 'needs-clone' ? 'Repository needs a local checkout' : 'Review the parent relationship')}));
 }
 
 export function runTabs(snapshot, filters, now, { memory = null } = {}) {
@@ -181,7 +190,7 @@ export function runTabs(snapshot, filters, now, { memory = null } = {}) {
   const closure = snapshot.capabilities?.edit_tickets && !isStaticSnapshot(snapshot)
     ? (snapshot.reconciliation?.items ?? []).filter((item) => keep(item.ticket_id)).map((item) => ({ kind: 'closure', id: `closure:${item.ticket_id}`, at: '', item, group: 'decision' })) : [];
   const tabs = {
-    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed' && x.proposal.origin !== 'ci').map((x) => ({ ...x, group: 'decision' })), ...runNeeds, ...closure, ...memoryNeeds(memory, filters).map((x) => ({ ...x, group: 'decision' }))],
+    needs: isStaticSnapshot(snapshot) ? [] : [...proposals.filter((x) => x.proposal.state === 'proposed' && x.proposal.origin !== 'ci').map((x) => ({ ...x, group: 'decision' })), ...runNeeds, ...closure, ...workAttentionItems(snapshot).filter(x => keep(x.ticket.id)), ...memoryNeeds(memory, filters).map((x) => ({ ...x, group: 'decision' }))],
     live: runs.filter((x) => LIVE.has(x.run.state)),
     failed: runs.filter((x) => FAILED.has(x.run.state)),
     all: [...proposals, ...runs.filter((x) => !Number.isFinite(Date.parse(x.at)) || nowMs - Date.parse(x.at) <= ALL_WINDOW_MS)],

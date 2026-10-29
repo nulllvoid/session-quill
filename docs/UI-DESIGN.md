@@ -1,7 +1,7 @@
 # Session Quill — UI Design Specification
 
 Status: revised draft v0.2 · 2026-10-02
-Proposed next design, 2026-10-30: [Unified Work control centre](superpowers/specs/2026-10-30-unified-work-control-centre-design.md) specifies the combined Board/Relationships view, agent modes and Daily update. It is a review draft; the behavior described there is not yet implemented.
+Implementation update, 2026-10-30: [Unified Work control centre](superpowers/specs/2026-10-30-unified-work-control-centre-design.md) and [ADR 0043](decisions/0043-unified-work-and-daily-continuity.md) supersede the historical view/navigation and run-composer sections below. Work combines Board and Relationships, with expandable parent/subtasks, explicit required/independent links, completion reasons, priority controls and ancestry-preserving filters. Daily update is a local evidence-based draft with history and opt-in scheduling; the legacy standup recipe remains available.
 Visual implementation update, 2026-10-11: use [Quill Fieldnotes](design-system/CLAUDE-DESIGN-SYSTEM.md) and its [asset reference](design-system/index.html) for current tokens, layouts and Claude implementation guidance. The shipped UI now puts recommendations before unlinked work, labels Today as Activity and Tree as Relationships, and groups ticket details into tabs. The behavior contracts below still apply unless explicitly superseded by the orchestration ADRs.
 Companions: [PRD](PRD.md), [TRD](TRD.md), [canonical fields](DATA-CONTRACT.md), [acceptance](ACCEPTANCE.md).
 Historical PNG wireframes are v0.1 references; the states and layouts below supersede them.
@@ -10,7 +10,7 @@ Historical PNG wireframes are v0.1 references; the states and layouts below supe
 
 The dashboard answers “what should I pick next?”, “where was I?” and “what still needs deployment?” for one developer. The local owner UI is editable; exported HTML is read-only for the owner or a teammate. A snapshot is not live and cannot be revoked after distribution.
 
-The owner typically works beside a terminal. Support 1440, 1024, 800 and 390 px layouts without hiding authorized actions solely because the viewport narrows. All six views remain available on small screens.
+The owner typically works beside a terminal. Support 1440, 1024, 800 and 390 px layouts without hiding authorized actions solely because the viewport narrows. Navigation and authorized actions remain available on small screens.
 
 Local projections update after note materialization; external reconciliation runs every two hours. Requests and handoff progress update independently. Show data age, worker connection and provider errors separately so a recent local update cannot imply fresh PR evidence.
 
@@ -27,17 +27,20 @@ Local projections update after note materialization; external reconciliation run
 
 ```mermaid
 flowchart TD
-  H["Header: project / freshness / worker health / Refresh"] --> P["Pick next"]
-  H --> B["Board"]
-  H --> T["Tree"]
-  H --> S["Sessions"]
-  H --> D["Deployments"]
-  P & B & T & S & D --> X["Ticket detail"]
-  X --> F["Handoff form"]
-  X --> E["Pending edit / conflict / result"]
+  H["Header: scope / freshness / health"] --> W["Work: Open / Suggested / Attention / Completed / All"]
+  H --> R["Runs"]
+  H --> U["Daily update"]
+  H --> S["Sessions and supporting views"]
+  W --> T["Task detail and expandable subtasks"]
+  T --> A["Read only / Plan / Auto / Full access"]
+  A --> P["Plan review or run progress"]
 ```
 
-Six views are tabs (Pick next, Board, Tree, Sessions, Deployments, Today); detail preserves the current view, filters and scroll position. A project filter applies globally; other filters are view-specific and reflected in the URL hash. Never serialize secrets or private paths in URLs.
+Work opens by default. Old `board`, `tree` and `picknext` links remain aliases; a tree root retains its subtree context. Filters preserve matching descendants' ancestors, stable selection and expansion. Rows show the task, priority, status, required completion and the most useful next action; evidence lives in detail. Independent and completed children disclose separately. No completion percentage implies effort.
+
+Dialogs keep a header × and sticky footer Cancel/action reachable at narrow/short sizes. Closing a composer discards only its draft; Stop is a separate request on an existing run and remains pending until acknowledged. Full access is never restored as the next run's default. Advanced recipes are a secondary choice. Read-only/static capabilities disable mutation, not navigation.
+
+Daily update shows exact window, timezone, scope, coverage and generation state. It retains prior successful outputs during failure, preserves owner edits as revisions and exposes a distinct sharing preview. Schedule controls require explicit opt-in and disclose synthesis limits. No summary posts externally or changes tickets.
 
 ## Data and capabilities
 

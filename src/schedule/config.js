@@ -1,9 +1,11 @@
 // [[schedule]] tables from user config (ADR 0007). Repository config cannot schedule jobs.
 import path from 'node:path';
+import { normalizeUpdateSchedule } from '../updates/schedule.js';
+import { fingerprint } from '../updates/evidence.js';
 import os from 'node:os';
 import { parseCron, parseInterval, nextAfter } from './cron.js';
 
-export const JOBS = ['reconcile', 'agent', 'digest', 'publish', 'tracker-sync'];
+export const JOBS = ['reconcile', 'agent', 'digest', 'publish', 'tracker-sync', 'daily-update'];
 export const DIGEST_TARGETS = ['vault-daily', 'file'];
 export const AGENT_SCOPES = ['deploy-pending', 'active', 'review', 'blocked', 'open'];
 export const AGENT_LIMIT_MAX = 25;
@@ -31,6 +33,12 @@ export function normalizeSchedules(config = {}, { timeZone = 'UTC', now = Date.n
     if (!JOBS.includes(raw.job)) { warnings.push(`${where}: unknown job "${raw.job}"; available jobs: ${JOBS.join(', ')}`); return; }
     if ((raw.cron === undefined) === (raw.every === undefined)) { warnings.push(`${where}: set exactly one of cron or every`); return; }
     let extra = {};
+    if (raw.job === 'daily-update') {
+      try {
+        const daily = normalizeUpdateSchedule({ ...raw, enabled: raw.enabled === true, scope: raw.scope ?? { project_ids: raw.project_ids ?? [], repo_ids: raw.repo_ids ?? [] } });
+        extra = { ...daily, settings_version: fingerprint(daily) };
+      } catch (err) { warnings.push(`${where}: ${err.message}`); return; }
+    }
     if (raw.job === 'agent') {
       if (typeof raw.recipe !== 'string' || !raw.recipe.trim()) { warnings.push(`${where}: an agent schedule needs recipe = "<name>"`); return; }
       const scope = raw.scope ?? 'open';

@@ -7,11 +7,16 @@ import { renderRunDetail, renderRunNotFound, parseRunRecord } from './views/run-
 import { renderPickNext } from './views/picknext.js';
 import { renderBoard } from './views/board.js';
 import { renderTree } from './views/tree.js';
+import { renderPlanReview } from './views/plan-review.js';
+import { renderUpdates, renderUpdatePreview, updateScope } from './views/updates.js';
+import { renderWorkDialog } from './views/work-dialogs.js';
+import { renderWork } from './views/work.js';
+import { buildWorkTree, WORK_LENSES } from './lib/work.js';
 import { renderSessions } from './views/sessions.js';
 import { renderDeployments } from './views/deployments.js';
 import { renderToday } from './views/today.js';
 import { renderDetail, DETAIL_TABS } from './views/detail.js';
-import { renderRunAgentDialog } from './views/run-dialog.js';
+import { renderRunAgentDialog, intentPayload } from './views/run-dialog.js';
 import { renderCompletionDialog, renderFollowupDialog, renderStatusDialog, renderDeploymentDialog, renderExportDialog, renderHelpDialog, renderAttachDialog, renderLinkExternalDialog, renderCloneDialog, renderSchedulesDialog, schedulesDialogKey, renderPublishDialog, publishDialogKey } from './views/dialogs.js';
 import { createApi, uuidv4 } from './lib/api.js';
 import { createDashboardMotion } from './lib/motion.js';
@@ -20,7 +25,7 @@ import { renderBulkActionBar, bulkBarShape, renderBulkHandoffForm, renderBulkRes
 import { freshProposals, proposalNotice } from './lib/proposals.js';
 import { toggleChecked, selectRange, selectionKey, bulkEntries, bulkRequests, bulkStatusRequests, pendingUndo, mergeUndo, batchDialogUpdate, withoutIds, pruneChecked, activeBatches } from './lib/bulk.js';
 
-const VIEWS = ['picknext', 'board', 'tree', 'sessions', 'deployments', 'today', 'runs', 'memory'];
+const VIEWS = ['work', 'updates', 'picknext', 'board', 'tree', 'sessions', 'deployments', 'today', 'runs', 'memory'];
 const POLL_VISIBLE_MS = 2000;
 const POLL_HIDDEN_MS = 30000;
 
@@ -28,19 +33,23 @@ const appState = {
   moreOpen: false,
   snapshot: null,
   online: true,
-  view: 'picknext',
+  view: 'work',
+  updateOffset: 0, updateBundles: {}, updateScheduleEditing: false, updates: null, updateSelected: null, updateStatus: null, updateEditing: false, updateDraft: '', updateScope: '', updateWindow: 'last-24-hours', updateSynthesis: false,
+  workLens: 'open', workSort: 'priority', workExpanded: new Set(), workRevealed: new Set(), workLimit: 100, workChildLimits: {},
   filters: { ...EMPTY_FILTERS },
   selected: null,
   runTab: null,
   // Needs you grouping (ADR 0039): 'attention' (default) or 'none' (one list); `group=` in the hash.
   runGroup: 'attention',
   selectedRun: null,
+  detailAncestors: [],
   detailTab: 'overview',
   detailExpanded: false,
   sidebarCollapsed: false,
   requests: new Map(),
   refresh: null,
   dialog: null,
+  runObjectiveDrafts: {},
   theme: null,
   boardToggled: new Set(),
   blockedExpanded: false,
@@ -88,7 +97,7 @@ const appState = {
 const staticPage = () => typeof window !== 'undefined' && !!window.__SNAPSHOT__;
 const ownerView = (view) => !(OWNER_ONLY_VIEWS.has(view) && staticPage());
 
-const BULK_VIEWS = new Set(['board', 'picknext']);
+const BULK_VIEWS = new Set(['work', 'board', 'picknext']);
 
 let receiptTimer = null;
 function setReceipt(text, tone = 'neutral') {
@@ -107,6 +116,7 @@ let detailCloseVersion = 0;
 let renderedView = null;
 let renderedDetail = null;
 const renderedMarkup = new WeakMap();
+const dialogAttempts = new WeakMap();
 
 // Preserve DOM nodes (and focus, hover and active animations) on unchanged polls.
 function setMarkup(element, html) {
@@ -122,9 +132,14 @@ function announce(text) { const el = $('#live'); if (el) { el.textContent = ''; 
 function readHash() {
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const view = params.get('view');
-  if (VIEWS.includes(view) && ownerView(view)) appState.view = view;
+  const nextView = ['board', 'tree', 'picknext'].includes(view) ? 'work' : view;
+  if (VIEWS.includes(view) && ownerView(view) && nextView !== appState.view) appState.runObjectiveDrafts = {};
+  if (VIEWS.includes(view) && ownerView(view)) appState.view = ['board', 'tree', 'picknext'].includes(view) ? 'work' : view;
+  appState.workLens = Object.hasOwn(WORK_LENSES, params.get('lens')) ? params.get('lens') : view === 'picknext' ? 'suggested' : 'open';
+  appState.workSort = ['priority','activity','title'].includes(params.get('sort')) ? params.get('sort') : 'priority';
   appState.filters = filtersFromHash(location.hash, appState.filters, VIEWS);
   appState.selected = params.get('ticket') || null;
+  if (appState.snapshot && appState.selected) { const tree = buildWorkTree(appState.snapshot, {}, { lens: 'all' }); let p = tree.parents.get(appState.selected); while (p) { appState.workExpanded.add(p); p = tree.parents.get(p); } }
   appState.treeRoot = params.get('root') || null;
   appState.runTab = params.get('tab') || null;
   appState.runGroup = params.get('group') === 'none' ? 'none' : 'attention';
@@ -133,11 +148,13 @@ function readHash() {
   appState.memoryRepo = appState.view === 'memory' ? params.get('mrepo') || null : null;
   const section = params.get('section');
   if (appState.selected && DETAIL_TABS.includes(section)) appState.detailTab = section;
+  if (appState.view === 'updates' && api && appState.snapshot) loadUpdates();
 }
 
 // The drawer belongs to the view it was opened from: switching views closes it.
 function setView(view) {
   if (view === appState.view || !ownerView(view)) return;
+  appState.runObjectiveDrafts = {};
   appState.view = view;
   appState.treeRoot = null;
   appState.selected = null;
@@ -150,11 +167,14 @@ function setView(view) {
   appState.memoryTab = null;
   appState.memoryRepo = null;
   appState.memoryEditing = null;
+  appState.updateScheduleEditing = false;
+  if (view === 'updates') loadUpdates();
 }
 
 function writeHash() {
   const params = new URLSearchParams();
   params.set('view', appState.view);
+  if (appState.view === 'work') { params.set('lens', appState.workLens); params.set('sort', appState.workSort); }
   for (const [k, v] of Object.entries(appState.filters)) if (v && k !== 'stale') params.set(k, v);
   if (appState.filters.stale) params.set('stale', '1');
   if (appState.selected) params.set('ticket', appState.selected);
@@ -171,7 +191,7 @@ function writeHash() {
 
 function layoutMode() {
   const w = window.innerWidth;
-  if (w - (appState.sidebarCollapsed ? 72 : 224) >= 1100) return 'desktop';
+  if (w >= 1024) return 'desktop';
   if (w >= 900) return 'medium';
   return 'narrow';
 }
@@ -210,27 +230,29 @@ function render() {
   setMarkup($('#header'), renderHeader(s, { now, online: appState.online, refresh: appState.refresh, theme: appState.theme, filters: appState.filters, view: appState.view, endpoint: appState.endpoint, receipt: appState.receipt }));
   { const pops = document.querySelectorAll('#header .health-pop'); for (const i of healthOpen) if (pops[i]) pops[i].open = true; }
   if (searchFocused) { const sInput = $('#search'); if (sInput) { sInput.focus(); if (searchPos !== null) sInput.setSelectionRange(searchPos, searchPos); } }
-  const filterOpen = $('#filters .filter-pop')?.open;
-  setMarkup($('#filters'), renderFilterBar(s, appState.filters));
-  if (filterOpen) $('#filters .filter-pop').open = true;
+  const filterOpen = [...document.querySelectorAll('#filters details')].map(el => el.open);
+  setMarkup($('#filters'), renderFilterBar(s, appState.filters, { work: appState.view === 'work' }));
+  [...document.querySelectorAll('#filters details')].forEach((el,i) => { el.open = !!filterOpen[i]; });
   const pending = [...appState.requests.values()];
   const opts = { now, pending, selected: appState.selected, leases: appState.leases };
   let html = '';
   const bulk = { selecting: appState.selecting, checked: appState.checked };
-  if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, { ...opts, ...bulk, blockedExpanded: appState.blockedExpanded });
+  if (appState.view === 'work') html = renderWork(s, appState.filters, { ...opts, ...bulk, lens: appState.workLens, sort: appState.workSort, root: appState.treeRoot, order: document.activeElement?.closest('[data-work-row]') ? [...main.querySelectorAll('[data-work-row]')].map(el => el.dataset.workRow) : null, expanded: appState.workExpanded, revealed: appState.workRevealed, limit: appState.workLimit, childLimits: appState.workChildLimits });
+  else if (appState.view === 'picknext') html = renderPickNext(s, appState.filters, { ...opts, ...bulk, blockedExpanded: appState.blockedExpanded });
   else if (appState.view === 'board') html = renderBoard(s, appState.filters, { ...opts, ...bulk, layout: layoutMode() === 'desktop' ? 'columns' : 'list', toggled: appState.boardToggled, pages: appState.boardPages });
   else if (appState.view === 'tree') html = renderTree(s, appState.filters, { root: appState.treeRoot });
   else if (appState.view === 'sessions') html = renderSessions(s, appState.filters, { ...opts, page: appState.sessionsPage });
   else if (appState.view === 'deployments') html = renderDeployments(s, appState.filters, opts);
   else if (appState.view === 'today') html = renderToday(s, appState.filters, opts);
   else if (appState.view === 'runs') html = renderRuns(s, appState.filters, { ...opts, tab: appState.runTab, selectedRun: appState.selectedRun, memory: appState.memory, group: appState.runGroup });
+  else if (appState.view === 'updates') html = renderUpdates(appState.updates, s, { selected: appState.updateSelected, status: appState.updateStatus, editing: appState.updateEditing, draft: appState.updateDraft, online: appState.online, scope: appState.updateScope, window: appState.updateWindow, synthesis: appState.updateSynthesis });
   else if (appState.view === 'memory') html = renderMemory(appState.memory, s, { now, pending, tab: appState.memoryTab, repo: appState.memoryRepo, editing: appState.memoryEditing, status: appState.memoryStatus, filters: appState.filters, online: appState.online });
   if (BULK_VIEWS.has(appState.view)) html = renderBatchStrips(s, activeBatches(s, appState.batches), { canCancel: !!(s.capabilities && s.capabilities.handoff) }) + html;
   renderBulkBar(s);
   const active = document.activeElement;
   // While the owner types in a Memory edit, the page is not rebuilt at all (like the detail panel's
   // editing guard): the field keeps IME composition, undo history, caret and scroll.
-  const typing = appState.view === 'memory' && appState.memoryEditing && active instanceof HTMLTextAreaElement && main.contains(active) && active.dataset.memoryDraft === appState.memoryEditing.id;
+  const typing = renderedView === appState.view && appState.view === 'updates' && (appState.updateEditing || appState.updateScheduleEditing || active?.closest('[data-form="set-update-schedule"]')) || appState.view === 'memory' && appState.memoryEditing && active instanceof HTMLTextAreaElement && main.contains(active) && active.dataset.memoryDraft === appState.memoryEditing.id;
   // A focused element of the page with an id (the repository selector, a tab, an entry's text) keeps
   // focus, and a text field its caret, across a re-render.
   const keep = !typing && active && active !== main && main.contains(active) && active.id ? { id: active.id, start: active.tagName === 'TEXTAREA' ? active.selectionStart : null, end: active.tagName === 'TEXTAREA' ? active.selectionEnd : null } : null;
@@ -261,7 +283,8 @@ function renderBulkBar(s) {
   const host = $('#bulk');
   if (!host) return;
   // Tickets the filters hide (or that left the snapshot) drop out of the selection (ADR 0023).
-  const kept = pruneChecked(s, appState.checked, appState.filters);
+  const visible = appState.view === 'work' ? buildWorkTree(s, appState.filters, { lens: appState.workLens, root: appState.treeRoot }).matches : null;
+  const kept = visible ? new Set([...appState.checked].filter(id => visible.has(id))) : pruneChecked(s, appState.checked, appState.filters);
   if (kept.size !== appState.checked.size) {
     const hidden = appState.checked.size - kept.size;
     appState.checked = kept;
@@ -326,7 +349,9 @@ function submitBulkStatus(form) {
   const status = String(fd.get('status') ?? '');
   const blocker = String(fd.get('blocker') ?? '').trim();
   if (status === 'blocked' && !blocker) { appState.dialog = { ...appState.dialog, error: 'Blocked needs a blocker.' }; render(); return; }
-  const { bodies, skipped } = bulkStatusRequests(appState.snapshot, [...appState.checked], { status, blocker });
+  const selected = String(form.dataset.ids || '').split(',').filter(Boolean), revisions = JSON.parse(form.dataset.revisions || '{}');
+  const { bodies, skipped } = bulkStatusRequests(appState.snapshot, selected, { status, blocker });
+  for (const body of bodies) if (revisions[body.target_id] !== undefined) body.expected_revision = revisions[body.target_id];
   closeDialog();
   const ids = [];
   for (const { original, ...body } of bodies) {
@@ -461,7 +486,11 @@ function renderDialog() {
   if (!d) { if (host.open) host.close(); host.innerHTML = ''; return; }
   const s = appState.snapshot;
   let html = '';
-  if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status, { snapshot: s, resolve: d.resolve });
+  if (d.type === 'plan-review') html = renderPlanReview(d.review, d.text, ticketById(s, d.ticket));
+  else if (d.type === 'update-preview') html = renderUpdatePreview(d.preview);
+  else if (d.type === 'update-revision') html = `<div class="dialog-form"><h2 id="dialog-title">Earlier revision</h2><pre class="update-content">${esc(d.text)}</pre><button class="btn" data-action="close-dialog">Close</button></div>`;
+  else if (['create-subtask', 'link-child', 'set-parent', 'bulk-priority'].includes(d.type)) html = renderWorkDialog(d.type, ticketById(s, d.ticket), s, { count: d.ids?.length || 0, ids: d.ids || [], revisions: d.revisions || {} });
+  else if (d.type === 'status') html = renderStatusDialog(ticketById(s, d.ticket), d.status, { snapshot: s, resolve: d.resolve });
   else if (d.type === 'completion') html = renderCompletionDialog(ticketById(s, d.ticket));
   else if (d.type === 'followup') {
     const run = s.handoffs.find((h) => h.id === d.handoff);
@@ -485,10 +514,10 @@ function renderDialog() {
   else if (d.type === 'run-agent') {
     const t = ticketById(s, d.ticket);
     if (!t) { appState.dialog = null; return renderDialog(); }
-    html = renderRunAgentDialog(t, s, { recipe: d.recipe, retryOf: d.retryOf, note: d.note });
+    html = renderRunAgentDialog(t, s, { recipe: d.recipe, retryOf: d.retryOf, note: d.note ?? appState.runObjectiveDrafts[t.id] ?? null });
   } else if (d.type === 'bulk-handoff') html = renderBulkHandoffForm(s, d.ids, { mode: d.mode });
   else if (d.type === 'bulk-results') html = renderBulkResults(s, { batchId: d.batchId, rows: d.rows, requests: [...appState.requests.values()] });
-  else if (d.type === 'bulk-status') html = renderBulkStatusDialog(appState.checked.size);
+  else if (d.type === 'bulk-status') html = renderBulkStatusDialog(d.ids?.length || 0, { ids: d.ids || [], revisions: d.revisions || {} });
   else if (d.type === 'publishers') html = renderPublishDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
   else if (d.type === 'schedules') html = renderSchedulesDialog(s, { now: nowIso(), pending: [...appState.requests.values()] });
   // The Schedules panel follows live state: it re-renders only when what it shows changes, and keeps
@@ -537,13 +566,16 @@ async function poll() {
   try {
     const snap = normalizeSnapshot(await api.getSnapshot());
     const changed = !appState.snapshot || snap.generation_id !== appState.snapshot.generation_id;
+    if (!appState.snapshot) { try { appState.workExpanded = new Set(JSON.parse(localStorage.getItem(`quill-work:${snap.meta.store_id}:${snap.meta.owner_machine_id}`) || '[]')); } catch {} }
     appState.snapshot = snap;
+    if (appState.selected) { const tree = buildWorkTree(snap, {}, { lens: 'all' }); let p = tree.parents.get(appState.selected); while (p) { appState.workExpanded.add(p); p = tree.parents.get(p); } }
     appState.online = true;
     appState.error = null;
     syncRequests(snap);
     // Content refs are content-addressed, so loaded text stays valid across generations.
     if (changed) { appState.contentStatus = Object.fromEntries(Object.entries(appState.contentStatus).filter(([, v]) => v === 'loading' || v === 'reloading')); appState.loadedTicket = null; }
     if (!api.static && (changed || (!appState.memory && !appState.memoryStatus))) loadMemory();
+    if (!api.static && (changed || (!appState.updates && !appState.updateStatus))) loadUpdates();
     render();
   } catch (err) {
     if (err.code === 'unauthenticated') { appState.error = err.message; appState.online = false; }
@@ -553,6 +585,19 @@ async function poll() {
   if (!api.static) pollTimer = setTimeout(poll, document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS);
 }
 
+let updatesLoad = null;
+function loadUpdates() {
+  if (api.static || updatesLoad) return updatesLoad;
+  updatesLoad = api.getUpdates(appState.updateOffset).then(async data => { appState.updates = data; appState.updateStatus = null; const id = appState.updateSelected?.id || data?.updates?.[0]?.id; if (id && !appState.updateEditing) appState.updateSelected = await loadUpdateDetail(id); }).catch(error => { appState.updateStatus = { error: error.message }; }).finally(() => { updatesLoad = null; render(); });
+  return updatesLoad;
+}
+async function loadUpdateDetail(id) {
+  const detail = await api.getUpdate(id); if (detail.input_ref) {
+    if (!(detail.input_ref in appState.updateBundles)) { try { const raw = await api.getContent(detail.input_ref, appState.snapshot.generation_id); appState.updateBundles[detail.input_ref] = raw ? JSON.parse(raw).bundle : null; } catch { appState.updateBundles[detail.input_ref] = null; } }
+    detail.evidence = appState.updateBundles[detail.input_ref];
+  } return detail;
+}
+async function openUpdate(id) { try { appState.updateSelected = await loadUpdateDetail(id); appState.updateEditing = false; appState.updateStatus = null; } catch(error) { appState.updateStatus = { error: error.message }; } render(); }
 function syncRequests(snap) {
   // A run proposed from a shared page since the last poll (ADR 0025) is announced and receipted.
   const proposals = freshProposals(appState.proposalsSeen, snap);
@@ -569,6 +614,8 @@ function syncRequests(snap) {
       appState.requests.set(r.id, { ...local, ...r, original: local ? local.original : null });
       if (prev && prev !== r.state && ['applied', 'conflict', 'failed', 'cancelled'].includes(r.state)) {
         const label = r.kind.replace(/-/g, ' ');
+        if (r.kind === 'set-update-schedule' && r.state === 'applied') appState.updateScheduleEditing = false;
+        if (r.kind === 'edit-update' && r.state === 'applied') { appState.updateEditing = false; appState.updateDraft = ''; }
         if (r.kind === 'memory-edit' && r.state === 'applied') delete appState.memoryDrafts[r.target_id];
         const text = `${label} ${r.state}${r.state === 'conflict' ? (r.kind.startsWith('memory-') ? ': the entry changed first' : ': the ticket changed first') : ''}${r.state === 'failed' && r.error ? `: ${r.error.message}` : ''}`;
         announce(text);
@@ -600,10 +647,11 @@ async function submit(body, { original = null, announceText } = {}) {
     announce(announceText ?? `${body.kind.replace(/-/g, ' ')} queued`);
     setReceipt(`${body.kind.replace(/-/g, ' ')} persisted as request ${id.slice(0, 8)} (${rec.state}${rec.not_before && rec.not_before !== rec.created_at ? `, applies at ${rec.not_before}` : ''})`, 'neutral');
   } catch (err) {
-    appState.requests.set(id, { ...req, state: 'failed', error: { code: err.code, message: err.message, retryable: err.status !== 400 && err.status !== 409 } });
+    const unknown = !err.status;
+    appState.requests.set(id, { ...req, state: 'failed', acknowledgement_unknown: unknown, error: { code: err.code, message: unknown ? `Request ${id.slice(0, 8)} was not acknowledged; its status is unknown. ${err.message}` : err.message, retryable: err.status !== 400 && err.status !== 409 } });
     if (err.status === 401 || !err.status) appState.online = false;
     announce(`Request failed: ${err.message}`);
-    setReceipt(`request rejected before the queue: ${err.message}`, 'critical');
+    setReceipt(!err.status ? `Request ${id.slice(0, 8)} was not acknowledged; its status is unknown. Retry the unchanged draft with the same request ID.` : `request rejected before the queue: ${err.message}`, 'critical');
   }
   render();
   return id;
@@ -731,6 +779,25 @@ function handleAction(el) {
       $(`#main [data-action="memory-edit"][data-entry="${CSS.escape(id)}"]`)?.focus();
       break;
     }
+    case 'review-plan': { const run = s.handoffs.find(h => h.id === el.dataset.run); if (!run) break; api.getPlanReview(run.id).then(async review => { const text = await api.getContent(review.source_plan_ref, s.generation_id); if (text == null) throw new Error('The plan content is missing; execution is unavailable.'); appState.dialog = { type: 'plan-review', ticket: run.ticket_id, review, text }; render(); }).catch(error => { setReceipt(error.message, 'critical'); render(); }); break; }
+    case 'updates-page': appState.updateOffset = Number(el.dataset.offset) || 0; loadUpdates(); break;
+    case 'configure-update-schedule': { const panel = document.querySelector('[data-disclosure="update-schedule"]'); if (panel) { panel.open = true; panel.querySelector('[name="enabled"]')?.focus(); } break; }
+    case 'updates-reload': loadUpdates(); break;
+    case 'update-open': openUpdate(el.dataset.update); break;
+    case 'update-edit': appState.updateEditing = true; appState.updateDraft = appState.updateSelected?.content || ''; render(); break;
+    case 'update-edit-cancel': appState.updateEditing = false; render(); break;
+    case 'update-preview': api.getUpdate(el.dataset.update, true).then(preview => { appState.dialog = { type: 'update-preview', preview }; render(); }).catch(error => { appState.updateStatus = { error: error.message }; render(); }); break;
+    case 'update-copy-preview': { const text = appState.dialog?.preview?.share_content || appState.dialog?.preview?.content; if (typeof text === 'string') navigator.clipboard.writeText(text).then(() => announce('Sharing preview copied')).catch(() => announce('Clipboard unavailable; select the preview text to copy')); break; }
+    case 'update-download-preview': { const text = appState.dialog?.preview?.share_content || appState.dialog?.preview?.content; if (typeof text !== 'string') break; const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = 'daily-update-preview.txt'; a.click(); URL.revokeObjectURL(url); break; }
+    case 'update-revision': api.getContent(el.dataset.ref, s.generation_id).then(text => { appState.dialog = { type: 'update-revision', text: text || 'Revision content is no longer stored.' }; render(); }).catch(error => { appState.updateStatus = { error: error.message }; render(); }); break;
+    case 'update-cancel': submit({ kind: 'cancel-update', target_id: null, expected_revision: null, payload: { update_id: el.dataset.update } }); break;
+    case 'update-retry':
+    case 'update-regenerate': submit({ kind: 'generate-update', target_id: null, expected_revision: null, payload: { window_kind: appState.updateSelected?.window_kind || 'last-24-hours', scope: appState.updateSelected?.scope || updateScope(), synthesis: false, [a === 'update-retry' ? 'retry_id' : 'regenerate_id']: el.dataset.update } }); break;
+    case 'work-expand': { const id = el.dataset.ticket; if (appState.workExpanded.has(id)) appState.workExpanded.delete(id); else appState.workExpanded.add(id); try { localStorage.setItem(`quill-work:${s.meta.store_id}:${s.meta.owner_machine_id}`, JSON.stringify([...appState.workExpanded])); } catch {} render(); break; }
+    case 'work-reveal': appState.workRevealed.add(el.dataset.ticket); appState.workExpanded.add(el.dataset.ticket); render(); break;
+    case 'work-children-more': appState.workChildLimits[el.dataset.ticket] = (appState.workChildLimits[el.dataset.ticket] || 100) + 100; render(); break;
+    case 'work-more': appState.workLimit += 100; render(); break;
+    case 'work-lens': appState.workLens = el.dataset.lens; clearWorkSelection(); render(); break;
     case 'toggle-more': appState.moreOpen = !appState.moreOpen; render(); break;
     case 'toggle-sidebar': appState.sidebarCollapsed = !appState.sidebarCollapsed; try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage may be unavailable */ } render(); document.querySelector('[data-action="toggle-sidebar"]')?.focus(); break;
     case 'expand-detail': appState.detailExpanded = !appState.detailExpanded; render(); break;
@@ -781,8 +848,8 @@ function handleAction(el) {
     case 'sessions-page': appState.sessionsPage = Number(el.dataset.page); render(); break;
     case 'tree-root': appState.treeRoot = el.dataset.root || null; render(); break;
     case 'dismiss-receipt': appState.receipt = null; render(); break;
-    case 'clear-filter': appState.filters[el.dataset.filter] = el.dataset.filter === 'stale' ? false : ''; render(); break;
-    case 'clear-filters': appState.filters = { ...appState.filters, category: '', tag: '', repo: '', machine: '', stale: false, q: '' }; render(); break;
+    case 'clear-filter': clearWorkSelection(); appState.filters[el.dataset.filter] = el.dataset.filter === 'stale' ? false : ''; render(); break;
+    case 'clear-filters': clearWorkSelection(); appState.filters = { ...EMPTY_FILTERS }; render(); break;
     case 'cancel-request': cancelRequest(el.dataset.request); break;
     // Dismissed stays dismissed: later polls do not bring the request's feedback back.
     case 'discard-request': appState.dismissedRequests.add(el.dataset.request); appState.requests.delete(el.dataset.request); render(); break;
@@ -791,7 +858,7 @@ function handleAction(el) {
       const r = appState.requests.get(el.dataset.request);
       if (!r) break;
       appState.requests.delete(r.id);
-      submit({ kind: r.kind, target_id: r.target_id, expected_revision: targetRevision(r), payload: r.payload, retry_of: r.id }, { announceText: 'Resubmitted against the current revision' });
+      submit({ kind: r.kind, target_id: r.target_id, expected_revision: r.acknowledgement_unknown ? r.expected_revision : targetRevision(r), payload: r.payload, ...(r.acknowledgement_unknown ? { id: r.id, ...(r.retry_of ? { retry_of: r.retry_of } : {}) } : { retry_of: r.id }) }, { announceText: r.acknowledgement_unknown ? 'Checking the original request with its unchanged identity' : 'Resubmitted against the current revision' });
       break;
     }
     case 'reverse-request': {
@@ -842,7 +909,11 @@ function handleAction(el) {
     }
     case 'bulk-clear': setChecked(new Set(), { anchor: null }); break;
     case 'bulk-handoff': appState.dialog = { type: 'bulk-handoff', mode: el.dataset.mode === 'attempt-fix' ? 'attempt-fix' : 'analyse', ids: [...appState.checked] }; render(); break;
-    case 'bulk-status': appState.dialog = { type: 'bulk-status' }; render(); break;
+    case 'link-child':
+    case 'create-subtask':
+    case 'set-parent': appState.dialog = { type: a, ticket: el.dataset.ticket }; render(); break;
+    case 'bulk-priority': appState.dialog = { type: 'bulk-priority', ids: [...appState.checked], revisions: Object.fromEntries([...appState.checked].map(id => [id, ticketRevision(id)])) }; render(); break;
+    case 'bulk-status': appState.dialog = { type: 'bulk-status', ids: [...appState.checked], revisions: Object.fromEntries([...appState.checked].map(id => [id, ticketRevision(id)])) }; render(); break;
     case 'bulk-undo-all': {
       const ids = pendingUndo(appState.requests, appState.bulkUndo);
       announce(`Undoing ${ids.length} change${ids.length === 1 ? '' : 's'}`);
@@ -880,6 +951,7 @@ function openDetail(id, source) {
   motion?.cancelElement($('#detail'));
   appState.lastFocus = source ?? document.activeElement;
   appState.selected = id;
+  { const tree = buildWorkTree(appState.snapshot, {}, { lens: 'all' }); appState.detailAncestors = []; let p = tree.parents.get(id); while (p) { appState.detailAncestors.push(p); p = tree.parents.get(p); } }
   appState.selectedRun = null;
   appState.detailTab = 'overview';
   appState.detailExpanded = false;
@@ -901,12 +973,19 @@ async function closeDetail() {
   appState.detailExpanded = false;
   appState.editingNext = null;
   render();
-  const source = appState.lastFocus && document.contains(appState.lastFocus) ? appState.lastFocus : $(`#main [data-ticket="${CSS.escape(selected ?? '')}"]`);
-  source?.focus({ preventScroll: true });
+  let source = appState.lastFocus && document.contains(appState.lastFocus) ? appState.lastFocus : document.getElementById(`work-open-${selected}`) || $(`#main [data-ticket="${CSS.escape(selected ?? '')}"]`);
+  if (!source && selected) { const tree = buildWorkTree(appState.snapshot, {}, { lens: 'all' }); let p = tree.parents.get(selected); while (p && !source) { source = document.getElementById(`work-open-${p}`); p = tree.parents.get(p); } }
+  if (!source) for (const id of appState.detailAncestors) { source = document.getElementById(`work-open-${id}`); if (source) break; }
+  (source || $('#tab-work'))?.focus({ preventScroll: true });
 }
 
-function closeDialog() {
+function closeDialog({ preserveObjective = true } = {}) {
   const host = $('#dialog');
+  if (preserveObjective && appState.dialog?.type === 'run-agent') {
+    const objective = host.querySelector('[name="instructions"], [name="note"]');
+    if (objective?.value.trim()) appState.runObjectiveDrafts[appState.dialog.ticket] = objective.value;
+    else delete appState.runObjectiveDrafts[appState.dialog.ticket];
+  }
   appState.dialog = null;
   if (host.open) host.close();
   host.innerHTML = '';
@@ -972,13 +1051,48 @@ function handleSubmit(form) {
     if (!error) { error = document.createElement('p'); error.dataset.formError = ''; error.className = 'critical small'; error.setAttribute('role', 'alert'); form.append(error); }
     error.textContent = message;
   };
+  const queueDialog = async (body, options) => {
+    const current = appState.dialog, button = form.querySelector('[type="submit"]');
+    if (button) button.disabled = true;
+    const key = JSON.stringify(body), previous = dialogAttempts.get(form);
+    const requestId = previous?.unknown && previous.key === key ? previous.id : uuidv4();
+    const attempt = { id: requestId, key, unknown: false }; dialogAttempts.set(form, attempt);
+    const id = await submit({ ...body, id: requestId }, options), request = id && appState.requests.get(id);
+    attempt.unknown = request?.acknowledgement_unknown === true;
+    if (!request || ['failed','conflict'].includes(request.state)) { if (appState.dialog === current) { formError(request?.error?.message || 'The request was not accepted. Your draft is retained.'); if (button) button.disabled = false; } return; }
+    if (body.kind === 'handoff') delete appState.runObjectiveDrafts[body.target_id];
+    if (appState.dialog === current) closeDialog({ preserveObjective: false });
+  };
   if (kind === 'completion' || kind === 'followup' || (kind === 'status' && fd.has('resolution_kind'))) {
     if (!appState.online) { formError('Offline: the request was not sent and is not queued.'); return; }
     if (!t || appState.snapshot.meta.exported_at || !appState.snapshot.capabilities.edit_tickets) return;
     const busy = [...appState.requests.values()].some((r) => r.target_id === ticketId && ['sending', 'pending', 'applying'].includes(r.state) && (kind === 'followup' ? r.kind === 'accept-suggestion' && r.payload?.suggestion_id === form.dataset.suggestion : ['set-completion', 'set-status', 'acknowledge-closure'].includes(r.kind)));
     if (busy) { formError('An edit is already pending for this ticket. Wait for its result.'); return; }
   }
-  if (kind === 'completion') {
+  if (kind === 'revise-plan' || kind === 'execute-plan') {
+    if (!appState.online) { formError('Offline: the request was not sent.'); return; }
+    const review = appState.dialog?.review; if (!review) return;
+    if (kind === 'revise-plan') { const text = String(fd.get('text') || '').trim(); if (!text || text.length > 20000) { formError('Enter plan text up to 20000 characters.'); return; } queueDialog({ kind: 'revise-run-plan', target_id: ticketId, expected_revision: revision, payload: { handoff_id: form.dataset.run, expected_plan_revision: Number(form.dataset.planRevision), text } }, { announceText: 'Plan revision requested; review the saved revision before execution' }); }
+    else { if (fd.get('reviewed') !== 'on') return; const payload = { ...intentPayload(fd), ...Object.fromEntries(['source_plan_run_id','source_plan_ref','source_plan_revision','reviewed_context_fingerprint','reviewed_base_commit'].map(k => [k, review[k]])) }; queueDialog({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload }, { announceText: 'Execution requested from the reviewed plan and base commit' }); }
+  } else if (kind === 'generate-update' || kind === 'edit-update' || kind === 'set-update-schedule') {
+    if (!appState.online) { formError('Offline: nothing was submitted.'); return; }
+    const payload = kind === 'generate-update' ? { window_kind: fd.get('window_kind'), scope: updateScope(String(fd.get('scope') || '')), synthesis: fd.get('synthesis') === 'on' } : kind === 'edit-update' ? { update_id: form.dataset.update, expected_revision: revision, text: String(fd.get('text') || '') } : { expected_fingerprint: form.dataset.fingerprint, enabled: fd.get('enabled') === 'on', time: fd.get('time'), weekdays: fd.getAll('weekday').map(Number), scope: updateScope(String(fd.get('scope') || '')), window_kind: fd.get('window_kind'), synthesis: fd.get('synthesis') === 'on', max_budget_usd: Number(fd.get('max_budget_usd')), timeout_seconds: Number(fd.get('timeout_seconds')) };
+    if (kind === 'set-update-schedule' && !payload.weekdays.length) { formError('Select at least one weekday.'); return; }
+    if (kind === 'edit-update') appState.updateDraft = payload.text;
+    submit({ kind, target_id: null, expected_revision: null, payload }).then(() => loadUpdates());
+  } else if (kind === 'link-child') {
+    const child = form.querySelector('[name=child_id]'); if (!child.value || !appState.online) { formError('Choose a task while the worker is connected.'); return; } const option = child.selectedOptions[0];
+    closeDialog(); submit({ kind: 'set-parent', target_id: child.value, expected_revision: Number(option.dataset.revision), payload: { parent_id: ticketId, blocks_parent: fd.get('blocks_parent') === 'true', old_parent_revision: option.dataset.oldParentRevision ? Number(option.dataset.oldParentRevision) : null, new_parent_revision: revision } });
+  } else if (kind === 'create-subtask' || kind === 'set-parent') {
+    if (!appState.online) { formError('Offline: the change was not sent.'); return; }
+    const parent = form.querySelector('[name=parent_id]');
+    const payload = kind === 'create-subtask' ? { title: String(fd.get('title')).trim(), description: String(fd.get('description')).trim(), blocks_parent: fd.get('blocks_parent') === 'true' } : { parent_id: parent.value || null, blocks_parent: parent.value ? fd.get('blocks_parent') === 'true' : null, old_parent_revision: form.dataset.oldParentRevision ? Number(form.dataset.oldParentRevision) : null, new_parent_revision: parent.value ? Number(parent.selectedOptions[0].dataset.revision) : null };
+    closeDialog(); submit({ kind, target_id: ticketId, expected_revision: revision, payload });
+  } else if (kind === 'bulk-priority') {
+    const ids = String(form.dataset.ids || '').split(',').filter(Boolean); const priority = fd.get('priority'); const revisions = JSON.parse(form.dataset.revisions || '{}'); const undo = []; closeDialog();
+    for (const id of ids) { const ticket = ticketById(appState.snapshot, id); if (!ticket || ticket.priority === priority) continue; const requestId = uuidv4(); undo.push(requestId); const sent = submit({ id: requestId, kind: 'set-priority', target_id: id, expected_revision: revisions[id] ?? ticket.revision, payload: { priority } }, { original: { priority: ticket.priority } }); appState.sending.set(requestId, sent); sent.finally(() => appState.sending.delete(requestId)); }
+    appState.bulkUndo = mergeUndo(appState.requests, appState.bulkUndo, undo); render();
+  } else if (kind === 'completion') {
     const completion_mode = fd.get('completion_mode');
     const relationship = fd.get('blocks_parent');
     if (!['evidence', 'children'].includes(completion_mode) || (relationship !== null && !['true', 'false', 'unknown'].includes(relationship))) { formError('Choose a completion mode and parent relationship.'); return; }
@@ -1033,6 +1147,13 @@ function handleSubmit(form) {
     if (!items.length) { appState.dialog = { ...appState.dialog, error: 'Select at least one obligation.' }; render(); return; }
     closeDialog();
     submit({ kind: 'record-deployment', target_id: ticketId, expected_revision: revision, payload: { items } });
+  } else if (kind === 'intent-run') {
+    if (!appState.online) { formError('Offline: the run was not sent.'); return; }
+    const payload = intentPayload(fd);
+    if (payload.permissions.push_branch && !payload.branch) { formError('Choose a non-default destination branch for publishing.'); return; }
+    if (!payload.instructions || payload.instructions.length > 4000) { formError('Enter instructions up to 4000 characters.'); return; }
+    if (['auto','full'].includes(payload.intent) && form.dataset.canEdit !== 'true') { formError('Link or clone a local repository for source edits.'); return; }
+    queueDialog({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: form.dataset.retryOf || null }, { announceText: 'Run requested; task changes require separate acceptance' });
   } else if (kind === 'recipe-run') {
     // Disabled boxes are not submitted: permissions the recipe requires come from the form itself.
     const required = form.dataset.requiresEdit === 'true';
@@ -1045,8 +1166,7 @@ function handleSubmit(form) {
     // Write scopes go only with Autonomous access (their boxes are disabled otherwise, spec §4.3).
     const scopes = payload.access === 'autonomous' ? scopeChoices(fd) : [];
     if (scopes.length) payload.scopes = scopes;
-    closeDialog();
-    submit({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: form.dataset.retryOf || null }, { announceText: `${form.dataset.recipe} run requested; its results arrive as suggestions on the ticket` });
+    queueDialog({ kind: 'handoff', target_id: ticketId, expected_revision: revision, payload, retry_of: form.dataset.retryOf || null }, { announceText: `${form.dataset.recipe} run requested; its results arrive as suggestions on the ticket` });
   } else if (kind === 'attach') {
     const key = String(fd.get('key') ?? '').trim();
     const bind = fd.get('bind') === 'on';
@@ -1176,7 +1296,7 @@ function onClick(e) {
   const open = e.target.closest('[data-open]');
   if (open) { e.preventDefault(); openDetail(open.dataset.open, open); if (DETAIL_TABS.includes(open.dataset.section)) { appState.detailTab = open.dataset.section; render(); $(`#detail-tab-${open.dataset.section}`)?.focus(); } return; }
   const action = e.target.closest('[data-action]');
-  if (action && !['detail-nav', 'status-select'].includes(action.dataset.action)) { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
+  if (action && !['detail-nav', 'status-select', 'priority-select'].includes(action.dataset.action)) { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
   const tab = e.target.closest('[data-view]');
   if (tab) {
     appState.moreOpen = false; setView(tab.dataset.view); render();
@@ -1200,8 +1320,17 @@ function scopeBlockers(form, scoped) {
   }
 }
 
+function clearWorkSelection() {
+  if (appState.checked.size) { appState.checked = new Set(); announce('Filters changed; selection cleared'); }
+  appState.workRevealed.clear(); appState.workLimit = 100;
+}
+
 function onChange(e) {
   const el = e.target;
+  if (el.closest('[data-form="set-update-schedule"]')) appState.updateScheduleEditing = true;
+  if (el.dataset.updateOption) { appState[el.dataset.updateOption === 'scope' ? 'updateScope' : el.dataset.updateOption === 'synthesis' ? 'updateSynthesis' : 'updateWindow'] = el.type === 'checkbox' ? el.checked : el.value; return; }
+  if (el.hasAttribute('data-work-sort')) { appState.workSort = el.value; render(); return; }
+  if (el.dataset.action === 'priority-select') { const t = ticketById(appState.snapshot, el.dataset.ticket); if (t && t.priority !== el.value) submit({ kind: 'set-priority', target_id: t.id, expected_revision: t.revision, payload: { priority: el.value } }, { original: { priority: t.priority } }); return; }
   if (el.name === 'resolution_kind') {
     const form = el.closest('form');
     form.querySelector('[name="resolution_reason"]').required = true;
@@ -1210,12 +1339,28 @@ function onChange(e) {
   if (el.dataset && el.dataset.lease !== undefined) { appState.leases[el.dataset.lease] = el.value; return; }
   if (el.dataset && el.dataset.memoryRepo !== undefined) { appState.memoryRepo = el.value || null; appState.memoryEditing = null; render(); $('#memory-repo')?.focus(); return; }
   if (el.dataset.filter) {
-    appState.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
+    clearWorkSelection();
+    if (el.dataset.filterValue) { const values = new Set(String(appState.filters[el.dataset.filter] || '').split(',').filter(Boolean)); if (el.checked) values.add(el.dataset.filterValue); else values.delete(el.dataset.filterValue); appState.filters[el.dataset.filter] = [...values].join(','); } else appState.filters[el.dataset.filter] = el.type === 'checkbox' ? el.checked : el.value;
     appState.boardPages = {};
     appState.sessionsPage = 0;
     render();
     if (el.dataset.filter !== 'q') $(`#filters [data-filter="${CSS.escape(el.dataset.filter)}"]`)?.focus();
     if (el.dataset.filter === 'q') { const s = $('#search'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
+    return;
+  }
+  const composer = el.closest && el.closest('form[data-form="intent-run"]');
+  if (composer) {
+    const intent = composer.querySelector('[name=intent]:checked').value, edits = ['auto','full'].includes(intent), delivery = composer.querySelector('[data-intent-delivery]');
+    delivery.hidden = !edits; delivery.disabled = !edits;
+    composer.querySelector('[data-full-delivery-note]').hidden = intent !== 'full';
+    composer.querySelector('[data-auto-delivery-note]').hidden = intent === 'full';
+    const commit = composer.querySelector('[name=commit]'), push = composer.querySelector('[name=push_branch]'), pr = composer.querySelector('[name=open_draft_pr]');
+    push.disabled = !edits || !commit.checked; if (push.disabled) push.checked = false;
+    const branch = composer.querySelector('[name=branch]'); branch.disabled = !edits || !push.checked; branch.required = !branch.disabled;
+    pr.disabled = push.disabled || !push.checked || composer.dataset.hasProvider !== 'true'; if (pr.disabled) pr.checked = false;
+    const blocked = composer.dataset.busy === 'true' ? 'A run is already queued or running for this task.' : edits && composer.dataset.canEdit !== 'true' ? 'Link or clone a local repository before requesting source edits.' : '';
+    const note = composer.querySelector('[data-intent-blocker]'); note.textContent = blocked; note.hidden = !blocked;
+    composer.querySelector('[type=submit]').disabled = !!blocked;
     return;
   }
   const runForm = el.closest && el.closest('form[data-form="recipe-run"]');
@@ -1227,7 +1372,7 @@ function onChange(e) {
     const box = (n) => runForm.querySelector(`input[name="${n}"]`);
     const commit = box('commit'), push = box('push_branch'), pr = box('open_draft_pr');
     if (push) { push.disabled = !(commit && commit.checked); if (push.disabled) push.checked = false; }
-    if (pr) { pr.disabled = !(push && push.checked) || !(repo && repo.provider); if (pr.disabled) pr.checked = false; }
+    if (pr) { pr.disabled = !(push && push.checked) || !(repo && (repo.provider_configured ?? repo.provider)); if (pr.disabled) pr.checked = false; }
     const fd = new FormData(runForm);
     const choices = Object.fromEntries(['read_source', 'edit_source', 'commit', 'push_branch', 'open_draft_pr', 'edit_files', 'delete_files'].map((k) => [k, fd.get(k) === 'on' || !!runForm.querySelector(`[name="${k}"][disabled][checked]`)]));
     const out = runForm.querySelector('.run-summary');
@@ -1295,16 +1440,17 @@ export function startApp() {
     const box = form && [...form.querySelectorAll('input[name="scope"]')].find((b) => b.value === t.dataset.scopeTarget);
     if (box && !box.disabled && !box.checked) { box.checked = true; box.dispatchEvent(new Event('change', { bubbles: true })); }
   });
+  document.addEventListener('input', e => { if (e.target.closest('[data-form="set-update-schedule"]')) appState.updateScheduleEditing = true; if (e.target.id === 'update-edit') appState.updateDraft = e.target.value; });
   // A Memory edit's text is kept as it is typed, so a re-render or a failed save never loses it.
   document.addEventListener('input', (e) => { const t = e.target; if (t instanceof HTMLTextAreaElement && t.dataset.memoryDraft) appState.memoryDrafts[t.dataset.memoryDraft] = t.value; });
-  document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { appState.filters.q = e.target.value; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
+  document.addEventListener('input', (e) => { if (e.target.dataset && e.target.dataset.filter === 'q') { clearWorkSelection(); appState.filters.q = e.target.value; render(); const s = $('#search'); if (s && document.activeElement !== s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } } });
   document.addEventListener('submit', (e) => { const form = e.target.closest('form[data-form]'); if (form) { e.preventDefault(); handleSubmit(form); } });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
   window.addEventListener('online', () => poll());
   window.addEventListener('offline', () => { appState.online = false; render(); });
   window.addEventListener('hashchange', () => { readHash(); render(); });
   window.addEventListener('resize', () => render());
-  $('#dialog').addEventListener('close', () => { if (appState.dialog) { appState.dialog = null; render(); } });
+  $('#dialog').addEventListener('close', () => { if (appState.dialog) { closeDialog(); render(); } });
   startCountdown();
   poll();
 }

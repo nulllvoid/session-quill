@@ -29,7 +29,7 @@ export function bulkBarShape({ count = 0, undo = 0 } = {}) {
 export function renderBulkActionBar({ count = 0, undo = 0 } = {}) {
   const actions = count ? `<button type="button" class="btn small" data-action="bulk-handoff" data-mode="analyse">${icon('analysis')}Analyze</button>
   <button type="button" class="btn small" data-action="bulk-handoff" data-mode="attempt-fix">${icon('play')}Attempt fix</button>
-  <button type="button" class="btn small" data-action="bulk-status">Change status</button>
+  <button type="button" class="btn small" data-action="bulk-status">Change status</button><button type="button" class="btn small" data-action="bulk-priority">Change priority</button>
   <button type="button" class="btn small ghost" data-action="bulk-clear">Clear</button>` : '';
   // One label span: the button is a flex row with a gap, which would otherwise space out "Undo all (", the count and ")".
   const undoBtn = undo ? `<button type="button" class="btn small" data-action="bulk-undo-all">${icon('undo')}<span class="bulk-undo-label">Undo all (<span class="bulk-undo-count">${esc(undo)}</span>)</span></button>` : '';
@@ -96,8 +96,8 @@ export function renderBulkResults(rawSnapshot, { batchId = null, rows = [], requ
 
 const BULK_STATUSES = ['todo', 'active', 'review', 'deploy-pending', 'blocked', 'done'];
 
-export function renderBulkStatusDialog(count) {
-  return `<form class="dialog-form bulk-form" data-form="bulk-status">
+export function renderBulkStatusDialog(count, { ids = [], revisions = {} } = {}) {
+  return `<form class="dialog-form bulk-form" data-form="bulk-status" data-ids="${attr(ids.join(','))}" data-revisions="${attr(JSON.stringify(revisions))}">
 <h2 id="dialog-title">Change status of ${esc(countLabel(count, 'ticket'))}</h2>
 <fieldset><legend>New status</legend>${BULK_STATUSES.map((s, i) => `<label><input type="radio" name="status" value="${attr(s)}"${i === 1 ? ' checked' : ''}> ${esc(STATUS_LABELS[s])}</label>`).join('')}</fieldset>
 <label class="label" for="bulk-blocker">Blocker <span class="muted">(required for Blocked)</span></label>

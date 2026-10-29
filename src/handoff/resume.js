@@ -142,6 +142,12 @@ export function resumeFields(h) {
     // supersedes the run whose pull request it pushes to, and the owner resumes it on the dashboard.
     ...(isCiFix(h) ? { origin: 'ci', ci_fix: isPlainObject(h.ci_fix) ? { ...h.ci_fix, failing: Array.isArray(h.ci_fix.failing) ? [...h.ci_fix.failing] : [] } : null } : {}),
   };
+  if (h.intent) {
+    out.intent = h.intent;
+    out.instructions = h.instructions ?? '';
+    out.legacy = false;
+  }
+  for (const key of ['source_plan_run_id', 'source_plan_ref', 'source_plan_revision', 'reviewed_context_fingerprint', 'reviewed_base_commit', 'reviewed_context_ref', 'reviewed_repo_id']) if (Object.hasOwn(h, key)) out[key] = h[key];
   if (!critical) {
     if (!scopes.length) return out;
     // A scoped run is resumed only with the scopes exactly as its grant was frozen (dispatch checks
