@@ -36,7 +36,7 @@ First-release non-goals:
 - Automatic production deployment, merge, approval or tracker publication based on model confidence.
 - A universal environment installer or process supervisor; setup automation comes after readiness is useful.
 - Importing every assigned issue across many accounts. Begin with existing linked/imported issues and current tracker onboarding.
-- A mandatory Jev, LangChain or LangSmith dependency.
+- Jev integration or benchmarking, deferred by the owner on 2026-10-30. No LangChain or LangSmith dependency.
 
 Anti-goals: invented completion percentages, “verified” based on an agent's assertion, another copy of a ticket database, destructive workspace cleanup, automatic transmission of session transcripts to a classifier, or more notification noise.
 
@@ -135,23 +135,13 @@ First make existing execution observable: per-recipe/model completed runs, first
 
 Improve the existing bounded context and failure ledger before adding agents. Reuse valid memory, avoid repeating failed commands without new evidence, expose stale context, and keep test/repair/critic calls within existing run budgets. Preserve one active run per ticket and serialized source-writing runs per repository. Existing read-only concurrency can be used; file-disjoint writable parallelism is a separate future design because merges and shared tests can still conflict.
 
-### Jev experiment and the LangChain harness example
+### Routing scope and deferred Jev exploration
 
-Jev answers typed questions rather than generating code or prose. Candidate uses are recipe choice, task complexity and failure classification. Its schema guarantees are not proof that its judgment is correct. See [TypeSafe introduction](https://docs.typesafe.ai/introduction) and the [launch explanation](https://typesafe.ai/blog/introducing-system-one-models-and-jev).
+On 2026-10-30 the owner asked to drop Jev for now. Its integration and benchmark are removed from the planned work. No TypeSafe account, credential or paid API is required for this roadmap.
 
-The user supplied [LangChain's harness article](https://www.langchain.com/blog/building-a-harness-with-jev). It demonstrates model routing and tool-risk classification. The linked [integration documentation](https://docs.langchain.com/oss/python/integrations/providers/typesafe) describes a Python package with experimental middleware. The router chooses a model for the run; the tool-risk middleware blocks selected calls and does not itself obtain human approval.
+Keep Node ESM, the existing Claude runner and explicit recipe/model selection. Improve deterministic next-action suggestions, bounded context reuse, budget visibility and failure recovery first. Measure improvements on comparable tasks using actual test outcomes, elapsed time and available usage; do not infer task success from a routing label. Quill cannot assume access to every internal `claude -p` model-call boundary, so per-turn cross-provider routing remains outside this design.
 
-**Quill adaptation (our proposal):** use the decision pattern at Quill's existing pre-dispatch boundary. Keep Node ESM and the Claude runner. A small direct TypeSafe HTTP call can be evaluated without importing the Python stack or migrating persistence to LangGraph. Quill cannot assume access to every internal `claude -p` model-call boundary; per-turn cross-provider routing is outside this design. A model recommendation must name an owner-configured model supported by the current runner, and remain within the already approved recipe, access and budget limits.
-
-Start with a developer-run offline evaluation, then an explicitly enabled recommendation-only pilot:
-
-1. Build at least 100 owner-labelled, redacted examples covering routine work, ambiguous tasks, failures and adversarial issue text. Separate tuning from held-out evaluation by task/session so repeated context cannot leak between sets.
-2. Compare deterministic rules, a small general model and Jev for the same bounded decisions. Record disagreement, abstention, latency, cost, owner overrides and downstream verified success; use replay only for classification accuracy, not as proof of execution quality.
-3. For the pilot, send only a previewable bounded task summary and permitted labels. Never send raw session logs, credentials, full tool arguments or private memory by default. Configuration is user-only and disabled by default. Local-only tasks are ineligible.
-4. Validate response structure and enum membership. Record provider/model version, decision, confidence when supplied, input hash, timing and actual usage when available. A three-second total timeout, unavailable credentials, invalid reply or uncertainty returns to the configured default/manual choice. No repeated call in a hook or polling loop.
-5. Recommendations appear in Run agent with their uncertainty and the ability to override. A click selecting a model/recipe is not a grant of additional permissions. Automatic routing is a later change, contingent on held-out evidence and no regression in verified task success; no fixed confidence threshold is declared “safe” in advance.
-
-Tool-risk classification may later add a warning or extra refusal. It can never allow an action the existing deterministic guard refuses, replace an approval pin, waive tests or approve publication. This release does not implement a new probabilistic security gate.
+The previously supplied [LangChain harness article](https://www.langchain.com/blog/building-a-harness-with-jev) remains research background only. Any future classifier experiment needs a new explicit request and a separate evaluation. Existing deterministic guards, approval pins and verification requirements remain authoritative.
 
 ## Later opportunities, ordered by dependency
 
@@ -190,7 +180,7 @@ Receipt replay and git inspection must not block routine snapshot serving. Use b
 
 1B is complete when the same task can create/reuse a safe ticket worktree, refresh limited readiness and preview/confirm a tracker update. Missing repo, runner or credentials has a specific next step. Dirty or foreign worktrees are never removed. Partial writes and unknown remote outcomes remain visible and never trigger automatic duplicate comments.
 
-Required focused tests: reducer replay and stale-review conflicts; attention/count regression; authenticated receipt/brief endpoints; receipt digest equivalence; UI loading/error/keyboard/mobile states; static export and privacy sentinels. Add worktree concurrency/crash and tracker partial-write fixtures with 1B. Run documented UI/browser checks using an isolated store. External-service writes and real Jev cost/latency are separate opt-in integration checks, not claims inferred from mocks.
+Required focused tests: reducer replay and stale-review conflicts; attention/count regression; authenticated receipt/brief endpoints; receipt digest equivalence; UI loading/error/keyboard/mobile states; static export and privacy sentinels. Add worktree concurrency/crash and tracker partial-write fixtures with 1B. Run documented UI/browser checks using an isolated store. External-service writes require separate opt-in integration checks; do not infer them from mocks.
 
 Use a manual seeded scenario covering success and one failure path per increment. Measure the number of context-switching steps before/after on the same task; retain correctness and evidence quality as release requirements even if fewer clicks are achieved.
 
@@ -202,4 +192,4 @@ Choose exact helper names, endpoint spelling, reducer operation naming, file bou
 
 Prepared from the current repository and official Jev/LangChain sources. An independent builder check on 2026-10-30 found no important unanswered planning questions, including after checking current run eligibility and attention handling. Owner design approval remains pending before the implementation plan.
 
-No product implementation, dependencies, external writes or live Jev benchmark are included in this design change. The builder check did not execute tests or validate live external APIs.
+No product implementation, dependencies, external writes or live Jev benchmark are included in this design change. The builder check did not execute tests or validate live external APIs. After the owner deferred Jev, temporary benchmark scaffolding was removed. One tool-disabled Claude connectivity probe completed before cancellation; it was not a routing benchmark and establishes no performance comparison.
