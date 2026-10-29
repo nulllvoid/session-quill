@@ -8,6 +8,7 @@ The design system for Quill's ticket and agent-orchestration UI.
 - [Token map](ui/assets/tokens.json)
 - [Asset manifest](ui/assets/manifest.json)
 - [Current implementation and scope gaps](docs/AGENT-HANDOVER-ORCHESTRATION-1.0.md)
+- [Design-system review and fixes, 30 October 2026](docs/design-system/REVIEW-2026-10-30.md)
 
 Preserve the evergreen/Geist identity implemented in `ui/styles.css`. Historical Graphite Ink and Terminal Slate boards in `docs/ui/` are archived references, not the current visual direction. The older `docs/UI-DESIGN.md` remains useful for behavior contracts; its superseded layout descriptions must be read alongside the current design contract.
 

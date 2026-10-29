@@ -1,6 +1,6 @@
 # Quill Fieldnotes — Claude design system
 
-Version 1.2 · 21 October 2026 · Quill-owned design language.
+Version 1.3 · 30 October 2026 · Quill-owned design language.
 
 This is an implementation contract for Claude and other coding agents working on Quill. It is not a recreation of the Claude app and has no affiliation with Anthropic's brand system.
 
@@ -25,7 +25,7 @@ Preserve the existing green/Geist identity. Use neutral surfaces, one primary ev
 | `ui/styles.css`, `ui/components.js`, current view renderers | Shipped implementation and theme/icon source values |
 | This document | Visual direction, component usage and implementation guidance |
 | `ui/assets/tokens.json` and `tokens.css` | Generated theme snapshot plus additive reference primitives |
-| `docs/design-system/index.html` | Inspectable component examples and the Runs page with example data |
+| `docs/design-system/index.html` | Inspectable component examples and a simplified Runs pattern; not a production screen replica |
 | `docs/AGENT-HANDOVER-ORCHESTRATION-1.0.md` | Known defects, scope gaps and prior validation limits |
 
 `docs/UI-DESIGN.md` is an older behavioral specification. Its “inbox first”, Today/Tree labels and prior visual layouts are superseded by the current UI. Historical `docs/ui/graphite_ink` and `terminal_slate` directions must not be blended into Fieldnotes.
@@ -70,7 +70,7 @@ Use `--border` for separation and `--border-strong` for actionable boundaries. T
 - Use 12–16px within a component, 20–24px between groups, and 24–32px content gutters on desktop.
 - Controls: 6px radius. Ticket cards: 10px. Larger panels: 12px.
 - These effective radii match the current app's later overrides. Legacy `--radius*` variables remain unchanged; the opt-in kit expresses them as `--q-radius-*`.
-- Desktop control height target: 36px; coarse-pointer target: at least 44px. The existing app has some smaller controls; new kit components should not inherit that debt.
+- Desktop control height target: 36px; coarse-pointer target: at least 44px. Compact desktop controls may remain smaller; the dashboard's action buttons, copy controls, filter tokens, tabs, search and selects expand for coarse pointers. Check the actual hit area rather than the icon size.
 - Content maximum: 1320px; expanded ticket reading width approximately 880px.
 - Current sidebar: 224px expanded / 72px collapsed; detail width: 440px. Do not force docking if the remaining work area becomes unusable.
 
@@ -213,6 +213,9 @@ Repository bindings belong to the checkpoint/event that recorded them. A session
 - Test at 390×844, 1024px, 1280×720 and 1440×900. Constrain document overflow; horizontally scrolling filters/tables must remain visibly usable.
 - Preserve every authorized action on narrow layouts. Move secondary navigation to an explicit menu rather than shrinking labels indefinitely.
 - Use native buttons/inputs and visible focus. Do not add nested interactive elements inside a button. A clickable article with separate inner actions needs deliberate keyboard behavior.
+- Sidebar tabs have one visible Tab stop, Up/Down navigation on desktop and Left/Right on phones, plus Home/End. The content panel names its selected tab. Phone overflow views remain available through More.
+- Native dialogs restore focus to their own trigger on close. Do not override that with a ticket drawer's remembered trigger. Standalone reference tab panels without focusable content have `tabindex="0"`.
+- Keep only the detail action bar sticky. Ticket titles and metadata scroll with the content so long headers cannot obscure evidence or section controls.
 - Polling must preserve drafts, focused controls, expanded evidence, selected tabs and scroll. Re-rendering must not repeatedly announce unchanged health.
 - Use stable identities for records and disclosure state; do not key important state solely by array position.
 - Use live regions for meaningful request/run transitions; provide persistent inline failure details.

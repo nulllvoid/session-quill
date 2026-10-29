@@ -199,6 +199,11 @@ function render() {
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
   const workspaceOpen = $('#sidebar .workspace-details')?.open;
   setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen, memory: appState.memory }));
+  const navTabs = [...document.querySelectorAll('#sidebar .nav [role="tab"]')].filter((el) => el.getClientRects().length);
+  const navStop = navTabs.find((el) => el.getAttribute('aria-selected') === 'true') ?? navTabs[0];
+  for (const tab of navTabs) tab.tabIndex = tab === navStop ? 0 : -1;
+  $('#sidebar .nav').setAttribute('aria-orientation', window.innerWidth < 900 ? 'horizontal' : 'vertical');
+  main.setAttribute('aria-labelledby', `tab-${appState.view}`);
   if (workspaceOpen) $('#sidebar .workspace-details').open = true;
   // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
   const healthOpen = [...document.querySelectorAll('#header .health-pop')].flatMap((p, i) => (p.open ? [i] : []));
@@ -874,7 +879,6 @@ function closeDialog() {
   if (host.open) host.close();
   host.innerHTML = '';
   delete host.dataset.key;
-  if (appState.lastFocus && document.contains(appState.lastFocus)) appState.lastFocus.focus();
 }
 
 function visibleTicketIds() {
@@ -1019,6 +1023,15 @@ function onKey(e) {
   if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
   const target = e.target;
   const inInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
+  const navTab = target?.closest('#sidebar .nav [role="tab"]');
+  const navKeys = window.innerWidth < 900 ? ['ArrowLeft', 'ArrowRight'] : ['ArrowUp', 'ArrowDown'];
+  if (navTab && [...navKeys, 'Home', 'End'].includes(e.key)) {
+    e.preventDefault();
+    const tabs = [...document.querySelectorAll('#sidebar .nav [role="tab"]')].filter((el) => el.getClientRects().length);
+    const index = tabs.indexOf(navTab);
+    const next = tabs[e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (index + (e.key === navKeys[1] ? 1 : tabs.length - 1)) % tabs.length];
+    setView(next.dataset.view); render(); $(`#tab-${appState.view}`)?.focus(); return;
+  }
   const runTab = target?.closest('[role="tab"][data-action="run-tab"]');
   if (runTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) {
     e.preventDefault();
@@ -1101,7 +1114,11 @@ function onClick(e) {
   const action = e.target.closest('[data-action]');
   if (action && !['detail-nav', 'status-select'].includes(action.dataset.action)) { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
   const tab = e.target.closest('[data-view]');
-  if (tab) { appState.moreOpen = false; setView(tab.dataset.view); render(); return; }
+  if (tab) {
+    appState.moreOpen = false; setView(tab.dataset.view); render();
+    const selected = $(`#tab-${appState.view}`);
+    (selected?.getClientRects().length ? selected : $('.nav-more'))?.focus(); return;
+  }
   const card = e.target.closest('#main [data-ticket][role=button]');
   if (card && !e.target.closest('button, a, [data-copy]')) openDetail(card.dataset.ticket, card);
 }

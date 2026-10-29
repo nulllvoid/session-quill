@@ -19,8 +19,8 @@ before(async () => {
     }
     try {
       const file = pathname === '/' ? 'ui/index.html' : pathname.slice(1);
-      if (!file.startsWith('ui/') || file.includes('..')) { res.writeHead(404).end(); return; }
-      res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'text/html');
+      if ((!file.startsWith('ui/') && !file.startsWith('docs/design-system/')) || file.includes('..')) { res.writeHead(404).end(); return; }
+      res.setHeader('Content-Type', file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : file.endsWith('.svg') ? 'image/svg+xml' : file.endsWith('.json') ? 'application/json' : 'text/html');
       res.end(await readFile(new URL(`../../${file}`, import.meta.url)));
     } catch { res.writeHead(404).end(); }
   });
@@ -143,4 +143,100 @@ test('mobile detail and run dialog fit long ticket data and retain keyboard navi
   assert.equal(await page.locator('#dialog').evaluate(el => el.scrollWidth <= el.clientWidth), true);
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#dialog').evaluate(el => el.open), false);
+});
+
+test('closing a dialog returns focus to its own trigger after another action', async () => {
+  await open();
+  await page.locator('[data-action="help"]').click();
+  await page.keyboard.press('Escape');
+  const trigger = page.locator('.card [data-action="handoff"]').first();
+  await trigger.click();
+  await page.keyboard.press('Escape');
+  assert.equal(await trigger.evaluate(el => el === document.activeElement), true);
+});
+
+test('sidebar tabs support arrows, a single tab stop, and a labelled panel', async () => {
+  await open();
+  await page.locator('#tab-picknext').focus(); await page.keyboard.press('ArrowDown');
+  assert.match(page.url(), /view=board/);
+  assert.equal(await page.locator('#tab-board').evaluate(el => el === document.activeElement), true);
+  assert.equal(await page.locator('#sidebar [role="tab"]').evaluateAll(els => els.filter(el => el.tabIndex === 0).length), 1);
+  assert.equal(await page.locator('#main').getAttribute('aria-labelledby'), 'tab-board');
+  await page.keyboard.press('End'); assert.match(page.url(), /view=memory/);
+  await page.keyboard.press('Home'); assert.match(page.url(), /view=picknext/);
+});
+
+test('touch controls meet the design system minimum on phones', async () => {
+  await context.close();
+  context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, reducedMotion: 'reduce' });
+  page = await context.newPage(); page.on('pageerror', e => errors.push(e.message));
+  await open();
+  const short = await page.locator('.btn, #search').evaluateAll(els => els.filter(el => el.getClientRects().length && !el.closest('details:not([open]) .popover')).map(el => ({ label: el.getAttribute('aria-label') || el.textContent, height: el.getBoundingClientRect().height })).filter(el => el.height < 44));
+  assert.deepEqual(short, []);
+  await page.locator('.card').first().click();
+  const detailShort = await page.locator('#detail .btn, #detail select, #detail .detail-tabs button').evaluateAll(els => els.filter(el => el.getClientRects().length).map(el => ({ label: el.getAttribute('aria-label') || el.textContent, height: el.getBoundingClientRect().height })).filter(el => el.height < 44));
+  assert.deepEqual(detailShort, []);
+});
+
+test('long ticket headers do not cover the content while scrolling', async () => {
+  data.tickets[0].title = 'Long title with important evidence '.repeat(30);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(); await page.locator('.card').first().click();
+  const tab = page.locator('#detail-tab-activity');
+  await tab.scrollIntoViewIfNeeded();
+  assert.equal(await tab.evaluate(el => { const r = el.getBoundingClientRect(); return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); }), true);
+});
+
+test('design reference panels are keyboard reachable and theme control has a stable name', async () => {
+  await page.goto(base + '/docs/design-system/index.html');
+  await page.waitForSelector('.icon-tile');
+  await page.locator('#tab-needs').focus(); await page.keyboard.press('ArrowRight');
+  assert.equal(await page.locator('#tab-live').getAttribute('aria-selected'), 'true');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.locator('#panel-live').evaluate(el => el === document.activeElement), true);
+  const before = await page.locator('#theme').innerText();
+  await page.locator('#theme').click();
+  assert.equal(await page.locator('#theme').innerText(), before);
+  assert.equal(await page.locator('#theme').getAttribute('aria-pressed'), 'true');
+});
+
+test('design reference controls work before the icon catalog finishes loading', async () => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/ui/assets/manifest.json', async route => { await held; await route.continue(); });
+  try {
+    await page.goto(base + '/docs/design-system/index.html', { waitUntil: 'domcontentloaded' });
+    await page.locator('#tab-needs').focus(); await page.keyboard.press('ArrowRight');
+    assert.equal(await page.locator('#tab-live').getAttribute('aria-selected'), 'true');
+    await page.locator('#icon-search').fill('queue');
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+  const manifest = JSON.parse(await readFile(new URL('../../ui/assets/manifest.json', import.meta.url), 'utf8'));
+  const count = manifest.files.filter(f => f.role === 'icon' && f.path !== 'icons/sprite.svg').length;
+  await page.waitForFunction(count => document.querySelectorAll('.icon-tile').length === count, count);
+  assert.deepEqual(await page.locator('.icon-tile:visible').evaluateAll(els => els.map(el => el.dataset.name)), ['queue']);
+});
+
+test('design reference fits four viewport sizes in both themes and loads its images', async () => {
+  await page.goto(base + '/docs/design-system/index.html');
+  for (const width of [390, 1024, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const theme of ['light', 'dark']) {
+      if (await page.locator('html').getAttribute('data-theme') !== theme) await page.locator('#theme').click();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `reference ${theme} ${width}px`);
+      await page.waitForFunction(() => [...document.images].every(img => img.complete && img.naturalWidth > 0));
+    }
+  }
+});
+
+test('phone navigation skips hidden tabs and keeps More views reachable', async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open();
+  await page.locator('#tab-picknext').focus(); await page.keyboard.press('End');
+  assert.match(page.url(), /view=today/);
+  await page.keyboard.press('ArrowRight'); assert.match(page.url(), /view=picknext/);
+  await page.locator('[data-action="toggle-more"]').first().click();
+  await page.locator('#more-sheet [data-view="sessions"]').click();
+  assert.equal(await page.locator('.nav-more').evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await page.locator('#tab-picknext').evaluate(el => el === document.activeElement), true);
 });

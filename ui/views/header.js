@@ -29,7 +29,7 @@ function navButton(item, { view, counts, needs }) {
   const badge = counts[id] ?? 0;
   const dot = id === 'runs' && needs ? '<span class="attention-dot" aria-hidden="true"></span>' : '';
   const name = id === 'runs' ? `${label}, ${badge} live${needs ? `, ${needs} need${needs === 1 ? 's' : ''} you` : ''}` : `${label}, ${badge} items`;
-  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${attr(name)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}">${icon(ic)}<span class="nav-label">${esc(label)}</span>${dot}<span class="badge" aria-hidden="true" title="Shortcut ${key}">${esc(badge)}</span></button>`;
+  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${attr(name)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}" tabindex="${view === id ? 0 : -1}">${icon(ic)}<span class="nav-label">${esc(label)}</span>${dot}<span class="badge" aria-hidden="true" title="Shortcut ${key}">${esc(badge)}</span></button>`;
 }
 
 // The views this dashboard offers: an export or read-only snapshot leaves out the owner-only ones.
