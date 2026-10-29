@@ -63,6 +63,16 @@ CI runs the suite on Ubuntu, macOS and Windows with Node 22 and 24.
 - Acceptance tests are named after their scenario id (`A08 …`) so [docs/ACCEPTANCE-RESULTS.md](docs/ACCEPTANCE-RESULTS.md) can point at them.
 - Hook fixtures in `tests/fixtures/hooks/` use the exact field names from the Claude Code hooks reference. If you change them, say which host version you verified against.
 
+### Browser interaction checks
+
+The dashboard browser suite uses an isolated loopback server and fixture data. It checks keyboard actions, native controls, drafts and disclosures across polling, pagination, and mobile/desktop layouts in both themes. It needs an existing Playwright installation and Chrome; it is separate from the dependency-free `npm test` suite.
+
+```bash
+NODE_PATH=/path/to/node_modules node --test tests/ui/browser.mjs
+```
+
+Set `PLAYWRIGHT_CHANNEL` to use another installed Chromium channel, such as `msedge`.
+
 ## Project layout
 
 ```

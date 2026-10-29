@@ -10,6 +10,7 @@ export function renderSessions(rawSnapshot, filters, { now, page = 0, selected =
   sessions.sort((a, b) => (order[a.state] - order[b.state]) || (a.last_event_at < b.last_event_at ? 1 : -1));
   if (!sessions.length) return `<section class="view view-sessions" aria-labelledby="tab-sessions">${emptyState('No sessions recorded', 'Sessions appear when a Claude Code session with the plugin loaded starts. Live means recent activity, not a running process.')}</section>`;
   const pages = Math.ceil(sessions.length / SESSIONS_PAGE_SIZE);
+  page = Math.max(0, Math.min(page, pages - 1));
   const machines = [...new Set(snapshot.sessions.map((s) => s.machine_name))];
   const multiMachine = machines.length > 1;
   const rows = sessions.slice(page * SESSIONS_PAGE_SIZE, (page + 1) * SESSIONS_PAGE_SIZE).map((s) => {
@@ -27,7 +28,7 @@ export function renderSessions(rawSnapshot, filters, { now, page = 0, selected =
     return `<tr data-session="${attr(s.id)}">
   <td><div class="session-title">${s.title ? esc(s.title) : '<span class="muted">Untitled session</span>'}</div><div class="small muted"><span class="session-id" title="${attr(s.host_session_id)}">${esc(String(s.host_session_id ?? '').slice(0, 8))}</span>${s.agent_id ? ` · agent ${esc(s.agent_id)}` : ''}${multiMachine ? ` · ${esc(s.machine_name)}` : ''}</div></td>
   <td>${sessionChip(s.state)}</td>
-  <td>${current ? `<button type="button" class="link" data-open="${attr(current.id)}">${keyEl(current.key)}</button>` : '<span class="muted">Unbound</span>'}${history.length ? `<div class="small muted">Earlier: ${history.map((h) => `<button type="button" class="link" data-open="${attr(h.id)}">${esc(h.key)}</button>`).join(', ')}</div>` : ''}<details class="session-metadata"><summary class="small muted">Session details</summary><div class="small muted">Binding revision ${esc(s.current_binding_revision)}<br>${esc(s.host_session_id)}</div></details></td>
+  <td>${current ? `<button type="button" class="link" data-open="${attr(current.id)}">${keyEl(current.key)}</button>` : '<span class="muted">Unbound</span>'}${history.length ? `<div class="small muted">Earlier: ${history.map((h) => `<button type="button" class="link" data-open="${attr(h.id)}">${esc(h.key)}</button>`).join(', ')}</div>` : ''}<details class="session-metadata" data-disclosure="session-${attr(s.id)}"><summary class="small muted">Session details</summary><div class="small muted">Binding revision ${esc(s.current_binding_revision)}<br>${esc(s.host_session_id)}</div></details></td>
   <td>${timeEl(s.started_at, now, tz)}</td>
   <td>${esc(s.successful_write_count)} <span class="small muted">/ ${esc(s.change_coverage)}</span></td>
   <td class="preview">${s.last_checkpoint_preview ? `<span title="${attr(s.last_checkpoint_preview.slice(0, 300))}">${esc(s.last_checkpoint_preview.slice(0, 180))}${s.last_checkpoint_preview.length > 180 ? '…' : ''}</span>${checkpointTicket ? `<button type="button" class="link small" data-open="${attr(checkpointTicket.id)}" data-section="activity">View checkpoints on ${esc(checkpointTicket.key)}</button>` : ''}` : '<span class="muted" aria-label="none">-</span>'}${current?.next_action ? `<p class="small"><strong>Next on ${esc(current.key)}</strong> ${esc(current.next_action)}</p>` : ''}</td>

@@ -434,10 +434,17 @@ function renderDetailPanel(now, pending) {
   const editing = active && panel.contains(active) && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
   if (editing) return; // never clobber an in-progress edit on poll
   const key = ticket ? ticket.id : `run:${runId}`;
+  const disclosures = renderedDetail === key ? [...panel.querySelectorAll('[data-disclosure][open]')].map((el) => el.dataset.disclosure) : [];
+  const draft = renderedDetail === key ? panel.querySelector('form[data-form="next-action"] textarea') : null;
+  const nextDraft = draft && draft.value !== draft.defaultValue ? { value: draft.value, revision: draft.form.dataset.revision } : null;
   const html = ticket
     ? renderDetail(ticket, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, loadedTicket: appState.loadedTicket, editingNext: appState.editingNext === ticket.id, tab: appState.detailTab, expanded: appState.detailExpanded, leases: appState.leases })
     : run ? renderRunDetail(run, s, { now, pending, content: appState.content, contentStatus: appState.contentStatus, memory: appState.memory, ...runRecordFor(run, s), ...runBlobsFor(run, s) }) : renderRunNotFound(runId);
   setMarkup(panel, html);
+  for (const id of disclosures) { const el = panel.querySelector(`[data-disclosure="${CSS.escape(id)}"]`); if (el) el.open = true; }
+  // Preserve both the draft and its original revision so concurrent edits still conflict.
+  const nextField = nextDraft && panel.querySelector('form[data-form="next-action"] textarea');
+  if (nextField) { nextField.value = nextDraft.value; nextField.form.dataset.revision = nextDraft.revision; }
   // A different ticket or run starts at its title, not at the previous one's scroll offset.
   if (renderedDetail !== key) { panel.scrollTop = 0; renderedDetail = key; }
   if (activeId) { const el = panel.querySelector(`#${CSS.escape(activeId)}`) || panel.querySelector(`[data-action="${CSS.escape(activeId)}"]`); if (el) { el.focus(); if (selectionStart !== null && el.setSelectionRange) el.setSelectionRange(selectionStart, selectionStart); } }
@@ -1009,6 +1016,7 @@ function handleSubmit(form) {
 }
 
 function onKey(e) {
+  if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
   const target = e.target;
   const inInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
   const runTab = target?.closest('[role="tab"][data-action="run-tab"]');
@@ -1060,7 +1068,7 @@ function onKey(e) {
   if (SHORTCUT_VIEWS[e.key] && ownerView(SHORTCUT_VIEWS[e.key])) { appState.moreOpen = false; setView(SHORTCUT_VIEWS[e.key]); render(); const tab = $(`#tab-${appState.view}`); if (tab) tab.focus(); return; }
   if (e.key === '?') { appState.lastFocus = document.activeElement; appState.dialog = { type: 'help' }; render(); return; }
   const card = target && target.closest ? target.closest('[data-ticket][role=button]') : null;
-  if (card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
+  if (card && target === card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openDetail(card.dataset.ticket, card); return; }
   const bulkKey = BULK_VIEWS.has(appState.view) && appState.snapshot && appState.snapshot.capabilities && (appState.snapshot.capabilities.handoff || appState.snapshot.capabilities.edit_tickets) ? selectionKey(e.key, { focusedId: card ? card.dataset.ticket : null, checkedSize: appState.checked.size, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey }) : null;
   if (bulkKey && bulkKey.type === 'toggle') {
     e.preventDefault();
@@ -1091,7 +1099,7 @@ function onClick(e) {
   const open = e.target.closest('[data-open]');
   if (open) { e.preventDefault(); openDetail(open.dataset.open, open); if (DETAIL_TABS.includes(open.dataset.section)) { appState.detailTab = open.dataset.section; render(); $(`#detail-tab-${open.dataset.section}`)?.focus(); } return; }
   const action = e.target.closest('[data-action]');
-  if (action && action.dataset.action !== 'detail-nav') { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
+  if (action && !['detail-nav', 'status-select'].includes(action.dataset.action)) { e.preventDefault(); appState.lastFocus = appState.lastFocus ?? action; handleAction(action); return; }
   const tab = e.target.closest('[data-view]');
   if (tab) { appState.moreOpen = false; setView(tab.dataset.view); render(); return; }
   const card = e.target.closest('#main [data-ticket][role=button]');
