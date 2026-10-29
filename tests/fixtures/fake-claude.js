@@ -159,7 +159,14 @@ function run() {
       spawnSync('git', ['add', '-A'], { cwd: process.cwd() });
       spawnSync('git', ['-c', 'user.name=Fake agent', '-c', 'user.email=fake@example.invalid', 'commit', '-qm', 'Agent committed fix'], { cwd: process.cwd() });
     }
-    if (!resumed && process.env.FAKE_CLAUDE_BREAK_GIT === '1') fs.writeFileSync(path.join(process.cwd(), '.git'), 'gitdir: /nonexistent-quill-probe-git-dir\n');
+    if (!resumed && process.env.FAKE_CLAUDE_BREAK_GIT === '1') {
+      // Git hides this file on Windows, where opening an existing hidden file with 'w' fails.
+      const fd = fs.openSync(path.join(process.cwd(), '.git'), 'r+');
+      try {
+        fs.ftruncateSync(fd, 0);
+        fs.writeFileSync(fd, 'gitdir: /nonexistent-quill-probe-git-dir\n');
+      } finally { fs.closeSync(fd); }
+    }
     if (process.env.FAKE_CLAUDE_REPAIR_EDIT && resumed && /tests failed/i.test(prompt)) {
       const file = path.join(process.cwd(), process.env.FAKE_CLAUDE_REPAIR_EDIT);
       fs.appendFileSync(file, '\n// repaired by fake-claude\n');
