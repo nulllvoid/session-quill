@@ -43,7 +43,7 @@ Both themes were checked at 1440, 1366×768, 1024, 768 and 390 px. At 1366×768 
 ## Final check results
 
 - `npm test`: **5,182 tests; 5,174 passed, 8 platform-specific skips, zero failures** (87.4 seconds on Node 26.5 / macOS).
-- `node --test tests/ui/browser.mjs` with the bundled Playwright runtime: **41 passed, zero failures/skips**. This was independently rerun by the integration agent after domain verification.
+- `node --test tests/ui/browser.mjs` with the bundled Playwright runtime: **42 passed, zero failures/skips**. This was independently rerun by the integration agent after domain verification, including Advanced template search with 40 templates at phone width.
 - `node scripts/install-smoke.mjs`: **7/7 steps passed** (fresh setup, hooks, first ticket, status and dashboard owner link in an isolated temporary store).
 - `git diff --check`: clean. No dependency additions or live owner configuration changes.
 - Fresh independent code review: all six reported defects resolved; retained request identity after an ambiguous submission was also fixed and browser-tested. Final audits added Daily bookkeeping purity, real provider capability, objective recovery and evidence-budget priority regressions.

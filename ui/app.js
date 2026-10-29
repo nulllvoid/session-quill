@@ -1206,6 +1206,7 @@ function handleSubmit(form) {
 function onKey(e) {
   if (e.defaultPrevented || e.isComposing || e.ctrlKey || e.metaKey || e.altKey) return;
   const target = e.target;
+  if (e.key === 'Enter' && target?.matches('[data-template-search]')) { e.preventDefault(); return; }
   const inInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
   const navTab = target?.closest('#sidebar .nav [role="tab"]');
   const navKeys = window.innerWidth < 900 ? ['ArrowLeft', 'ArrowRight'] : ['ArrowUp', 'ArrowDown'];
@@ -1432,6 +1433,13 @@ export function startApp() {
     // A run's diff file stays open or closed as the owner left it across polls (ADR 0040).
     if (d instanceof HTMLDetailsElement && d.dataset.diffFile) appState.diffOpen[d.dataset.diffFile] = d.open;
   }, true);
+  document.addEventListener('input', (e) => {
+    if (!e.target.matches('[data-template-search]')) return;
+    const panel = e.target.closest('.advanced'), query = e.target.value.trim().toLocaleLowerCase();
+    const templates = [...panel.querySelectorAll('[data-recipe]')];
+    for (const button of templates) button.hidden = !button.textContent.toLocaleLowerCase().includes(query);
+    panel.querySelector('[data-template-empty]').hidden = templates.some(button => !button.hidden);
+  });
   // Typing a scope's target ticks its box (review M5), so a typed target is never silently dropped.
   document.addEventListener('input', (e) => {
     const t = e.target;

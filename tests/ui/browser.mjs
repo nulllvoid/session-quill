@@ -530,3 +530,15 @@ test('unconfigured Daily schedule offers setup without enabling it and shows nex
  await open('#view=updates'); await page.locator('[data-action="configure-update-schedule"]').click(); assert.equal(await page.locator('[data-disclosure="update-schedule"]').evaluate(d=>d.open),true); assert.equal(await page.locator('[name="enabled"]').isChecked(),false); assert.equal(await page.locator('[name="enabled"]').evaluate(e=>e===document.activeElement),true);
  assert.match(await page.locator('[data-disclosure="update-schedule"]').textContent(),/Next run: Not scheduled/); assert.match(await page.locator('[data-disclosure="update-schedule"]').textContent(),/Latest result: failed/); assert.match(await page.locator('[data-disclosure="update-schedule"]').textContent(),/Evidence input missing/);
 });
+
+test('Advanced template search filters names and descriptions locally without losing the composer draft or focus', async () => {
+ data.recipes=Array.from({length:40},(_,i)=>({name:`template-${i}`,description:i===17?'Review database migrations':'General repository inspection',mode:'source',permissions:{read_source:true},timeout_min:20}));
+ await page.setViewportSize({width:390,height:844}); await open('#view=work'); await page.locator('.work-row [data-action="handoff"]').first().click();
+ await page.locator('[name="instructions"]').fill('Keep this objective while choosing a template'); await page.locator('#dialog .advanced summary').click();
+ const search=page.getByRole('searchbox',{name:'Search templates'}), matches=page.locator('.legacy-template-list [data-recipe]:visible');
+ await search.fill('  DATABASE  '); assert.equal(await matches.count(),1); assert.equal(await matches.first().getAttribute('data-recipe'),'template-17'); assert.equal(await search.evaluate(el=>el===document.activeElement),true);
+ data.generation_id+='-search'; await refresh(); assert.equal(await search.inputValue(),'  DATABASE  '); assert.equal(await matches.count(),1); assert.equal(await page.locator('[name="instructions"]').inputValue(),'Keep this objective while choosing a template'); assert.equal(await search.evaluate(el=>el===document.activeElement),true);
+ await search.press('Enter'); assert.equal(await page.locator('#dialog').evaluate(el=>el.open),true); await search.fill('template-3'); assert.equal(await matches.count(),11); await search.fill('not-a-template'); assert.equal(await matches.count(),0); assert.equal(await page.getByText('No templates match your search.').isVisible(),true);
+ await search.fill(''); assert.equal(await matches.count(),40); assert.equal(await page.getByText('No templates match your search.').isVisible(),false);
+ const cancel=page.locator('.composer-footer [data-action="close-dialog"]'); const bounds=await cancel.boundingBox(); assert.ok(bounds.y>=0&&bounds.y+bounds.height<=844,'Cancel stays inside the viewport'); await cancel.click(); assert.equal(await page.locator('#dialog').evaluate(el=>el.open),false);
+});
