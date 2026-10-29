@@ -64,3 +64,21 @@ test('a cancelled retry followed by successful evidence resolves an earlier fail
  const s=snapshot({tickets:[t],handoffs:[fail,{id:'cancelled',ticket_id:t.id,state:'cancelled',requested_at:'2026-01-02T00:00:00Z'},{id:'success',ticket_id:t.id,state:'done',requested_at:'2026-01-03T00:00:00Z'}]});
  assert.equal(needsYou(s,fail,'2026-10-30T00:00:00Z'),false);
 });
+
+test('work overview counts only matching tasks, including nested matches without counting context ancestors', () => {
+ const s = data(); s.tickets[2].status = 'done';
+ const h = renderWork(s, {q:'needle'}, {lens:'all'});
+ assert.match(h, /aria-label="1 of 1 matching tasks marked done"/);
+ assert.match(h, />100%<\/text>/);
+ assert.match(h, /class="pulse-label">Work in view<\/span><strong>1<span> task<\/span>/);
+ const empty = renderWork(s, {q:'absent'}, {lens:'all'});
+ assert.match(empty, /aria-label="0 of 0 matching tasks marked done"/);
+ assert.doesNotMatch(empty, /NaN|Infinity/);
+});
+
+test('subtask meters accept only numeric rollups and clamp invalid completion values', () => {
+ const s = snapshot({tickets:[ticket(1,{work_rollup:{required_total:'" onmouseover="bad',required_completed:1}})]});
+ assert.doesNotMatch(renderWork(s), /<meter|onmouseover=/);
+ const valid = snapshot({tickets:[ticket(1,{work_rollup:{required_total:3,required_completed:8}})]});
+ assert.match(renderWork(valid), /<meter min="0" max="3" value="3"/);
+});

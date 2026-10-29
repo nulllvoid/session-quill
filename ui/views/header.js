@@ -9,12 +9,13 @@ export const NAV_ITEMS = [
 ];
 export const OWNER_ONLY_VIEWS = new Set(['memory', 'updates']);
 export const PHONE_PRIMARY = new Set(['work', 'runs', 'updates', 'sessions']);
-const GROUP_LABELS = { work: 'Workspace', track: 'More' };
+const GROUP_LABELS = { work: 'Workspace', track: 'Insights' };
 export const SHORTCUT_VIEWS = { 1: 'work', 2: 'runs', 3: 'updates', 4: 'sessions', 5: 'deployments', 6: 'today', 7: 'runs', 8: 'memory' };
 
 export function renderPageHeading(view, snapshot) {
   const label = NAV_ITEMS.find(([id]) => id === view)?.[1] ?? 'Work';
-  return `<header class="page-heading"><h1>${esc(label)}</h1><span class="workspace-label">${icon('branch')}${esc(snapshot.meta.store_name || 'Local workspace')}</span></header>`;
+  const descriptions = { work: 'A clear view of what moves your work forward.', runs: 'Follow your agents. Review what needs you.', updates: 'Turn recorded work into a readable daily brief.', sessions: 'Pick up the context of every coding session.', today: 'The story of your work, as it happens.', deployments: 'Track the path from merged code to production.', memory: 'The knowledge your next session starts with.' };
+  return `<header class="page-heading"><div><h1>${esc(label)}</h1><p class="page-description">${descriptions[view] || descriptions.work}</p></div><span class="workspace-label">${icon('branch')}${esc(snapshot.meta.store_name || 'Local workspace')}</span></header>`;
 }
 
 export function logoSvg() {
@@ -26,7 +27,7 @@ function navButton(item, { view, counts, needs }) {
   const badge = counts[id] ?? 0;
   const dot = id === 'runs' && needs ? '<span class="attention-dot" aria-hidden="true"></span>' : '';
   const name = id === 'runs' ? `${label}, ${badge} live${needs ? `, ${needs} need${needs === 1 ? 's' : ''} you` : ''}` : label;
-  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${attr(name)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}" tabindex="${view === id ? 0 : -1}">${icon(ic)}<span class="nav-label">${esc(label)}</span>${dot}${id === 'runs' && badge ? `<span class="badge" aria-hidden="true" title="Live runs">${esc(badge)}</span>` : ''}</button>`;
+  return `<button type="button" role="tab" class="nav-item${PHONE_PRIMARY.has(id) ? '' : ' nav-overflow'}" title="${esc(label)}" aria-label="${attr(name)}" data-view="${id}" id="tab-${id}" aria-selected="${view === id ? 'true' : 'false'}" aria-controls="main" aria-keyshortcuts="${key}" tabindex="${view === id ? 0 : -1}">${icon(ic)}<span class="nav-label">${esc(label)}</span><kbd class="nav-shortcut" aria-hidden="true">${key}</kbd>${dot}${id === 'runs' && badge ? `<span class="badge" aria-hidden="true" title="Live runs">${esc(badge)}</span>` : ''}</button>`;
 }
 
 // The views this dashboard offers: an export or read-only snapshot leaves out the owner-only ones.
@@ -51,16 +52,17 @@ export function renderSidebar(rawSnapshot, { view = 'picknext', endpoint = null,
   const needs = snapshot && now && !isStatic ? needsYouCount(snapshot, now, memory) : 0;
   const opts = { view, counts, needs, moreOpen, isStatic };
   const conn = isStatic ? 'snapshot' : online ? 'online' : 'offline';
-  return `<div class="sidebar-brand">${logoSvg()}<div class="brand-text"><span class="brand-name">Session Quill</span><span class="brand-sub">${isStatic ? 'Snapshot' : 'Local'}${meta ? ` · v${esc(meta.tracker_version)}` : ''}</span></div></div>
-<button type="button" class="btn small ghost sidebar-toggle" data-action="toggle-sidebar" aria-label="${collapsed ? 'Expand navigation' : 'Collapse navigation'}" aria-expanded="${!collapsed}">${icon('machine')}<span class="nav-label">Collapse navigation</span></button><div class="nav" role="tablist" aria-label="Views">${navGroups(opts)}</div>${moreControl(opts)}
+  return `<div class="sidebar-brand">${logoSvg()}<div class="brand-text"><span class="brand-name">Session Quill</span><span class="brand-sub">${isStatic ? 'Read-only snapshot' : esc(meta?.store_name || 'Local workspace')}</span></div></div>
+<div class="nav" role="tablist" aria-label="Views">${navGroups(opts)}</div>${moreControl(opts)}
 ${meta ? `<details class="sidebar-section workspace-details"><summary>Workspace details</summary>
 <dl class="context-list">
   <div><dt>Store</dt><dd title="${attr(meta.store_name)}">${esc(meta.store_name)}</dd></div>
   <div><dt>Timezone</dt><dd title="${attr(meta.timezone)}">${esc(meta.timezone)}</dd></div>
+  <div><dt>Version</dt><dd>${esc(meta.tracker_version)}</dd></div>
   <div><dt>Schema</dt><dd>${esc(meta.schema_version)}</dd></div>
   <div><dt>Stale</dt><dd${meta.stale_ticket_count ? ' class="stale-count"' : ''}>${esc(meta.stale_ticket_count)} ticket${meta.stale_ticket_count === 1 ? '' : 's'}</dd></div>
 </dl></details>` : ''}
-<div class="sidebar-foot">
+<div class="sidebar-foot"><button type="button" class="btn small ghost sidebar-toggle" data-action="toggle-sidebar" aria-label="${collapsed ? 'Expand navigation' : 'Collapse navigation'}" aria-expanded="${!collapsed}">${icon('collapse')}<span class="nav-label">${collapsed ? 'Expand navigation' : 'Collapse navigation'}</span></button>
   <div class="conn" data-connection="${conn}"><span class="dot" aria-hidden="true"></span><span class="conn-text"><strong>${isStatic ? 'Read-only snapshot' : online ? 'Connected' : 'Worker offline'}</strong><span>${isStatic ? `Exported ${esc(meta.exported_at)}` : esc(endpoint ?? '127.0.0.1')}</span></span></div>
 </div>`;
 }
@@ -175,7 +177,7 @@ export function renderFilterBar(rawSnapshot, f = EMPTY_FILTERS, { work = false }
   const workControls = work ? [['status', 'Status', STATUS_ORDER], ['priority', 'Priority', ['P0','P1','P2','P3']]].map(([key, label, choices]) => `<details class="health-pop work-filter"><summary class="btn small">${label}${f[key] ? ` · ${esc(f[key])}` : ''}</summary><div class="popover" role="group" aria-label="${label} filter">${choices.map(value => `<label class="check"><input type="checkbox" data-filter="${key}" data-filter-value="${value}"${String(f[key] || '').split(',').includes(value) ? ' checked' : ''}>${esc(value)}</label>`).join('')}</div></details>`).join('') : '';
 
   const workMore = work ? ['blocked','attention','active_run','ready','unresolved'].map(k => `<label class="check"><input type="checkbox" data-filter="${k}"${f[k] ? ' checked' : ''}>${({ blocked: 'Blocked', attention: 'Needs attention', active_run: 'Active run', ready: 'Ready to close', unresolved: 'Unresolved parent or repository' })[k]}</label>`).join('') : '';
-  return `${workControls}<details class="filter-pop health-pop"><summary class="btn small ghost">${icon('search')}Filter${n ? ` · ${n}` : ''}</summary><div class="popover filter-popover" role="group" aria-label="Filters">${controls}${workMore}</div></details>${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
+  return `${workControls}<details class="filter-pop health-pop"><summary class="btn small ghost">${icon('analysis')}Filters${n ? ` · ${n}` : ''}</summary><div class="popover filter-popover" role="group" aria-label="Filters">${controls}${workMore}</div></details>${tokens.length ? `<div class="tokens">${tokens.join('')}<button type="button" class="link small" data-action="clear-filters">Clear all</button></div>` : ''}`;
 }
 
 export function renderReceipt(receipt, { online }) {
@@ -198,9 +200,11 @@ export function renderHeader(rawSnapshot, { now, online, refresh, theme, filters
   </div></details>`; })()}
   <div class="topbar-actions">
     ${openProposals(snapshot).length ? `<button type="button" class="btn small attention-button" data-action="review-proposals" aria-label="${openProposals(snapshot).length} awaiting approval">${icon('alert')}${openProposals(snapshot).length}<span class="action-label"> awaiting approval</span></button>` : ''}
+    ${caps.export || !isStatic && (snapshot.schedules.length || (snapshot.publishers ?? []).length) ? `<details class="health-pop tools-pop"><summary class="btn small ghost" aria-label="Workspace tools">${icon('machine')}<span class="action-label">Tools</span>${icon('chevron')}</summary><div class="popover tools-menu" role="group" aria-label="Workspace tools">
     ${snapshot.schedules.length && !isStatic ? `<button type="button" class="btn small ghost" data-action="schedules" aria-label="Schedules">${icon('clock')}<span class="action-label">Schedules</span></button>` : ''}
     ${(snapshot.publishers ?? []).length && !isStatic ? `<button type="button" class="btn small ghost" data-action="publishers" aria-label="Publish" data-publish-state="${snapshot.publishers.some((p) => p.last_outcome === 'failed' || !p.confirmed) ? 'attention' : 'ok'}">${icon('download')}<span class="action-label">Publish</span></button>` : ''}
     ${caps.export ? `<button type="button" class="btn small ghost" data-action="export" aria-label="Export">${icon('download')}<span class="action-label">Export</span></button>` : ''}
+    </div></details>` : ''}
     <button type="button" class="btn small ghost icon-only" data-action="theme" aria-label="Switch to ${theme === 'dark' ? 'light' : 'dark'} theme" title="Theme">${icon(theme === 'dark' ? 'sun' : 'moon')}</button>
     <button type="button" class="btn small ghost icon-only" data-action="help" aria-label="Keyboard shortcuts" title="Help (?)">${icon('help')}</button>
   </div>

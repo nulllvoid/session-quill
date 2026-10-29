@@ -1,3 +1,4 @@
+import { renderMarkdown } from '../lib/markdown.js';
 // Run detail (spec §3): what a run did, what the worker verified, where it is, and what is left for
 // the owner to decide. Sections an export stripped are omitted, never shown empty.
 // Autonomous runs (FEAT-12 spec §5.3, §5.4, §8) add the run's own record — plan, attempts checked
@@ -406,7 +407,7 @@ export function renderRunDetail(h, rawSnapshot, { now, pending = [], content = {
 
   const result = [
     h.error && h.error.message ? `<p class="small critical">${esc(h.error.message)}</p>` : '',
-    h.result_summary ? `<p class="prewrap">${esc(h.result_summary)}</p>` : '',
+    h.result_summary ? renderMarkdown(h.result_summary) : '',
     h.result_ref ? contentViewer(h.result_ref, { content, status: contentStatus, generation: snapshot.generation_id, label: h.state === 'done' ? 'Show full result' : 'Show partial result' }) : '',
     runQuality(h, { gate: false }),
   ].join('');

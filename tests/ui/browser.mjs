@@ -542,3 +542,49 @@ test('Advanced template search filters names and descriptions locally without lo
  await search.fill(''); assert.equal(await matches.count(),40); assert.equal(await page.getByText('No templates match your search.').isVisible(),false);
  const cancel=page.locator('.composer-footer [data-action="close-dialog"]'); const bounds=await cancel.boundingBox(); assert.ok(bounds.y>=0&&bounds.y+bounds.height<=844,'Cancel stays inside the viewport'); await cancel.click(); assert.equal(await page.locator('#dialog').evaluate(el=>el.open),false);
 });
+
+test('rich descriptions render safely in the browser and long tables fit a phone', async () => {
+ data.tickets[0].description = { valid:true, goal:'**Reliable** releases', context:'<img src="https://untrusted.invalid/pixel" onerror="window.markdownExecuted=true">\n\n[Bad link](javascript:alert(1))\n\n```js\n<script>window.markdownExecuted=true</script>\n```\n\n| Column | Result |\n| --- | --- |\n| '+ 'LongValue'.repeat(30)+' | **Passed** |', done:['The `release_id` is recorded.'] };
+ const requests=[]; page.on('request',r=>{if(r.url().includes('untrusted.invalid'))requests.push(r.url());});
+ await page.setViewportSize({width:390,height:844}); await open(); await page.locator('.work-title').first().click();
+ assert.equal(await page.locator('.description strong').first().textContent(),'Reliable');
+ assert.equal(await page.locator('.description .markdown img, .description .markdown script, .description .markdown a[href^="javascript:"]').count(),0);
+ assert.equal(await page.evaluate(()=>window.markdownExecuted),undefined);
+ assert.equal(await page.locator('#detail').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+ assert.deepEqual(requests,[]);
+});
+
+test('workspace tools stay discoverable on desktop and phone, with full-width mobile navigation', async () => {
+ data.schedules=[{name:'daily-update',enabled:false}];
+ for(const width of [1440,390]) {
+   await page.setViewportSize({width,height:844}); await open();
+   await page.locator('.tools-pop > summary').click();
+   assert.equal(await page.locator('.tools-menu [data-action="export"]').isVisible(),true);
+   assert.equal(await page.locator('.tools-menu [data-action="schedules"]').isVisible(),true);
+   await page.locator('.tools-menu [data-action="schedules"]').click();
+   assert.equal(await page.locator('#dialog').evaluate(el=>el.open),true);
+   await page.keyboard.press('Escape');
+   if(width===390) {
+     const widths=await page.locator('#sidebar .nav-item:visible').evaluateAll(els=>els.map(el=>el.getBoundingClientRect().width));
+     assert.ok(widths.every(w=>w>=65&&w<=85),JSON.stringify(widths));
+   }
+ }
+});
+
+test('work lens transitions animate on interaction but do not replay during unchanged polling', async () => {
+ await page.emulateMedia({reducedMotion:'no-preference'}); await open();
+ await page.evaluate(()=>{window.workspaceAnimations=0;const animate=Element.prototype.animate;Element.prototype.animate=function(...args){window.workspaceAnimations++;return animate.apply(this,args);};});
+ await page.locator('#work-lens-all').click();
+ assert.ok(await page.evaluate(()=>window.workspaceAnimations)>0);
+ const before=await page.evaluate(()=>window.workspaceAnimations); await refresh();
+ assert.equal(await page.evaluate(()=>window.workspaceAnimations),before);
+ await page.emulateMedia({reducedMotion:'reduce'}); await page.locator('#work-lens-open').click();
+ assert.equal(await page.evaluate(()=>window.workspaceAnimations),before);
+});
+
+test('a resize between URL navigation and hashchange cannot discard the destination', async () => {
+ await open();
+ await page.evaluate(()=>{location.hash='#view=sessions';window.dispatchEvent(new Event('resize'));});
+ await page.waitForSelector('.view-sessions',{timeout:2000});
+ assert.match(page.url(),/view=sessions/);
+});

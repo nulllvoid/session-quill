@@ -1,4 +1,5 @@
 // Reusable components as pure HTML-string renderers (UI-DESIGN §Components).
+import { renderMarkdown } from './lib/markdown.js';
 import { relativeTime, formatAbsolute, ageLabel, parseMs } from './lib/time.js';
 
 export const STATUS_ORDER = ['todo', 'active', 'review', 'deploy-pending', 'blocked', 'done'];
@@ -399,7 +400,7 @@ export function pager(page, pages, { prefix }) {
 // and failure states. A failure always offers Retry; nothing is left silently empty.
 export function contentViewer(ref, { content = {}, status = {}, generation = '', label = 'Full text' } = {}) {
   if (!ref) return '';
-  if (Object.hasOwn(content, ref)) return `<div class="content-viewer" data-ref="${attr(ref)}"><button type="button" class="link small" data-action="hide-content" data-hash="${attr(ref)}">Hide</button><pre class="full">${esc(content[ref])}</pre></div>`;
+  if (Object.hasOwn(content, ref)) return `<div class="content-viewer" data-ref="${attr(ref)}"><button type="button" class="link small" data-action="hide-content" data-hash="${attr(ref)}">Hide</button>${renderMarkdown(content[ref])}<details class="markdown-source" data-disclosure="source-${attr(ref)}"><summary>View source</summary><pre class="full">${esc(content[ref])}</pre></details></div>`;
   const st = status[ref];
   if (st === 'reloading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">The snapshot changed; reloading…</span></div>`;
   if (st === 'loading') return `<div class="content-viewer" data-ref="${attr(ref)}" aria-busy="true"><span class="muted small">Loading…</span></div>`;

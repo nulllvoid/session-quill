@@ -539,7 +539,7 @@ test('detail drawer: next action reads as text with Edit, the editor opens on re
   const s = snapshot();
   const t = { ...s.tickets[1], next_action: 'Ship it' };
   const view = renderDetail(t, s, { now: NOW, pending: [], content: {} });
-  assert.match(view, /confirmed-value">Ship it</);
+  assert.match(view, /confirmed-value"><div class="markdown"><p>Ship it</);
   assert.match(view, /data-action="edit-next"/);
   assert.doesNotMatch(view, /<textarea[^>]*>Ship it<\/textarea>/, 'the value is not repeated in a pre-filled editor');
   const editing = renderDetail(t, s, { now: NOW, pending: [], content: {}, editingNext: true });
@@ -673,7 +673,7 @@ test('navigation is grouped, Runs has a live count and an attention dot, phones 
   const base = snapshot();
   const s = { ...base, handoffs: [{ ...base.handoffs[0], id: 'f', ticket_id: base.tickets[0].id, state: 'failed', finished_at: '2026-10-02T11:00:00Z' }] };
   const side = renderSidebar(s, { view: 'deployments', now: NOW });
-  assert.match(side, /<span class="nav-caption">Workspace<\/span>[\s\S]*data-view="runs"[\s\S]*<span class="nav-caption">More<\/span>/);
+  assert.match(side, /<span class="nav-caption">Workspace<\/span>[\s\S]*data-view="runs"[\s\S]*<span class="nav-caption">Insights<\/span>/);
   assert.match(side, /aria-label="Runs, \d+ live, 1 needs you" data-view="runs"/);
   assert.match(side, /data-view="runs"[\s\S]*?class="attention-dot" aria-hidden="true"/);
   assert.match(side, /data-view="deployments"[^>]*class="nav-item nav-overflow"|class="nav-item nav-overflow"[^>]*data-view="deployments"/);
@@ -696,7 +696,7 @@ test('the top bar is one row with a status button; receipts are toasts; filters 
   assert.equal(receiptLifetime('good'), 6000);
   assert.equal(activeFilterCount({ project: 'demo', category: '', tag: '', repo: 'demo', machine: '', stale: true, q: '' }), 3);
   const bar = renderFilterBar(s, { project: '', category: 'feature', tag: '', repo: '', machine: '', stale: false, q: '' });
-  assert.match(bar, /<details class="filter-pop health-pop"><summary class="btn small ghost">[\s\S]*Filter · 1<\/summary>/);
+  assert.match(bar, /<details class="filter-pop health-pop"><summary class="btn small ghost">[\s\S]*Filters · 1<\/summary>/);
   assert.match(bar, /data-filter="category"/);
   assert.match(bar, /data-action="clear-filter" data-filter="category"/);
 });

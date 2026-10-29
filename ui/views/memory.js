@@ -1,3 +1,4 @@
+import { renderMarkdown } from '../lib/markdown.js';
 // Memory (spec §6.4, ADR 0027): what runs have learned and the owner's notes, by Repo, Machine and
 // Quarantine, with trust in words, where each entry came from, and the owner's actions (Approve,
 // Edit, Pin, Retire). Owner-only: the data comes from the owner endpoint, never from a snapshot, so a
@@ -98,7 +99,7 @@ function entryItem(e, snapshot, { now, tz, pending, editing, canAct }) {
   const held = e.trust === 'quarantined' ? `<p class="memory-held small" data-level="warning">${icon('alert')}Held: ${esc(e.quarantine_reason || 'awaiting your approval')}</p>` : '';
   const dis = busy ? ' disabled' : '';
   const actions = !canAct || isEditing ? '' : `<div class="memory-actions">${e.trust === 'quarantined' ? `<button type="button" class="btn small primary" data-action="memory-approve" data-entry="${attr(e.id)}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>Approve</button> ` : ''}<button type="button" class="btn small" data-action="memory-edit" data-entry="${attr(e.id)}" aria-describedby="${attr(textId)}"${dis}>Edit</button> ${e.trust === 'quarantined' ? '' : `<button type="button" class="btn small ghost" data-action="memory-pin" data-entry="${attr(e.id)}" data-pinned="${e.pinned ? 'false' : 'true'}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>${e.pinned ? 'Unpin' : 'Pin'}</button> `}<button type="button" class="btn small ghost" data-action="memory-retire" data-entry="${attr(e.id)}" data-revision="${attr(e.revision)}" aria-describedby="${attr(textId)}"${dis}>Retire</button></div>`;
-  return `<li class="memory-entry" data-entry="${attr(e.id)}" data-trust="${attr(e.trust)}"><div class="memory-head">${chips.join(' ')}${section ? ` <span class="small muted">${esc(section)}</span>` : ''}</div><p class="memory-text" id="${attr(textId)}" tabindex="-1">${esc(e.text)}</p>${held}<p class="memory-meta small muted">${meta.join(' · ')}</p>${isEditing && canAct ? editForm(e, editing) : actions}${req ? requestFeedback(req, { now }) : ''}</li>`;
+  return `<li class="memory-entry" data-entry="${attr(e.id)}" data-trust="${attr(e.trust)}"><div class="memory-head">${chips.join(' ')}${section ? ` <span class="small muted">${esc(section)}</span>` : ''}</div><div class="memory-text" id="${attr(textId)}" tabindex="-1">${renderMarkdown(e.text)}</div>${held}<p class="memory-meta small muted">${meta.join(' · ')}</p>${isEditing && canAct ? editForm(e, editing) : actions}${req ? requestFeedback(req, { now }) : ''}</li>`;
 }
 
 export function renderMemory(memory, rawSnapshot, { now, tab = null, repo = null, pending = [], editing = null, status = null, filters = {}, online = true } = {}) {

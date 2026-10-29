@@ -32,8 +32,11 @@ export function createDashboardMotion(root, media) {
     if (media.matches) return;
     if (!last || last.view !== state.view) {
       enter(root.querySelector('.page-heading'), 0, 8);
+      const ring = root.querySelector('.ring-value');
+      const arc = ring?.getAttribute?.('stroke-dasharray');
+      if (arc) play(ring, [{ strokeDasharray: '0 100' }, { strokeDasharray: arc }], { duration: 560 });
       // Animate groups, not every row in large tables or every card in the board.
-      const groups = root.querySelectorAll('.work-overview, .inbox, .picknext-grid > .card, .blocked-list, .board > .column, .tree, .table-wrap, .env-matrix, .view > .empty, .today-day');
+      const groups = root.querySelectorAll('.work-pulse, .work-controls, .work-table, .run-tabs, .run-list, .memory-list, .update-controls, .daily-report, .work-overview, .inbox, .picknext-grid > .card, .blocked-list, .board > .column, .tree, .table-wrap, .env-matrix, .view > .empty, .today-day');
       [...groups].slice(0, 12).forEach((element, i) => enter(element, Math.min(i * 35, 175), 12));
       if (last) play(root.querySelector('.nav-item[aria-selected="true"]'), [{ opacity: .55 }, { opacity: 1 }], { duration: 200 });
     } else if (last.results !== state.results) {

@@ -1,3 +1,4 @@
+import { renderMarkdown } from '../lib/markdown.js';
 import { completionText } from '../lib/work.js';
 import { closureReviewExtras, esc, attr, keyEl, trustChip, statusChip, categoryChip, priorityMark, timeEl, handoffChip, handoffLabel, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip, openProposals, proposalItem, hasActiveRun, contentViewer } from '../components.js';
 import { renderAgentsSection, testGateBadge, accessTierBadge, accessWords } from './agents.js';
@@ -31,11 +32,11 @@ function descriptionBlock(t) {
   const d = t.description;
   const howTo = `The next Claude session on this ticket is asked to write one, or run <code>quill ticket set ${esc(t.key)} --description "…"</code> in the Goal / Context / Done when format.`;
   if (d && d.valid) {
-    return `${progress}<dl class="description"><dt>Goal</dt><dd>${esc(d.goal)}</dd><dt>Context</dt><dd>${esc(d.context)}</dd><dt>Done when</dt><dd><ul>${d.done.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></dd></dl>`;
+    return `<dl class="description"><dt>Goal</dt><dd>${renderMarkdown(d.goal)}</dd><dt>Context</dt><dd>${renderMarkdown(d.context)}</dd><dt>Done when</dt><dd><ul>${d.done.map((x) => `<li>${renderMarkdown(x)}</li>`).join('')}</ul></dd></dl>${progress}`;
   }
   if (t.summary && t.summary.trim()) {
     const problems = d && d.problems ? d.problems : [];
-    return `${progress}<p class="chip warning small">${icon('alert')}Description not in the required format</p>${problems.length ? `<p class="small muted">${esc(problems.join('; '))}.</p>` : ''}<p class="prewrap">${esc(t.summary)}</p><p class="small muted">${howTo}</p>`;
+    return `${progress}<p class="chip warning small">${icon('alert')}Description not in the required format</p>${problems.length ? `<p class="small muted">${esc(problems.join('; '))}.</p>` : ''}${renderMarkdown(t.summary)}<p class="small muted">${howTo}</p>`;
   }
   return `${progress}<p class="chip warning small">${icon('alert')}Missing description</p><p class="small muted">${howTo}</p>`;
 }
@@ -134,7 +135,7 @@ export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], conten
       <div class="inline-actions"><button type="submit" class="btn small">Save</button>${t.next_action ? '<button type="button" class="btn small ghost" data-action="cancel-next">Cancel</button>' : ''}<span class="small muted">Confirmed value stays until the worker applies the change.</span></div>
     </form>`;
   const nextValue = t.next_action && !(showEditor && editingNext)
-    ? `<div class="next-value"><p class="prewrap confirmed-value">${esc(t.next_action)}</p>${readOnly ? '' : `<button type="button" class="btn small ghost" data-action="edit-next" data-ticket="${attr(t.id)}" aria-label="Edit next action">Edit</button>`}</div>`
+    ? `<div class="next-value"><div class="confirmed-value">${renderMarkdown(t.next_action)}</div>${readOnly ? '' : `<button type="button" class="btn small ghost" data-action="edit-next" data-ticket="${attr(t.id)}" aria-label="Edit next action">Edit</button>`}</div>`
     : (readOnly && !t.next_action ? '<p class="muted small">None set.</p>' : '');
   const closure = !readOnly && !snapshot.meta.exported_at ? (snapshot.reconciliation?.items ?? []).find((item) => item.ticket_id === t.id) : null;
   const completionBusy = mine.some((r) => ['set-completion', 'set-status', 'acknowledge-closure'].includes(r.kind) && ['sending', 'pending', 'applying'].includes(r.state));
@@ -157,10 +158,10 @@ ${mine.length ? `<section class="detail-requests" aria-label="Pending edits">${m
 ${checkpoints.length ? `<section class="latest-checkpoint"><h3>Latest checkpoint</h3><p>${checkpoints[0].complete ? esc(checkpoints[0].preview.slice(0, 240)) : 'Capture incomplete — full content unavailable.'}</p><button type="button" class="link small" data-action="detail-tab" data-tab="activity">View checkpoints and activity</button></section>` : ''}
 <div class="detail-tabs" role="tablist" aria-label="Ticket sections">${DETAIL_TABS.map((name) => `<button type="button" role="tab" id="detail-tab-${name}" data-action="detail-tab" data-tab="${name}" aria-selected="${tab === name}" aria-controls="detail-page-${name}" tabindex="${tab === name ? 0 : -1}">${TAB_LABELS[name]}</button>`).join('')}</div>
 <div class="detail-page" id="detail-page-overview" role="tabpanel" aria-labelledby="detail-tab-overview" ${tab !== 'overview' ? 'hidden' : ''}>
-${completion}
 <section class="detail-section"><h3>Description</h3>${descriptionBlock(t)}${!readOnly ? `<div class="detail-actions"><button class="btn small" data-action="create-subtask" data-ticket="${attr(t.id)}">Add subtask</button><button class="btn small" data-action="link-child" data-ticket="${attr(t.id)}">Link existing child</button><button class="btn small" data-action="set-parent" data-ticket="${attr(t.id)}">Move / classify relationship</button></div>` : ''}</section>
+${completion}
 <section class="detail-section"><h3>Status</h3><p>${statusChip(t.status, { stale: t.stale, staleAge: staleAgeLabel(t, now) })} <span class="muted small">source: ${esc(t.status_source)}</span></p>${t.blocker ? `<p class="card-blocker">${icon('alert')}<span class="label">Blocker</span> ${esc(t.blocker)}</p>` : ''}${t.due ? `<p>${icon('clock')}Due ${esc(t.due)}</p>` : ''}</section>
-<section class="detail-section"><h3>Approved plans <span class="count">${esc(t.plans_count)}</span></h3>${t.plans.length ? t.plans.map((p) => `<details class="plan" data-disclosure="plan-${attr(p.checkpoint_id ?? p.content_ref ?? p.approved_at)}"><summary>${timeEl(p.approved_at, now, tz, { absolute: true })} · ${esc(p.provenance)}</summary><pre class="preview">${esc(p.preview)}</pre>${viewer(p.content_ref, 'Full plan')}</details>`).join('') : '<p class="muted small">No approved plans. Approve the latest checkpoint with <code>/session-quill:approve</code>.</p>'}</section>
+<section class="detail-section"><h3>Approved plans <span class="count">${esc(t.plans_count)}</span></h3>${t.plans.length ? t.plans.map((p) => `<details class="plan" data-disclosure="plan-${attr(p.checkpoint_id ?? p.content_ref ?? p.approved_at)}"><summary>${timeEl(p.approved_at, now, tz, { absolute: true })} · ${esc(p.provenance)}</summary>${renderMarkdown(p.preview)}${viewer(p.content_ref, 'Full plan')}</details>`).join('') : '<p class="muted small">No approved plans. Approve the latest checkpoint with <code>/session-quill:approve</code>.</p>'}</section>
 <section class="detail-section"><h3>Follow-ups</h3>${parent ? `<p>Parent: <button type="button" class="link" data-open="${attr(parent.id)}">${keyEl(parent.key)} ${esc(parent.title)}</button></p>` : ''}${children.length ? `<ul class="children">${children.map((c) => `<li><button type="button" class="link" data-open="${attr(c.id)}">${keyEl(c.key)} ${esc(c.title)}</button> ${statusChip(c.status)}</li>`).join('')}</ul><p class="muted small">${esc(t.children_done_count)} of ${esc(children.length)} children done</p>` : '<p class="muted small">No children.</p>'}</section>
 </div>
 <div class="detail-page" id="detail-page-runs" role="tabpanel" aria-labelledby="detail-tab-runs" ${tab !== 'runs' ? 'hidden' : ''}>

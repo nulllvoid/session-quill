@@ -249,9 +249,9 @@ test('ticket detail shows the description as Goal, Context and Done when, and fl
   const valid = ticketSummary({ ...base, summary: desc });
   const snap = { generation_id: 'g', tickets: [valid], handoffs: [], recipes: [], sessions: [], checkpoints: [], capabilities: { read: true }, meta: { timezone: 'UTC' } };
   const html = renderDetail(valid, snap, { now: '2026-10-02T09:00:00Z' });
-  assert.match(html, /<dt>Goal<\/dt><dd>Ship the deploy check\.<\/dd>/);
+  assert.match(html, /<dt>Goal<\/dt><dd><div class="markdown"><p>Ship the deploy check\.<\/p>/);
   assert.match(html, /&lt;b&gt;tag&lt;\/b&gt;/, 'escaped');
-  assert.match(html, /<li>production shows v1\.2<\/li>/);
+  assert.match(html, /<li><div class="markdown"><p>production shows v1\.2<\/p>/);
   const missing = ticketSummary({ ...base, summary: '' });
   assert.match(renderDetail(missing, { ...snap, tickets: [missing] }, { now: '2026-10-02T09:00:00Z' }), /Missing description[\s\S]*quill ticket set PROJ-1 --description/);
   const loose = ticketSummary({ ...base, summary: 'just some text' });

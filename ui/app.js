@@ -129,7 +129,9 @@ function $(sel) { return document.querySelector(sel); }
 function nowIso() { return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'); }
 function announce(text) { const el = $('#live'); if (el) { el.textContent = ''; setTimeout(() => { el.textContent = text; }, 30); } }
 
+let appliedHash = null;
 function readHash() {
+  appliedHash = location.hash;
   const params = new URLSearchParams(location.hash.replace(/^#/, ''));
   const view = params.get('view');
   const nextView = ['board', 'tree', 'picknext'].includes(view) ? 'work' : view;
@@ -172,6 +174,8 @@ function setView(view) {
 }
 
 function writeHash() {
+  // A resize or poll can render before hashchange delivers an external navigation.
+  if (appliedHash !== location.hash) return;
   const params = new URLSearchParams();
   params.set('view', appState.view);
   if (appState.view === 'work') { params.set('lens', appState.workLens); params.set('sort', appState.workSort); }
@@ -186,7 +190,7 @@ function writeHash() {
   if (appState.view === 'memory' && appState.memoryTab) params.set('mtab', appState.memoryTab);
   if (appState.view === 'memory' && appState.memoryRepo) params.set('mrepo', appState.memoryRepo);
   const next = `#${params.toString()}`;
-  if (location.hash !== next) history.replaceState(null, '', next);
+  if (location.hash !== next) { history.replaceState(null, '', next); appliedHash = next; }
 }
 
 function layoutMode() {
@@ -270,7 +274,7 @@ function render() {
   renderDialog();
   motion?.update({
     view: appState.view,
-    results: JSON.stringify([appState.filters, appState.sessionsPage, appState.boardPages, [...appState.boardToggled], appState.treeRoot]),
+    results: JSON.stringify([appState.filters, appState.workLens, appState.workSort, [...appState.workExpanded], appState.sessionsPage, appState.boardPages, [...appState.boardToggled], appState.treeRoot]),
     detail: appState.selected,
     receipt: appState.receipt ? JSON.stringify(appState.receipt) : null,
   });

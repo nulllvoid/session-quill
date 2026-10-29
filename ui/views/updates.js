@@ -1,3 +1,4 @@
+import { renderMarkdown } from '../lib/markdown.js';
 import { esc, attr, normalizeSnapshot } from '../components.js';
 const WINDOWS = { 'last-24-hours': 'Last 24 hours', today: 'Today', yesterday: 'Yesterday', 'since-last': 'Since last successful update' };
 export function updateScope(value = '') { return { project_ids: value.startsWith('project:') ? [value.slice(8)] : [], repo_ids: value.startsWith('repo:') ? [value.slice(5)] : [] }; }
@@ -5,25 +6,17 @@ function scopeOptions(s, value = '') {
  const projects = [...new Map(s.tickets.map(t => [t.project_id, t.project_name || t.project_id])).entries()];
  return `<option value="">Whole workspace</option>${projects.map(([id,name]) => `<option value="project:${attr(id)}"${value === `project:${id}` ? ' selected' : ''}>Project · ${esc(name)}</option>`).join('')}${s.repos.map(r => `<option value="repo:${attr(r.id)}"${value === `repo:${r.id}` ? ' selected' : ''}>Repository · ${esc(r.display_name || r.id)}</option>`).join('')}`;
 }
-// Generated text is untrusted: only plain headings, lists and the known continuity disclosure are rendered.
+// Only this exact product-owned disclosure is HTML; all report content is untrusted Markdown.
 export function updateMarkup(text = '') {
- let list = false, details = false, block = 0;
- const out = [];
- const closeList = () => { if (list) { out.push('</ul>'); list = false; } };
- for (const line of String(text).split('\n')) {
-  if (line === '# Daily update') continue;
-  if (line.startsWith('- ')) { if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${esc(line.slice(2))}</li>`); continue; }
-  closeList();
-  if (line === '<details><summary>Earlier milestones and continuity</summary>') { if (!details) { out.push(`<details data-disclosure="update-continuity-${block++}"><summary>Earlier milestones and continuity</summary>`); details = true; } continue; }
-  if (line === '</details>' && details) { out.push('</details>'); details = false; continue; }
-  const heading = /^(#{1,3}) (.+)$/.exec(line);
-  if (heading) out.push(`<h${Math.min(heading[1].length + 1, 4)}>${esc(heading[2])}</h${Math.min(heading[1].length + 1, 4)}>`);
-  else if (line.trim()) out.push(`<p>${esc(line)}</p>`);
- }
- closeList(); if (details) out.push('</details>'); return out.join('');
+ const parts = String(text).replace(/^# Daily update\s*\n/, '').split('<details><summary>Earlier milestones and continuity</summary>');
+ return parts.map((part, i) => {
+   if (!i) return renderMarkdown(part);
+   const end = part.indexOf('</details>');
+   return `<details data-disclosure="update-continuity-${i - 1}"><summary>Earlier milestones and continuity</summary>${renderMarkdown(end < 0 ? part : part.slice(0, end))}</details>${end < 0 ? '' : renderMarkdown(part.slice(end + 10))}`;
+ }).join('');
 }
 export function renderUpdatePreview(detail) {
- return `<div class="dialog-form"><header class="composer-header"><h2 id="dialog-title">Sharing preview</h2><button class="btn ghost" data-action="close-dialog" aria-label="Close sharing preview">×</button></header><p class="small">Regenerated from shareable evidence. Review the preview before copying or downloading.</p><pre class="update-content">${esc(detail.share_content || detail.content || 'No shareable evidence.')}</pre><div class="dialog-actions"><button class="btn" data-action="update-copy-preview">Copy preview</button><button class="btn" data-action="update-download-preview">Download preview</button><button class="btn ghost" data-action="close-dialog">Cancel</button></div></div>`;
+ return `<div class="dialog-form"><header class="composer-header"><h2 id="dialog-title">Sharing preview</h2><button class="btn ghost" data-action="close-dialog" aria-label="Close sharing preview">×</button></header><p class="small">Regenerated from shareable evidence. Review the preview before copying or downloading.</p><div class="update-content">${renderMarkdown(detail.share_content || detail.content || 'No shareable evidence.')}</div><div class="dialog-actions"><button class="btn" data-action="update-copy-preview">Copy preview</button><button class="btn" data-action="update-download-preview">Download preview</button><button class="btn ghost" data-action="close-dialog">Cancel</button></div></div>`;
 }
 export function renderUpdates(data, rawSnapshot, { selected = null, status = null, editing = false, draft = '', online = true, scope = '', window = 'last-24-hours', synthesis = false } = {}) {
  const s = normalizeSnapshot(rawSnapshot);

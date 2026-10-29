@@ -13,6 +13,7 @@ function harness(reduced = false) {
   const elements = new Map();
   function element(name) {
     if (!elements.has(name)) elements.set(name, {
+      getAttribute: key => name === '.ring-value' && key === 'stroke-dasharray' ? '40 100' : null,
       animate(frames, options) {
         let finish;
         const animation = { finished: new Promise((resolve) => { finish = resolve; }), cancelled: false, cancel() { this.cancelled = true; finish(); } };
@@ -49,6 +50,17 @@ test('opening a ticket animates once and changing tickets animates again', () =>
   assert.equal(h.calls.filter((c) => c.name === '#detail').length, 1);
   h.motion.update({ ...state, detail: 'ticket-2' });
   assert.equal(h.calls.filter((c) => c.name === '#detail').length, 2);
+  h.motion.destroy();
+});
+
+test('progress draws to its actual value on view entry and stays still during polling', () => {
+  const h = harness();
+  h.motion.update({view:'work',results:'all'});
+  const rings = () => h.calls.filter(c => c.name === '.ring-value');
+  assert.equal(rings().length, 1);
+  assert.deepEqual(rings()[0].frames, [{strokeDasharray:'0 100'},{strokeDasharray:'40 100'}]);
+  h.motion.update({view:'work',results:'all'});
+  assert.equal(rings().length, 1);
   h.motion.destroy();
 });
 
