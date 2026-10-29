@@ -20,6 +20,14 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Publishers.** Share a roll-up note, a read-only HTML copy or a live claude.ai artifact page. Each sends only the fields and projects you list, and only after you confirm the destination.
 - **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear on a schedule; sync never writes. Opt in to push one ticket's status back yourself, previewed and confirmed. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline. With Run agent on, they can propose an agent run that waits for your Approve.
 
+## What's new in 2.3
+
+The dashboard has new light and dark themes, grouped navigation, compact task rows and a responsive **Tools** menu. **Work** brings filtered progress, status distribution, active runs and attention counts into view, with clearer subtask hierarchy and motion that respects reduced-motion preferences.
+
+Descriptions, next actions, plans, run summaries, memory and Daily updates now render Markdown with readable tables and copyable code blocks. Raw HTML is escaped, unsafe link schemes are rejected and remote images are not loaded automatically. A navigation fix also preserves the requested destination when a resize or poll overlaps a URL change.
+
+Restart the worker and reload the dashboard after upgrading. This release does not change the journal schema or reducer version. See the [2.3.0 changelog](CHANGELOG.md#230---2026-10-30).
+
 ## What's new in 2.2
 
 **Work** combines the board and relationship views into one expandable hierarchy: see whether a parent is complete, which required subtasks remain, and which follow-ups are independent. Filter and prioritize work without losing its ancestry.

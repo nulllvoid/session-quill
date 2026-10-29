@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-10-30
+
+A calmer, more expressive dashboard with clearer navigation and rich Markdown.
+
+### Changed
+
+- Redesigned light and dark themes, grouped navigation, compact task rows and a responsive Tools menu for schedules, publishing and exports. Existing workspace actions remain available on desktop and mobile.
+- Work shows filtered progress, status distribution, active runs and attention counts, with clearer hierarchy and subtask progress. Finite transitions respect reduced-motion preferences and do not replay during unchanged polling.
+- Descriptions, next actions, plans, run summaries, memory and Daily updates render Markdown with readable tables, links and copyable code blocks. Source remains available where applicable; raw HTML is escaped, unsafe link schemes are rejected and remote images are not loaded automatically.
+
+### Fixed
+
+- A resize or poll between URL navigation and its hash-change event can no longer replace the requested destination.
+- Long Markdown tables and mobile navigation fit narrow screens; subtask progress validates counts before rendering.
+
+### Compatibility
+
+- Both package and Claude plugin versions are **2.3.0**. Restart the worker and reload the dashboard after upgrading.
+- No journal schema or reducer version change from 2.2.0. Existing routes, revision checks, undo controls and standalone exports remain supported.
+
 ## [2.2.0] - 2026-10-30
 
 Unified task management, explicit agent modes and daily work continuity.
@@ -470,7 +490,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/nulllvoid/session-quill/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/nulllvoid/session-quill/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/nulllvoid/session-quill/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/nulllvoid/session-quill/compare/v1.1.1...v2.0.0
