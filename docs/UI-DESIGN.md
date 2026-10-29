@@ -1,6 +1,7 @@
 # Session Quill — UI Design Specification
 
 Status: revised draft v0.2 · 2026-10-02
+Proposed next design, 2026-10-30: [Unified Work control centre](superpowers/specs/2026-10-30-unified-work-control-centre-design.md) specifies the combined Board/Relationships view, agent modes and Daily update. It is a review draft; the behavior described there is not yet implemented.
 Visual implementation update, 2026-10-11: use [Quill Fieldnotes](design-system/CLAUDE-DESIGN-SYSTEM.md) and its [asset reference](design-system/index.html) for current tokens, layouts and Claude implementation guidance. The shipped UI now puts recommendations before unlinked work, labels Today as Activity and Tree as Relationships, and groups ticket details into tabs. The behavior contracts below still apply unless explicitly superseded by the orchestration ADRs.
 Companions: [PRD](PRD.md), [TRD](TRD.md), [canonical fields](DATA-CONTRACT.md), [acceptance](ACCEPTANCE.md).
 Historical PNG wireframes are v0.1 references; the states and layouts below supersede them.
