@@ -7,6 +7,8 @@ import { runHook } from '../../src/hooks/adapter.js';
 import { planAutoBind } from '../../src/hooks/autobind.js';
 import { writeBindingSnapshot, readBindingSnapshot, bindingSnapshotPath, writeHeartbeat, writeRuntimeIdentity } from '../../src/hooks/binding-snapshot.js';
 import { listIngress } from '../../src/core/ingress.js';
+import { publishGeneration } from '../../src/worker/projections.js';
+import { newState, createTicket, ev } from '../core/helpers.js';
 import { normalizeTracker, externalTicketId } from '../../src/core/external-keys.js';
 
 const STORE = '11111111-1111-4111-8111-111111111111';
@@ -134,4 +136,26 @@ test('prompt scanning with auto-binding stays within the hook budget', () => {
   }
   durations.sort((a, b) => a - b);
   assert.ok(durations[94] < 200, `p95 ${durations[94].toFixed(1)} ms`);
+});
+
+test('automatic binding skips done keys and aliases, then accepts a reopened ticket', () => {
+  const state = newState();
+  createTicket(state, { key: 'pmla-77', status: 'done' });
+  ev(state, 'relink', { ticket_id: T1, new_key: 'pmla-78' });
+  for (const key of ['PMLA-77', 'PMLA-78']) {
+    const fx = setup({ branch: `fix/${key}-old-task` });
+    publishGeneration(state, { env: fx.env, now: NOW, generationNumber: 1 });
+    hook(fx, 'SessionStart', { source: 'startup' });
+    hook(fx, 'UserPromptSubmit', { prompt: `look at ${key}` });
+    assert.equal(binds(fx).length, 0);
+    assert.equal(readBindingSnapshot('s1', fx.env), null, 'no provisional done binding');
+    hook(fx, 'UserPromptSubmit', { prompt: `${key} relates to PC-2` });
+    assert.equal(binds(fx)[0].payload.external.key, 'PC-2', 'the next open key is eligible');
+  }
+  const fx = setup({ branch: 'fix/PMLA-77-reopened' });
+  publishGeneration(state, { env: fx.env, now: NOW, generationNumber: 1 });
+  ev(state, 'ticket-update', { ticket_id: T1, fields: { status: 'active' }, source: 'manual' });
+  publishGeneration(state, { env: fx.env, now: NOW, generationNumber: 2 });
+  hook(fx, 'SessionStart', { source: 'startup' });
+  assert.equal(binds(fx)[0].payload.external.key, 'PMLA-77');
 });

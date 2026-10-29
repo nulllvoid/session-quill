@@ -9,6 +9,7 @@ import { writeIngress } from '../../src/core/ingress.js';
 import { createStoreMeta, writeStoreMeta } from '../../src/config/store.js';
 import { defaultUserConfig, saveUserConfig } from '../../src/config/config.js';
 import { readRuntimeIdentity, readBindingSnapshot, writeBindingSnapshot } from '../../src/hooks/binding-snapshot.js';
+import { runHook } from '../../src/hooks/adapter.js';
 import { externalTicketId } from '../../src/core/external-keys.js';
 
 const MACHINE = '22222222-2222-4222-8222-222222222222';
@@ -116,5 +117,42 @@ test('a fresh provisional snapshot survives an unrelated publish until its bind 
     writeIngress(f.mk('session-start', { source: 'startup', cwd: f.repo }, { session_id: 'p2' }), f.env);
     w.tick();
     assert.equal(readBindingSnapshot('p2', f.env).ticket_id, null, 'a stale provisional snapshot is replaced');
+  } finally { await w.stop(); }
+});
+
+
+test('rejecting a provisional done binding restores the prior binding and keeps queued writes off the done ticket', async () => {
+  const f = fixture({ tracker: { prefixes: ['PMLA'] } });
+  const w = new Worker({ config: f.config, storeMeta: f.meta, env: f.env, clock: f.clock });
+  await w.start();
+  try {
+    const external = (key) => ({ external: { key }, source: 'prompt', project_id: 'demo' });
+    w.emit('bind', external('PMLA-1'), { session_id: 'seed' });
+    const doneId = externalTicketId(f.meta.store_id, 'PMLA-1');
+    w.emit('ticket-update', { ticket_id: doneId, fields: { status: 'done' }, source: 'manual' });
+    w.emit('bind', external('PMLA-2'), { session_id: 'bound' });
+    const activeId = externalTicketId(f.meta.store_id, 'PMLA-2');
+    for (const session_id of ['bound', 'unbound']) {
+      fs.rmSync(path.join(f.home, 'projections', 'done-ticket-keys.json'), { force: true });
+      const call = (name, input, now) => runHook(name, { session_id, cwd: f.repo, ...input }, { env: f.env, now });
+      call('UserPromptSubmit', { prompt: 'look at PMLA-1' }, '2026-10-02T08:00:00Z');
+      assert.equal(readBindingSnapshot(session_id, f.env).provisional, true);
+      call('PreToolUse', { tool_name: 'Edit', tool_use_id: session_id, tool_input: { file_path: path.join(f.repo, `${session_id}.js`) } }, '2026-10-02T08:00:01Z');
+      w.tick();
+      const restored = readBindingSnapshot(session_id, f.env);
+      assert.equal(restored.provisional, undefined);
+      assert.equal(restored.ticket_id, session_id === 'bound' ? activeId : null);
+      call('PostToolUse', { tool_name: 'Edit', tool_use_id: session_id, tool_input: { file_path: path.join(f.repo, `${session_id}.js`) }, tool_response: {} }, '2026-10-02T08:00:02Z');
+      w.tick();
+      assert.equal(w.state.tickets.get(doneId).files_touched.length, 0);
+      const files = session_id === 'bound' ? w.state.tickets.get(activeId).files_touched : w.state.sessions.get(session_id).unbound_work.files;
+      assert.ok(files.some((file) => file.relative_path === `${session_id}.js`));
+    }
+    w.emit('bind', { ticket_id: doneId }, { session_id: 'owner' });
+    for (const name of ['PreToolUse', 'PostToolUse']) {
+      runHook(name, { session_id: 'owner', cwd: f.repo, tool_name: 'Edit', tool_use_id: 'explicit', tool_input: { file_path: path.join(f.repo, 'owner.js') }, tool_response: {} }, { env: f.env, now: '2026-10-02T08:00:03Z' });
+    }
+    w.tick();
+    assert.deepEqual(w.state.tickets.get(doneId).files_touched.map((file) => file.relative_path), ['owner.js'], 'explicit owner bindings still capture work');
   } finally { await w.stop(); }
 });

@@ -191,6 +191,18 @@ test('without critic = true there is no critic process and no critic field; the 
   } finally { await b.w.stop(); }
 });
 
+test('the critic reviews agent-committed changes against the run base even with a clean checkout', async () => {
+  const { b, h, capture } = await fixRun({ fakeEnv: { FAKE_CLAUDE_COMMIT: '1' } });
+  try {
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.equal(h.test_gate.status, 'passed');
+    assert.equal(git(h.worktree_path, 'status', '--porcelain'), '');
+    assert.equal(h.critic_status, 'clean', h.critic_reason);
+    const cap = JSON.parse(fs.readFileSync(`${capture}.critic`, 'utf8'));
+    assert.match(cap.prompt, /edited by fake-claude/);
+  } finally { await b.w.stop(); }
+});
+
 test('a critic that crashes or replies without JSON never changes how the run ends', async () => {
   for (const [mode, reason] of [['crash', 'the critic exited with code 3'], ['malformed', "the critic's reply had no usable JSON block"]]) {
     const { b, h } = await fixRun({ fakeEnv: { FAKE_CLAUDE_CRITIC_MODE: mode } });

@@ -34,6 +34,76 @@ test('createWorktree fails with a reason when the base commit or repo is invalid
   await assert.rejects(() => createWorktree({ repoPath: path.join(os.tmpdir(), 'not-a-repo-xyz'), baseCommit: repo.head, dir }), (e) => e.code === 'worktree-failed');
 });
 
+test('changedFiles includes committed edits since the run base even when the checkout is clean', async () => {
+  const repo = makeRepo();
+  assert.deepEqual(await changedFiles(repo.dir, { baseCommit: repo.head }), []);
+  fs.writeFileSync(path.join(repo.dir, 'src.js'), 'export const a = 2;\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'agent fix');
+  assert.deepEqual(await changedFiles(repo.dir), [], 'without a base only pending changes are returned');
+  assert.deepEqual(await changedFiles(repo.dir, { baseCommit: repo.head }), ['src.js']);
+  fs.writeFileSync(path.join(repo.dir, 'src.js'), 'export const a = 3;\n');
+  git(repo.dir, 'add', 'src.js');
+  fs.writeFileSync(path.join(repo.dir, 'src.js'), 'export const a = 4;\n');
+  fs.writeFileSync(path.join(repo.dir, 'new.txt'), 'untracked');
+  assert.deepEqual(await changedFiles(repo.dir, { baseCommit: repo.head }), ['new.txt', 'src.js'], 'committed, staged and unstaged changes are deduplicated');
+});
+
+test('changedFiles preserves unusual paths and both sides of committed and pending renames', async () => {
+  const repo = makeRepo();
+  const suffix = process.platform === 'win32' ? 'é.js' : '-> name\t\n"é.js';
+  const committed = ` committed ${suffix}`;
+  const pending = ` pending ${suffix}`;
+  const untracked = ` untracked ${suffix}`;
+  git(repo.dir, 'mv', 'src.js', committed);
+  git(repo.dir, 'rm', 'README.md');
+  git(repo.dir, 'commit', '-q', '-m', 'rename and delete');
+  assert.deepEqual(await changedFiles(repo.dir, { baseCommit: repo.head }), [committed, 'README.md', 'src.js'].sort());
+  git(repo.dir, 'mv', committed, pending);
+  fs.writeFileSync(path.join(repo.dir, untracked), 'untracked');
+  assert.deepEqual(await changedFiles(repo.dir), [committed, pending, untracked].sort());
+  assert.deepEqual(await changedFiles(repo.dir, { baseCommit: repo.head }), [committed, pending, untracked, 'README.md', 'src.js'].sort());
+});
+
+test('changedFiles propagates git failures instead of reporting an unchanged checkout', async () => {
+  const repo = makeRepo();
+  await assert.rejects(() => changedFiles(repo.dir, { baseCommit: 'does-not-exist' }), (e) => e.code === 'git-failed');
+  await assert.rejects(() => changedFiles(path.join(repo.dir, 'missing')), (e) => e.code === 'git-failed');
+});
+
+test('diffPatch includes committed and pending changes relative to the run base', async () => {
+  const repo = makeRepo();
+  fs.writeFileSync(path.join(repo.dir, 'src.js'), 'export const a = 2;\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'agent fix');
+  assert.match(await diffPatch(repo.dir, { baseCommit: repo.head }), /\+export const a = 2;/);
+  assert.equal(await diffPatch(repo.dir), '', 'the default base remains HEAD');
+  fs.writeFileSync(path.join(repo.dir, 'README.md'), '# pending\n');
+  fs.writeFileSync(path.join(repo.dir, 'new.txt'), 'untracked\n');
+  const patch = await diffPatch(repo.dir, { baseCommit: repo.head });
+  for (const text of ['+export const a = 2;', '+# pending', '+untracked']) assert.ok(patch.includes(text), text);
+  await assert.rejects(() => diffPatch(repo.dir, { baseCommit: 'does-not-exist' }), (e) => e.code === 'git-failed');
+});
+
+test('diffPatch preserves the real index, HEAD and files while including binary changes', async () => {
+  const repo = makeRepo();
+  fs.writeFileSync(path.join(repo.dir, 'src.js'), 'export const a = 2;\n');
+  git(repo.dir, 'add', 'src.js');
+  fs.writeFileSync(path.join(repo.dir, 'src.js'), 'export const a = 3;\n');
+  const binary = Buffer.from([0, 255, 1, 0]);
+  fs.writeFileSync(path.join(repo.dir, 'new.bin'), binary);
+  const index = git(repo.dir, 'diff', '--cached', '--binary');
+  const status = git(repo.dir, 'status', '--porcelain');
+  const patch = await diffPatch(repo.dir, { baseCommit: repo.head });
+  assert.match(patch, /\+export const a = 3;/);
+  assert.match(patch, /GIT binary patch/);
+  assert.equal(git(repo.dir, 'diff', '--cached', '--binary'), index);
+  assert.equal(git(repo.dir, 'status', '--porcelain'), status);
+  assert.equal(await headCommit(repo.dir), repo.head);
+  assert.equal(fs.readFileSync(path.join(repo.dir, 'src.js'), 'utf8'), 'export const a = 3;\n');
+  assert.deepEqual(fs.readFileSync(path.join(repo.dir, 'new.bin')), binary);
+});
+
 test('protected branch targets are refused', () => {
   assert.equal(isProtectedTarget('main', { default_branch: 'main' }), true);
   assert.equal(isProtectedTarget('release/1.0', { default_branch: 'main' }), true);

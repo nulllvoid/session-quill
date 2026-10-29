@@ -88,10 +88,23 @@ test('recipeStats counts runs, outcomes, first-time and repaired test passes, in
   const stats = recipeStats({ handoffs, tickets, requests, nowIso: NOW });
   assert.deepEqual(stats.map((s) => s.recipe), ['attempt-fix', 'analyse']);
   const [f, a] = stats;
-  assert.deepEqual({ ...f, median_done_to_merge_ms: undefined }, { recipe: 'attempt-fix', runs: 7, done: 5, failed: 1, tests_first_pass: 1, tests_after_repair: 1, interventions: 3, merged: 4, reverted_48h: 1, pending_48h: 1, median_done_to_merge_ms: undefined });
+  assert.deepEqual({ ...f, median_done_to_merge_ms: undefined }, { recipe: 'attempt-fix', runs: 7, done: 5, failed: 1, fixes_tested: 0, fixes_no_changes: 0, fixes_unverified: 0, fixes_unknown: 5, tests_first_pass: 1, tests_after_repair: 1, interventions: 3, merged: 4, reverted_48h: 1, pending_48h: 1, median_done_to_merge_ms: undefined });
   assert.equal(f.median_done_to_merge_ms, 1.5 * 3600_000, 'median of 24 h, 2 h, 1 h and 1 h');
   assert.deepEqual([a.runs, a.failed, a.merged, a.pending_48h], [1, 1, 1, 1]);
   const lines = recipeLines(stats);
-  assert.match(lines[0], /^attempt-fix: 7 run\(s\), 5 done, 1 failed · tests passed \(worker\) first time 1, after a repair 1 · 3 owner intervention\(s\) · 4 PR\(s\) merged, 1 reverted within 48 h, 1 not yet known/);
+  assert.match(lines[0], /^attempt-fix: 7 run\(s\), 5 finished, 1 failed · tests passed \(worker\) first time 1, after a repair 1 · 3 owner intervention\(s\) · 4 PR\(s\) merged, 1 reverted within 48 h, 1 not yet known/);
   assert.deepEqual(recipeLines([]), ['no agent runs in the last 30 days']);
+});
+
+test('recipe outcomes separate a finished process from verified changes and no-op work', async () => {
+  const { recipeStats, recipeLines } = await import('../../src/core/usage.js');
+  const handoffs = ['tests-passed', 'no-changes', 'changed-unverified', 'unknown'].map((fix_outcome, i) => ({ id: `r${i}`, mode: 'attempt-fix', state: 'done', requested_at: NOW, fix_outcome }));
+  const [s] = recipeStats({ handoffs, nowIso: NOW });
+  assert.equal(s.done, 4);
+  assert.equal(s.fixes_tested, 1);
+  assert.equal(s.fixes_no_changes, 1);
+  assert.equal(s.fixes_unverified, 1);
+  assert.equal(s.fixes_unknown, 1);
+  assert.match(recipeLines([s])[0], /4 finished/);
+  assert.match(recipeLines([s])[0], /1 changes tested, 1 no changes, 1 changes not test-verified, 1 outcome not verified/);
 });

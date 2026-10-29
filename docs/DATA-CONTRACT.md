@@ -732,3 +732,12 @@ Reducer version: **3**. These are journal-derived owner fields; replay does not 
 Revision-checked requests: `set-completion` accepts only completion mode/child relationship; `set-status` optionally carries resolution; `acknowledge-closure` accepts only an evidence version. Both submission and application validate them. Automatic cleanup additionally rechecks complete worker state immediately before applying. Completion controls retain the existing undo delay and explicit outstanding-deployment choice.
 
 Resolution reasons/references, closure acknowledgements, follow-up source identities and closure evidence bookkeeping stay out of vault front matter. External snapshot, mirror and publisher allow-lists omit these and the entire reconciliation section. Historical legacy child-result mutations still replay; new live results become proposals.
+
+
+## Session linking and fix outcomes
+
+Reducer version **4** rejects `bind-external` events sourced from a branch or prompt when the resolved ticket is already done, including alias resolution. Explicit owner binding is unaffected. The worker publishes a local `done-ticket-keys.json` key-only lookup for hooks; the reducer remains authoritative if it is stale. Opening an initialized dashboard is read-only with respect to session identity and repo registration.
+
+A source-edit run's owner-only `fix_outcome` is `no-changes`, `changed-unverified`, `tests-passed`, or `unknown`. Lifecycle `state: done` means the process finished; it does not establish a successful fix or completion of its ticket. New outcomes use worker-observed changes relative to `base_commit`, including agent commits. Historical empty change lists without an explicit outcome remain unknown. `tests-passed` asserts that the configured worker test command passed, not that every requirement is satisfied.
+
+`test_gate.status: error` means the worker could not inspect the checkout/base before verification. The run fails with `change-inspection-failed`; no worker commit, push, PR or successful fix is inferred. Missing repository test configuration remains visibly unverified. Doctor recipe counters add `fixes_tested`, `fixes_no_changes`, `fixes_unverified`, and `fixes_unknown`; the existing `done` count remains a count of finished processes.

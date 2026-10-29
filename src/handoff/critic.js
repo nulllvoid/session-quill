@@ -184,7 +184,7 @@ export async function runCritic({ run, ticket, repo, gate, recipe, budgetUsd = I
   if (!(capMs >= minMs)) return notRun("less than two minutes were left before the run's deadline");
   const started = now();
   let patch;
-  try { patch = await diff(run.worktree_path); } catch (err) { return { ...notRun(`the diff could not be read: ${err.message}`), status: 'failed' }; }
+  try { patch = await diff(run.worktree_path, { baseCommit: run.base_commit }); } catch (err) { return { ...notRun(`the diff could not be read: ${err.message}`), status: 'failed' }; }
   if (!patch) return notRun('the run left no diff to review');
   const settings = criticSettings(repo);
   const docs = await readReviewDocs({ checkout: run.worktree_path, base: run.base_commit, docs: settings.reviewDocs });

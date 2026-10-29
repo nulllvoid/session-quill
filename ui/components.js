@@ -6,6 +6,7 @@ export const STATUS_LABELS = { todo: 'To do', active: 'Active', review: 'Review'
 export const CATEGORY_LABELS = { feature: 'Feature', bugfix: 'Bugfix', vuln: 'Vulnerability', infra: 'Infra', research: 'Research', analysis: 'Analysis' };
 export const SESSION_LABELS = { live: 'Live', idle: 'Idle', ended: 'Ended', extinct: 'Extinct' };
 export const HANDOFF_LABELS = { queued: 'Queued', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Cancelled', 'timed-out': 'Timed out' };
+const FIX_OUTCOME_LABELS = { 'no-changes': 'No changes', 'changed-unverified': 'Changes not test-verified', 'tests-passed': 'Changes tested', unknown: 'Outcome not verified' };
 export const REQUEST_LABELS = { sending: 'Sending', pending: 'Pending', applying: 'Applying', applied: 'Applied', conflict: 'Conflict', failed: 'Failed', cancelled: 'Cancelled' };
 
 const ICONS = {
@@ -115,9 +116,21 @@ export function sessionChip(state) {
   return `<span class="chip session" data-state="${attr(state)}"><span class="dot${state === 'live' ? ' pulse' : ''}" aria-hidden="true"></span>${esc(SESSION_LABELS[state] ?? state)}</span>`;
 }
 
+function fixOutcome(handoff) {
+  if (handoff.state !== 'done' || !handoff.permissions?.edit_source) return null;
+  if (handoff.fix_outcome != null) return Object.hasOwn(FIX_OUTCOME_LABELS, handoff.fix_outcome) ? handoff.fix_outcome : 'unknown';
+  // Older empty file lists may omit committed work, so they cannot prove a no-op.
+  return handoff.changed_files?.length ? handoff.test_gate?.status === 'passed' ? 'tests-passed' : 'changed-unverified' : 'unknown';
+}
+
+export function handoffLabel(handoff) {
+  return FIX_OUTCOME_LABELS[fixOutcome(handoff)] ?? HANDOFF_LABELS[handoff.state] ?? handoff.state;
+}
+
 export function handoffChip(handoff) {
   const reason = handoff.error && handoff.error.message ? `: ${esc(handoff.error.message)}` : '';
-  return `<span class="chip handoff" data-state="${attr(handoff.state)}">${esc(HANDOFF_LABELS[handoff.state] ?? handoff.state)}</span>${reason ? `<span class="muted small">${reason}</span>` : ''}`;
+  const outcome = fixOutcome(handoff);
+  return `<span class="chip handoff" data-state="${attr(handoff.state)}"${outcome ? ` data-fix-outcome="${outcome}"` : ''}>${esc(handoffLabel(handoff))}</span>${reason ? `<span class="muted small">${reason}</span>` : ''}`;
 }
 
 export function requestChip(state) {

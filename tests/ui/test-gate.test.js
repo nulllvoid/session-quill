@@ -48,3 +48,17 @@ test('an export keeps the gate result but never the test output or command', () 
   const out = sanitizeSnapshot(snap, { fields: ['key', 'title'] });
   assert.deepEqual(out.handoffs[0].test_gate, { status: 'passed', exit_code: 0, ms: 10, attempts: 1, repaired: false });
 });
+
+test('verification errors report unavailable verification with a reason, never failed tests', async () => {
+  const { testGateChip, testGateBadge } = await import('../../ui/views/agents.js');
+  const gate = { status: 'error', reason: 'Could not inspect <checkout>; tests did not run' };
+  for (const html of [testGateChip(gate), testGateBadge(gate)]) {
+    assert.match(html, />Verification unavailable</);
+    assert.match(html, /Could not inspect &lt;checkout&gt;; tests did not run/);
+    assert.doesNotMatch(html, /Tests failed|Tests passed|class="chip good/);
+  }
+  assert.match(testGateChip({ status: 'error' }), /The worker could not verify the run/);
+  const t = ticket(1);
+  const h = { id: 'h-error', ticket_id: t.id, state: 'failed', mode: 'attempt-fix', requested_at: NOW, test_gate: gate };
+  assert.match(renderRunDetail(h, snapshot({ tickets: [t], handoffs: [h] }), { now: NOW }), />Verification unavailable</);
+});

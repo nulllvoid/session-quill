@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { cli, seedSpawnConfig, stopSpawnedWorker } from './helpers.js';
+import { cli, seedSpawnConfig, stopSpawnedWorker, DESC } from './helpers.js';
 import { loadContext, latestSnapshot, workerStatus, effectiveDefaults } from '../../src/cli/context.js';
 import { ensureReady, pausePath } from '../../src/runtime/readiness.js';
 import { loadUserConfig } from '../../src/config/config.js';
@@ -50,9 +50,10 @@ test('fresh enable privately registers the git root, captures this session, and 
 
 test('dashboard bootstraps a fresh home and an explicit stop stays paused until start', async (t) => {
   const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
-  const result = await cli(['ui', '--repo', fx.repo, '--no-open'], fx.env);
+  const result = await cli(['ui', '--repo', fx.repo, '--session', 'first-dashboard-session', '--no-open'], fx.env);
   assert.equal(result.code, 0, result.err);
   assert.match(result.out, /http:\/\/127\.0\.0\.1:\d+\/auth\?secret=/);
+  assert.ok(latestSnapshot(loadContext(fx.env)).sessions.some((s) => s.host_session_id === 'first-dashboard-session'));
   assert.equal((await cli(['worker', 'stop'], fx.env)).code, 0);
   const status = await cli(['status', '--session', 'paused-session'], fx.env);
   assert.match(status.out, /paused by you/);
@@ -147,18 +148,23 @@ test('private registration supplies ticket defaults and concurrent enables keep 
   assert.equal(fs.existsSync(path.join(other, '.quill.toml')), false);
 });
 
-test('dashboard attaches the current session and repository to an existing store', async (t) => {
+test('dashboard preserves the existing session and repository when setup is already complete', async (t) => {
   const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
-  assert.equal((await cli(['start', '--repo', fx.repo], fx.env)).code, 0);
+  assert.equal((await cli(['start', '--repo', fx.repo, '--session', 'dashboard-session'], fx.env)).code, 0);
+  assert.equal((await cli(['ticket', 'work', 'Existing task', '--description', DESC, '--session', 'dashboard-session'], fx.env)).code, 0);
+  const ctx = loadContext(fx.env);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !latestSnapshot(ctx)?.sessions.find((s) => s.host_session_id === 'dashboard-session')?.current_ticket_id) await new Promise((r) => setTimeout(r, 100));
+  const before = latestSnapshot(ctx).sessions.find((s) => s.host_session_id === 'dashboard-session');
+  assert.ok(before?.current_ticket_id, 'the binding must be projected before opening the dashboard');
+  const configBefore = fs.readFileSync(path.join(fx.env.QUILL_HOME, 'config.toml'), 'utf8');
   const other = path.join(fx.root, 'dashboard-app');
   fs.mkdirSync(other); execFileSync('git', ['init', other], { stdio: 'ignore', windowsHide: true });
   const result = await cli(['ui', '--repo', other, '--session', 'dashboard-session', '--no-open'], fx.env);
   assert.equal(result.code, 0, result.err);
-  const ctx = loadContext(fx.env);
-  assert.ok(samePath(ctx.config.repos['dashboard-app'].canonical_path, other));
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline && !latestSnapshot(ctx)?.sessions.some((s) => s.host_session_id === 'dashboard-session')) await new Promise((r) => setTimeout(r, 100));
-  assert.ok(latestSnapshot(ctx).sessions.some((s) => s.host_session_id === 'dashboard-session'));
+  assert.equal(fs.readFileSync(path.join(fx.env.QUILL_HOME, 'config.toml'), 'utf8'), configBefore);
+  const after = latestSnapshot(ctx).sessions.find((s) => s.host_session_id === 'dashboard-session');
+  assert.deepEqual(after, before);
   assert.equal(fs.existsSync(path.join(other, '.quill.toml')), false);
 });
 
@@ -176,4 +182,17 @@ test('a repository reached through a link or another spelling of its path keeps 
   assert.deepEqual([scope.repo_id, scope.gate_mode], ['sample-app', 'strict']);
   const hook = await cli(['hook', 'PreToolUse'], fx.env, { stdin: JSON.stringify({ session_id: 'linked-session', tool_name: 'Edit', cwd: link, tool_input: { file_path: 'x.js' } }) });
   assert.match(hook.out, /deny/, 'the strict gate applies through the link');
+});
+
+test('an initialized dashboard opens outside Git with a session id', async (t) => {
+  const fx = fixture(); t.after(() => stopSpawnedWorker(fx.env));
+  assert.equal((await cli(['start', '--repo', fx.repo], fx.env)).code, 0);
+  const cwd = process.cwd();
+  try {
+    process.chdir(fx.root);
+    const result = await cli(['ui', '--session', 'outside-session', '--no-open'], fx.env);
+    assert.equal(result.code, 0, result.err);
+    assert.match(result.out, /Dashboard: http:/);
+    assert.equal(latestSnapshot(loadContext(fx.env)).sessions.some((s) => s.host_session_id === 'outside-session'), false);
+  } finally { process.chdir(cwd); }
 });

@@ -84,6 +84,7 @@ export function testGateChip(g) {
   if (!g || !g.status) return '';
   if (g.status === 'passed') return `<span class="chip good small" title="${attr(`The worker ran ${g.command ?? 'the test command'} in the run's checkout and it exited 0${g.repaired ? ' after one repair turn' : ''}`)}">Tests passed (worker)</span>`;
   if (g.status === 'skipped') return `<span class="chip small" title="${attr(g.reason ?? 'the worker did not run tests')}">Not test-verified</span>`;
+  if (g.status === 'error') return `${testGateBadge(g)} <span class="muted small">${esc(g.reason ?? 'The worker could not verify the run')}</span>`;
   const label = g.status === 'timeout' ? 'Tests timed out' : 'Tests failed';
   return `<details class="test-output small"><summary><span class="chip critical small">${label}</span></summary><p class="muted small">${esc(g.command ?? '')}${Number.isInteger(g.exit_code) ? ` exited with code ${esc(g.exit_code)}` : ''}${g.attempts > 1 ? ' after one repair turn' : ''}</p><pre class="preview">${esc(g.tail ?? '')}</pre></details>`;
 }
@@ -93,6 +94,7 @@ export function testGateBadge(g) {
   if (!g || !g.status) return '';
   if (g.status === 'passed') return '<span class="chip good small">Tests passed (worker)</span>';
   if (g.status === 'skipped') return '<span class="chip small">Not test-verified</span>';
+  if (g.status === 'error') return `<span class="chip warning small" title="${attr(g.reason ?? 'The worker could not verify the run')}">Verification unavailable</span>`;
   return `<span class="chip critical small">${g.status === 'timeout' ? 'Tests timed out' : 'Tests failed'}</span>`;
 }
 

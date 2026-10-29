@@ -1,7 +1,7 @@
 // Runs (spec §2): every agent run and proposed run, by what needs the owner, grouped by batch. Rows
 // open the run detail; nothing here acts except batch cancel and proposal approve or dismiss. Needs
 // you also lists quarantined learnings and memory conflicts, which open the Memory page (spec §6.4).
-import { closureReviewExtras, esc, attr, timeEl, handoffChip, ticketById, normalizeSnapshot, emptyState, proposalItem, shortKey, HANDOFF_LABELS, learningItem, memoryConflictItem, ciItem } from '../components.js';
+import { closureReviewExtras, esc, attr, timeEl, handoffChip, ticketById, normalizeSnapshot, emptyState, proposalItem, shortKey, handoffLabel, learningItem, memoryConflictItem, ciItem } from '../components.js';
 import { batchProgress } from '../lib/bulk.js';
 import { runTabs, visibleRunTabs, defaultRunTab, groupRuns, runFacts, batchBudgetState, attentionGroups, RUN_TAB_LABELS } from '../lib/runs.js';
 import { testGateBadge, accessBadge, accessWords } from './agents.js';
@@ -23,7 +23,7 @@ export function runRow(snapshot, h, { now, tz, selected = false, ready = false }
   const drift = Number.isInteger(h.scope_drift) && h.scope_drift > 0 ? h.scope_drift : 0;
   if (drift) facts.push(`${drift} write${drift === 1 ? '' : 's'} outside planned files`);
   const gate = ready && !(h.test_gate && h.test_gate.status) ? { status: 'skipped' } : h.test_gate;
-  const label = `${t ? t.key : 'Ticket not in view'}: ${name}, ${HANDOFF_LABELS[h.state] ?? h.state}, ${accessWords(h).join(', ')}${facts.length ? `, ${facts.join(', ')}` : ''}`;
+  const label = `${t ? t.key : 'Ticket not in view'}: ${name}, ${handoffLabel(h)}, ${accessWords(h).join(', ')}${facts.length ? `, ${facts.join(', ')}` : ''}`;
   const ticket = t ? `<code class="key" title="${attr(t.key)}">${esc(shortKey(t.key))}</code> <span class="run-title">${esc(t.title)}</span>` : '<span class="muted">Ticket not in view</span>';
   return `<li class="run-row" data-state="${attr(h.state)}"><button type="button" class="run-open" data-action="open-run" data-run="${attr(h.id)}" aria-label="${attr(label)}" aria-pressed="${selected ? 'true' : 'false'}">${handoffChip({ ...h, error: null })}<span class="run-ticket">${ticket}</span><span class="run-recipe">${esc(name)}</span><span class="run-badges">${accessBadge(h)} ${testGateBadge(gate)}</span><span class="run-facts small muted">${esc(facts.join(' · '))}</span><span class="run-time small muted">${timeEl(h.requested_at, now, tz)}</span></button></li>`;
 }

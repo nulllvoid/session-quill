@@ -154,6 +154,7 @@ export function publishGeneration(state, { env, now, generationNumber, snapshotO
     const ticket = state.tickets.get(id);
     if (ticket) writeJsonAtomic(ticketDetailPath(env, id), { ...ticket, generation_id });
   }
+  writeJsonAtomic(path.join(root, 'done-ticket-keys.json'), [...state.keyIndex].filter(([, id]) => state.tickets.get(id)?.status === 'done').map(([key]) => key));
   // Commit manifest last: readers only read complete generations.
   writeJsonAtomic(path.join(root, 'MANIFEST.json'), { schema_version: 1, generation_id, generated_at: now, path: generation_id });
   pruneGenerations(root, generation_id);

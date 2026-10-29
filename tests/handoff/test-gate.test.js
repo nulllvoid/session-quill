@@ -257,3 +257,39 @@ test('a committed fix journals its evidence before the draft PR, whose body carr
     assert.ok(body.endsWith(again.receipt.markdown), 'the PR carries exactly the rebuilt receipt');
   } finally { await b.w.stop(); }
 });
+
+test('agent-committed changes are tested and kept in the review patch without an empty worker commit', async () => {
+  const repo = makeRepo();
+  const b = await bootWorker({ repo, runtimeAvailable: true, repoExtra: { test_command: gateScript('pass') }, fakeEnv: { FAKE_CLAUDE_EDIT: 'src.js', FAKE_CLAUDE_COMMIT: '1' } });
+  try {
+    const h = await runFix(b, RID(70), { ...fix, permissions: { ...fix.permissions, commit: true } });
+    assert.equal(h.state, 'done', JSON.stringify(h.error));
+    assert.equal(h.test_gate.status, 'passed');
+    assert.deepEqual(h.changed_files, ['src.js']);
+    assert.equal(h.fix_outcome, 'tests-passed');
+    assert.ok(h.commit_sha && h.commit_sha !== h.base_commit);
+    assert.match(fs.readFileSync(h.patch_path, 'utf8'), /edited by fake-claude/);
+  } finally { await b.w.stop(); }
+});
+
+test('a successful runtime with no code changes records no-changes, not a verified fix', async () => {
+  const b = await bootWorker({ repo: makeRepo(), runtimeAvailable: true, repoExtra: { test_command: gateScript('pass') } });
+  try {
+    const h = await runFix(b, RID(71));
+    assert.equal(h.state, 'done');
+    assert.equal(h.fix_outcome, 'no-changes');
+    assert.equal(h.test_gate.status, 'skipped');
+  } finally { await b.w.stop(); }
+});
+
+test('a Git inspection failure fails verification instead of silently skipping the test gate', async () => {
+  const b = await bootWorker({ repo: makeRepo(), runtimeAvailable: true, repoExtra: { test_command: gateScript('pass') }, fakeEnv: { FAKE_CLAUDE_BREAK_GIT: '1' } });
+  try {
+    const h = await runFix(b, RID(72));
+    assert.equal(h.state, 'failed');
+    assert.equal(h.error.code, 'change-inspection-failed');
+    assert.equal(h.test_gate.status, 'error');
+    assert.equal(h.fix_outcome, 'unknown');
+    assert.equal(h.commit_sha ?? null, null);
+  } finally { await b.w.stop(); }
+});

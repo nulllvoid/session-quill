@@ -78,12 +78,6 @@ export async function run({ flags, io, env }) {
   }
   const { ensureReady } = await import('../../runtime/readiness.js');
   await ensureReady(ctx, { dashboard: true });
-  // Readiness comes first so opening the dashboard respects an explicit pause.
-  if (!needsSetup && (flags.session || flags.repo)) {
-    const { run: start } = await import('./start.js');
-    await start({ flags, io: { ...io, println() {} }, env });
-    ctx = loadContext(env);
-  }
   const { url, base, fallback } = await issueOwnerUrl(ctx);
   io.println(`Dashboard: ${base}`);
   if (fallback) io.println(`! ${fallback}: another program holds the configured port, so bookmarks to it do not reach this dashboard (and could reach that program). Free the port and restart the worker, or set ui_port.`);

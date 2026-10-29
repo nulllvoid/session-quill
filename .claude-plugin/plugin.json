@@ -19,6 +19,17 @@
     "publishing",
     "jira"
   ],
+  "commands": [
+    "./commands/agent.md",
+    "./commands/approve.md",
+    "./commands/doctor.md",
+    "./commands/handoff.md",
+    "./commands/publish.md",
+    "./commands/start.md",
+    "./commands/status.md",
+    "./commands/ticket.md",
+    "./commands/ui.md"
+  ],
   "agents": [
     "./agents/quill-handoff.md"
   ]

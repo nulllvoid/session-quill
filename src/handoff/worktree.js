@@ -137,19 +137,20 @@ async function ciFixBase(repoCfg, { branch, commit }) {
   return { ref: commit, label: `checkout at commit ${commit.slice(0, 7)} of branch ${branch}, where CI failed` };
 }
 
-export async function changedFiles(dir) {
-  const out = await git(dir, ['status', '--porcelain', '--untracked-files=all'], { raw: true });
-  // Porcelain v1: two status columns, a space, then the path (leading spaces are significant).
-  return out.split(/\r?\n/).filter((l) => l.length > 3).map((line) => line.slice(3).replace(/^"|"$/g, '')).map((p) => (p.includes(' -> ') ? p.split(' -> ')[1] : p)).sort();
+export async function changedFiles(dir, { baseCommit = null } = {}) {
+  // Treat renames as deletion/addition so both affected paths reach the test gate.
+  const out = await git(dir, ['status', '--porcelain', '-z', '--no-renames', '--untracked-files=all'], { raw: true });
+  const files = out.split('\0').filter(Boolean).map((entry) => entry.slice(3));
+  if (baseCommit) {
+    const committed = await git(dir, ['diff', '--name-only', '-z', '--no-renames', '--end-of-options', baseCommit, 'HEAD', '--'], { raw: true });
+    files.push(...committed.split('\0').filter(Boolean));
+  }
+  return [...new Set(files)].sort();
 }
 
-export async function diffPatch(dir) {
-  await git(dir, ['add', '-A']);
-  try {
-    return await git(dir, ['diff', '--cached', '--binary']);
-  } finally {
-    try { await git(dir, ['reset', '-q']); } catch { /* ignore */ }
-  }
+export async function diffPatch(dir, { baseCommit = null } = {}) {
+  const tree = await workingTree(dir);
+  return git(dir, ['diff', '--binary', '--end-of-options', baseCommit ?? 'HEAD', tree, '--']);
 }
 
 export async function commitAll(dir, message) {

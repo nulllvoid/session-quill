@@ -108,11 +108,18 @@ export function recipeStats({ handoffs = [], tickets = [], requests = [], nowIso
   const by = new Map();
   for (const h of runs) {
     const recipe = h.recipe && typeof h.recipe.name === 'string' ? h.recipe.name : h.mode ?? 'unknown';
-    const s = by.get(recipe) ?? { recipe, runs: 0, done: 0, failed: 0, tests_first_pass: 0, tests_after_repair: 0, interventions: 0, merged: 0, reverted_48h: 0, pending_48h: 0, merge_ms: [] };
+    const s = by.get(recipe) ?? { recipe, runs: 0, done: 0, failed: 0, fixes_tested: 0, fixes_no_changes: 0, fixes_unverified: 0, fixes_unknown: 0, tests_first_pass: 0, tests_after_repair: 0, interventions: 0, merged: 0, reverted_48h: 0, pending_48h: 0, merge_ms: [] };
     s.runs += 1;
     if (h.state === 'done') s.done += 1;
     else if (h.state === 'failed' || h.state === 'timed-out') s.failed += 1;
     const g = h.test_gate;
+    if (h.state === 'done' && (h.permissions?.edit_source || h.mode === 'attempt-fix' || h.recipe?.name === 'attempt-fix')) {
+      const outcome = h.fix_outcome ?? ((h.changed_files ?? []).length ? (g?.status === 'passed' ? 'tests-passed' : 'changed-unverified') : 'unknown');
+      if (outcome === 'tests-passed') s.fixes_tested += 1;
+      else if (outcome === 'no-changes') s.fixes_no_changes += 1;
+      else if (outcome === 'changed-unverified') s.fixes_unverified += 1;
+      else s.fixes_unknown += 1;
+    }
     if (g && g.status === 'passed') {
       const attempts = Array.isArray(g.runs) && g.runs.length ? g.runs.length : g.attempts ?? 1;
       if (attempts === 1) s.tests_first_pass += 1;
@@ -144,6 +151,7 @@ export function recipeLines(stats, { days = RECIPE_STATS_DAYS } = {}) {
   const hours = (ms) => (ms === null ? null : ms < 3_600_000 ? `${Math.round(ms / 60_000)} min` : `${(ms / 3_600_000).toFixed(1)} h`);
   return stats.map((s) => {
     const merge = s.merged ? `${s.merged} PR(s) merged, ${s.reverted_48h} reverted within 48 h${s.pending_48h ? `, ${s.pending_48h} not yet known` : ''}${s.median_done_to_merge_ms !== null ? `, median ${hours(s.median_done_to_merge_ms)} from run end to merge` : ''}` : 'no PR merged';
-    return `${String(s.recipe).replace(/[\p{Cc}\p{Cf}]+/gu, '').slice(0, 60)}: ${s.runs} run(s), ${s.done} done, ${s.failed} failed · tests passed (worker) first time ${s.tests_first_pass}, after a repair ${s.tests_after_repair} · ${s.interventions} owner intervention(s) · ${merge}`;
+    const fixes = (s.fixes_tested + s.fixes_no_changes + s.fixes_unverified + s.fixes_unknown) > 0 ? ` · fixes: ${s.fixes_tested} changes tested, ${s.fixes_no_changes} no changes, ${s.fixes_unverified} changes not test-verified, ${s.fixes_unknown} outcome not verified` : '';
+    return `${String(s.recipe).replace(/[\p{Cc}\p{Cf}]+/gu, '').slice(0, 60)}: ${s.runs} run(s), ${s.done} finished, ${s.failed} failed · tests passed (worker) first time ${s.tests_first_pass}, after a repair ${s.tests_after_repair} · ${s.interventions} owner intervention(s) · ${merge}${fixes}`;
   });
 }

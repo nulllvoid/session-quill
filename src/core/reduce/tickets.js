@@ -148,7 +148,8 @@ export function bindExternal(state, session, ev, result) {
   const ext = p.external;
   if (!ext || typeof ext.key !== 'string') return { rejected: 'external-invalid' };
   try { validateKey(ext.key); } catch { return { rejected: 'key-invalid' }; }
-  let ticketId = state.keyIndex.get(ext.key) ?? null;
+  let ticketId = state.keyIndex.get(ext.key)
+    ?? [...state.keyIndex].find(([key]) => key.toUpperCase() === ext.key.toUpperCase())?.[1] ?? null;
   if (!ticketId) {
     const project_id = p.project_id ?? Object.keys(state.meta.projects)[0] ?? null;
     if (!project_id) return { rejected: 'project-required' };
@@ -166,6 +167,7 @@ export function bindExternal(state, session, ev, result) {
     ticketId = id;
   }
   const ticket = state.tickets.get(ticketId);
+  if (ticket.status === 'done' && ['branch', 'prompt'].includes(p.source)) return { rejected: 'ticket-done' };
   if (p.ensure_only === true) {
     ticket.timeline.push(timelineEntry(ev, 'status', `Mentioned in session ${session.host_session_id} (${p.source ?? 'prompt'})`));
     touch(state, ticket, ev, result);

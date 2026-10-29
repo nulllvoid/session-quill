@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadContext, workerStatus, commandName, latestSnapshot } from '../context.js';
 import { usageStats, usageItems, readJournalTail, recipeStats, recipeLines, RECIPE_STATS_DAYS } from '../../core/usage.js';
 import { replayState } from './sync.js';
@@ -13,6 +15,7 @@ import { repoStatus, REPO_STATUS_TEXT } from '../../config/repos.js';
 import { pausePath } from '../../runtime/readiness.js';
 import { verifyAutostart } from '../../worker/autostart.js';
 import { parseVersion, MIN_RUNTIME } from '../../handoff/inventory.js';
+import { parseYaml } from '../../worker/markdown.js';
 
 export const MIN_NODE_MAJOR = 22;
 // Autonomous runs empty the checkout's own credential helper with command-scope config, which
@@ -41,8 +44,31 @@ function version(cmd, args) {
   }
 }
 
+export function commandsCheck(pluginRoot = fileURLToPath(new URL('../../../', import.meta.url))) {
+  let source = '.claude-plugin/plugin.json';
+  try {
+    const { commands } = JSON.parse(fs.readFileSync(path.join(pluginRoot, source), 'utf8'));
+    if (!Array.isArray(commands) || !commands.length) throw new Error('commands must list the bundled command files');
+    const names = [];
+    for (const file of commands) {
+      if (typeof file !== 'string' || !file.startsWith('./') || file.includes('\\') || file.split('/').includes('..') || !file.endsWith('.md')) throw new Error(`invalid command path: ${JSON.stringify(file)}`);
+      source = file;
+      const text = fs.readFileSync(path.join(pluginRoot, file), 'utf8');
+      const front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+      if (!front) throw new Error('missing or unclosed frontmatter');
+      const { description } = parseYaml(front[1]);
+      if (typeof description !== 'string' || !description.trim()) throw new Error('frontmatter needs a non-empty description');
+      if (!text.slice(front[0].length).includes('${CLAUDE_PLUGIN_ROOT}/bin/quill.js')) throw new Error('missing bundled CLI reference ${CLAUDE_PLUGIN_ROOT}/bin/quill.js');
+      names.push(commandName(path.basename(file, '.md')));
+    }
+    return { level: 'ok', detail: names.sort().join(', ') };
+  } catch (err) {
+    return { level: 'error', detail: `${source}: ${err.message}; reinstall the Session Quill plugin` };
+  }
+}
+
 // `autostart` passes test fakes ({ platform, run, home }) to the login-entry check.
-export async function collect(env, { autostart = {} } = {}) {
+export async function collect(env, { autostart = {}, pluginRoot } = {}) {
   const ctx = loadContext(env, { requireStore: false });
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   const report = { ok: true, items: [] };
@@ -56,7 +82,8 @@ export async function collect(env, { autostart = {} } = {}) {
   const claude = claudeCheck(version(process.platform === 'win32' ? 'claude.exe' : 'claude', ['--version']) ?? version('claude', ['--version']));
   add(claude.level, 'claude', claude.detail);
   add('ok', 'platform', `${process.platform} ${process.arch}`);
-  add('ok', 'commands', `${commandName('ticket')}, ${commandName('approve')}, ${commandName('status')}, ${commandName('handoff')}`);
+  const commands = commandsCheck(pluginRoot);
+  add(commands.level, 'commands', commands.detail);
   if (!ctx.initialized) {
     add('error', 'store', 'not enabled — run /session-quill:start (or quill start)');
     return { ctx, report };

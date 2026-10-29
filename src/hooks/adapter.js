@@ -10,7 +10,7 @@ import { redactText, redactCapped } from '../lib/redact.js';
 import { sessionKey } from '../core/state.js';
 import { matchApprovalPhrase } from '../core/approval.js';
 import { decideGate, WRITE_TOOLS, READ_TOOLS, isPlanFileWrite, DENIAL_REASON } from '../gate/decide.js';
-import { readTicketProjection, readContextCard, readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
+import { readDoneTicketKeys, readTicketProjection, readContextCard, readBindingSnapshot, readHeartbeat, readRuntimeIdentity, readPlanClaim, writePlanClaim, writeBindingSnapshot, bindingSnapshotPath } from './binding-snapshot.js';
 import { scopeFor } from './scope.js';
 import { planAutoBind } from './autobind.js';
 import { markUnboundWork, shouldNudge, markNudged, nudgeReason, isWorkTool, markTicketWork, shouldCheckDone, markDoneChecked, doneCheckReason, recordPlanFiles, markDrift, driftToNudge, markDriftNudged, driftReason } from './nudge.js';
@@ -193,7 +193,7 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
       let current = snapshot;
       if (!(current && current.ticket_id) && scope.tracker) {
         const branch = currentBranch(input.cwd);
-        const plan = branch ? planAutoBind({ source: 'branch', text: branch, snapshot: current, tracker: scope.tracker }) : null;
+        const plan = branch ? planAutoBind({ source: 'branch', text: branch, snapshot: current, tracker: scope.tracker, doneKeys: readDoneTicketKeys(env) }) : null;
         if (plan && autoBind({ plan, source: 'branch', titleHint: branchTitle(branch, plan.key), base, key, snapshot: current, scope, identity, env, result, occurred_at })) current = readBindingSnapshot(key, env);
       }
       const brief = current && current.ticket_id ? resumeBrief(readTicketProjection(current.ticket_id, env), { nowIso: occurred_at, card: readContextCard(current.ticket_id, env) }) : null;
@@ -218,7 +218,7 @@ export function runHook(eventName, input, { env = process.env, now, elapsedMs = 
       // A session started before `quill init` (or whose SessionStart was missed) learns its id here.
       if (!snapshot) context.push(bindingContext(null, session_id, mode, scope.tracker));
       if (!handoff) {
-        const plan = planAutoBind({ source: 'prompt', text: prompt, snapshot, tracker: scope.tracker });
+        const plan = planAutoBind({ source: 'prompt', text: prompt, snapshot, tracker: scope.tracker, doneKeys: scope.tracker ? readDoneTicketKeys(env) : [] });
         if (plan && autoBind({ plan, source: 'prompt', titleHint: titleOf(), base, key, snapshot, scope, identity, env, result, occurred_at }) && !plan.ensure_only) {
           const was = snapshot && snapshot.ticket_id ? ` (previously ${snapshot.ticket_key})` : '';
           context.length = 0;

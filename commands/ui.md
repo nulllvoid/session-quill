@@ -5,9 +5,11 @@ allowed-tools: Bash(node *)
 ---
 
 Open the local dashboard or export a snapshot. The live command sets up Quill if needed
-and reconnects or starts its worker automatically. Use the current repository as the
-working directory. Pass `--session <id>` when the `Session Quill session:` context line
-provides an id, so first-time setup captures this session too. Never guess the id.
+and reconnects or starts its worker automatically. First-time setup needs a Git
+repository as the working directory; an existing dashboard can open from any directory.
+Pass `--session <id>` when the `Session Quill session:` context line provides an id, so
+first-time setup captures this session too. Never guess the id. Once initialized, opening
+the dashboard does not register repositories or change session bindings or working directories.
 If the user explicitly stopped processing, offer `/session-quill:start` to resume it.
 
 1. Run:

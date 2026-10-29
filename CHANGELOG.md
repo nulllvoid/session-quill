@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- Opening an initialized dashboard no longer reruns setup, changes a session's working directory, or binds it from another repository's branch. It also works outside Git repositories.
+- Automatic prompt/branch linking skips completed tickets and aliases; explicit owner binding remains available.
+- Run change detection includes agent commits since the recorded base plus pending edits. The patch preserves the real staging area, and Git inspection failures are reported instead of treated as no changes.
+- Source-edit runs distinguish no changes, changes not test-verified, changes tested, and unknown outcomes. Doctor labels terminated successful processes as finished and reports these outcomes separately.
+- Doctor validates all nine declared command files and reports missing or malformed installation content.
+
 ## [2.1.0] - 2026-10-30
 
 Reliable reconciliation and explicit task completion, with dashboard fixes and clearer follow-up ownership.

@@ -102,3 +102,23 @@ test('relink with an external record stores it beside the legacy jira field', ()
   assert.equal(t.jira, null);
   assert.match(t.timeline.at(-1).text, /linear ENG-9/);
 });
+
+test('automatic binds reject completed tickets by key or alias; explicit binding remains allowed', () => {
+  const state = newState();
+  createTicket(state, { key: 'PMLA-1', status: 'done' });
+  ev(state, 'relink', { ticket_id: T1, new_key: 'PMLA-2' });
+  for (const source of ['branch', 'prompt']) {
+    for (const key of ['PMLA-1', 'PMLA-2', 'pmla-1', 'pmla-2']) {
+      const session_id = `${source}-${key}`;
+      start(state, session_id);
+      const r = ev(state, 'bind', ext(key, { source }), { session_id });
+      assert.equal(r.rejected, 'ticket-done');
+      assert.equal(state.sessions.get(session_id).current_ticket_id, null);
+      assert.ok(r.bindingChanged.has(session_id), 'replace a provisional hook binding');
+    }
+  }
+  start(state, 'owner');
+  const explicit = ev(state, 'bind', { ticket_id: T1 }, { session_id: 'owner' });
+  assert.equal(explicit.rejected, undefined);
+  assert.equal(state.sessions.get('owner').current_ticket_id, T1);
+});

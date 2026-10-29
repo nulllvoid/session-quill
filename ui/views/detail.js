@@ -1,4 +1,4 @@
-import { closureReviewExtras, esc, attr, keyEl, trustChip, statusChip, categoryChip, priorityMark, timeEl, handoffChip, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip, openProposals, proposalItem, hasActiveRun, contentViewer } from '../components.js';
+import { closureReviewExtras, esc, attr, keyEl, trustChip, statusChip, categoryChip, priorityMark, timeEl, handoffChip, handoffLabel, repoName, ticketById, staleAgeLabel, icon, STATUS_LABELS, STATUS_ORDER, normalizeSnapshot, normalizeTicket, requestFeedback, ticketKey, externalChip, effortText, repoChip, openProposals, proposalItem, hasActiveRun, contentViewer } from '../components.js';
 import { renderAgentsSection, testGateBadge, accessTierBadge, accessWords } from './agents.js';
 import { attemptItem } from './run-detail.js';
 import { ticketRuns, openSuggestions } from '../lib/runs.js';
@@ -100,7 +100,7 @@ function runStrip(t, snapshot, { now, tz }) {
   if (!current) return caps.handoff && t.status !== 'done' ? `<div class="run-strip" data-empty="true"><span class="muted small">No agent runs yet</span></div>` : '';
   const name = current.recipe ? current.recipe.name : current.mode;
   const open = openSuggestions(current).length;
-  return `<button type="button" class="run-strip" data-action="open-run" data-run="${attr(current.id)}" aria-label="${attr(`Open run: ${[name, current.state, ...accessWords(current).slice(1)].join(', ')}`)}">${handoffChip({ ...current, error: null })} <strong>${esc(name)}</strong> ${accessTierBadge(current)} ${testGateBadge(current.test_gate)}${open ? ` <span class="chip small">${esc(open)} suggestion${open === 1 ? '' : 's'} to review</span>` : ''} <span class="muted small">${timeEl(current.requested_at, now, tz)}</span></button>`;
+  return `<button type="button" class="run-strip" data-action="open-run" data-run="${attr(current.id)}" aria-label="${attr(`Open run: ${[name, handoffLabel(current), ...accessWords(current).slice(1)].join(', ')}`)}">${handoffChip({ ...current, error: null })} <strong>${esc(name)}</strong> ${accessTierBadge(current)} ${testGateBadge(current.test_gate)}${open ? ` <span class="chip small">${esc(open)} suggestion${open === 1 ? '' : 's'} to review</span>` : ''} <span class="muted small">${timeEl(current.requested_at, now, tz)}</span></button>`;
 }
 
 export function renderDetail(rawTicket, rawSnapshot, { now, pending = [], content = {}, contentStatus = {}, loadedTicket = null, editingNext = false, tab = 'overview', expanded = false, leases = null }) {

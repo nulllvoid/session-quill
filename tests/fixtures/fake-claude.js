@@ -155,6 +155,11 @@ function run() {
       const file = path.join(process.cwd(), process.env.FAKE_CLAUDE_EDIT);
       fs.writeFileSync(file, `${fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''}\n// edited by fake-claude\n`);
     }
+    if (!resumed && process.env.FAKE_CLAUDE_COMMIT === '1') {
+      spawnSync('git', ['add', '-A'], { cwd: process.cwd() });
+      spawnSync('git', ['-c', 'user.name=Fake agent', '-c', 'user.email=fake@example.invalid', 'commit', '-qm', 'Agent committed fix'], { cwd: process.cwd() });
+    }
+    if (!resumed && process.env.FAKE_CLAUDE_BREAK_GIT === '1') fs.writeFileSync(path.join(process.cwd(), '.git'), 'gitdir: /nonexistent-quill-probe-git-dir\n');
     if (process.env.FAKE_CLAUDE_REPAIR_EDIT && resumed && /tests failed/i.test(prompt)) {
       const file = path.join(process.cwd(), process.env.FAKE_CLAUDE_REPAIR_EDIT);
       fs.appendFileSync(file, '\n// repaired by fake-claude\n');

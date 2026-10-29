@@ -367,6 +367,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     if (parsed.is_error) { await record(worker, h.id, parsed, { state: 'failed', error: { code: 'agent-error', message: parsed.summary ?? 'agent reported an error' }, extra: await fixExtras(worker, current) }); return; }
     // Tests that still fail after the repair turn leave no suggestion: no commit, push, PR or
     // ticket change, only the diff for the owner to inspect and the reason (ADR 0023).
+    if (gate?.status === 'error') {
+      await record(worker, h.id, parsed, { state: 'failed', error: { code: 'change-inspection-failed', message: gate.reason }, extra: { ...(await fixExtras(worker, current)), test_gate: gate, fix_outcome: 'unknown' } });
+      return;
+    }
     if (gate && (gate.status === 'failed' || gate.status === 'timeout')) {
       const extra = { ...(await fixExtras(worker, current)), test_gate: gate, ...criticExtra };
       if (quality) extra.result_quality = { ...quality, problems: parsed.problems };
@@ -548,11 +552,16 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     const out = {};
     // ADR 0033: counts of the guard's decisions, for a run the guard watched (autonomous, full).
     if (['autonomous', 'full'].includes(h.access)) { try { out.guard_summary = guardSummary(readLedger(path.join(handoffRunDir(worker.env, h.id), 'ledger.jsonl'))); } catch { /* no summary */ } }
-    if (!h.worktree_path || !fs.existsSync(h.worktree_path)) return out;
+    if (!h.worktree_path || !fs.existsSync(h.worktree_path)) {
+      if (h.permissions?.edit_source) { out.fix_outcome = 'unknown'; if (finalize) out.error = { code: 'change-inspection-failed', message: 'The run checkout is missing; changes could not be verified' }; }
+      return out;
+    }
     try {
-      out.changed_files = await changedFiles(h.worktree_path);
+      if (!h.base_commit) throw new Error('The run base commit is missing; committed changes cannot be verified');
+      out.changed_files = await changedFiles(h.worktree_path, { baseCommit: h.base_commit });
+      if (h.permissions?.edit_source) out.fix_outcome = !out.changed_files.length ? 'no-changes' : gate?.status === 'passed' ? 'tests-passed' : 'changed-unverified';
       out.change_summary = changeSummary(out.changed_files, changeGlobs(ctx.config.repos[h.repo_id]));
-      const patch = await diffPatch(h.worktree_path);
+      const patch = await diffPatch(h.worktree_path, { baseCommit: h.base_commit });
       const patchPath = path.join(handoffsDir(worker.env), 'results', `${h.id}.patch`);
       fs.mkdirSync(path.dirname(patchPath), { recursive: true });
       fs.writeFileSync(patchPath, patch);
@@ -560,6 +569,8 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
       // ADR 0040: the patch as a blob too, so the owner's dashboard can show it grouped.
       Object.assign(out, patchFields(patch, worker.env));
     } catch (err) {
+      out.fix_outcome = 'unknown';
+      if (finalize) out.error = { code: 'change-inspection-failed', message: `Could not inspect run changes: ${err.message}` };
       out.uncertain_effects = [...(h.uncertain_effects ?? []), `could not collect diff: ${err.message}`];
       return out;
     }
@@ -569,7 +580,10 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
     let receipt = null;
     try {
       if (p.commit) await takeSnapshot(worker, h.id, 'before-commit');
-      if (p.commit) out.commit_sha = await commitAll(h.worktree_path, `handoff(${h.id.slice(0, 8)}): ${h.note || 'attempt fix'}`);
+      if (p.commit) {
+        const pending = await changedFiles(h.worktree_path);
+        out.commit_sha = pending.length ? await commitAll(h.worktree_path, `handoff(${h.id.slice(0, 8)}): ${h.note || 'attempt fix'}`) : await headCommit(h.worktree_path);
+      }
       // ADR 0033: the evidence is journaled before anything leaves the machine, so the receipt a
       // draft PR carries is built from journaled facts only.
       if (out.commit_sha) {
@@ -600,9 +614,14 @@ export function createExtension(ctx, { removeWorktreeFn = removeWorktree, openDr
   // with the failing output, then the tests again. Only a real pass is ever reported as one.
   async function testGate(worker, entry, h, outcome) {
     const parsed = parseOutcome(outcome, { outputs: entry.outputs });
-    if (parsed.is_error || parsed.no_result || !h.worktree_path) return { outcome, gate: null };
-    let changed = [];
-    try { changed = await changedFiles(h.worktree_path); } catch { /* treated as no diff */ }
+    if (parsed.is_error || parsed.no_result) return { outcome, gate: null };
+    let changed;
+    try {
+      if (!h.worktree_path || !h.base_commit) throw new Error('The run checkout or base commit is missing');
+      changed = await changedFiles(h.worktree_path, { baseCommit: h.base_commit });
+    } catch (err) {
+      return { outcome, gate: { status: 'error', reason: `Could not inspect changes before verification: ${err.message}` } };
+    }
     if (!changed.length) return { outcome, gate: { status: 'skipped', reason: 'no changes to test' } };
     const { command, timeoutMs } = testGateSettings(ctx.config.repos[h.repo_id]);
     if (!command) return { outcome, gate: { status: 'skipped', reason: 'no test_command for this repository; the fix is not test-verified' } };

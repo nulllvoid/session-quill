@@ -14,6 +14,14 @@ export function readTicketProjection(ticketId, env = process.env) {
   try { return readJsonIfExists(path.join(projectionsDir(env), 'tickets', `${ticketId}.json`)); } catch { return null; }
 }
 
+// Compact lookup for automatic linking, including aliases; never read the dashboard snapshot.
+export function readDoneTicketKeys(env = process.env) {
+  try {
+    const keys = readJsonIfExists(path.join(projectionsDir(env), 'done-ticket-keys.json'));
+    return Array.isArray(keys) ? keys.filter((key) => typeof key === 'string') : [];
+  } catch { return []; }
+}
+
 // The worker's context card of one ticket (ADR 0038), read with the projection above. A missing or
 // unreadable card is simply absent: the first prompt-time bind may come before the worker wrote it.
 export function readContextCard(ticketId, env = process.env) {

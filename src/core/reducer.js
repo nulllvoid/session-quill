@@ -25,7 +25,7 @@ export { SCHEDULE_HISTORY, PUBLISH_HISTORY } from './reduce/integrations.js';
 // The shape and meaning of reduced state (ADR 0030). A state checkpoint written under another value
 // is ignored and the journal replays in full, so bump it in any change that makes existing events
 // reduce differently or adds, removes or reshapes a state field.
-export const REDUCER_VERSION = 3;
+export const REDUCER_VERSION = 4;
 
 function settleClosures(state, ev, result) {
   const context = closureContext(state, ev.occurred_at);
@@ -143,11 +143,12 @@ function applyEventInner(state, ev, { replayingDeferred = false }) {
       const s = getOrCreateSession(state, ev);
       s.events_since_checkpoint += 1;
       if (ev.tool_call_id) {
-        // A provisional hook binding can name a ticket id the worker resolved differently (the key
-        // belonged to an existing ticket); the session's own confirmed binding is authoritative then.
-        const unknownTicket = !!ev.ticket_id && !state.tickets.has(ev.ticket_id);
-        const ticket_id = unknownTicket ? s.current_ticket_id : (ev.ticket_id ?? s.current_ticket_id);
-        const binding_revision = unknownTicket ? s.current_binding_revision : (ev.binding_revision ?? s.current_binding_revision);
+        // Provisional keys can resolve differently or be rejected as done; only a confirmed
+        // binding revision may attribute a queued tool call to a completed ticket.
+        const ticket = state.tickets.get(ev.ticket_id);
+        const unconfirmed = !!ev.ticket_id && (!ticket || (ticket.status === 'done' && !s.bindings.some((b) => b.ticket_id === ev.ticket_id && b.revision === ev.binding_revision)));
+        const ticket_id = unconfirmed ? s.current_ticket_id : (ev.ticket_id ?? s.current_ticket_id);
+        const binding_revision = unconfirmed ? s.current_binding_revision : (ev.binding_revision ?? s.current_binding_revision);
         state.pendingToolCalls.set(`${sessionKey(ev)}:${ev.tool_call_id}`, { session_key: sessionKey(ev), ticket_id, binding_revision, tool_name: ev.payload.tool_name, sequence: ev.sequence, at: ev.occurred_at, denied: ev.payload.denied === true });
         replayDeferred(state, sessionKey(ev), ev.tool_call_id, result);
       }

@@ -305,7 +305,7 @@ textarea { resize: vertical; }
 .chip.session[data-state="extinct"] { background: var(--status-blocked-bg); color: var(--status-blocked); }
 .chip.session[data-state="extinct"] .dot { background: var(--status-blocked-dot); }
 .chip.handoff[data-state="running"], .chip.handoff[data-state="queued"], .chip.request[data-state="applying"], .chip.request[data-state="pending"], .chip.request[data-state="sending"] { background: var(--status-active-bg); color: var(--status-active); }
-.chip.handoff[data-state="done"], .chip.request[data-state="applied"], .chip.good { background: var(--status-done-bg); color: var(--status-done); }
+.chip.handoff[data-state="done"]:not([data-fix-outcome]), .chip.handoff[data-fix-outcome="tests-passed"], .chip.request[data-state="applied"], .chip.good { background: var(--status-done-bg); color: var(--status-done); }
 .chip.handoff[data-state="failed"], .chip.handoff[data-state="timed-out"], .chip.request[data-state="failed"], .chip.request[data-state="conflict"], .chip.critical { background: var(--status-blocked-bg); color: var(--status-blocked); }
 .chip.warning, .chip[data-validation="pending"] { background: var(--stale-bg); color: var(--stale); }
 .chip[data-validation="invalid"] { background: var(--status-blocked-bg); color: var(--status-blocked); }
