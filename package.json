@@ -1,17 +1,37 @@
 {
   "name": "session-quill",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Ticket-bound Claude Code sessions with recoverable local notes and a personal dashboard",
   "type": "module",
   "private": true,
-  "bin": { "quill": "bin/quill.js" },
-  "engines": { "node": ">=22" },
+  "bin": {
+    "quill": "bin/quill.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "build:ui": "node scripts/build-platform.mjs && node scripts/build-ui-assets.mjs",
+    "check:ui": "node scripts/build-platform.mjs --check && node scripts/build-ui-assets.mjs --check",
+    "dev:ui": "npm run build:ui && node scripts/dev-seed.mjs",
+    "review:ui": "node scripts/review-ui.mjs",
     "test": "node scripts/test-run.mjs \"tests/**/*.test.js\"",
     "bench:hooks": "node scripts/bench-hooks.mjs",
     "test:acceptance":"node scripts/test-run.mjs \"tests/acceptance/*.test.js\"",
     "test:ci": "node scripts/test-run.mjs --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=test-results.tap \"tests/**/*.test.js\""
   },
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/nulllvoid/session-quill.git" }
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nulllvoid/session-quill.git"
+  },
+  "dependencies": {
+    "@cloudscape-design/components": "^3.0.1407",
+    "@cloudscape-design/global-styles": "^1.0.71",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
 }

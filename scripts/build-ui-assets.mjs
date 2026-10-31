@@ -36,10 +36,10 @@ ${rule(':root', { ...shared, ...primitives, ...light })}
 @media (prefers-color-scheme: dark) { ${rule(':root:not([data-theme="light"])', dark)} :root:not([data-theme="light"]) { color-scheme: dark; } }
 ${rule(':root[data-theme="dark"]', dark)}
 :root[data-theme="dark"] { color-scheme: dark; }`);
-put('tokens.json', JSON.stringify({ name: 'Quill Fieldnotes', version: '1.0.0', format: 'quill-css-token-map-v1', source: 'ui/styles.css', note: 'Theme/shared values mirror the app. q-* primitives are additive reference-kit values; this is not a DTCG-format file.', light, dark, shared, primitives }, null, 2));
+put('tokens.json', JSON.stringify({ name: 'Quill Studio', version: '1.1.0', format: 'quill-css-token-map-v1', source: 'ui/styles.css', note: 'Theme/shared values mirror the app. q-* primitives are additive reference-kit values; this is not a DTCG-format file.', light, dark, shared, primitives }, null, 2));
 
 const logo = logoSvg().replace('class="logo" ', '').replace('width="28" height="28"', 'width="32" height="32"');
-for (const [name, fill, fg] of [['light', '#245c49', '#ffffff'], ['dark', '#91cebb', '#142e26']]) {
+for (const [name, fill, fg] of [['light', light['accent-fill'], light['accent-fg']], ['dark', dark['accent-fill'], dark['accent-fg']]]) {
   put(`brand/quill-mark-${name}.svg`, logo.replaceAll('var(--accent-fill)', fill).replaceAll('var(--accent-fg)', fg).replace('aria-hidden="true"', 'role="img" aria-label="Session Quill"'));
 }
 put('brand/quill-mark-mono.svg', '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" fill="currentColor" role="img" aria-label="Session Quill"><path d="M22.5 7.5c-6 1-10.5 5.5-12 13l-1 4 3.2-2.6c6.8-1.4 10.3-6.2 9.8-14.4Z"/></svg>');
@@ -69,7 +69,7 @@ const illustrations = {
   'worker-offline': '<rect x="71" y="30" width="178" height="103" rx="10"/><path d="M137 155h46M160 133v22M120 78h21M179 78h21"/><path class="accent" d="m150 65 20 26M170 65l-20 26"/>',
 };
 for (const [name, body] of Object.entries(illustrations)) {
-  for (const [suffix, ink, accent] of [['', '#627169', '#23634f'], ['-dark', '#9baaa3', '#91cebb']]) {
+  for (const [suffix, ink, accent] of [['', light['text-faint'], light.accent], ['-dark', dark['text-faint'], dark.accent]]) {
     const art = body.replaceAll('class="accent"', `stroke="var(--art-accent, ${accent})"`);
     put(`illustrations/${name}${suffix}.svg`, `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180" fill="none" role="img" aria-label="${name.replaceAll('-', ' ')}"><g stroke="var(--art-ink, ${ink})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${art}</g></svg>`);
   }

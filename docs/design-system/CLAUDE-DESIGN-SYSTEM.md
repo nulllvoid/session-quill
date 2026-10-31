@@ -2,6 +2,8 @@
 
 Version 1.3 · 30 October 2026 · Quill-owned design language.
 
+**Live-shell update:** The approved [Studio Cloudscape migration](AFTERHOURS.md) supersedes this document's evergreen palette and shell implementation guidance. Its build instructions, graphite/paper with iris accents tokens and current v2.3 navigation apply to the live app. The behavioral, accessibility and permission contracts below remain in force. The reference specimen is not the live Cloudscape shell.
+
 This is an implementation contract for Claude and other coding agents working on Quill. It is not a recreation of the Claude app and has no affiliation with Anthropic's brand system.
 
 ## 1. Design intent

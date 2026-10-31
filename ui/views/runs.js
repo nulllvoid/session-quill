@@ -8,7 +8,7 @@ import { testGateBadge, accessBadge, accessWords } from './agents.js';
 
 const EMPTY = {
   needs: ['Nothing needs you', 'Proposed runs, results with suggestions to decide on, recent failures, CI failures on pull requests Quill opened, finished fixes ready to review, quarantined learnings, memory conflicts and closure reviews appear here.'],
-  live: ['No runs queued or running', 'Start one with Run agent on a ticket, or select tickets on Board for a bulk run.'],
+  live: ['No runs queued or running', 'Start one with Run agent on a ticket, or select tasks in Work for a bulk run.'],
   failed: ['No failed runs', 'Failed, timed-out and cancelled runs appear here with what went wrong.'],
   all: ['No runs in the last 30 days', 'Agent runs and proposed runs appear here as they are requested.'],
 };
@@ -52,7 +52,7 @@ function batchGroup(snapshot, g, { now, tz, caps, selectedRun }) {
 // One Needs you, Live, Failed or All entry: a batch, a proposal, a CI failed item, a memory item or a run row.
 function entryHtml(snapshot, e, { now, tz, caps, pending, leases, selectedRun }) {
   if (e.kind === 'work') return `<li class="proposal run-row" data-attention="${attr(e.id)}"><strong>${esc(e.ticket.key)} · ${esc(e.ticket.title)}</strong><p>${esc(e.reason)}</p><button type="button" class="btn small" data-open="${attr(e.ticket.id)}">Review task</button></li>`;
-  if (e.kind === 'closure') return `<li class="proposal run-row closure-review" data-closure="${attr(e.item.ticket_id)}"><strong>Closure review · ${esc(e.item.key)} ${esc(e.item.title)}</strong><p>${esc(e.item.reason)}</p>${e.item.blockers?.length ? `<ul class="small">${e.item.blockers.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}<button type="button" class="btn small" data-open="${attr(e.item.ticket_id)}">Open ticket</button>${closureReviewExtras(e.item, snapshot, { now, pending })}</li>`;
+  if (e.kind === 'closure') return `<li class="proposal run-row closure-review" data-closure="${attr(e.item.ticket_id)}"><div class="review-heading"><span class="review-kind">Closure review</span><code title="${attr(e.item.key)}">${esc(shortKey(e.item.key))}</code><strong>${esc(e.item.title)}</strong></div><p>${esc(e.item.reason)}</p>${e.item.blockers?.length ? `<ul class="small">${e.item.blockers.map((b) => `<li>${esc(b)}</li>`).join('')}</ul>` : ''}<button type="button" class="btn small" data-open="${attr(e.item.ticket_id)}">Open ticket</button>${closureReviewExtras(e.item, snapshot, { now, pending })}</li>`;
   if (e.kind === 'batch') return batchGroup(snapshot, e, { now, tz, caps, selectedRun });
   if (e.kind === 'proposal') return proposalRow(snapshot, e.proposal, { now, pending, leases });
   if (e.kind === 'ci') return ciItem(e.run, snapshot, { proposal: e.proposal, now, pending });

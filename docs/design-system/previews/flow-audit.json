@@ -1,0 +1,4796 @@
+{
+  "date": "2026-10-31",
+  "cases": 126,
+  "checks": [
+    {
+      "id": "create-subtask",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "link-child",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "set-parent",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-priority",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-active",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-blocked",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-done",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "resolve",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "completion-parent",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "completion-child",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-record",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-waive",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-attach",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-create",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "link-external",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-false",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-true",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "export",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "export-preview",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "help",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-confirm",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-running",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-empty",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-empty",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-legacy",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-repo",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-busy",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-analyse",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-attempt-fix",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-status",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-results",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "followup",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-false",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-true",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-no-base",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "update-preview",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "update-revision",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-ready",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-partial",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-failed",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-cancelled",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-interrupted",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-queued",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-collecting",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-generating",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-running",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-edit",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-offline",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-queued",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-running",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-done",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-failed",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-timed-out",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-cancelled",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-missing",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-content-error",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-overview",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-runs",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-activity",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-delivery",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-edit-next",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-repo",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-machine",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-quarantine",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-edit",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-error",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-conflict",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "header-popovers",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-multiple-record",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-multiple-waive",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "resolve-multiple",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-existing",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-missing",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-mixed",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-anchor-changed",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-run-env-changed",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-pinned",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-search-empty",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-loading",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-read-only",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-loaded-description",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-loading",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-error",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-missing",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-loaded",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-truncated",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-resume",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshots-false",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshots-true",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-configured",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "form-error",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-sending",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-pending",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-applying",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-failed",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-conflict",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshot-restoring",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-record-error",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-bound",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-record-populated",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-full-effects",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-plan-ready",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-overview",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-runs",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-activity",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-session",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-queued",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-running",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-disabled",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-repo-selector",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-empty",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-coverage-history",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-scopes",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-provider",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-files",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "sessions",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "sessions-empty",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployments",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "activity",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-all",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-needs",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-live",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "work-hierarchy",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-test-failed",
+      "theme": "light",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "create-subtask",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "link-child",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "set-parent",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-priority",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-active",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-blocked",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-done",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "resolve",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "completion-parent",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "completion-child",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-record",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-waive",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-attach",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-create",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "link-external",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-false",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-true",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "export",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "export-preview",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "help",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-confirm",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-running",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-empty",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-empty",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-legacy",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-repo",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-busy",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-analyse",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-attempt-fix",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-status",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-results",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "followup",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-false",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-true",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-no-base",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "update-preview",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "update-revision",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-ready",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-partial",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-failed",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-cancelled",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-interrupted",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-queued",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-collecting",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-generating",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-running",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-edit",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-offline",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-queued",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-running",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-done",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-failed",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-timed-out",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-cancelled",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-missing",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-content-error",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-overview",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-runs",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-activity",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-delivery",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-edit-next",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-repo",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-machine",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-quarantine",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-edit",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-error",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-conflict",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "header-popovers",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-multiple-record",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-multiple-waive",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "resolve-multiple",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-existing",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-missing",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-mixed",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-anchor-changed",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-run-env-changed",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-pinned",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-search-empty",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-loading",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-read-only",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-loaded-description",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-loading",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-error",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-missing",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-loaded",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-truncated",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-resume",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshots-false",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshots-true",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-configured",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "form-error",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-sending",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-pending",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-applying",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-failed",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-conflict",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshot-restoring",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-record-error",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-bound",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-record-populated",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-full-effects",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-plan-ready",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-overview",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-runs",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-activity",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-session",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-queued",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-running",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-disabled",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-repo-selector",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-empty",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-coverage-history",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-scopes",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-provider",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-files",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "sessions",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "sessions-empty",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployments",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "activity",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-all",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-needs",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-live",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "work-hierarchy",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1440,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-test-failed",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "clientWidth": 1430,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "create-subtask",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "link-child",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "set-parent",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-priority",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-active",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-blocked",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-done",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "resolve",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "completion-parent",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "completion-child",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-record",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-waive",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-attach",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-create",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "link-external",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-false",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-true",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "export",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "export-preview",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "help",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-confirm",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-running",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-empty",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-empty",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-legacy",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-repo",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-busy",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-analyse",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-attempt-fix",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-status",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-results",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "followup",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-false",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-true",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 2,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-no-base",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "update-preview",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "update-revision",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-ready",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-partial",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-failed",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-cancelled",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-interrupted",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-queued",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-collecting",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-generating",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-running",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-edit",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-offline",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-queued",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-running",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-done",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-failed",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-timed-out",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-cancelled",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-missing",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-content-error",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-overview",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-runs",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-activity",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-delivery",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-edit-next",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-repo",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-machine",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-quarantine",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-edit",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-error",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-conflict",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "header-popovers",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 2,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-multiple-record",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-multiple-waive",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "resolve-multiple",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-existing",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-missing",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-mixed",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-anchor-changed",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-run-env-changed",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-pinned",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-search-empty",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-loading",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-read-only",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-loaded-description",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-loading",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-error",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-missing",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-loaded",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 2,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-truncated",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-resume",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshots-false",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshots-true",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-configured",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "form-error",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-sending",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-pending",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-applying",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-failed",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-conflict",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshot-restoring",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-record-error",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-bound",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-record-populated",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-full-effects",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-plan-ready",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-overview",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-runs",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-activity",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-session",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-queued",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-running",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-disabled",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-repo-selector",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-empty",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-coverage-history",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-scopes",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-provider",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-files",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "sessions",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "sessions-empty",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployments",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "activity",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-all",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-needs",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-live",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "work-hierarchy",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-test-failed",
+      "theme": "light",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "create-subtask",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "link-child",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "set-parent",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-priority",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-active",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-blocked",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "status-done",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "resolve",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "completion-parent",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "completion-child",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-record",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-waive",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-attach",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-create",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "link-external",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-false",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-true",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "export",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "export-preview",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "help",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-confirm",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-running",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-empty",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-empty",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-legacy",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-repo",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-busy",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-analyse",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-attempt-fix",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-status",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-results",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "followup",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-false",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-true",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 2,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "plan-no-base",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "update-preview",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "update-revision",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-ready",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-partial",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-failed",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-cancelled",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-interrupted",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-queued",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-collecting",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-generating",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-running",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-edit",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-offline",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-queued",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-running",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-done",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-failed",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-timed-out",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-cancelled",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-missing",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-content-error",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-overview",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-runs",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-activity",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-delivery",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-edit-next",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-repo",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-machine",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-quarantine",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-edit",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-error",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-conflict",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "header-popovers",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 2,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-multiple-record",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployment-multiple-waive",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "resolve-multiple",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-existing",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "clone-missing",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "bulk-mixed",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-anchor-changed",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-run-env-changed",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-pinned",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-search-empty",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-loading",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-read-only",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-loaded-description",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-loading",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-error",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-missing",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-loaded",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 2,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-diff-truncated",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-resume",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshots-false",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshots-true",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-configured",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "form-error",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-sending",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-pending",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-applying",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-failed",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-request-conflict",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-snapshot-restoring",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-record-error",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "session-bound",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-record-populated",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-full-effects",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-plan-ready",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-overview",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-runs",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "ticket-populated-activity",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "publish-session",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-queued",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-running",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "schedules-disabled",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-repo-selector",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "memory-empty",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "daily-coverage-history",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 3,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-scopes",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-provider",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-files",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "sessions",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "sessions-empty",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "deployments",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "activity",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-all",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-needs",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "runs-live",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 390,
+      "expanded": 0,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "work-hierarchy",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    },
+    {
+      "id": "run-test-failed",
+      "theme": "dark",
+      "viewport": "390x844",
+      "clientWidth": 380,
+      "expanded": 1,
+      "pageOverflow": false,
+      "smallControls": [],
+      "surfaceOverflow": false
+    }
+  ],
+  "composerFollowup": [
+    {
+      "id": "agent",
+      "theme": "light",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-legacy",
+      "theme": "light",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-repo",
+      "theme": "light",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-busy",
+      "theme": "light",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-scopes",
+      "theme": "light",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-provider",
+      "theme": "light",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-files",
+      "theme": "light",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-legacy",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-repo",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-busy",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-scopes",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-provider",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-files",
+      "theme": "dark",
+      "viewport": "1440x900",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent",
+      "theme": "light",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-legacy",
+      "theme": "light",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-repo",
+      "theme": "light",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-busy",
+      "theme": "light",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-scopes",
+      "theme": "light",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-provider",
+      "theme": "light",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-files",
+      "theme": "light",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent",
+      "theme": "dark",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-legacy",
+      "theme": "dark",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-repo",
+      "theme": "dark",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-busy",
+      "theme": "dark",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-scopes",
+      "theme": "dark",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-no-provider",
+      "theme": "dark",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    },
+    {
+      "id": "agent-files",
+      "theme": "dark",
+      "viewport": "390x844",
+      "footerWithinDialog": true,
+      "outerScroll": false,
+      "pageOverflow": false,
+      "surfaceOverflow": false
+    }
+  ]
+}

@@ -51,6 +51,9 @@ export function buildStaticHtml(snapshot, options = {}, { uiDir = UI_DIR } = {})
   const sanitized = sanitizeSnapshot(snapshot, options);
   const css = fs.readFileSync(path.join(uiDir, 'styles.css'), 'utf8');
   let html = fs.readFileSync(path.join(uiDir, 'index.html'), 'utf8');
+  // The React/Cloudscape shell is for the live owner app. Exports stay self-contained.
+  html = html.replace(/<link[^>]*data-live-shell[^>]*>\s*/g, '')
+    .replace(/<script[^>]*data-live-shell[^>]*><\/script>\s*/g, '');
   html = html.replace(/<link rel="stylesheet" href="\/ui\/styles.css">/, `<style>\n${css}\n</style>`);
   html = html.replace(/<title>[^<]*<\/title>/, `<title>Session Quill snapshot — ${sanitized.meta.exported_at}</title>`);
   const bundle = bundleUiModules({ staticMode: true, uiDir });

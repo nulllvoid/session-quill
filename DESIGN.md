@@ -1,6 +1,8 @@
-# Quill Fieldnotes
+# Quill Studio
 
 The design system for Quill's ticket and agent-orchestration UI.
+
+The approved live-app direction is now [Cloudscape + Studio](docs/design-system/AFTERHOURS.md): graphite/paper with iris accents surfaces, Geist typography and simple platform navigation. This supersedes the older evergreen identity guidance below. Existing workflow and safety contracts still apply.
 
 - [Claude implementation contract](docs/design-system/CLAUDE-DESIGN-SYSTEM.md)
 - [Interactive visual reference](docs/design-system/index.html)
@@ -10,7 +12,7 @@ The design system for Quill's ticket and agent-orchestration UI.
 - [Current implementation and scope gaps](docs/AGENT-HANDOVER-ORCHESTRATION-1.0.md)
 - [Design-system review and fixes, 30 October 2026](docs/design-system/REVIEW-2026-10-30.md)
 
-Preserve the evergreen/Geist identity implemented in `ui/styles.css`. Historical Graphite Ink and Terminal Slate boards in `docs/ui/` are archived references, not the current visual direction. The older `docs/UI-DESIGN.md` remains useful for behavior contracts; its superseded layout descriptions must be read alongside the current design contract.
+Preserve the Studio/Geist identity implemented in `ui/styles.css` and `ui/platform/theme.mjs`. Historical Fieldnotes, Graphite Ink and Terminal Slate directions are references, not palettes to mix into the current UI. The older `docs/UI-DESIGN.md` remains useful for behavior contracts; its superseded layout descriptions must be read alongside the current design contract.
 
 The reference kit is opt-in; the production dashboard keeps its own stylesheet. The Runs page and run detail are shipped (see §7 of the contract).
 
