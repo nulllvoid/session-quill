@@ -68,11 +68,11 @@ test('a cancelled retry followed by successful evidence resolves an earlier fail
 test('work overview counts only matching tasks, including nested matches without counting context ancestors', () => {
  const s = data(); s.tickets[2].status = 'done';
  const h = renderWork(s, {q:'needle'}, {lens:'all'});
- assert.match(h, /aria-label="1 of 1 matching tasks marked done"/);
- assert.match(h, />100%<\/text>/);
- assert.match(h, /class="pulse-label">Work in view<\/span><strong>1<span> task<\/span>/);
+ assert.match(h, /<strong>1<\/strong> tasks in view/);
+ assert.match(h, /1 marked done/);
+ assert.doesNotMatch(h, /progress-ring|%<\/text>/);
  const empty = renderWork(s, {q:'absent'}, {lens:'all'});
- assert.match(empty, /aria-label="0 of 0 matching tasks marked done"/);
+ assert.match(empty, /<strong>0<\/strong> tasks in view/);
  assert.doesNotMatch(empty, /NaN|Infinity/);
 });
 
@@ -81,4 +81,16 @@ test('subtask meters accept only numeric rollups and clamp invalid completion va
  assert.doesNotMatch(renderWork(s), /<meter|onmouseover=/);
  const valid = snapshot({tickets:[ticket(1,{work_rollup:{required_total:3,required_completed:8}})]});
  assert.match(renderWork(valid), /<meter min="0" max="3" value="3"/);
+});
+
+test('child relationship labels distinguish unknown, required and independent without implying completion', () => {
+ const parent = ticket(1), children = [ticket(2,{parent_id:parent.id,blocks_parent:null}),ticket(3,{parent_id:parent.id,blocks_parent:true}),ticket(4,{parent_id:parent.id,blocks_parent:false})];
+ const h=renderWork(snapshot({tickets:[parent,...children]}),{}, {lens:'all',expanded:new Set([parent.id])});
+ assert.match(h,/3 child tasks/);
+ assert.match(h,/1 relationship needs a decision/);
+ assert.match(h,/Relationship not classified/);
+ assert.match(h,/Required subtask/);
+ assert.match(h,/Independent follow-up/);
+ assert.match(h,/Choose whether these tasks are required to finish this outcome/);
+ assert.equal((h.match(/data-work-row=/g)||[]).length,4);
 });

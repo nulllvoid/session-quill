@@ -1,22 +1,22 @@
-/* Session Quill, "Fieldnotes": soft neutral surfaces, one evergreen accent, Geist type,
+/* Session Quill Studio: graphite and paper surfaces, one iris accent, Geist type,
    hairline separation instead of boxes, status always labelled. Light variant keeps the same roles with measured AA. */
 @font-face { font-family: "Geist"; src: url("/ui/fonts/Geist-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: "Geist Mono"; src: url("/ui/fonts/GeistMono-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 
 :root[data-theme="dark"], :root:not([data-theme="light"]) {
-  --bg: #151716;
-  --surface: #1d201e;
-  --surface-raised: #282c29;
-  --surface-inset: #121513;
-  --text: #edf1ee;
-  --text-muted: #c0c9c3;
-  --text-faint: #919e95;
-  --border: #393f3b;
-  --border-strong: #6f8277;
-  --accent: #91cebb;
-  --accent-fill: #91cebb;
-  --accent-fg: #142e26;
-  --accent-soft: #233d33;
+  --bg: #18191b;
+  --surface: #202123;
+  --surface-raised: #292a2d;
+  --surface-inset: #1b1c1e;
+  --text: #f0efed;
+  --text-muted: #bcbab7;
+  --text-faint: #a4a19e;
+  --border: #38393d;
+  --border-strong: #85817e;
+  --accent: #c1a7ff;
+  --accent-fill: #c1a7ff;
+  --accent-fg: #201335;
+  --accent-soft: #30263f;
   --status-todo: #bab7ad;
   --status-todo-dot: #9baaa3;
   --status-todo-bg: #23221f;
@@ -41,8 +41,8 @@
   --good: #74d8b0;
   --warning: #f0c466;
   --critical: #ff9384;
-  --focus: #91cebb;
-  --accent-mark: #91cebb;
+  --focus: #c1a7ff;
+  --accent-mark: #c1a7ff;
   --hairline: rgba(237, 236, 230, 0.07);
   --hairline-strong: rgba(237, 236, 230, 0.13);
   --highlight: rgba(255, 255, 250, 0.045);
@@ -52,19 +52,19 @@
   color-scheme: dark;
 }
 :root {
-  --bg: #f4f6f3;
+  --bg: #f6f5f2;
   --surface: #ffffff;
   --surface-raised: #ffffff;
-  --surface-inset: #eef1ed;
-  --text: #242c27;
-  --text-muted: #58685f;
-  --text-faint: #627169;
-  --border: #d9e0da;
-  --border-strong: #7f8f86;
-  --accent: #23634f;
-  --accent-fill: #245c49;
+  --surface-inset: #eeede9;
+  --text: #262523;
+  --text-muted: #65625e;
+  --text-faint: #706c67;
+  --border: #dedcd7;
+  --border-strong: #89837c;
+  --accent: #6941c6;
+  --accent-fill: #6941c6;
   --accent-fg: #ffffff;
-  --accent-soft: #e7f0e9;
+  --accent-soft: #f0eafb;
   --status-todo: #55544d;
   --status-todo-dot: #77756c;
   --status-todo-bg: #ecebe5;
@@ -89,8 +89,8 @@
   --good: #0d6847;
   --warning: #7a4c00;
   --critical: #a3192b;
-  --focus: #23634f;
-  --accent-mark: #30745c;
+  --focus: #6941c6;
+  --accent-mark: #8656df;
   --hairline: rgba(28, 28, 25, 0.08);
   --hairline-strong: rgba(28, 28, 25, 0.15);
   --highlight: rgba(255, 255, 255, 0.8);
@@ -1476,4 +1476,304 @@ button.run-strip:hover { box-shadow: inset 0 0 0 1px var(--hairline-strong); }
 }
 @media (prefers-reduced-motion: reduce) {
   .work-row, .ring-value { transition: none; }
+}
+
+/* Studio platform shell. Cloudscape owns navigation and responsive app layout;
+   these styles address Quill's stable renderer islands, never Cloudscape internals. */
+body[data-platform="cloudscape"] { display: block; height: auto; min-height: 100dvh; overflow: auto; }
+.platform-topbar { display: grid; grid-template-columns: 224px minmax(0, 1fr); background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 1000; }
+.platform-run-count { display: inline-flex; align-items: center; gap: 8px; }
+.platform-run-count .attention-dot { position: static; }
+.platform-brand { display: flex; align-items: center; gap: 12px; padding: 16px 24px; color: var(--text); text-decoration: none; font-size: 27px; font-weight: 650; letter-spacing: -.05em; }
+.platform-brand:hover { text-decoration: none; color: var(--accent); }
+.platform-brand img { border-radius: 10px; }
+.platform-brand-note { display: block; font-size: 11px; font-weight: 450; letter-spacing: .015em; color: var(--text-muted); margin-top: 1px; }
+.platform-header-island { min-width: 0; }
+.platform-header-island .topbar-wrap { padding: 14px 24px; background: transparent; }
+.platform-header-island .topbar { flex-wrap: wrap; gap: 8px 16px; }
+.platform-header-island .brand { display: none; }
+.platform-header-island .search { flex: 1 1 220px; max-width: 480px; min-height: 36px; border: 1px solid var(--border); background: var(--bg); }
+.platform-header-island .statusline { min-height: 34px; font-size: 12px; padding: 6px 0 10px; }
+.platform-header-island .health-right { font-size: 12px; }
+.platform-header-island .connection-details { font-size: 12px; }
+.platform-header-island .topbar-actions { gap: 4px; }
+.platform-navigation { display: flex; flex-direction: column; min-height: calc(100dvh - 160px); }
+.platform-workspace { display: flex; align-items: center; gap: 10px; padding: 18px 20px 24px; }
+.workspace-avatar { width: 34px; height: 34px; display: grid; place-items: center; background: var(--accent-soft); border: 1px solid var(--border); border-radius: 9px; color: var(--accent); font-weight: 650; flex: none; }
+.platform-workspace > div { min-width: 0; }
+.platform-workspace strong { display: block; font-size: 13px; overflow-wrap: anywhere; }
+.platform-workspace div > span { display: block; font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.platform-nav-footer { padding: 24px 20px; margin-top: auto; color: var(--text-muted); font-size: 12px; }
+.platform-nav-footer p { margin: 10px 0 20px; line-height: 1.6; }
+.platform-nav-footer kbd { font-family: var(--mono); background: var(--surface-inset); border: 1px solid var(--border); padding: 2px 5px; border-radius: 4px; margin-right: 5px; }
+.platform-content { padding: 0 0 32px; min-width: 0; }
+.platform-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 16px; }
+.platform-content .filters { padding: 16px 20px; gap: 12px 16px; font-size: 13px; border: 1px solid var(--border); border-radius: 12px 12px 0 0; }
+.platform-content .filters select { min-height: 36px; border-radius: 8px; }
+.platform-content .layout { background: var(--surface); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 12px 12px; }
+.platform-content .main { padding: 24px; overflow: visible; }
+.platform-content .page-heading { display: none; }
+.platform-content .main > .view { max-width: none; }
+.platform-content .work-overview { margin: 0 0 28px; padding: 0 0 24px; border-top: 0; border-bottom: 1px solid var(--border); }
+.platform-content .overview-stat { padding-inline: 24px; gap: 8px; }
+.platform-content .overview-stat:first-child { padding-left: 0; }
+.platform-content .overview-stat strong { font-size: 30px; font-weight: 550; letter-spacing: -.045em; }
+.platform-content .stat-label, .platform-content .stat-hint { font-size: 13px; }
+.platform-content .stat-label .icon { display: none; }
+.platform-content .overview-stat:nth-child(3) strong { color: var(--warning); }
+.platform-content .section-head h2 { font-size: 18px; font-weight: 600; }
+.platform-content .section-count { font-size: 12px; }
+.platform-content .picknext-grid { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.platform-content .next-workspace { display: grid; gap: 24px; align-items: start; }
+.platform-content .next-main, .platform-content .next-context { min-width: 0; }
+.platform-content .next-context { display: flex; flex-direction: column; gap: 24px; }
+.platform-content .next-context > section { margin: 0; padding: 20px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+.platform-content .next-context .section-head { margin-bottom: 12px; }
+.platform-content .next-context h2 { font-size: 15px; }
+.platform-content .next-context p { font-size: 13px; line-height: 1.65; color: var(--text-muted); }
+.platform-content .next-context .recent-work > .link { font-size: 14px; line-height: 1.5; text-align: left; }
+.platform-content .next-context .attention-links { flex-direction: column; align-items: stretch; }
+.platform-content .next-context .blocked-list li { padding: 0; box-shadow: none; background: transparent; }
+.platform-content .next-context .blocked-list li li { border-left: 0; }
+.platform-content .next-context .blocked-list .link { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 6px; }
+.platform-content .next-context .blocked-list .key { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.platform-content .next-context .blocker-text { margin-top: 10px; line-height: 1.6; }
+@container (min-width: 960px) {
+  .platform-content .next-workspace.has-context { grid-template-columns: minmax(0, 1fr) 290px; }
+}
+.platform-content .card-picknext { padding: 20px 24px; border-radius: 0; box-shadow: none; border-bottom: 1px solid var(--border); background: var(--surface); gap: 10px; }
+.platform-content .card-picknext:last-child { border-bottom: 0; }
+.platform-content .card-picknext:hover { background: var(--bg); transform: none; }
+.platform-content .card-picknext.top { padding: 24px; margin: 0; background: var(--surface); border-radius: 0; box-shadow: inset 3px 0 0 var(--accent); }
+.platform-content .card-picknext.top .card-title { font-size: 22px; max-width: 64ch; }
+.platform-content .card-picknext:not(.top) .card-title { font-size: 16px; }
+.platform-content .card-picknext .card-actions { padding-top: 2px; }
+.platform-content .card-picknext .next-strip { background: var(--bg); padding: 12px 14px; border-radius: 8px; margin: 0; border: 0; font-size: 14px; }
+.platform-content .card-picknext.top .next-strip { background: var(--accent-soft); }
+.platform-content .reasons, .platform-content .score, .platform-content .card-meta { font-size: 12px; }
+.platform-content .reasons { line-height: 1.6; }
+.platform-content .eyebrow { font-size: 11px; letter-spacing: .04em; }
+.platform-content .recent-work { margin-top: 24px; padding: 20px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.platform-content .attention-section { margin-top: 24px; padding-top: 20px; }
+.platform-content .blocked-list { border-top: 1px solid var(--border); }
+.platform-content .empty { box-shadow: none; border: 1px dashed var(--border-strong); background: var(--bg); padding: 40px 24px; }
+body[data-platform="cloudscape"] .btn { min-height: 36px; border-radius: 8px; font-size: 13px; box-shadow: inset 0 0 0 1px var(--border); }
+body[data-platform="cloudscape"] .btn.ghost { box-shadow: none; }
+body[data-platform="cloudscape"] .btn.primary { box-shadow: none; }
+body[data-platform="cloudscape"] .btn.primary { background: var(--accent-fill); color: var(--accent-fg); }
+.platform-content .work-lenses .btn { border-radius: 0; }
+.platform-content .work-lenses .btn[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.platform-content .work-columns { font-size: 12px; padding-bottom: 12px; }
+.platform-content .work-title { font-size: 14px; }
+.platform-content .work-meta { font-size: 12px; }
+.platform-content .work-row { min-height: 56px; }
+.platform-content .work-row select { font-size: 13px; }
+.platform-content .work-pulse { background: var(--bg); border: 1px solid var(--border); padding: 12px 16px; margin-bottom: 16px; }
+.platform-content .pulse-label, .platform-content .pulse-note { font-size: 12px; }
+.platform-content .progress-ring { width: 44px; height: 44px; }
+.platform-content .pulse-distribution { display: none; }
+.platform-content .work-toolbar { padding-block: 10px; }
+.platform-content .work-status[data-status="active"] .status-orbit { border-color: var(--accent); }
+.platform-content .work-row:hover { background: var(--bg); }
+.platform-content .work-row.is-selected { background: var(--accent-soft); }
+body[data-platform="cloudscape"] .btn.primary:hover { background: color-mix(in srgb, var(--accent-fill) 88%, var(--text)); }
+body[data-platform="cloudscape"] .detail-panel { background: var(--surface); }
+body[data-platform="cloudscape"][data-layout="desktop"][data-detail="open"] .detail-panel { border-radius: 0 0 12px 0; }
+body[data-platform="cloudscape"][data-layout="medium"] .detail-panel,
+body[data-platform="cloudscape"][data-layout="narrow"] .detail-panel { z-index: 1100; }
+body[data-platform="cloudscape"] .dialog { z-index: 1200; }
+@media (max-width: 1100px) {
+  .platform-topbar { grid-template-columns: 180px minmax(0, 1fr); }
+  .platform-brand { padding-inline: 20px; }
+  .platform-header-island .topbar-actions { flex-wrap: wrap; }
+}
+@media (max-width: 899px) {
+  .platform-topbar { display: block; }
+  .platform-brand { position: absolute; top: 10px; left: 16px; padding: 0; height: 44px; font-size: 23px; gap: 8px; z-index: 1; }
+  .platform-brand-note { display: none; }
+  .platform-header-island .topbar-wrap { padding: 10px 16px 12px; }
+  .platform-header-island .topbar { flex-wrap: wrap; gap: 8px 4px; }
+  .platform-header-island .status-pop { margin-left: 94px; }
+  .platform-header-island .topbar-actions { gap: 0; }
+  .platform-header-island .topbar .search { flex-basis: 100%; max-width: none; min-height: 44px; }
+  .platform-header-island .search { flex-basis: 180px; }
+  .platform-content .main { padding: 20px; }
+  .platform-content .filters { overflow-x: auto; flex-wrap: nowrap; padding: 12px 16px; }
+  .platform-content .filters label { flex: none; }
+  .platform-content .card-picknext, .platform-content .card-picknext.top { padding: 20px; }
+  .platform-content .overview-stat { padding-inline: 16px; }
+  .platform-content .overview-stat:nth-child(3) { padding-left: 0; }
+  .platform-heading { margin-bottom: 20px; }
+  body[data-platform="cloudscape"] .btn { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .platform-content *, .platform-header-island * { scroll-behavior: auto; }
+}
+/* Studio workspace: shared surfaces and interaction rhythm across all views. */
+.platform-heading { margin-bottom: 22px; }
+.platform-content .filters { border: 0; border-radius: 0; background: transparent; padding: 0 0 16px; }
+.platform-content .layout { border: 1px solid var(--border); border-radius: 12px; }
+.platform-content .main { padding: 20px 24px 32px; }
+.platform-content .filters .tokens { flex-wrap: wrap; }
+.platform-brand-note { color: var(--text-muted); }
+.work-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding: 0 0 18px; color: var(--text-muted); font-size: 13px; }
+.work-summary strong { color: var(--text); font-weight: 600; }
+.work-summary > span { white-space: nowrap; }
+.work-group-items { list-style: none; padding: 0; margin: 0; }
+.work-node > .work-children { position: relative; margin-left: 23px; padding-left: 23px; border-left: 1px solid var(--border-strong); margin-bottom: 12px; }
+.work-node[data-depth="5"] .work-children { margin-left: 6px; padding-left: 8px; }
+.work-children .work-node { position: relative; }
+.work-children .work-node::before { content: ''; position: absolute; top: 29px; left: -23px; width: 19px; border-top: 1px solid var(--border-strong); pointer-events: none; }
+.work-node[data-depth="5"] .work-node::before { left: -8px; width: 6px; }
+.work-identity { padding-left: 0; min-width: 0; }
+.platform-content .work-title { font-size: 15px; line-height: 1.45; font-weight: 500; text-align: left; }
+.work-parent > .work-row .work-title { font-weight: 600; }
+.platform-content .work-row { min-height: 64px; border-radius: 7px; }
+.work-children .work-row { background: transparent; }
+.platform-content .work-row.is-selected { box-shadow: inset 3px 0 0 var(--accent); }
+.work-meta { flex-wrap: wrap; row-gap: 4px; line-height: 1.5; }
+.work-child-count { color: var(--text-muted); }
+.work-relation { color: var(--text-muted); font-size: 12px; }
+.work-preview { min-width: 0; }
+.work-children > .work-group > details > summary { margin-left: 0; padding: 10px 8px; font-size: 13px; font-weight: 500; color: var(--text); }
+.work-group-help { margin: 0 8px 10px; color: var(--text-muted); font-size: 13px; max-width: 60ch; }
+.work-group { border-radius: 8px; }
+.work-group + .work-group { margin-top: 4px; }
+.work-group > details[open] { padding-bottom: 4px; }
+.work-table { min-width: 0; }
+.work-title { overflow-wrap: anywhere; }
+body[data-platform="cloudscape"] :is(input, textarea, select) { color: var(--text); font-family: var(--font); }
+body[data-platform="cloudscape"] :is(textarea, input[type="text"], input[type="search"], input[type="datetime-local"], input[type="url"]) { background: var(--surface-inset); border: 1px solid var(--border-strong); border-radius: 8px; font-size: 14px; line-height: 1.5; }
+body[data-platform="cloudscape"] :is(button, a, input, textarea, select, summary):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+body[data-platform="cloudscape"] .btn { transition: background-color 140ms ease, border-color 140ms ease; }
+body[data-platform="cloudscape"] .btn:active:not(:disabled) { transform: translateY(1px); }
+body[data-platform="cloudscape"] .btn:disabled { cursor: not-allowed; }
+body[data-platform="cloudscape"] :is(.dialog, .popover, .tools-menu, .filter-popover, .status-popover) { color: var(--text); background-color: var(--surface); }
+body[data-platform="cloudscape"] .dialog { border: 1px solid var(--border); border-radius: 16px; max-height: calc(100dvh - 32px); overscroll-behavior: contain; }
+body[data-platform="cloudscape"] .dialog-inner { padding: 24px; }
+body[data-platform="cloudscape"] .dialog-form { gap: 18px; }
+body[data-platform="cloudscape"] .dialog-actions { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 16px 0 0; margin-top: 6px; }
+body[data-platform="cloudscape"] .dialog-form :is(label, legend) { font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+body[data-platform="cloudscape"] .detail-panel { overscroll-behavior: contain; line-height: 1.55; }
+body[data-platform="cloudscape"] .detail-panel :is(h2, h3) { text-wrap: pretty; }
+body[data-platform="cloudscape"] :is(.detail-nav, .intent-header, .intent-footer) { background: var(--surface); }
+body[data-platform="cloudscape"] :is(.tools-menu, .health-pop .popover) { border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow-soft); }
+body[data-platform="cloudscape"] .skip { z-index: 1300; }
+@container (max-width: 750px) {
+  .work-node > .work-children { margin-left: 14px; padding-left: 14px; }
+  .work-children .work-node::before { left: -14px; width: 10px; }
+  .platform-content .work-row { min-height: 60px; }
+}
+@media (max-width: 899px) {
+  .platform-content .filters { flex-wrap: wrap; overflow: visible; }
+  .platform-content .main { padding: 16px 12px 24px; }
+  .platform-heading { margin-bottom: 16px; }
+  .work-summary { gap: 6px 14px; font-size: 12px; }
+  body[data-platform="cloudscape"] .dialog-inner { padding: 20px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body[data-platform="cloudscape"] *, body[data-platform="cloudscape"] *::before, body[data-platform="cloudscape"] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+/* Each branch responds to its own available width, including beside the inspector. */
+.work-node { container-type: inline-size; }
+.platform-content .work-parent > .work-row .work-title { font-weight: 600; }
+.work-node[data-depth="5"] .work-children { margin-left: 0; padding-left: 0; border-left: 0; }
+.work-node[data-depth="5"] .work-node::before { display: none; }
+.platform-header-island .search input { border: 0 !important; background: transparent !important; }
+body[data-platform="cloudscape"] .dialog-actions.composer-footer { padding: 16px 20px; margin: 0; }
+body[data-platform="cloudscape"] .dialog-form.intent-composer { gap: 0; }
+body[data-platform="cloudscape"] .intent-modes { gap: 8px; padding: 10px; background: transparent; box-shadow: none; }
+body[data-platform="cloudscape"] .intent-modes label { padding: 12px; border: 1px solid var(--border); border-radius: 9px; cursor: pointer; }
+body[data-platform="cloudscape"] .intent-modes label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+body[data-platform="cloudscape"] .intent-modes label strong { color: var(--text); }
+body[data-platform="cloudscape"] .intent-modes label span { line-height: 1.5; }
+body[data-platform="cloudscape"] .composer-header h2 { overflow-wrap: anywhere; }
+body[data-platform="cloudscape"] .composer-header .btn { flex-shrink: 0; }
+.platform-content .run-row { padding: 18px; border-radius: 10px; box-shadow: none; border: 1px solid var(--border); gap: 10px; }
+.platform-content .run-row + .run-row { margin-top: 10px; }
+.review-heading { display: flex; align-items: baseline; gap: 8px 12px; flex-wrap: wrap; width: 100%; }
+.review-heading .review-kind { font-size: 12px; color: var(--text-muted); }
+.review-heading code { background: transparent; border: 0; padding: 0; color: var(--text-muted); font-size: 12px; }
+.review-heading strong { flex-basis: 100%; font-size: 15px; line-height: 1.5; }
+.platform-content .run-row > p { font-size: 14px; line-height: 1.6; }
+.platform-content .run-row > ul { margin: 0 0 4px; padding-left: 20px; color: var(--text-muted); line-height: 1.6; }
+.platform-content .empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; border: 0; background: var(--bg); padding: 32px; }
+.platform-content .empty :is(h2, h3, p) { margin: 0; }
+.platform-content .empty p { max-width: 62ch; line-height: 1.65; }
+.platform-content .empty-mark { margin: 0 0 8px; }
+.platform-content .today-day { max-width: 100%; }
+.platform-content .today-ticket { padding: 18px 0; }
+.platform-content .today-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; }
+.platform-content .today-head > .link { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; text-align: left; font-size: 15px; line-height: 1.5; flex-basis: 100%; }
+.platform-content .today-head .key { color: var(--text-muted); font-size: 12px; }
+.platform-content .today-items { border-left: 1px solid var(--border); margin: 12px 0 0 4px; padding-left: 16px; }
+.platform-content .today-items li { padding-block: 5px; line-height: 1.6; }
+.platform-content .table-wrap { border-color: var(--border); border-radius: 10px; }
+.platform-content th { color: var(--text-muted); background: var(--bg); font-weight: 500; }
+.platform-content td { line-height: 1.6; }
+.platform-content .view-sessions td:first-child { font-size: 14px; font-weight: 500; }
+.platform-content .view-sessions .key { display: inline-block; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.platform-content .view-updates .update-controls { padding: 18px; border-radius: 10px; }
+/* Header menus must sit above Cloudscape's mobile toolbar (z-index 1000). */
+.platform-topbar { z-index: 1001; }
+@media (max-width: 899px) {
+  .platform-header-island .tools-pop .tools-menu { top: 58px; max-height: calc(100dvh - 80px); overflow-y: auto; }
+}
+/* Dense evidence tables scroll within their surface instead of crushing words. */
+body[data-platform="cloudscape"] .dialog .table-wrap { max-width: 100%; overflow-x: auto; }
+body[data-platform="cloudscape"] .schedules-table { min-width: 620px; table-layout: auto; }
+body[data-platform="cloudscape"] .schedules-table :is(th, td) { word-break: normal; overflow-wrap: normal; }
+body[data-platform="cloudscape"] .schedules-table th:first-child { min-width: 120px; }
+body[data-platform="cloudscape"] .schedules-table td:last-child { min-width: 100px; }
+body[data-platform="cloudscape"] .dialog-actions { z-index: 2; }
+body[data-platform="cloudscape"] .table-wrap { position: relative; }
+/* Complete form coverage: implicit text, URLs, schedule times and budget fields. */
+body[data-platform="cloudscape"] :where(.dialog, .view-updates, .view-memory, .detail-panel) :is(input:not([type]), input[type="text"], input[type="url"], input[type="search"], input[type="number"], input[type="time"], input[type="date"], input[type="datetime-local"], textarea, select) {
+  min-height: 36px; max-width: 100%; min-width: 0; padding: 8px 10px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface-inset); color: var(--text); font: inherit;
+}
+body[data-platform="cloudscape"] :is(.dialog-form, .handoff-form, .stacked-form) label:has(> :is(textarea, select, input:not([type]), input[type="text"], input[type="url"], input[type="datetime-local"], input[type="time"], input[type="number"])) { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+body[data-platform="cloudscape"] :is(.dialog-form, .stacked-form) textarea { width: 100%; resize: vertical; }
+body[data-platform="cloudscape"] .stacked-form { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
+body[data-platform="cloudscape"] .stacked-form > .btn { align-self: flex-start; }
+body[data-platform="cloudscape"] .dialog:has(.handoff-form.bulk-form) .dialog-inner { padding: 24px; }
+body[data-platform="cloudscape"] .handoff-form:not(:has(.composer-body)) { gap: 16px; max-height: none; }
+body[data-platform="cloudscape"] .handoff-form:not(:has(.composer-body)) > h2 { padding: 0 0 8px; }
+body[data-platform="cloudscape"] pre.update-content { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
+body[data-platform="cloudscape"] .dialog-form .composer-header { padding: 0 0 16px; }
+body[data-platform="cloudscape"] .intent-composer .composer-header { padding: 16px 20px; }
+/* Account for the dialog border so only the composer body scrolls. */
+body[data-platform="cloudscape"] .dialog:has(.composer-body) { overflow: hidden; }
+body[data-platform="cloudscape"] .dialog :is(.intent-composer, .handoff-form:has(.composer-body)) { max-height: calc(100dvh - 34px); }
+body[data-platform="cloudscape"] :is(.obligation-fields, [data-deployment-fields]) { border: 0; padding: 8px 0 0; margin: 0; box-shadow: none; background: transparent; }
+body[data-platform="cloudscape"] .obligation-fields:disabled { opacity: .65; }
+body[data-platform="cloudscape"] .obligation-fields .indent { margin-left: 0; }
+body[data-platform="cloudscape"] .dialog :is(h2, h3, code, a) { overflow-wrap: anywhere; }
+body[data-platform="cloudscape"] .plan-review details { border-top: 1px solid var(--border); padding-top: 12px; }
+body[data-platform="cloudscape"] .plan-review summary { min-height: 36px; cursor: pointer; }
+@media (max-width: 600px), (pointer: coarse) {
+ body[data-platform="cloudscape"] :where(.dialog, .view-updates, .view-memory, .detail-panel) :is(input:not([type]), input[type="text"], input[type="url"], input[type="search"], input[type="number"], input[type="time"], input[type="date"], input[type="datetime-local"], select) { min-height: 44px; }
+}
+@media (max-width: 600px) {
+ body[data-platform="cloudscape"] .dialog:has(.handoff-form.bulk-form) .dialog-inner { padding: 20px; }
+ body[data-platform="cloudscape"] .dialog-form label.indent { margin-left: 0; }
+ body[data-platform="cloudscape"] .dialog-actions { gap: 8px; }
+}
+/* Keep checkbox/radio captions beside their control, including long confirmation copy. */
+body[data-platform="cloudscape"] :is(.dialog-form, .handoff-form, .stacked-form) label:has(> input:is([type="checkbox"], [type="radio"])):not(.intent-modes label) { display: block; line-height: 1.6; }
+body[data-platform="cloudscape"] :is(.dialog-form, .handoff-form, .stacked-form) label > input:is([type="checkbox"], [type="radio"]) { margin-right: 8px; vertical-align: -2px; }
+body[data-platform="cloudscape"] .view-updates .dialog-actions { position: static; background: transparent; }
+body[data-platform="cloudscape"] [data-form="set-update-schedule"] > .btn { align-self: flex-start; }
+/* Session evidence needs readable columns, even on a narrow workspace. */
+.platform-content .sessions { min-width: 1080px; table-layout: auto; }
+.platform-content .sessions td:first-child { min-width: 180px; }
+.platform-content .sessions td:nth-child(6) { min-width: 280px; }
+.platform-content .sessions :is(th, td) { overflow-wrap: normal; word-break: normal; }
+.publish-command { display: flex; align-items: center; gap: 12px; }
+.publish-command code { flex: 1; min-width: 0; }
+.publisher .publish-command .btn { flex: none; margin: 0; }
+@media (max-width: 600px), (pointer: coarse) {
+  .platform-header-island .search input,
+  body[data-platform="cloudscape"] :is(.filter-popover, .status-popover) select { min-height: 44px; }
 }

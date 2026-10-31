@@ -20,6 +20,12 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Publishers.** Share a roll-up note, a read-only HTML copy or a live claude.ai artifact page. Each sends only the fields and projects you list, and only after you confirm the destination.
 - **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear on a schedule; sync never writes. Opt in to push one ticket's status back yourself, previewed and confirmed. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline. With Run agent on, they can propose an agent run that waits for your Approve.
 
+## What's new in 2.4
+
+**Quill Studio** brings a Cloudscape shell, graphite and paper themes, iris accents, and consistent dialogs, inspectors, menus, and forms. Work makes parent-child branches and required, independent, or unclassified relationships explicit. Mobile tables remain readable, deployment forms validate only selected evidence, and agent composers keep their actions visible while scrolling.
+
+The UI and fonts are bundled locally; plugin users do not need to install frontend packages. Restart the worker and reload the dashboard after upgrading. The journal schema and reducer version are unchanged. See the [2.4.0 changelog](CHANGELOG.md#240---2026-10-31), [Studio development notes](docs/design-system/AFTERHOURS.md), and [UI verification report](docs/design-system/STUDIO-VERIFICATION.md).
+
 ## What's new in 2.3
 
 The dashboard has new light and dark themes, grouped navigation, compact task rows and a responsive **Tools** menu. **Work** brings filtered progress, status distribution, active runs and attention counts into view, with clearer subtask hierarchy and motion that respects reduced-motion preferences.

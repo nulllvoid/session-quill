@@ -1,3 +1,4 @@
+import { syncDeploymentSelection, syncStatusDeploymentChoice } from './lib/forms.js';
 // Dashboard shell: state, polling, routing, keyboard, dialogs and request feedback (UI-DESIGN.md).
 import { esc, attr, icon, ticketById, STATUS_LABELS, normalizeSnapshot, EMPTY_FILTERS, filtersFromHash, NEEDS_CLONE_FILTER, scopeChoices, tracksSnapshotRequest } from './components.js';
 import { renderHeader, renderSidebar, renderPageHeading, SHORTCUT_VIEWS, OWNER_ONLY_VIEWS, renderFilterBar, receiptLifetime } from './views/header.js';
@@ -211,6 +212,7 @@ function render() {
   const now = nowIso();
   const main = $('#main');
   if (!s) {
+    window.quillShell?.update({ view: appState.view, online: appState.online, theme: appState.theme, collapsed: appState.sidebarCollapsed });
     setMarkup(main, !appState.online
       ? `<section class="empty" role="alert"><h1>Unable to load your workspace</h1><p>${esc(appState.error || 'The worker is unavailable. Start it with quill worker start; this page will retry automatically.')}</p></section>`
       : `<div class="skeleton" role="status" aria-label="Waiting for the first snapshot from the worker"><span></span><span></span><span></span></div>`);
@@ -222,12 +224,18 @@ function render() {
   const searchFocused = document.activeElement && document.activeElement.id === 'search';
   const searchPos = searchFocused ? document.activeElement.selectionStart : null;
   const workspaceOpen = $('#sidebar .workspace-details')?.open;
-  setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen, memory: appState.memory }));
-  const navTabs = [...document.querySelectorAll('#sidebar .nav [role="tab"]')].filter((el) => el.getClientRects().length);
-  const navStop = navTabs.find((el) => el.getAttribute('aria-selected') === 'true') ?? navTabs[0];
-  for (const tab of navTabs) tab.tabIndex = tab === navStop ? 0 : -1;
-  $('#sidebar .nav').setAttribute('aria-orientation', window.innerWidth < 900 ? 'horizontal' : 'vertical');
-  main.setAttribute('aria-labelledby', `tab-${appState.view}`);
+  if (window.quillShell) {
+    window.quillShell.update({ snapshot: s, view: appState.view, filters: appState.filters, online: appState.online, theme: appState.theme, collapsed: appState.sidebarCollapsed, now, memory: appState.memory });
+    main.setAttribute('role', 'region');
+    main.setAttribute('aria-labelledby', 'platform-page-title');
+  } else {
+    setMarkup($('#sidebar'), renderSidebar(s, { view: appState.view, endpoint: appState.endpoint, online: appState.online, filters: appState.filters, collapsed: appState.sidebarCollapsed, now, moreOpen: appState.moreOpen, memory: appState.memory }));
+    const navTabs = [...document.querySelectorAll('#sidebar .nav [role="tab"]')].filter((el) => el.getClientRects().length);
+    const navStop = navTabs.find((el) => el.getAttribute('aria-selected') === 'true') ?? navTabs[0];
+    for (const tab of navTabs) tab.tabIndex = tab === navStop ? 0 : -1;
+    $('#sidebar .nav').setAttribute('aria-orientation', window.innerWidth < 900 ? 'horizontal' : 'vertical');
+    main.setAttribute('aria-labelledby', `tab-${appState.view}`);
+  }
   if (workspaceOpen) $('#sidebar .workspace-details').open = true;
   // Keep an open health popover (provider errors, worker) open across the header's per-minute re-render.
   const healthOpen = [...document.querySelectorAll('#header .health-pop')].flatMap((p, i) => (p.open ? [i] : []));
@@ -266,6 +274,7 @@ function render() {
   const draft = field ? appState.memoryDrafts[appState.memoryEditing.id] : undefined;
   if (field && typeof draft === 'string' && field.value !== draft) field.value = draft;
   if (keep) { const el = document.getElementById(keep.id); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (keep.start !== null && el.setSelectionRange) el.setSelectionRange(keep.start, keep.end); } }
+  if (window.quillShell && renderedView && renderedView !== appState.view) window.scrollTo(0, 0);
   main.scrollTop = renderedView === appState.view ? scroll : 0;
   renderedView = appState.view;
   disclosures.forEach((id) => { const el = main.querySelector(`[data-disclosure="${CSS.escape(id)}"]`); if (el) el.open = true; });
@@ -452,6 +461,7 @@ function renderDetailPanel(now, pending) {
   const run = runId ? (s.handoffs ?? []).find((h) => h.id === runId) ?? null : null;
   const open = !!(ticket || runId);
   const mode = layoutMode();
+  window.quillShell?.setModal(open && mode !== 'desktop');
   document.body.dataset.expandedTicket = appState.detailExpanded && ticket ? 'true' : 'false';
   panel.hidden = !open;
   document.body.dataset.detail = open ? 'open' : 'closed';
@@ -1332,6 +1342,8 @@ function clearWorkSelection() {
 
 function onChange(e) {
   const el = e.target;
+  syncDeploymentSelection(el);
+  syncStatusDeploymentChoice(el);
   if (el.closest('[data-form="set-update-schedule"]')) appState.updateScheduleEditing = true;
   if (el.dataset.updateOption) { appState[el.dataset.updateOption === 'scope' ? 'updateScope' : el.dataset.updateOption === 'synthesis' ? 'updateSynthesis' : 'updateWindow'] = el.type === 'checkbox' ? el.checked : el.value; return; }
   if (el.hasAttribute('data-work-sort')) { appState.workSort = el.value; render(); return; }
@@ -1422,11 +1434,24 @@ function startCountdown() {
 export function startApp() {
   applyTheme();
   try { appState.sidebarCollapsed = localStorage.getItem('st-sidebar-collapsed') === 'true'; } catch { /* use expanded navigation */ }
+  if (window.quillShell && window.innerWidth < 900) appState.sidebarCollapsed = true;
   motion = createDashboardMotion(document, window.matchMedia('(prefers-reduced-motion: reduce)'));
   readHash();
   const staticSnapshot = window.__SNAPSHOT__ ?? null;
   api = createApi({ staticSnapshot });
   document.addEventListener('click', onClick);
+  document.addEventListener('quill:navigate', (event) => {
+    if (!VIEWS.includes(event.detail?.view)) return;
+    setView(event.detail.view);
+    if (window.innerWidth < 900) appState.sidebarCollapsed = true;
+    render();
+    $('#main').focus({ preventScroll: true });
+  });
+  document.addEventListener('quill:navigation', (event) => {
+    appState.sidebarCollapsed = !!event.detail?.collapsed;
+    try { localStorage.setItem('st-sidebar-collapsed', String(appState.sidebarCollapsed)); } catch { /* storage unavailable */ }
+    render();
+  });
   document.addEventListener('keydown', onKey);
   document.addEventListener('change', onChange);
   // The Advanced access details stays open while it holds the checked access level, so that

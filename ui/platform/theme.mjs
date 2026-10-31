@@ -1,0 +1,26 @@
+// One brand layer across Cloudscape components. Semantic status colors remain distinct.
+export const theme = {
+  tokens: {
+    fontFamilyBase: '"Geist", "Segoe UI", sans-serif',
+    fontFamilyMonospace: '"Geist Mono", ui-monospace, monospace',
+    borderRadiusButton: '8px',
+    borderRadiusContainer: '12px',
+    borderRadiusInput: '8px',
+    colorBackgroundLayoutMain: { light: '#f6f5f2', dark: '#18191b' },
+    colorBackgroundContainerContent: { light: '#ffffff', dark: '#202123' },
+    colorBackgroundContainerHeader: { light: '#ffffff', dark: '#202123' },
+    colorBackgroundButtonPrimaryDefault: { light: '#6941c6', dark: '#c1a7ff' },
+    colorBackgroundButtonPrimaryHover: { light: '#5731ae', dark: '#d1bdff' },
+    colorTextButtonPrimaryDefault: { light: '#ffffff', dark: '#201335' },
+    colorTextButtonPrimaryHover: { light: '#ffffff', dark: '#201335' },
+    colorBorderButtonPrimaryDefault: { light: '#6941c6', dark: '#c1a7ff' },
+    colorBorderButtonPrimaryHover: { light: '#5731ae', dark: '#d1bdff' },
+    colorTextAccent: { light: '#6941c6', dark: '#c1a7ff' },
+    colorTextLinkDefault: { light: '#6941c6', dark: '#c1a7ff' },
+    colorTextBodyDefault: { light: '#262523', dark: '#f0efed' },
+    colorTextBodySecondary: { light: '#65625e', dark: '#bcbab7' },
+    colorTextHeadingDefault: { light: '#262523', dark: '#f0efed' },
+    colorBorderItemSelected: { light: '#6941c6', dark: '#c1a7ff' },
+    colorBackgroundItemSelected: { light: '#f0eafb', dark: '#30263f' },
+  },
+};

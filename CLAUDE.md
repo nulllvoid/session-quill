@@ -4,6 +4,8 @@ For UI, UX, visual assets, or orchestration interface work, read:
 
 @docs/design-system/CLAUDE-DESIGN-SYSTEM.md
 
+For the live shell, also read @docs/design-system/AFTERHOURS.md. The approved Cloudscape/React shell and graphite/paper with iris accents identity supersede the older no-framework/evergreen visual guidance; retain the existing workflow renderers and safety contracts. After shell changes run `npm run build:ui` and `npm run check:ui`.
+
 Use `docs/design-system/index.html` as the visual reference and `ui/assets/README.md` for asset integration. The design system is Quill's own Fieldnotes identity; it is not Anthropic's Claude brand or an official Claude component library.
 
 Before editing, inspect the working tree and relevant existing renderers/tests. Preserve unrelated changes. Use the existing Node ES modules and CSS stack. Production behavior and safety contracts are defined in the data contract and orchestration ADRs; a visual specimen does not authorize a backend behavior change.

@@ -128,9 +128,9 @@ ${needsChoice ? `<fieldset><legend>${icon('alert')}${esc(outstanding.length)} de
   <label><input type="radio" name="deployment_choice" value="waive" required> Waive each with a reason</label>
   <label><input type="radio" name="deployment_choice" value="leave" required> Leave outstanding (ticket stays listed under Deployments)</label>
   <div class="obligations">${outstanding.map((d, i) => `<div class="obligation" data-pr="${attr(d.pr_id)}" data-environment="${attr(d.environment)}"><strong>${esc(d.environment)}</strong> <span class="muted small">PR ${esc(d.pr_id.slice(0, 8))}</span>
-    <label class="indent">Deployed at <input type="datetime-local" name="deployed_at_${i}"></label>
-    <label class="indent">Evidence <input type="text" name="evidence_${i}" maxlength="500" placeholder="release tag, link, note"></label>
-    <label class="indent">Waiver reason <input type="text" name="waiver_${i}" maxlength="500"></label></div>`).join('')}</div>
+    <fieldset data-deployment-fields="record" disabled hidden><legend class="sr-only">Deployment evidence</legend><label class="indent">Deployed at <input type="datetime-local" name="deployed_at_${i}" required></label>
+    <label class="indent">Evidence <input type="text" name="evidence_${i}" maxlength="500" placeholder="release tag, link, note"></label></fieldset>
+    <fieldset data-deployment-fields="waive" disabled hidden><legend class="sr-only">Waiver</legend><label class="indent">Waiver reason <input type="text" name="waiver_${i}" maxlength="500" required></label></fieldset></div>`).join('')}</div>
 </fieldset>` : ''}
 <div class="dialog-actions"><button type="submit" class="btn primary">Apply</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;
@@ -143,8 +143,8 @@ export function renderDeploymentDialog(rawTicket, { mode = 'record', deploymentI
 <h2 id="dialog-title">${icon('rocket')}${mode === 'waive' ? 'Waive' : 'Record'} deployment for ${keyEl(ticket.key)}</h2>
 <p class="muted small">Select each PR/environment obligation and provide ${mode === 'waive' ? 'a waiver reason' : 'a timestamp and evidence'}. Rows stay visible until the worker confirms.</p>
 <div class="obligations">${items.map((d, i) => `<div class="obligation"><label><input type="checkbox" name="select_${i}" value="${attr(d.id)}" data-pr="${attr(d.pr_id)}" data-environment="${attr(d.environment)}" ${items.length === 1 ? 'checked' : ''}> <strong>${esc(d.environment)}</strong> <span class="muted small">PR ${esc(d.pr_id.slice(0, 8))}, merged ${esc(d.merged_at)}</span></label>
-  ${mode === 'waive' ? `<label class="indent">Reason (required) <input type="text" name="waiver_${i}" maxlength="500" required></label>` : `<label class="indent">Deployed at <input type="datetime-local" name="deployed_at_${i}" required></label><label class="indent">Evidence type <select name="evidence_kind_${i}"><option value="tag">Values-file or manifest tag bump</option><option value="argocd">ArgoCD sync</option><option value="release">Release tag</option><option value="merge">The merge itself deploys</option><option value="manual" selected>Other (my note)</option></select></label><label class="indent">Evidence <input type="text" name="evidence_${i}" maxlength="500" placeholder="commit, file, sync id or link"></label>`}
-</div>`).join('')}</div>
+  <fieldset class="obligation-fields"${items.length === 1 ? '' : ' disabled'}><legend class="sr-only">Evidence for ${esc(d.environment)}</legend>${mode === 'waive' ? `<label class="indent">Reason (required) <input type="text" name="waiver_${i}" maxlength="500" required></label>` : `<label class="indent">Deployed at <input type="datetime-local" name="deployed_at_${i}" required></label><label class="indent">Evidence type <select name="evidence_kind_${i}"><option value="tag">Values-file or manifest tag bump</option><option value="argocd">ArgoCD sync</option><option value="release">Release tag</option><option value="merge">The merge itself deploys</option><option value="manual" selected>Other (my note)</option></select></label><label class="indent">Evidence <input type="text" name="evidence_${i}" maxlength="500" placeholder="commit, file, sync id or link"></label>`}
+</fieldset></div>`).join('')}</div>
 <div class="dialog-actions"><button type="submit" class="btn primary">${mode === 'waive' ? 'Waive selected' : 'Mark deployed'}</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;
 }
@@ -152,23 +152,24 @@ export function renderDeploymentDialog(rawTicket, { mode = 'record', deploymentI
 export function renderExportDialog(snapshot, preview) {
   const projects = [...new Map(snapshot.tickets.map((t) => [t.project_id, t.project_name])).entries()];
   const fields = ['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'tags', 'prs', 'deployments', 'files_touched_count', 'plans_count', 'children_ids', 'summary'];
+  const fieldLabels = { key: 'Ticket key', title: 'Title', status: 'Status', category: 'Category', priority: 'Priority', next_action: 'Next action', blocker: 'Blocker', due: 'Due date', last_activity: 'Last activity', stale: 'Stale indicator', tags: 'Tags', prs: 'Pull requests', deployments: 'Deployments', files_touched_count: 'Changed file count', plans_count: 'Plan count', children_ids: 'Child tasks', summary: 'Summary' };
   const defaults = new Set(['key', 'title', 'status', 'category', 'priority', 'next_action', 'blocker', 'due', 'last_activity', 'stale', 'prs', 'deployments', 'children_ids']);
   return `<form class="dialog-form export-form" data-form="export">
 <h2 id="dialog-title">${icon('download')}Export read-only snapshot</h2>
 <p class="muted small">Creates a standalone HTML copy with an export time. It will not update, cannot be revoked after you share it, and is saved locally. Nothing is uploaded or messaged.</p>
 <fieldset><legend>Projects</legend>${projects.map(([id, name]) => `<label><input type="checkbox" name="project" value="${attr(id)}" checked> ${esc(name ?? id)}</label>`).join('')}</fieldset>
-<fieldset><legend>Fields</legend><div class="field-grid">${fields.map((f) => `<label><input type="checkbox" name="field" value="${f}" ${defaults.has(f) ? 'checked' : ''}> ${esc(f)}</label>`).join('')}</div></fieldset>
+<fieldset><legend>Fields</legend><div class="field-grid">${fields.map((f) => `<label><input type="checkbox" name="field" value="${f}" ${defaults.has(f) ? 'checked' : ''}> ${esc(fieldLabels[f] || f)}</label>`).join('')}</div></fieldset>
 <fieldset><legend>Sensitive content (excluded by default)</legend>
   <label><input type="checkbox" name="include_checkpoints"> Include checkpoint previews</label>
   <label><input type="checkbox" name="include_links"> Include PR and Jira links</label>
 </fieldset>
-<div class="export-preview" aria-live="polite">${preview ? `<h3>Preview</h3><p>${esc(preview.ticket_count)} ticket(s) · fields: ${preview.fields.map((f) => `<code>${esc(f)}</code>`).join(' ')}</p><p class="small muted">Excluded: ${preview.excluded.map((x) => esc(x)).join(', ')}</p>` : '<p class="muted small">Choose options, then Preview to see exactly what is included.</p>'}</div>
+<div class="export-preview" aria-live="polite">${preview ? `<h3>Preview</h3><p>${esc(preview.ticket_count)} ticket(s) · fields: ${preview.fields.map((f) => `<span>${esc(fieldLabels[f] || f)}</span>`).join(' ')}</p><p class="small muted">Excluded: ${preview.excluded.map((x) => esc(x)).join(', ')}</p>` : '<p class="muted small">Choose options, then Preview to see exactly what is included.</p>'}</div>
 <div class="dialog-actions"><button type="button" class="btn" data-action="export-preview">Preview</button><button type="submit" class="btn primary" ${preview ? '' : 'disabled'}>Save snapshot</button><button type="button" class="btn ghost" data-action="close-dialog">Cancel</button></div>
 </form>`;
 }
 
 export function renderHelpDialog() {
-  const rows = [['/', 'Focus search'], ['1 to 8', 'Switch view (7 opens Runs, 8 opens Memory)'], ['Enter / Space', 'Open the focused card'], ['h', 'Run agent on a focused eligible card'], ['Escape', 'Close detail or dialog, restore focus; otherwise clear the bulk selection'], ['x', 'Select or deselect the focused card for bulk actions (Board and Pick next)'], ['Shift + click', 'Select every card between the last selected one and this one'], ['Left / Right', 'Previous / next record while the detail navigation control is focused'], ['?', 'This help']];
+  const rows = [['/', 'Focus search'], ['1 to 8', 'Switch view (7 opens Runs, 8 opens Memory)'], ['Enter / Space', 'Open the focused card'], ['h', 'Run agent on a focused eligible card'], ['Escape', 'Close detail or dialog, restore focus; otherwise clear the bulk selection'], ['x', 'Select or deselect the focused card for bulk actions (Work)'], ['Shift + click', 'Select every card between the last selected one and this one'], ['Left / Right', 'Previous / next record while the detail navigation control is focused'], ['?', 'This help']];
   return `<div class="dialog-form"><h2 id="dialog-title">Keyboard shortcuts</h2><table class="shortcuts">${rows.map(([k, d]) => `<tr><th scope="row"><kbd>${esc(k)}</kbd></th><td>${esc(d)}</td></tr>`).join('')}</table><p class="muted small">Shortcuts never run inside inputs or while a dialog owns focus.</p><div class="dialog-actions"><button type="button" class="btn primary" data-action="close-dialog">Close</button></div></div>`;
 }
 
@@ -189,7 +190,7 @@ export function renderPublishDialog(rawSnapshot, { now, pending = [] } = {}) {
     const queued = pending.some((r) => r.kind === 'publish' && ACTIVE_REQUEST.has(r.state) && r.payload && (r.payload.publisher === p.name || r.payload.publisher === null));
     const safeUrl = p.url && /^https:\/\/claude\.ai\//.test(p.url) ? p.url : null;
     const where = `${safeUrl ? `<a href="${attr(safeUrl)}" target="_blank" rel="noopener noreferrer">${esc(safeUrl)}</a>` : `<code>${esc(p.destination_label)}</code>`}${p.last_url && p.last_url !== p.url ? ` <span class="muted">(last published to ${esc(p.last_url)})</span>` : ''}`;
-    const scope = `${esc((p.fields ?? []).join(', '))} of tickets in ${p.projects && p.projects.length ? esc(p.projects.join(', ')) : 'every project'}${p.include_links ? ', with links' : ''}`;
+    const scope = `${esc((p.fields ?? []).map(field => String(field).replaceAll('_', ' ')).join(', '))} of tickets in ${p.projects && p.projects.length ? esc(p.projects.join(', ')) : 'every project'}${p.include_links ? ', with links' : ''}`;
     const last = p.last_outcome === 'failed' ? `<div class="small critical">${esc(p.last_error ?? 'failed')}</div>`
       : p.last_published_at ? `<div class="small">Last published ${timeEl(p.last_published_at, now, tz)}${p.last_summary ? `: ${esc(p.last_summary)}` : ''}</div>` : '<div class="small muted">Not published yet.</div>';
     // A live page published from a Claude Code session (executor "session"): the dashboard records
@@ -197,7 +198,7 @@ export function renderPublishDialog(rawSnapshot, { now, pending = [] } = {}) {
     const viaSession = p.kind === 'artifact' && p.executor === 'session';
     const command = `/session-quill:publish ${p.name}`;
     const action = !canRun ? '' : queued || p.running ? '<span class="muted small">Publishing…</span>'
-      : viaSession && p.confirmed ? `<p class="small">Publish from a Claude Code session: <code>${esc(command)}</code> <button type="button" class="btn small ghost" data-copy="${attr(command)}" data-copy-label="the publish command">${icon('copy')}Copy</button></p>`
+      : viaSession && p.confirmed ? `<p class="small">Publish from a Claude Code session:</p><div class="publish-command"><code>${esc(command)}</code><button type="button" class="btn small ghost" data-copy="${attr(command)}" data-copy-label="the publish command">${icon('copy')}Copy</button></div>`
       : `<button type="button" class="btn small${p.confirmed ? '' : ' primary'}" data-action="publish" data-publisher="${attr(p.name)}" data-confirm="${p.confirmed ? 'false' : 'true'}">${icon('download')}${p.confirmed ? 'Publish now' : viaSession ? 'Confirm destination' : 'Confirm and publish'}</button>`;
     const confirmNote = p.confirmed ? '' : `<p class="small warning-text">${icon('alert')}Nothing has been sent to this destination yet. Confirming sends ${scope} there${p.kind === 'artifact' ? ', and everyone you share the page with can see it' : ''}.</p>`;
     return `<li class="publisher" data-publisher="${attr(p.name)}"><div class="publisher-head"><span class="chip small" data-kind="${attr(p.kind)}">${esc(p.label)}</span> <strong>${esc(p.title ?? p.name)}</strong> <span class="small muted">${esc(p.name)}${p.after_reconcile ? ' · after each reconciliation' : ''}</span></div>

@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-31
+
+Quill Studio: a consistent developer workspace with a Cloudscape shell, clearer task relationships, and polished light and dark themes.
+
+### Changed
+
+- The live dashboard uses locally bundled Cloudscape navigation and layout, with graphite and paper surfaces, iris accents, Geist typography, and capitalized Quill branding. Existing Work, Runs, Daily update, Sessions, Activity, Deployments, and Memory workflows remain available.
+- Work shows visible parent-child branches, child counts, and explicit required, independent, and unclassified relationship labels. Deep hierarchies keep readable indentation and a level label.
+- Dialogs, inspectors, popovers, forms, focus states, and action rows share consistent spacing and controls in both themes. Agent composers keep their header and actions visible while the body scrolls.
+- Phone layouts retain readable Sessions and schedule columns with local scrolling, larger touch controls, and correctly layered menus.
+
+### Fixed
+
+- Unselected deployment obligations and hidden Record/Waive fields no longer block form submission; only the selected evidence fields are enabled and validated.
+- View changes reset document scrolling without moving the workspace during unchanged polling. Mobile detail panels make background shell controls inert.
+- Sessions navigation now uses a supported Cloudscape icon. Bulk-dialog padding, plan and update editing forms, publishing command layout, and duplicate composer scrollbars are corrected.
+
+### Development
+
+- Added reproducible UI bundles, generated-asset checks in CI, and a local review gallery with 126 production-renderer states. The UI review covers both themes at desktop and phone sizes.
+
+### Compatibility
+
+- Package and Claude plugin versions are **2.4.0**. Restart the worker and reload the dashboard after upgrading.
+- No journal schema or reducer version change from 2.3.0. Existing routes, permissions, revision checks, undo controls, and standalone exports remain supported.
+- Frontend dependencies and fonts are bundled locally. Plugin users do not need to install frontend packages; contributors use `npm ci` before rebuilding. Standalone exports retain their self-contained layout without React or Cloudscape dependencies.
+
 ## [2.3.0] - 2026-10-30
 
 A calmer, more expressive dashboard with clearer navigation and rich Markdown.
@@ -490,7 +517,8 @@ First implementation of the v0.2 design (PRD, TRD, data contract, UI specificati
 - Export redaction covers any absolute path; handoff agents get test-runner-only shell access and no provider tokens unless push/PR permission is granted.
 - Plan-mode file exception limited to the first `Write` of a Markdown file directly inside the plan directory (ADR 0004).
 
-[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/nulllvoid/session-quill/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/nulllvoid/session-quill/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/nulllvoid/session-quill/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/nulllvoid/session-quill/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/nulllvoid/session-quill/compare/v2.0.0...v2.1.0
