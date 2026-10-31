@@ -8,7 +8,7 @@ Session Quill is a Claude Code plugin with a small, deliberately conservative co
 
 Guiding constraints you will be held to in review:
 
-- **Node built-ins only.** No runtime dependencies. The hooks must start fast and never make network or model calls.
+- **Keep the worker and hooks dependency-free.** Their runtime uses Node built-ins, starts quickly, and makes no network or model calls on the hook path. The approved Cloudscape/React UI dependencies are bundled locally; the worker and hooks do not import them.
 - **Fail closed.** Anything the gate cannot evaluate denies covered tools. Anything the worker cannot apply is recorded, not guessed.
 - **Nothing is guessed from the working directory.** Session identity comes from the host; bindings never fall back to `cwd`.
 - **Authored text is sacred.** Generated note sections are rewritten; user sections are preserved byte for byte, and unrecognized files are conflicts, never overwrites.
@@ -23,7 +23,7 @@ node --version   # 22 LTS or newer
 npm test
 ```
 
-There is nothing to install: the test runner is `node:test`. Git is needed for the handoff worktree tests. The `claude` CLI is optional (one test validates the plugin manifest with it and skips otherwise).
+The test runner is `node:test` and needs no package installation. Git is needed for the handoff worktree tests. The `claude` CLI is optional (one test validates the plugin manifest with it and skips otherwise). To change the live shell, run `npm ci`, then `npm run build:ui` and `npm run check:ui`; the checked-in browser bundle lets plugin users run the dashboard without those packages.
 
 ### Try the plugin locally
 
@@ -44,6 +44,8 @@ node scripts/dev-seed.mjs
 ```
 
 This starts an in-process worker on a throwaway store seeded with tickets, sessions, a merged PR obligation, a provider error and a stale ticket, and prints a one-use owner URL. It never touches `~/.claude/quill`.
+
+After installing frontend dependencies, `npm run dev:ui` rebuilds the shell before starting the seed worker. `npm run review:ui` serves the production-renderer fixture gallery without mutation endpoints. See [Studio development notes](docs/design-system/AFTERHOURS.md).
 
 ## Running tests
 
@@ -87,7 +89,7 @@ src/server/             loopback API, auth/CSRF, request state machine
 src/handoff/            reservation, worktrees, agent runner, results, permissions
 src/export/             sanitized static HTML export
 src/migrate/            inventory, PMLA profile mapping, backup, run/rollback
-ui/                     dashboard (plain ES modules, no build step)
+ui/                     dashboard renderers (plain ES modules) and locally bundled Cloudscape shell in ui/platform
 agents/, commands/, hooks/, .claude-plugin/   plugin packaging
 profiles/               migration profiles
 tests/                  node:test suites; tests/acceptance mirrors docs/ACCEPTANCE.md
@@ -98,7 +100,7 @@ docs/                   PRD, TRD, data contract, UI spec, ADRs, acceptance scena
 
 1. **Start from the spec.** Find the requirement in the PRD/TRD/data contract. If it is not there, propose it in an issue first; small clarifications can be an ADR under `docs/decisions/`.
 2. **Write the failing test**, then the smallest change that passes it, then run `npm test`.
-3. **Keep the UI buildable without a bundler.** Modules under `ui/` use named exports only and unique top-level names across files, because the static exporter concatenates them (`src/export/static.js`). Run `node --test tests/ui/*.test.js tests/export/*.test.js` after touching them. Colours are tokens in `ui/styles.css`; the contrast test enforces 4.5:1 for both themes.
+3. **Keep workflow renderers export-compatible.** Renderer modules under `ui/` use named exports and unique top-level names because the static exporter concatenates them (`src/export/static.js`). The live shell under `ui/platform/` is a separate React/Cloudscape bundle, removed from standalone exports. Rebuild it with `npm run build:ui` and verify it with `npm run check:ui`. Run `node --test tests/ui/*.test.js tests/export/*.test.js` after UI changes. Shared tokens in `ui/styles.css` and `ui/platform/theme.mjs` keep both themes aligned; contrast tests enforce 4.5:1.
 4. **Update documentation that the change affects**: README for user-facing behaviour, `docs/ACCEPTANCE-RESULTS.md` if you ran or changed a scenario, `CHANGELOG.md` under *Unreleased*.
 5. **Open a pull request** using the template. Describe the behaviour change, how you tested it, and any spec deviation.
 

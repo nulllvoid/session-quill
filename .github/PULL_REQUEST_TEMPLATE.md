@@ -14,7 +14,7 @@
 
 ## Checklist
 
-- [ ] No new runtime dependencies; hook path makes no network or model calls
+- [ ] Worker/hooks remain dependency-free; hook path makes no network or model calls; any frontend dependency changes include the lockfile and rebuilt local bundle
 - [ ] Fail-closed behaviour preserved for covered tools
 - [ ] No absolute paths, credentials or prompts added to anything that leaves the machine
 - [ ] UI changes keep both themes at 4.5:1 contrast and work at 390 px
