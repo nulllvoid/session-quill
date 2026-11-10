@@ -25,6 +25,9 @@ const USER_ONLY_FIELDS = new Set([
   'critical',
   // ADR 0039: whether the worker polls CI of Quill-opened pull requests, and how often.
   'ci',
+  // ADR 0044: where the board is pushed and what leaves the machine. A repository must never
+  // point a member's board at another host or widen what is sent.
+  'hub',
 ]);
 
 // `[worktree]` (ADR 0036), user config only: `auto` makes `ticket work|bind` mount a ticket worktree

@@ -18,6 +18,7 @@ A Claude Code plugin that binds development sessions to tickets, keeps a durable
 - **Agent recipes.** Analyse, analyse with follow-ups, attempt a fix, check deployments or write a standup, or add your own recipes as Markdown files. Each runs in an isolated Git worktree with explicit read/edit/commit/push/draft-PR permissions that the recipe caps, and its suggestions wait for you to accept them.
 - **Environments and Today.** Each merged PR owes a deployment per environment, shown as a PR-by-environment matrix with the evidence for each. Today lists what happened on each day of the last week, and a digest job writes the same summary into your daily note.
 - **Publishers.** Share a roll-up note, a read-only HTML copy or a live claude.ai artifact page. Each sends only the fields and projects you list, and only after you confirm the destination.
+- **Self-hosted team hub.** Run `quill hub serve` (or the Docker image) on a machine your team controls. Each member's worker pushes a read-only, sanitized copy of their board; one page shows everyone's open work and the deployments still owed. No hosted service, no database, no runtime dependencies. See [Self-hosting a team hub](docs/SELF-HOSTING.md).
 - **Tracker sync and two-way pages.** Read status, assignee and fix version from Jira, GitHub or Linear on a schedule; sync never writes. Opt in to push one ticket's status back yourself, previewed and confirmed. On a two-way artifact page, teammates' status and next-action changes come back as revision-checked edits, and their comments join the ticket's timeline. With Run agent on, they can propose an agent run that waits for your Approve.
 
 ## What's new in 2.4
@@ -71,6 +72,7 @@ The full list is in [CHANGELOG.md](CHANGELOG.md); every new field is in [DATA-CO
 | For | Read |
 | --- | --- |
 | Using the plugin | This README, then `node bin/quill.js help` |
+| Running a team hub on your own server | [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) |
 | Product website and GitHub Pages deployment | [site/README.md](site/README.md) |
 | How it works inside | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | What it must do (spec) | [docs/README.md](docs/README.md): PRD, TRD, data contract, UI spec, decisions |
@@ -414,6 +416,31 @@ quill mirror open --dir "<synced store>/.quill-mirror"     # opens the read-only
 ```
 
 The mirror uses the same privacy rules as a shared snapshot (no checkpoint text, no local paths or credentials) and refreshes at most once a minute while the owner's worker runs ([ADR 0019](docs/decisions/0019-read-only-mirror.md)).
+
+## A team hub you host yourself
+
+A mirror shows one board on another machine. A team hub shows every member's board in one place, on a server the team runs. It is read-only: nothing on the hub can change a ticket or start a run.
+
+On the server (Node 22, no install step; a Docker image and a compose file with TLS are in the repository):
+
+```bash
+node bin/quill.js hub serve --dir /var/lib/quill-hub --name "Payments team"
+node bin/quill.js hub token add alice --dir /var/lib/quill-hub                 # a member: pushes and reads
+node bin/quill.js hub token add vera --role viewer --dir /var/lib/quill-hub    # a viewer: reads only
+```
+
+On each member's machine:
+
+```bash
+export QUILL_HUB_TOKEN="qh_m_…"                      # never written to a config file
+quill hub join https://quill.example.org             # preview: what would be sent, and what never is
+quill hub join https://quill.example.org --confirm   # save it; the worker now pushes after each change
+quill hub status                                     # last accepted push, last error
+```
+
+The hub's overview lists each board with its counts and last push, the deployments merged pull requests still owe across the team, and all open work with next actions and blockers. Each board opens as the same read-only dashboard an export gives you.
+
+What is sent follows the shared-snapshot rules (no source, prompts, command output, checkpoint text, memory, credentials or local paths), and the hub checks them again on arrival. `[hub]` can be set only in your own `config.toml`, the address must be `https` outside localhost, and changing it stops pushing until you confirm again. Setup, options, backup and limits are in [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md); the design is [ADR 0044](docs/decisions/0044-self-hosted-team-hub.md).
 
 ## GitHub pull requests and automatic closing
 
@@ -859,6 +886,7 @@ checkpoint_every = 500    # events journaled since the last checkpoint before an
 - **Secret redaction at ingress (2.0).** Every hook and CLI event is redacted before it reaches the journal or the blob store, and the worker redacts each ingress file again before journaling it. This covers end-of-turn messages, approved plans, the start of a shell command, tool error text, the first prompt's title, commit messages and `quill tracker push --comment`, which is redacted before the preview, so what you see is what is sent. Known credential formats are replaced with `[secret redacted]`: GitHub, GitLab, Slack, npm and `sk-` tokens, AWS key ids, Bearer and Basic credentials, passwords in URLs, `secret=value` pairs, `.env` lines with secret-looking names, private keys, and long random-looking strings. Ids, hashes, paths, branches and URLs are kept as they are. Not covered: secrets in no known format (a short plain password in prose), events the worker writes itself, what you type into the dashboard, and journals and blobs written before 2.0, which are not rewritten. Claude Code's own transcripts are outside Quill ([ADR 0029](docs/decisions/0029-ingress-redaction.md)).
 - The gate covers tool calls delivered to its hooks. External processes, disabled hooks and host crashes are outside its guarantee, and a valid binding never bypasses normal Claude Code permissions.
 - Exports are copies: they do not update and cannot be revoked after you share them.
+- A team hub you joined receives a sanitized copy of your board on each push, under the same rules as an export. `quill hub leave --remove` deletes the hub's copy; whoever runs the hub can read what was pushed while you were joined.
 - Handoffs use your configured model provider; selected ticket content leaves the machine when you queue one. That includes the ticket's Notes section, its full latest plan and checkpoint, its earlier run summaries and, with source access, the diff of its commits.
 - An **attempt-fix** handoff runs the repository's own tests inside the isolated worktree, which means it executes repository code with your user account. With a `test_command`, the worker also runs that command there itself after the agent finishes. Granting `edit_source` is granting that. Push and draft-PR permissions are enforced by removing provider tokens and disabling git prompts from the agent's environment unless you grant them, plus the explicit tool allow-list; treat them as policy you can audit in the handoff log, not as a sandbox. Read-only git commands go through Claude Code's own read-only check instead of an allow rule, so options that write files or run programs (`git log --output=…`, `--ext-diff`) are refused. Programs you configured yourself in git config, such as `diff.external`, still run. Details are in [TRD §Handoff execution](docs/TRD.md#handoff-execution).
 - Plan mode: the gate identifies a session's plan file by its first `Write` of a Markdown file directly inside `~/.claude/plans` (the host does not report the path). See [ADR 0004](docs/decisions/0004-plan-path-first-claim.md).

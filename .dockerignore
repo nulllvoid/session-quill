@@ -1,0 +1,16 @@
+.git
+.github
+node_modules
+docs
+site
+tests
+scripts
+recipes
+commands
+agents
+hooks
+profiles
+deploy
+*.md
+*.log
+test-results.tap

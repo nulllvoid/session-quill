@@ -1,0 +1,39 @@
+/* Team hub pages (ADR 0044). Loaded after ui/assets/tokens.css and components.css; uses their
+   tokens and q-* primitives only. These pages are server-rendered and carry no script. */
+html { background: var(--bg); color: var(--text); font: var(--q-type-body)/1.5 var(--font); font-variant-numeric: tabular-nums; }
+body { margin: 0; }
+.hub-skip { position: absolute; left: -999px; top: 8px; padding: 8px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--q-radius-control); }
+.hub-skip:focus { left: 8px; z-index: 5; }
+.hub-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--q-space-3) var(--q-space-5); padding: var(--q-space-3) var(--q-space-6); background: var(--surface); border-bottom: 1px solid var(--border); }
+.hub-brand { font-weight: 600; }
+.hub-brand span { color: var(--text-muted); font-weight: 500; }
+.hub-who { display: flex; flex-wrap: wrap; align-items: center; gap: var(--q-space-3); font-size: var(--q-type-small); color: var(--text-muted); }
+.hub-who form { margin: 0; }
+.hub-main { max-width: 1320px; margin: 0 auto; padding: var(--q-space-6) var(--q-space-6) var(--q-space-12); }
+.hub-main h1 { font-size: var(--q-type-title); line-height: 1.2; font-weight: 600; margin: 0 0 var(--q-space-2); }
+.hub-main h2 { font-size: var(--q-type-section); line-height: 1.25; font-weight: 600; margin: var(--q-space-8) 0 var(--q-space-2); }
+.hub-lead { margin: 0; max-width: 70ch; color: var(--text-muted); font-size: var(--q-type-small); }
+.hub-note { margin: 0 0 var(--q-space-3); max-width: 70ch; color: var(--text-muted); font-size: var(--q-type-small); }
+.hub-totals { display: flex; flex-wrap: wrap; gap: var(--q-space-2); margin: var(--q-space-4) 0 0; padding: 0; list-style: none; }
+.hub-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--q-radius-panel); background: var(--surface); }
+.hub-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.hub-table { width: 100%; border-collapse: collapse; font-size: var(--q-type-small); }
+.hub-table th, .hub-table td { padding: 10px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+.hub-table tr:last-child td { border-bottom: 0; }
+.hub-table th { font-weight: 500; color: var(--text-muted); white-space: nowrap; background: var(--surface-inset); }
+.hub-table td { overflow-wrap: anywhere; min-width: 7ch; }
+.hub-table td.hub-wide { min-width: 22ch; }
+.hub-table td.hub-num, .hub-table th.hub-num { text-align: right; white-space: nowrap; }
+.hub-key { font-family: var(--mono); font-size: var(--q-type-caption); }
+.hub-sub { display: block; color: var(--text-muted); font-size: var(--q-type-caption); }
+.hub-main a, .hub-signin a { color: var(--accent); }
+.hub-main a:focus-visible, .hub-signin a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.hub-signin { max-width: 26rem; margin: 14vh auto 0; padding: 0 var(--q-space-4); }
+.hub-signin h1 { font-size: var(--q-type-title); line-height: 1.2; font-weight: 600; margin: 0 0 var(--q-space-2); }
+.hub-signin form { display: grid; gap: var(--q-space-4); margin-top: var(--q-space-5); }
+.hub-signin code, .hub-main code { font-family: var(--mono); font-size: .92em; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .hub-top { padding: var(--q-space-3) var(--q-space-4); }
+  .hub-main { padding: var(--q-space-5) var(--q-space-4) var(--q-space-12); }
+  .hub-table th, .hub-table td { padding: 10px; }
+}

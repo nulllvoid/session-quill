@@ -1,0 +1,6 @@
+# Caddy obtains and renews the certificate for this host name on its own.
+{$QUILL_HUB_DOMAIN} {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy hub:47400
+}

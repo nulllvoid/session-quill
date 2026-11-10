@@ -47,20 +47,26 @@ function embedJson(obj) {
     .split(PARA_SEP).join('\\u2029');
 }
 
-export function buildStaticHtml(snapshot, options = {}, { uiDir = UI_DIR } = {}) {
-  const sanitized = sanitizeSnapshot(snapshot, options);
+// The page for a snapshot that is already sanitized. The team hub (ADR 0044) renders boards with
+// this from the sanitized JSON a member pushed; it never serves markup a member sent.
+export function renderStaticHtml(sanitized, { uiDir = UI_DIR } = {}) {
   const css = fs.readFileSync(path.join(uiDir, 'styles.css'), 'utf8');
   let html = fs.readFileSync(path.join(uiDir, 'index.html'), 'utf8');
   // The React/Cloudscape shell is for the live owner app. Exports stay self-contained.
   html = html.replace(/<link[^>]*data-live-shell[^>]*>\s*/g, '')
     .replace(/<script[^>]*data-live-shell[^>]*><\/script>\s*/g, '');
-  html = html.replace(/<link rel="stylesheet" href="\/ui\/styles.css">/, `<style>\n${css}\n</style>`);
-  html = html.replace(/<title>[^<]*<\/title>/, `<title>Session Quill snapshot — ${sanitized.meta.exported_at}</title>`);
+  html = html.replace(/<link rel="stylesheet" href="\/ui\/styles.css">/, () => `<style>\n${css}\n</style>`);
+  const exportedAt = String(sanitized.meta.exported_at).replace(/[^0-9A-Za-z:.+-]/g, '');
+  html = html.replace(/<title>[^<]*<\/title>/, () => `<title>Session Quill snapshot — ${exportedAt}</title>`);
   const bundle = bundleUiModules({ staticMode: true, uiDir });
   const scripts = `<script>window.__SNAPSHOT__ = ${embedJson(sanitized)};</script>\n<script type="module">\n${bundle}\n</script>`;
-  html = html.replace(/<script type="module" src="\/ui\/app.js"><\/script>/, scripts);
-  html = html.replace('<body ', `<body data-static="true" data-exported-at="${sanitized.meta.exported_at}" `);
+  html = html.replace(/<script type="module" src="\/ui\/app.js"><\/script>/, () => scripts);
+  html = html.replace('<body ', () => `<body data-static="true" data-exported-at="${exportedAt}" `);
   return html;
+}
+
+export function buildStaticHtml(snapshot, options = {}, { uiDir = UI_DIR } = {}) {
+  return renderStaticHtml(sanitizeSnapshot(snapshot, options), { uiDir });
 }
 
 export function writeStaticHtml(snapshot, outPath, options = {}) {

@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **Self-hosted team hub** ([ADR 0044](docs/decisions/0044-self-hosted-team-hub.md), [guide](docs/SELF-HOSTING.md)). `quill hub serve` runs a small web service on a machine the team controls. Members' workers push a sanitized, read-only copy of their boards; people with a token see every board, the team's open work and the deployments still owed on one page. Node built-ins only, plain files for storage, no hosted service.
+- `quill hub token add|list|revoke` manages member and viewer tokens on the hub's host. Tokens are shown once and stored as hashes.
+- `quill hub join <url> [--confirm]`, `hub push`, `hub status` and `hub leave [--remove]` on a member's machine. `join` previews what would be sent and saves nothing without `--confirm`. The `[hub]` table is user-only configuration; the token comes from an environment variable.
+- `Dockerfile` and `deploy/hub/docker-compose.yml` (hub behind Caddy with automatic TLS).
+
+### Changed
+
+- `src/export/static.js` exposes `renderStaticHtml` for an already sanitized snapshot. `buildStaticHtml` behaves as before; snapshot text containing `$` replacement patterns can no longer alter an export's markup.
+
+### Compatibility
+
+- No journal schema or reducer version change. A worker without a `[hub]` table behaves exactly as in 2.4.0.
+
 ## [2.4.0] - 2026-10-31
 
 Quill Studio: a consistent developer workspace with a Cloudscape shell, clearer task relationships, and polished light and dark themes.

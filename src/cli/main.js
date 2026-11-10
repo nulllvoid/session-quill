@@ -28,6 +28,7 @@ const COMMANDS = {
   memory: () => import('./commands/memory.js'),
   worktree: () => import('./commands/worktree.js'),
   receipt: () => import('./commands/receipt.js'),
+  hub: () => import('./commands/hub.js'),
 };
 
 // Every command the dispatcher knows; tests enumerate it to check the in-run refusal.
@@ -61,6 +62,10 @@ Usage: quill <command> [options]
   ui [--no-open] | ui --static <out.html> [--open] | ui --revoke  (sign every browser out)
                                             export --projects a,b --fields k1,k2 --out <file> [--include-links] [--yes]
   mirror status|open [--dir <folder>] [--json] | mirror write   (read-only copy for other machines)
+  hub join <url> [--token-env NAME] [--projects a,b] [--fields k1,k2] [--include-links] [--confirm]   (push this board, read-only, to a team hub you host)
+  hub push | hub status [--json] | hub leave [--remove]
+  hub serve --dir <data> [--host h] [--port n] [--name "<team>"] [--secure-cookies] [--trust-proxy]   (run a team hub; no store needed)
+  hub token add <name> [--role member|viewer] --dir <data>   hub token list|revoke <name> --dir <data> [--purge]
   handoff <KEY> [--mode m] [--note text] [--read-source] [--edit-source] [--commit] [--push-branch <b>] [--draft-pr] [--access autonomous|standard|settings|full] [--scope s]... [--planned glob]... [--max-turns n] [--budget usd]
   handoff list                              handoff cancel <run-id> | handoff cancel --batch <batch-id>  (queued runs of a batch)
   agent list [--ticket KEY] [--json]        agent show <recipe> [--ticket KEY]

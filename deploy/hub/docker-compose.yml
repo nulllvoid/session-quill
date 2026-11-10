@@ -1,0 +1,39 @@
+# Session Quill team hub with TLS from Caddy. See docs/SELF-HOSTING.md.
+#
+#   QUILL_HUB_DOMAIN=quill.example.org docker compose up -d --build
+#   docker compose exec hub node bin/quill.js hub token add alice
+#
+# Only Caddy is published. The hub itself is reachable from Caddy alone, which is what makes
+# QUILL_HUB_TRUST_PROXY safe here.
+services:
+  hub:
+    build:
+      context: ../..
+    restart: unless-stopped
+    environment:
+      QUILL_HUB_NAME: ${QUILL_HUB_NAME:-Team hub}
+      QUILL_HUB_TRUST_PROXY: "1"
+    volumes:
+      - hub-data:/data
+    expose:
+      - "47400"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - hub
+    environment:
+      QUILL_HUB_DOMAIN: ${QUILL_HUB_DOMAIN:?set QUILL_HUB_DOMAIN to the host name people will open}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  hub-data:
+  caddy-data:
+  caddy-config:

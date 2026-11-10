@@ -28,7 +28,7 @@ export function extensionOptions(spec, ctx) {
   return undefined;
 }
 
-const EXTENSIONS = ['../../updates/extension.js', '../../reconcile/extension.js', '../../server/extension.js', '../../handoff/extension.js', '../../mirror/mirror.js', '../../onboard/extension.js'];
+const EXTENSIONS = ['../../updates/extension.js', '../../reconcile/extension.js', '../../server/extension.js', '../../handoff/extension.js', '../../mirror/mirror.js', '../../hub/client.js', '../../onboard/extension.js'];
 
 export async function attachExtensions(w, ctx, { only = null } = {}) {
   for (const spec of only ?? EXTENSIONS) {

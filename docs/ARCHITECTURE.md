@@ -46,6 +46,7 @@ Everything flows through the journal. Hooks and the CLI only ever *write events*
 | `src/publish/*` | Publisher config, sanitized rows, markdown and html writers, the artifact page, row planning with pinned writes, and the plan executor (ADR 0010). | `normalizePublishers`, `rowsFor`, `beginArtifactPublish`, `continueArtifactPublish` |
 | `src/agents/*` | Recipe frontmatter parsing, discovery and precedence (repo, personal, built-in in `recipes/`), prompt rendering, and suggestions from typed outputs (ADR 0008). | `createRecipeCatalog`, `catalogFor`, `buildSuggestions`, `suggestionMutation` |
 | `src/export/*` | Sanitization and the single-file static build. | `sanitizeSnapshot`, `buildStaticHtml` |
+| `src/hub/*` | The self-hosted team hub (ADR 0044). `server.js`, `store.js`, `accept.js`, `team.js` and `page.js` are the service: token auth, a second sanitizing pass on every push, file storage, and server-rendered pages. `client.js` is the member side: `[hub]` settings, the push, and the worker extension. | `createHub`, `acceptSnapshot`, `teamOverview`, `hubSettings`, `pushSnapshot`, `createExtension` |
 | `src/migrate/*` | Inventory, PMLA mapping, backup, run and rollback. | `runMigration`, `rollback` |
 | `src/cli/*` | Argument parsing, context loading, commands. Commands that change state wait for a worker ack file. | `main`, `submitAndWait` |
 | `ui/` | Dashboard as plain ES modules with pure render functions (`renderBoard(snapshot, filters, opts)` returns HTML) and one imperative shell (`app.js`). | `startApp` |

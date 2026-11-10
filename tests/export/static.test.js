@@ -157,3 +157,12 @@ test('sharing redacts forward-slash Windows paths without removing opted-in web 
   const { redactText } = await import('../../src/export/sanitize.js');
   assert.equal(redactText('See https://example.com/path/to/file and C:/Company/private.txt and src/a.js'), 'See https://example.com/path/to/file and [path redacted] and src/a.js');
 });
+
+test('ticket text that looks like a replacement pattern is embedded as written', () => {
+  const s = snapshot();
+  s.tickets[0].title = "Cost is $& and $' and $` and $1 today";
+  const html = buildStaticHtml(s, { exportedAt: '2026-10-02T12:00:00Z' });
+  const embedded = /window\.__SNAPSHOT__ = (.*);<\/script>/.exec(html)[1];
+  assert.equal(JSON.parse(embedded).tickets[0].title, "Cost is $& and $' and $` and $1 today");
+  assert.equal(html.split('<script type="module">').length, 2, 'the bundle appears once');
+});
