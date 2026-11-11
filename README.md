@@ -419,7 +419,7 @@ The mirror uses the same privacy rules as a shared snapshot (no checkpoint text,
 
 ## A team hub you host yourself
 
-A mirror shows one board on another machine. A team hub shows every member's board in one place, on a server the team runs. It is read-only: nothing on the hub can change a ticket or start a run.
+A mirror shows one board on another machine. A team hub shows every member's board in one place, on a server the team runs. It is read-only unless a board's owner opts in to proposals: then a teammate can propose a status or next action, which reaches the owner's machine as a revision-checked request with the usual undo window.
 
 On the server (Node 22, no install step; a Docker image and a compose file with TLS are in the repository):
 
@@ -427,6 +427,7 @@ On the server (Node 22, no install step; a Docker image and a compose file with 
 node bin/quill.js hub serve --dir /var/lib/quill-hub --name "Payments team"
 node bin/quill.js hub token add alice --dir /var/lib/quill-hub                 # a member: pushes and reads
 node bin/quill.js hub token add vera --role viewer --dir /var/lib/quill-hub    # a viewer: reads only
+node bin/quill.js hub token add ext --role viewer --boards alice --dir /var/lib/quill-hub   # reads alice's board only
 ```
 
 On each member's machine:
@@ -436,11 +437,12 @@ export QUILL_HUB_TOKEN="qh_m_…"                      # never written to a conf
 quill hub join https://quill.example.org             # preview: what would be sent, and what never is
 quill hub join https://quill.example.org --confirm   # save it; the worker now pushes after each change
 quill hub status                                     # last accepted push, last error
+quill hub join https://quill.example.org --accept-edits --confirm   # optional: let teammates propose status and next action
 ```
 
 The hub's overview lists each board with its counts and last push, the deployments merged pull requests still owe across the team, and all open work with next actions and blockers. Each board opens as the same read-only dashboard an export gives you.
 
-What is sent follows the shared-snapshot rules (no source, prompts, command output, checkpoint text, memory, credentials or local paths), and the hub checks them again on arrival. `[hub]` can be set only in your own `config.toml`, the address must be `https` outside localhost, and changing it stops pushing until you confirm again. Setup, options, backup and limits are in [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md); the design is [ADR 0044](docs/decisions/0044-self-hosted-team-hub.md).
+What is sent follows the shared-snapshot rules (no source, prompts, command output, checkpoint text, memory, credentials or local paths), and the hub checks them again on arrival. `[hub]` can be set only in your own `config.toml`, the address must be `https` outside localhost, and changing it stops pushing until you confirm again. Setup, options, backup and limits are in [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md); the design is [ADR 0044](docs/decisions/0044-self-hosted-team-hub.md) and [ADR 0045](docs/decisions/0045-hub-edits-and-scoped-tokens.md).
 
 ## GitHub pull requests and automatic closing
 

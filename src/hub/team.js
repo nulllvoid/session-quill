@@ -40,7 +40,7 @@ export function teamOverview(boards, now) {
     for (const t of b.snapshot.tickets) {
       if (t.status === 'done') continue;
       open.push({
-        member: b.name, store_id: b.store_id, key: text(t.key, 200), title: text(t.title), status: STATUSES.includes(t.status) ? t.status : 'todo',
+        member: b.name, store_id: b.store_id, id: text(t.id, 80), key: text(t.key, 200), title: text(t.title), status: STATUSES.includes(t.status) ? t.status : 'todo',
         priority: text(t.priority, 10) || null, project_name: text(t.project_name, 80) || null, next_action: text(t.next_action), blocker: text(t.blocker),
         last_activity: time(t.last_activity), stale: t.stale === true,
       });

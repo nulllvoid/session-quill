@@ -56,20 +56,34 @@ function saveTokens(dir, tokens) {
   try { fs.chmodSync(tokensPath(dir), 0o600); } catch { /* not supported on this file system */ }
 }
 
-export function addToken(dir, { name, role = 'member', now }) {
+// `boards`: the member names whose boards this token may read; null means every board. A member
+// always reads its own.
+function cleanBoards(boards) {
+  if (boards === null || boards === undefined) return null;
+  if (!Array.isArray(boards) || !boards.length || boards.some((b) => typeof b !== 'string' || !NAME_RE.test(b))) throw new TrackerError('hub-boards', '--boards takes a comma-separated list of member names');
+  return [...new Set(boards)].sort();
+}
+
+const publicToken = (t) => ({ id: t.id, name: t.name, role: t.role, boards: Array.isArray(t.boards) ? t.boards : null });
+
+export function canSee(token, memberName) {
+  return !!token && (token.boards === null || token.boards.includes(memberName) || (token.role === 'member' && token.name === memberName));
+}
+
+export function addToken(dir, { name, role = 'member', boards = null, now }) {
   if (typeof name !== 'string' || !NAME_RE.test(name)) throw new TrackerError('hub-name', 'a token name is 1 to 40 lowercase letters, digits and dashes, starting with a letter or digit');
   if (!ROLES.includes(role)) throw new TrackerError('hub-role', `role must be one of ${ROLES.join(', ')}`);
   const tokens = loadTokens(dir);
   if (tokens.some((t) => t.name === name)) throw new TrackerError('hub-name-taken', `a token named "${name}" already exists; revoke it first or pick another name`);
   if (tokens.length >= MAX_TOKENS) throw new TrackerError('hub-token-limit', `the hub holds at most ${MAX_TOKENS} tokens`);
   const token = `qh_${role === 'member' ? 'm' : 'v'}_${randomBytes(32).toString('base64url')}`;
-  const record = { id: randomBytes(6).toString('hex'), name, role, hash: sha256(token), created_at: now };
+  const record = { id: randomBytes(6).toString('hex'), name, role, boards: cleanBoards(boards), hash: sha256(token), created_at: now };
   saveTokens(dir, [...tokens, record]);
-  return { token, id: record.id, name, role };
+  return { token, ...publicToken(record) };
 }
 
 export function listTokens(dir) {
-  return loadTokens(dir).map(({ id, name, role, created_at }) => ({ id, name, role, created_at }));
+  return loadTokens(dir).map((t) => ({ ...publicToken(t), created_at: t.created_at }));
 }
 
 export function revokeToken(dir, name) {
@@ -90,12 +104,12 @@ export function findToken(dir, presented) {
     const stored = Buffer.from(t.hash, 'hex');
     if (stored.length === hash.length && timingSafeEqual(stored, hash)) found = t;
   }
-  return found ? { id: found.id, name: found.name, role: found.role } : null;
+  return found ? publicToken(found) : null;
 }
 
 export function tokenById(dir, id) {
   const t = loadTokens(dir).find((x) => x.id === id);
-  return t ? { id: t.id, name: t.name, role: t.role } : null;
+  return t ? publicToken(t) : null;
 }
 
 function boardDir(dir, name, storeId) {
@@ -147,5 +161,46 @@ export function removeBoardsOf(dir, name) {
   const target = path.join(dir, 'boards', name);
   const n = listFiles(target, (x) => STORE_ID_RE.test(x)).length;
   fs.rmSync(target, { recursive: true, force: true });
+  return n;
+}
+
+// Edits a teammate proposed on the hub (ADR 0045), waiting for the board owner's worker.
+//   boards/<name>/<store_id>/edits.json   { schema_version, edits: [{ id, ticket_id, field, value,
+//     expected_revision, by, at, delivered_at }] }
+export const MAX_OPEN_EDITS = 200;
+const EDIT_KEEP_MS = 7 * 86_400_000;
+const editsPath = (dir, name, storeId) => path.join(boardDir(dir, name, storeId), 'edits.json');
+
+export function listEdits(dir, name, storeId) {
+  let data = null;
+  try { data = readJsonIfExists(editsPath(dir, name, storeId)); } catch { return []; }
+  return data && Array.isArray(data.edits) ? data.edits.filter((e) => e && typeof e.id === 'string') : [];
+}
+
+function saveEdits(dir, name, storeId, edits, nowMs) {
+  // Delivered edits are kept a week for the record; undelivered ones lapse after a week too.
+  const kept = edits.filter((e) => nowMs - Date.parse(e.delivered_at ?? e.at) < EDIT_KEEP_MS);
+  writeJsonAtomic(editsPath(dir, name, storeId), { schema_version: 1, edits: kept });
+  return kept;
+}
+
+/** Queue one edit. A newer undelivered edit of the same field of the same ticket replaces the older. */
+export function queueEdit(dir, name, storeId, edit, nowMs) {
+  const edits = listEdits(dir, name, storeId).filter((e) => e.delivered_at || e.ticket_id !== edit.ticket_id || e.field !== edit.field);
+  if (edits.filter((e) => !e.delivered_at).length >= MAX_OPEN_EDITS) throw new TrackerError('hub-edit-limit', `this board already has ${MAX_OPEN_EDITS} edits waiting for its owner's machine`);
+  const record = { id: randomBytes(8).toString('hex'), ...edit, delivered_at: null };
+  saveEdits(dir, name, storeId, [...edits, record], nowMs);
+  return record;
+}
+
+export function ackEdits(dir, name, storeId, ids, now) {
+  const want = new Set(ids);
+  let n = 0;
+  const edits = listEdits(dir, name, storeId).map((e) => {
+    if (!want.has(e.id) || e.delivered_at) return e;
+    n += 1;
+    return { ...e, delivered_at: now };
+  });
+  if (n) saveEdits(dir, name, storeId, edits, Date.parse(now));
   return n;
 }

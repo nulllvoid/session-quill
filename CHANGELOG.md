@@ -10,6 +10,12 @@ All notable changes to this project are documented here. The format follows [Kee
 - `quill hub token add|list|revoke` manages member and viewer tokens on the hub's host. Tokens are shown once and stored as hashes.
 - `quill hub join <url> [--confirm]`, `hub push`, `hub status` and `hub leave [--remove]` on a member's machine. `join` previews what would be sent and saves nothing without `--confirm`. The `[hub]` table is user-only configuration; the token comes from an environment variable.
 - `Dockerfile` and `deploy/hub/docker-compose.yml` (hub behind Caddy with automatic TLS).
+- **Proposals from the hub** ([ADR 0045](docs/decisions/0045-hub-edits-and-scoped-tokens.md)). With `[hub] accept_edits = true` (`quill hub join --accept-edits --confirm`), a signed-in member can propose a status or next action on a ticket page of the hub. The owner's worker collects proposals once a minute and journals each as a revision-checked request with the 10-second undo window and `actor_id = hub:<name>`. Off by default; viewer tokens cannot propose.
+- **Tokens limited to boards.** `quill hub token add <name> --boards alice,bob` reads only those members' boards.
+- A board on the hub opens under the hub's own bar, with a link back to the overview.
+- `quill doctor` shows a `team hub` line when a hub is configured.
+- `scripts/hub-smoke.mjs` checks a running hub end to end.
+- `quill` says plainly that it needs Node 22 when started on an older Node, instead of failing with a syntax error.
 
 ### Changed
 

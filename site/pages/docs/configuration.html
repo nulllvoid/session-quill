@@ -13,6 +13,7 @@
     <tr><td>[[schedule]]</td><td>Yes</td><td>No; repositories cannot schedule jobs</td></tr>
     <tr><td>[[publish]]</td><td>Yes</td><td>No</td></tr>
     <tr><td>[mirror]</td><td>Yes</td><td>No</td></tr>
+    <tr><td>[hub]</td><td>Yes</td><td>No</td></tr>
     <tr><td>ui_port</td><td>Yes</td><td>No</td></tr>
   </tbody>
 </table>
@@ -106,6 +107,18 @@ two_way       = true
 run_agent     = true             # 1.0: a Run agent select; every pick waits for your approval
 run_recipes   = ["deploy-check"] # offered beside the read-only built-ins</code></pre>
 <p>The first publish to a destination waits for your confirmation. With <code>two_way</code>, editors change status and next action on the page and, from 1.0, pick a recipe under <em>Run agent</em>; each becomes a revision-checked request or a proposed run on your dashboard.</p>
+
+<h2 id="hub">[hub]</h2>
+<pre><code>[hub]
+url = "https://quill.example.org"
+enabled = true
+confirmed_url = "https://quill.example.org"
+# token_env = "QUILL_HUB_TOKEN"
+# interval_seconds = 300
+# projects = ["payments"]
+# include_links = false
+# accept_edits = false</code></pre>
+<p>Pushes a sanitised, read-only copy of your board to a team hub your team hosts itself. Written by <code>quill hub join &lt;url&gt; --confirm</code>; changing <code>url</code> stops pushing until you confirm again. The token is read from the environment variable named in <code>token_env</code> and is never stored in a file. <code>accept_edits = true</code> lets signed-in teammates propose a status or next action, which arrive as revision-checked requests with the usual undo window. A repository's <code>.quill.toml</code> cannot set this table. Running a hub is covered in <code>docs/SELF-HOSTING.md</code> in the repository.</p>
 
 <h2 id="mirror">[mirror]</h2>
 <pre><code>[mirror]

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { normalizeHubUrl, hubSettings, buildPayload, pushSnapshot, pingHub, createExtension, readHubState } from '../../src/hub/client.js';
 import { loadRepoConfig } from '../../src/config/config.js';
+import { hubCheck } from '../../src/cli/commands/doctor.js';
 import { startHub, rawSnapshot, ticket, NOW } from './helpers.js';
 
 const cfg = (hub) => ({ machine_name: 'laptop', hub });
@@ -159,4 +160,49 @@ test('the worker says once why it is not pushing, and never sends without a toke
   off.lastSnapshot = rawSnapshot();
   ext.tick(off);
   assert.deepEqual(off.logs, [], 'a hub that is not switched on is silent');
+});
+
+test('doctor reports the hub only when one is configured, and never fails on it', () => {
+  const url = 'https://h.example';
+  const on = (extra = {}, env = { QUILL_HUB_TOKEN: 'secret-token' }) => hubSettings(cfg({ url, enabled: true, confirmed_url: url, ...extra }), env);
+  assert.equal(hubCheck(hubSettings({}, {}), null), null);
+  assert.deepEqual(hubCheck(hubSettings(cfg({ url }), {}), null), { level: 'ok', detail: `${url}: pushing is off (quill hub join <url> --confirm switches it on)` });
+  assert.match(hubCheck(on({}, {}), null).detail, /not pushing: no token: set the QUILL_HUB_TOKEN/);
+  assert.equal(hubCheck(on({}, {}), null).level, 'warn');
+  assert.match(hubCheck(on(), null).detail, /no push recorded yet/);
+  assert.deepEqual(hubCheck(on({ accept_edits: true }), { url, last_success_at: NOW, last_error: null }), { level: 'ok', detail: `${url}: last push accepted ${NOW}; edits from the hub accepted` });
+  const failed = hubCheck(on(), { url, last_attempt_at: NOW, last_success_at: '2026-11-09T00:00:00Z', last_error: { code: 'hub-unreachable', message: 'could not reach the hub' } });
+  assert.equal(failed.level, 'warn');
+  assert.match(failed.detail, /failed: could not reach the hub; last accepted 2026-11-09/);
+  assert.match(hubCheck(on(), { url: 'https://old.example', last_success_at: NOW }).detail, /no push recorded yet/, 'state for another hub is ignored');
+  assert.equal(JSON.stringify([hubCheck(on(), null), failed]).includes('secret-token'), false);
+});
+
+test('the worker collects edits once a minute, only when the owner accepts them', async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push(`${init.method} ${new URL(url).pathname}`);
+    if (init.method === 'GET') return new Response(JSON.stringify({ edits: [] }), { status: 200 });
+    return new Response(JSON.stringify({ ok: true, member: 'alice' }), { status: 200 });
+  };
+  const url = 'https://h.example';
+  const env = { QUILL_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'quill-hub-w3-')), QUILL_HUB_TOKEN: 'tok' };
+  const ctx = { storeMeta: { store_id: 'store-1' }, machineId: 'm1', env };
+  const off = fakeWorker(cfg({ url, enabled: true, confirmed_url: url }), env);
+  const extOff = createExtension(ctx, { fetchImpl });
+  extOff.tick(off);
+  await extOff.collecting;
+  assert.deepEqual(calls, [], 'accept_edits is off by default: the hub is never asked for edits');
+  const w = fakeWorker(cfg({ url, enabled: true, confirmed_url: url, accept_edits: true }), env);
+  const ext = createExtension(ctx, { fetchImpl });
+  ext.tick(w);
+  await ext.collecting;
+  ext.tick(w);
+  w.ms += 30_000;
+  ext.tick(w);
+  assert.deepEqual(calls, ['GET /v1/edits']);
+  w.ms += 31_000;
+  ext.tick(w);
+  await ext.collecting;
+  assert.deepEqual(calls, ['GET /v1/edits', 'GET /v1/edits']);
 });

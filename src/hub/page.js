@@ -112,7 +112,7 @@ function openTable(overview, nowMs) {
 </section>`;
   }
   const rows = overview.open.map((t) => `<tr>
-<td class="hub-wide"><span class="hub-key">${esc(t.key)}</span><span class="hub-sub">${esc(t.title)}</span></td>
+<td class="hub-wide"><a class="hub-key" href="${ticketHref(t)}">${esc(t.key) || 'Open'}</a><span class="hub-sub">${esc(t.title)}</span></td>
 <td>${chip(t.status)}${t.stale ? ' <span class="q-chip">Stale</span>' : ''}</td>
 <td>${esc(t.priority ?? '')}</td>
 <td class="hub-wide">${t.blocker ? `<strong>Blocked:</strong> ${esc(t.blocker)}` : esc(t.next_action) || '<span class="hub-sub">no next action recorded</span>'}</td>
@@ -135,19 +135,110 @@ ${more}
 </section>`;
 }
 
+function topBar(who) {
+  const scope = who.boards ? `${who.role}, ${who.boards.length} board${who.boards.length === 1 ? '' : 's'}` : who.role;
+  return `<a class="hub-skip" href="#main">Skip to content</a>
+<header class="hub-top">
+<div class="hub-brand"><a href="/">Session Quill <span>· Team hub</span></a></div>
+<div class="hub-who"><span>Signed in as <strong>${esc(who.name)}</strong> (${esc(scope)})</span><form method="post" action="/logout"><button class="q-button" type="submit">Sign out</button></form></div>
+</header>`;
+}
+
+export const EDIT_STATUSES = Object.freeze(['todo', 'active', 'review', 'deploy-pending', 'done']);
+export const ticketHref = (t) => `/b/${encodeURIComponent(t.member)}/${encodeURIComponent(t.store_id)}/t/${encodeURIComponent(t.id)}`;
+
+// What is known about a proposed edit, from the hub's own records and the latest push only.
+export function editState(edit, ticket, member, nowMs) {
+  if (!edit.delivered_at) return `Waiting for ${member}'s machine to collect it`;
+  const collected = `Collected ${ago(nowMs - Date.parse(edit.delivered_at))}`;
+  const shown = ticket && (edit.field === 'status' ? ticket.status : (ticket.next_action ?? '')) === edit.value;
+  if (shown) return `${collected}; the board now shows this value`;
+  if (ticket && Number.isInteger(ticket.revision) && ticket.revision > edit.expected_revision) return `${collected}; the ticket has changed since and does not show this value`;
+  return `${collected}; not visible in a push yet`;
+}
+
+function editLine(edit, ticket, member, nowMs) {
+  const what = edit.field === 'status' ? `status to ${STATUS_LABEL[edit.value] ?? edit.value}` : 'the next action';
+  return `<li><strong>${esc(edit.by)}</strong> proposed ${esc(what)} ${timeEl(edit.at, nowMs)}${edit.field === 'next_action' ? `<span class="hub-sub">${esc(edit.value) || '(empty)'}</span>` : ''}<span class="hub-sub">${esc(editState(edit, ticket, member, nowMs))}</span></li>`;
+}
+
+export function ticketPage({ hubName, who, member, storeId, info, ticket, edits, now, canEdit, whyNot = null, sent = 0, error = null, draft = null }) {
+  const nowMs = Date.parse(now);
+  const board = { member, store_id: storeId };
+  const action = ticketHref({ ...board, id: ticket.id });
+  const nextAction = draft && draft.field === 'next_action' ? draft.value : (ticket.next_action ?? '');
+  const errFor = (field) => (error && (!draft || draft.field === field) ? error : null);
+  const statusError = errFor('status');
+  const nextError = errFor('next_action');
+  // One change per request: each is checked against the ticket's revision on the owner's machine,
+  // so two sent together would have the second refused as out of date.
+  const form = canEdit ? `<p class="hub-note" id="edit-help">A change goes to ${esc(member)}'s machine as a request from <strong>${esc(who.name)}</strong>. Their worker applies it after a 10-second undo window, or refuses it if the ticket changed after this copy was pushed. Send one change at a time; this page changes only when their machine pushes again.</p>
+<form class="hub-form" method="post" action="${action}">
+<input type="hidden" name="field" value="status">
+<label class="q-field" for="status">Status
+<select class="q-input" id="status" name="value" required${statusError ? ' aria-invalid="true" aria-describedby="status-error edit-help"' : ' aria-describedby="edit-help"'}>
+<option value="">Now: ${esc(STATUS_LABEL[ticket.status] ?? ticket.status)}. Choose a new status</option>
+${EDIT_STATUSES.filter((s) => s !== ticket.status).map((s) => `<option value="${s}">${esc(STATUS_LABEL[s])}</option>`).join('\n')}
+</select>
+</label>
+${statusError ? `<p class="q-error" id="status-error" role="alert">${esc(statusError)}</p>` : ''}
+<div><button class="q-button q-button--primary" type="submit">Send status to ${esc(member)}'s machine</button></div>
+</form>
+<form class="hub-form" method="post" action="${action}">
+<input type="hidden" name="field" value="next_action">
+<label class="q-field" for="next_action">Next action
+<textarea class="q-input" id="next_action" name="value" rows="3" maxlength="2000"${nextError ? ' aria-invalid="true" aria-describedby="next-error edit-help"' : ' aria-describedby="edit-help"'}>${esc(nextAction)}</textarea>
+</label>
+${nextError ? `<p class="q-error" id="next-error" role="alert">${esc(nextError)}</p>` : ''}
+<div><button class="q-button" type="submit">Send next action to ${esc(member)}'s machine</button></div>
+</form>` : `${error ? `<p class="q-error" role="alert">${esc(error)}</p>` : ''}<p class="hub-note">${esc(whyNot ?? 'This board is read-only here.')}</p>`;
+  const body = `${topBar(who)}
+<main id="main" class="hub-main">
+<p class="hub-crumb"><a href="/">${esc(hubName)}</a> / <a href="${boardHref(board)}">${esc(member)}</a></p>
+<h1><span class="hub-key">${esc(ticket.key ?? '')}</span> ${esc(ticket.title ?? '')}</h1>
+${sent ? `<p class="hub-sent" role="status">Your change is queued for ${esc(member)}'s machine. Queued is not applied: the list below says what happened to it.</p>` : ''}
+<dl class="hub-facts">
+<div><dt>Status</dt><dd>${chip(STATUSES.includes(ticket.status) ? ticket.status : 'todo')}${ticket.stale === true ? ' <span class="q-chip">Stale</span>' : ''}</dd></div>
+<div><dt>Priority</dt><dd>${esc(ticket.priority ?? 'not set')}</dd></div>
+<div><dt>Next action</dt><dd>${esc(ticket.next_action) || '<span class="hub-sub">none recorded</span>'}</dd></div>
+${ticket.blocker ? `<div><dt>Blocker</dt><dd>${esc(ticket.blocker)}</dd></div>` : ''}
+<div><dt>Last activity</dt><dd>${timeEl(typeof ticket.last_activity === 'string' ? ticket.last_activity : null, nowMs)}</dd></div>
+<div><dt>This copy</dt><dd>Pushed ${timeEl(info.pushed_at, nowMs)} from ${esc(member)}'s machine</dd></div>
+</dl>
+<section aria-labelledby="edit-h">
+<h2 id="edit-h">Propose a change</h2>
+${form}
+</section>
+<section aria-labelledby="edits-h">
+<h2 id="edits-h">Changes proposed on this hub (${edits.length})</h2>
+${edits.length ? `<ul class="hub-edits">${edits.map((e) => editLine(e, ticket, member, nowMs)).join('\n')}</ul>` : '<p class="hub-note">None in the last week.</p>'}
+</section>
+</main>`;
+  return shell({ title: `${ticket.key ?? 'Ticket'} · ${hubName}`, body, bodyClass: 'hub' });
+}
+
+// One board: the hub's bar, then the read-only dashboard in a frame of its own, so the dashboard's
+// full-height layout is untouched.
+export function boardFramePage({ hubName, who, member, storeId, pushedAt, now }) {
+  const nowMs = Date.parse(now);
+  const src = `/b/${encodeURIComponent(member)}/${encodeURIComponent(storeId)}/frame`;
+  const body = `${topBar(who)}
+<main id="main" class="hub-board">
+<p class="hub-crumb"><a href="/">${esc(hubName)}</a> / ${esc(member)} <span class="hub-crumb-note">Read-only copy, pushed ${timeEl(pushedAt, nowMs)}</span></p>
+<iframe class="hub-frame" src="${src}" title="${esc(member)}'s board, read-only"></iframe>
+</main>`;
+  return shell({ title: `${member} · ${hubName}`, body, bodyClass: 'hub hub-board-page' });
+}
+
 export function overviewPage({ hubName, who, overview }) {
   const nowMs = Date.parse(overview.generated_at);
   const totals = overview.boards.length
     ? `<ul class="hub-totals" aria-label="Tickets by status, all boards">${STATUSES.map((s) => `<li>${chip(s)} ${overview.totals[s]}</li>`).join('')}</ul>`
     : '';
-  const body = `<a class="hub-skip" href="#main">Skip to content</a>
-<header class="hub-top">
-<div class="hub-brand">Session Quill <span>· Team hub</span></div>
-<div class="hub-who"><span>Signed in as <strong>${esc(who.name)}</strong> (${esc(who.role)})</span><form method="post" action="/logout"><button class="q-button" type="submit">Sign out</button></form></div>
-</header>
+  const body = `${topBar(who)}
 <main id="main" class="hub-main">
 <h1>${esc(hubName)}</h1>
-<p class="hub-lead">Read-only copies that each member's own machine pushed. Nothing on this page changes a ticket. Page built <time datetime="${esc(overview.generated_at)}">${esc(overview.generated_at)}</time>; reload for newer pushes.</p>
+<p class="hub-lead">Copies that each member's own machine pushed. Nothing here changes a ticket directly; on boards that accept it, a member can propose a change from a ticket's page. Page built <time datetime="${esc(overview.generated_at)}">${esc(overview.generated_at)}</time>; reload for newer pushes.</p>
 ${totals}
 ${boardsTable(overview)}
 ${deploymentsTable(overview, nowMs)}

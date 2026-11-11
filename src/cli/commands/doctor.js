@@ -16,6 +16,7 @@ import { pausePath } from '../../runtime/readiness.js';
 import { verifyAutostart } from '../../worker/autostart.js';
 import { parseVersion, MIN_RUNTIME } from '../../handoff/inventory.js';
 import { parseYaml } from '../../worker/markdown.js';
+import { hubSettings, readHubState } from '../../hub/client.js';
 
 export const MIN_NODE_MAJOR = 22;
 // Autonomous runs empty the checkout's own credential helper with command-scope config, which
@@ -34,6 +35,19 @@ export function claudeCheck(line) {
   if (!line) return { level: 'warn', detail: 'not found (required for handoffs)' };
   if (older(line, MIN_RUNTIME)) return { level: 'warn', detail: `${line}: autonomous runs need ${MIN_RUNTIME} or later and are refused (runtime-too-old); standard runs still work` };
   return { level: 'ok', detail: line };
+}
+
+// The team hub (ADR 0044): nothing when no hub is configured; a warning, never an error, when a
+// configured hub is not being pushed to. The token is never printed.
+export function hubCheck(settings, state) {
+  if (!settings.configured) return null;
+  if (!settings.switched_on) return { level: 'ok', detail: `${settings.url ?? 'configured'}: pushing is off (quill hub join <url> --confirm switches it on)` };
+  if (!settings.enabled) return { level: 'warn', detail: `${settings.url ?? 'invalid address'}: not pushing: ${settings.problems.join('; ')}` };
+  const mine = state && state.url === settings.url ? state : null;
+  const edits = settings.accept_edits ? '; edits from the hub accepted' : '';
+  if (mine && mine.last_error) return { level: 'warn', detail: `${settings.url}: last push (${mine.last_attempt_at}) failed: ${mine.last_error.message}${mine.last_success_at ? `; last accepted ${mine.last_success_at}` : ''}` };
+  if (mine && mine.last_success_at) return { level: 'ok', detail: `${settings.url}: last push accepted ${mine.last_success_at}${edits}` };
+  return { level: 'ok', detail: `${settings.url}: no push recorded yet (the worker pushes after the next change)${edits}` };
 }
 
 function version(cmd, args) {
@@ -117,6 +131,8 @@ export async function collect(env, { autostart = {}, pluginRoot } = {}) {
     const status = repoStatus(repo);
     if (status !== 'ok') add('warn', `repo ${id}`, `${repo.canonical_path ?? ''} ${REPO_STATUS_TEXT[status]} (fix the path with quill repo add, or quill repo remove ${id})`.trim());
   }
+  const hub = hubCheck(hubSettings(ctx.config, env), readHubState(env));
+  if (hub) add(hub.level, 'team hub', hub.detail);
   // Usage health stays on this machine; warnings here never fail the doctor.
   const snap = latestSnapshot(ctx);
   report.usage = usageStats({ events: readJournalTail(journalPath(env)), healthErrors: readHealthErrors(env, { limit: 5000 }), sessions: snap ? snap.sessions : [], nowIso: nowIso() });

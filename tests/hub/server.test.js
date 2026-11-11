@@ -25,13 +25,13 @@ test('tokens are stored only as hashes, and names are unique slugs', async () =>
     assert.equal(file.includes(h.member.token), false);
     assert.match(h.member.token, /^qh_m_/);
     assert.match(h.viewer.token, /^qh_v_/);
-    assert.deepEqual(findToken(h.dir, h.member.token), { id: h.member.id, name: 'alice', role: 'member' });
+    assert.deepEqual(findToken(h.dir, h.member.token), { id: h.member.id, name: 'alice', role: 'member', boards: null });
     assert.equal(findToken(h.dir, `${h.member.token.slice(0, -1)}x`), null);
     assert.equal(findToken(h.dir, 'not a token'), null);
     assert.throws(() => addToken(h.dir, { name: 'alice', now: NOW }), /already exists/);
     assert.throws(() => addToken(h.dir, { name: '../etc', now: NOW }), /lowercase letters/);
     assert.throws(() => addToken(h.dir, { name: 'bob', role: 'admin', now: NOW }), /role must be/);
-    assert.deepEqual(listTokens(h.dir).map((t) => Object.keys(t).sort()), [['created_at', 'id', 'name', 'role'], ['created_at', 'id', 'name', 'role']]);
+    assert.deepEqual(listTokens(h.dir).map((t) => Object.keys(t).sort()), [['boards', 'created_at', 'id', 'name', 'role'], ['boards', 'created_at', 'id', 'name', 'role']]);
   } finally { await h.close(); }
 });
 
@@ -94,7 +94,7 @@ test('pages need a signed-in browser; sign-in sets an HttpOnly, SameSite=Strict 
   const h = await startHub();
   try {
     await h.put(h.member.token, payload());
-    for (const p of ['/', `/b/alice/${STORE}/`]) {
+    for (const p of ['/', `/b/alice/${STORE}/`, `/b/alice/${STORE}/frame`]) {
       const res = await fetch(`${h.base}${p}`, { redirect: 'manual' });
       assert.equal(res.status, 303);
       assert.equal(res.headers.get('location'), '/login');
@@ -171,10 +171,12 @@ test('a board is rendered by the hub from JSON, under a policy that names its tw
     const evil = ticket(1, { title: '</script><script>alert(1)</script><img src=x onerror=alert(2)>', next_action: '"><script>alert(3)</script>' });
     await h.put(h.member.token, payload({ tickets: [evil] }));
     const { cookie } = await h.signIn(h.viewer.token);
-    const res = await fetch(`${h.base}/b/alice/${STORE}/`, { headers: { Cookie: cookie } });
+    const res = await fetch(`${h.base}/b/alice/${STORE}/frame`, { headers: { Cookie: cookie } });
     assert.equal(res.status, 200);
     const html = await res.text();
     const csp = res.headers.get('content-security-policy');
+    assert.match(csp, /frame-ancestors 'self'/);
+    assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN');
     const scripts = [...html.matchAll(/<script(?![^>]*\ssrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
     assert.equal(scripts.length, 2, 'the snapshot and the dashboard bundle, nothing else');
     for (const s of scripts) assert.ok(csp.includes(`'sha256-${createHash('sha256').update(s).digest('base64')}'`));

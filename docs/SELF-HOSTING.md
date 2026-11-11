@@ -5,7 +5,8 @@ A team hub is a small web service your team runs on its own machine. Each member
 - every member's board, with ticket counts by status and when it was last pushed;
 - the deployments that merged pull requests still owe, across the team, oldest first;
 - all open work, most recent activity first, with next actions and blockers;
-- each member's full read-only dashboard.
+- each member's full read-only dashboard;
+- on boards whose owner allows it, a page per ticket where a teammate can propose a new status or next action.
 
 The hub is part of this repository and under the same MIT licence. It has no runtime dependencies and no database. Design and guarantees: [ADR 0044](decisions/0044-self-hosted-team-hub.md).
 
@@ -65,7 +66,7 @@ node bin/quill.js hub token add alice --dir /var/lib/quill-hub
 - A **member** token pushes that member's boards and can read the hub.
 - A **viewer** token only reads. Use it for people who do not run Quill.
 
-Any token reads every board on the hub. `hub token list` shows names and roles, never tokens. `hub token revoke <name>` ends that token and signs out browsers using it; add `--purge` to delete the member's boards too.
+A token reads every board on the hub unless you limit it: `hub token add contractor --role viewer --boards alice,bob` reads only those members' boards. `hub token list` shows names, roles and limits, never tokens. `hub token revoke <name>` ends that token and signs out browsers using it; add `--purge` to delete the member's boards too.
 
 ## 3. Join from each member's machine
 
@@ -90,6 +91,7 @@ confirmed_url = "https://quill.example.org"   # changing url stops pushing until
 # projects = ["payments"]           # default: all projects
 # fields = ["key", "title", "status", "next_action", "blocker", "last_activity", "prs", "deployments"]
 # include_links = false             # PR and tracker links stay out unless true
+# accept_edits = false              # true: teammates may propose a status or next action from the hub
 ```
 
 `quill hub status` shows whether pushing is on, the last accepted push and the last error. `quill hub leave` stops pushing; `quill hub leave --remove` also deletes your board from the hub.
@@ -99,6 +101,26 @@ confirmed_url = "https://quill.example.org"   # changing url stops pushing until
 Open the hub's address in a browser and paste a token. The browser stays signed in for 7 days. The overview is built when you load it; reload for newer pushes.
 
 `GET /v1/team` returns the overview as JSON for scripts, with `Authorization: Bearer <token>`.
+
+## Letting teammates propose changes
+
+Off by default. On your own machine:
+
+```bash
+quill hub join https://quill.example.org --accept-edits --confirm
+```
+
+A signed-in member then sees a form on each of your open tickets and can propose a new status or a new next action, one change at a time. The proposal waits on the hub; your worker collects it within a minute and treats it like an edit from a two-way page: a request under the proposer's name (`hub:bob`), applied after the 10-second undo window, refused if the ticket changed after the copy on the hub was pushed. Nothing else can be changed from the hub, and viewer tokens cannot propose.
+
+The hub says what it knows: waiting, collected, and then whether your next push shows the value. `--no-accept-edits --confirm` switches it off again. Design: [ADR 0045](decisions/0045-hub-edits-and-scoped-tokens.md).
+
+## Checking a hub
+
+```bash
+node scripts/hub-smoke.mjs --url https://quill.example.org --token "$QUILL_HUB_TOKEN"
+```
+
+Nine checks: health, a push, a refused unsanitized push, the team view, sign-in, the overview, a board, the sign-in wall, and removal. It pushes a two-ticket board with store id `smoke-store` under your token and removes it. `quill doctor` on a member's machine shows a `team hub` line with the last accepted push or the reason nothing is pushed.
 
 ## Operating it
 
@@ -112,7 +134,7 @@ Open the hub's address in a browser and paste a token. The browser stays signed 
 
 ## Limits in this release
 
-- Read-only. Nobody can edit a ticket or start a run from the hub.
-- No per-board permissions: any token reads every board. Run separate hubs for groups that must not see each other's work.
-- No accounts, SSO or snapshot history.
+- Proposals cover status and next action only. Nobody can start a run, change another field or approve anything from the hub.
+- Tokens can be limited to boards, not to projects or tickets within a board.
+- No accounts, SSO or snapshot history; no organization policy and no stored evidence receipts.
 - The hub renders boards with its own copy of the dashboard, so keep the hub at least as new as the members' plugins.

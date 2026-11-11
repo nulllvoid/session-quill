@@ -2,11 +2,11 @@
 //
 // On the hub's host (no Quill store needed there):
 //   hub serve --dir <data> [--host 127.0.0.1] [--port 47400] [--name "<team>"] [--secure-cookies] [--trust-proxy]
-//   hub token add <name> [--role member|viewer] --dir <data>
+//   hub token add <name> [--role member|viewer] [--boards a,b] --dir <data>
 //   hub token list --dir <data> [--json]      hub token revoke <name> --dir <data> [--purge]
 //
 // On a member's machine:
-//   hub join <url> [--token-env NAME] [--projects a,b] [--fields k1,k2] [--include-links] [--interval-seconds n] [--confirm]
+//   hub join <url> [--token-env NAME] [--projects a,b] [--fields k1,k2] [--include-links] [--accept-edits] [--interval-seconds n] [--confirm]
 //   hub push        hub status [--json]        hub leave [--remove]
 import path from 'node:path';
 import { loadUserConfig, saveUserConfig } from '../../config/config.js';
@@ -63,7 +63,8 @@ function token({ args, flags, io, env }) {
   if (verb === 'add') {
     initHub(dir, { now: nowIso() });
     const role = typeof flags.role === 'string' ? flags.role : 'member';
-    const t = addToken(dir, { name, role, now: nowIso() });
+    const boards = typeof flags.boards === 'string' ? csv(flags.boards) : null;
+    const t = addToken(dir, { name, role, boards, now: nowIso() });
     if (flags.json) { io.json(t); return 0; }
     io.println(`Token for ${t.name} (${t.role}). It is shown once; the hub keeps only its hash:`);
     io.println('');
@@ -71,14 +72,15 @@ function token({ args, flags, io, env }) {
     io.println('');
     io.println(t.role === 'member'
       ? `Give it to ${t.name}. They set ${DEFAULT_TOKEN_ENV} to it and run: quill hub join <this hub's address> --confirm`
-      : `Give it to ${t.name}. They paste it on the hub's sign-in page. A viewer token reads every board and cannot push.`);
+      : `Give it to ${t.name}. They paste it on the hub's sign-in page. A viewer token cannot push or propose changes.`);
+    io.println(t.boards ? `It reads only these members' boards: ${t.boards.join(', ')}.` : 'It reads every board on the hub (limit it with --boards alice,bob).');
     return 0;
   }
   if (verb === 'list') {
     const tokens = listTokens(dir);
     if (flags.json) { io.json(tokens); return 0; }
     if (!tokens.length) { io.println('No tokens. Create one with: quill hub token add <name>'); return 0; }
-    for (const t of tokens) io.println(`${t.name.padEnd(24)} ${t.role.padEnd(7)} created ${t.created_at}  id ${t.id}`);
+    for (const t of tokens) io.println(`${t.name.padEnd(24)} ${t.role.padEnd(7)} boards ${t.boards ? t.boards.join(',') : 'all'}  created ${t.created_at}  id ${t.id}`);
     return 0;
   }
   if (verb === 'revoke') {
@@ -122,6 +124,8 @@ async function join({ args, flags, io, env }) {
     next.fields = fields;
   }
   if (flags['include-links'] === true) next.include_links = true;
+  if (flags['accept-edits'] === true) next.accept_edits = true;
+  if (flags['no-accept-edits'] === true) next.accept_edits = false;
   if (typeof flags['interval-seconds'] === 'string') {
     const n = Number(flags['interval-seconds']);
     if (!Number.isInteger(n) || n < 60) throw new TrackerError('hub-interval', '--interval-seconds must be a whole number, at least 60');
@@ -140,6 +144,9 @@ async function join({ args, flags, io, env }) {
   } else {
     io.println('No published generation yet; start the worker once to see a preview.');
   }
+  io.println(settings.accept_edits
+    ? 'Edits from the hub: accepted. A member signed in on the hub can propose a status or next action for your tickets; each arrives here as a request under their name, applies after the 10-second undo window, and is refused if the ticket changed first.'
+    : 'Edits from the hub: not accepted (add --accept-edits to let teammates propose a status or next action).');
   if (!confirmed) {
     io.println('');
     io.println('Nothing was changed and nothing was sent. Re-run with --confirm to save this hub and let the worker push to it.');
@@ -173,7 +180,7 @@ function status({ flags, io, env }) {
   const snap = ctx.initialized ? latestSnapshot(ctx) : null;
   const out = {
     url: settings.url, configured: settings.configured, confirmed: settings.confirmed, enabled: settings.enabled, token_env: settings.token_env, token_present: !!settings.token,
-    interval_seconds: Math.round(settings.interval_ms / 1000), projects: settings.projects, include_links: settings.include_links, problems: settings.problems,
+    interval_seconds: Math.round(settings.interval_ms / 1000), projects: settings.projects, include_links: settings.include_links, accept_edits: settings.accept_edits, problems: settings.problems,
     shareable_tickets: snap ? shareableTicketCount(snap, settings) : null,
     last_success_at: state && state.url === settings.url ? state.last_success_at ?? null : null,
     last_attempt_at: state && state.url === settings.url ? state.last_attempt_at ?? null : null,
@@ -183,6 +190,7 @@ function status({ flags, io, env }) {
   if (!settings.configured) { io.println('No hub configured. To push this board to a team hub: quill hub join <url> --confirm'); return 0; }
   io.println(`Hub: ${settings.url ?? '(invalid address)'}`);
   io.println(`Pushing: ${settings.enabled ? `on, at most once every ${out.interval_seconds} s` : 'off'}`);
+  io.println(`Edits from the hub: ${settings.accept_edits ? 'accepted as revision-checked requests' : 'not accepted'}`);
   for (const p of settings.problems) io.println(`  - ${p}`);
   if (out.last_success_at) io.println(`Last push accepted: ${out.last_success_at}`);
   if (out.last_error) io.println(`Last attempt (${out.last_attempt_at}) failed: ${out.last_error.message}`);

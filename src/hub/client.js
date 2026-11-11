@@ -12,11 +12,18 @@
 //   projects = ["payments"]            # optional: only these projects leave the machine
 //   fields = ["key", "title", …]       # optional: export fields (default: the shared-snapshot set)
 //   include_links = false
+//   accept_edits = false               # true: teammates' status and next-action edits from the hub
+//                                      # become revision-checked requests here (ADR 0045)
 import path from 'node:path';
 import { sanitizeSnapshot, isExportableTicket, SELECTABLE_FIELDS } from '../export/sanitize.js';
 import { readJsonIfExists, writeJsonAtomic, ensureDir } from '../lib/atomic-fs.js';
 import { stateDir } from '../lib/paths.js';
 import { TrackerError } from '../lib/errors.js';
+import { createHash } from 'node:crypto';
+import { writeIngress } from '../core/ingress.js';
+import { makeEvent } from '../core/events.js';
+import { bodyHash, EDIT_DELAY_MS } from '../server/requests.js';
+import { addMs } from '../lib/time.js';
 
 export const DEFAULT_TOKEN_ENV = 'QUILL_HUB_TOKEN';
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -62,6 +69,7 @@ export function hubSettings(config = {}, env = {}) {
     projects: Array.isArray(h.projects) && h.projects.length ? h.projects.filter((p) => typeof p === 'string') : null,
     fields: fields.length ? fields : null,
     include_links: h.include_links === true,
+    accept_edits: h.accept_edits === true,
     problems,
   };
 }
@@ -73,7 +81,7 @@ export function exportOptions(settings, now) {
 }
 
 export function buildPayload(snapshot, settings, { now, storeId, machineName = null }) {
-  return { schema_version: 1, store_id: storeId, machine_name: machineName, snapshot: sanitizeSnapshot(snapshot, exportOptions(settings, now)) };
+  return { schema_version: 1, store_id: storeId, machine_name: machineName, accepts_edits: settings.accept_edits === true, snapshot: sanitizeSnapshot(snapshot, exportOptions(settings, now)) };
 }
 
 export function shareableTicketCount(snapshot, settings) {
@@ -121,6 +129,52 @@ export function pingHub(settings, opts = {}) {
 
 export const pushPayload = (settings, payload, opts = {}) => request(settings, 'PUT', '/v1/snapshot', { ...opts, body: payload });
 export const removeRemoteBoard = (settings, storeId, opts = {}) => request(settings, 'DELETE', `/v1/snapshot/${encodeURIComponent(storeId)}`, opts);
+
+export const pullEdits = (settings, storeId, opts = {}) => request(settings, 'GET', `/v1/edits?store_id=${encodeURIComponent(storeId)}`, opts).then((b) => (b && Array.isArray(b.edits) ? b.edits : []));
+export const ackEdits = (settings, storeId, ids, opts = {}) => request(settings, 'POST', '/v1/edits/ack', { ...opts, body: { store_id: storeId, ids } });
+
+// Edits a teammate proposed on the hub (ADR 0045). Each becomes the same revision-checked request a
+// two-way page edit becomes (ADR 0011): through ingress, with the undo window, refused by the
+// reducer if the ticket moved on. The hub is not trusted to shape it: only these two fields, these
+// statuses and a bounded text are accepted, and the request id is derived from the hub's edit id,
+// so an edit collected twice is one request.
+export const HUB_EDIT_STATUSES = Object.freeze(['todo', 'active', 'review', 'deploy-pending', 'done']);
+const EDITOR_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
+
+export function requestFromHubEdit(edit, { url, now }) {
+  if (!edit || typeof edit !== 'object') return null;
+  if (typeof edit.id !== 'string' || !/^[0-9a-f]{8,64}$/.test(edit.id)) return null;
+  if (typeof edit.ticket_id !== 'string' || !edit.ticket_id || edit.ticket_id.length > 80) return null;
+  if (!Number.isInteger(edit.expected_revision) || edit.expected_revision < 0) return null;
+  if (typeof edit.by !== 'string' || !EDITOR_RE.test(edit.by)) return null;
+  let kind;
+  let payload;
+  if (edit.field === 'status' && HUB_EDIT_STATUSES.includes(edit.value)) { kind = 'set-status'; payload = { status: edit.value }; }
+  else if (edit.field === 'next_action' && typeof edit.value === 'string' && edit.value.length <= 2000) { kind = 'set-next-action'; payload = { next_action: edit.value }; }
+  else return null;
+  // A request id is a UUID; this one is derived, so the same hub edit always gives the same id.
+  const h = createHash('sha256').update(JSON.stringify(['hub', url, edit.id])).digest('hex');
+  const id = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  const body = { id, kind, target_id: edit.ticket_id, expected_revision: edit.expected_revision, payload };
+  return { ...body, created_at: now, not_before: addMs(now, EDIT_DELAY_MS), actor_id: `hub:${edit.by}`, retry_of: null, body_hash: bodyHash(body) };
+}
+
+/** Collect waiting edits, journal them as requests, then tell the hub they were collected. */
+export async function collectEdits(settings, { now, storeId, machineId, env, fetchImpl, log = () => {} }) {
+  const edits = await pullEdits(settings, storeId, { fetchImpl });
+  if (!edits.length) return { collected: 0, refused: 0 };
+  let collected = 0;
+  let refused = 0;
+  for (const e of edits) {
+    const req = requestFromHubEdit(e, { url: settings.url, now });
+    if (!req) { refused += 1; log(`hub: ignored a malformed edit from the hub (${String(e && e.id).slice(0, 16)})`); continue; }
+    writeIngress(makeEvent({ kind: 'request', payload: req, store_id: storeId, machine_id: machineId, producer: 'cli', session_id: null, agent_id: null, ticket_id: req.target_id, source_identity: `request:${req.id}`, occurred_at: now }), env);
+    collected += 1;
+    log(`hub: ${req.actor_id} proposed ${req.kind} on ${req.target_id}; it applies after the undo window unless the ticket changed`);
+  }
+  await ackEdits(settings, storeId, edits.map((e) => e.id).filter((i) => typeof i === 'string'), { fetchImpl });
+  return { collected, refused };
+}
 
 const statePath = (env) => path.join(stateDir(env), 'hub.json');
 export const readHubState = (env) => { try { return readJsonIfExists(statePath(env)); } catch { return null; } };
@@ -171,14 +225,28 @@ export function createExtension(ctx, { fetchImpl } = {}) {
       .finally(() => { inFlight = null; });
     return inFlight;
   };
+  // Edits are looked for once a minute, whether or not the board changed.
+  let lastPullAt = -Infinity;
+  let pulling = null;
+  const pull = (w) => {
+    const settings = hubSettings(w.config, w.env ?? ctx.env ?? {});
+    if (!settings.enabled || !settings.accept_edits || pulling || w.clock() - lastPullAt < MIN_INTERVAL_MS) return;
+    lastPullAt = w.clock();
+    pulling = collectEdits(settings, { now: w.now(), storeId: ctx.storeMeta.store_id, machineId: ctx.machineId, env: w.env ?? ctx.env, fetchImpl, log: (m) => w.log(m) })
+      .catch((err) => { w.log(`hub: collecting edits failed: ${err.message}`); })
+      .finally(() => { pulling = null; });
+  };
   return {
     tick(w) {
+      pull(w);
       if (inFlight) return;
       const interval = hubSettings(w.config, w.env ?? ctx.env ?? {}).interval_ms;
       if (w.clock() - lastAt < interval) return;
       start(w, 'tick');
     },
+    get collecting() { return pulling; },
     async onStop(w) {
+      if (pulling) await pulling;
       if (inFlight) await inFlight;
       await start(w, 'stop');
     },

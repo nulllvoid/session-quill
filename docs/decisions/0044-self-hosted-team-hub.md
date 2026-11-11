@@ -30,7 +30,7 @@ The PRD deferred "hosted live dashboards" until an authenticated adapter existed
 
 ## Not in this change
 
-- **Edits from the hub.** Teammates cannot change a status or propose a run from the hub. The path exists (revision-checked requests, ADR 0011; owner-approved proposals, ADR 0025) and can be added behind the same rule: the worker pulls requests and may refuse them. The hub would then supply a verified editor identity, which ADR 0025 names as the precondition for anything beyond owner approval.
+- **Edits from the hub.** Status and next-action proposals, and tokens limited to some boards, were added in [ADR 0045](0045-hub-edits-and-scoped-tokens.md). In this ADR's change, teammates cannot change a status or propose a run from the hub. The path exists (revision-checked requests, ADR 0011; owner-approved proposals, ADR 0025) and can be added behind the same rule: the worker pulls requests and may refuse them. The hub would then supply a verified editor identity, which ADR 0025 names as the precondition for anything beyond owner approval.
 - **Organization policy and evidence receipts on the hub**, per-user accounts or SSO, and a hub-side history of snapshots.
 - **A live board.** Pages are built when requested; there is no push to the browser.
 
